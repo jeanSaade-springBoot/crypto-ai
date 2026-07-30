@@ -1,0 +1,21 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: crypto-ai-mysql
+    environment:
+      MYSQL_DATABASE: crypto_ai
+      MYSQL_USER: crypto_user
+      MYSQL_PASSWORD: crypto_password
+      MYSQL_ROOT_PASSWORD: root_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - crypto_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot_password"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  crypto_mysql_data:

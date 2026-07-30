@@ -1,0 +1,173 @@
+spring:
+  application:
+    name: crypto-ai-trader
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3307/crypto_ai?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: crypto
+    password: password
+    hikari:
+      maximum-pool-size: 15
+      minimum-idle: 3
+      connection-timeout: 30000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: true
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    session:
+      timeout: ${LOGIN_SESSION_TIMEOUT:30m}
+      cookie:
+        http-only: true
+        same-site: lax
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+binance:
+  market-data:
+    enabled: true
+    base-url: https://data-api.binance.vision
+    websocket-base-url: wss://data-stream.binance.vision:443
+    default-limit: 500
+    request-timeout-seconds: 30
+    symbols:
+      - BTCUSDT
+      - ETHUSDT
+      - BNBUSDT
+    intervals:
+      - 1m
+      - 5m
+      - 1h
+    historical:
+      enabled: true
+      limit: 1000
+    websocket:
+      enabled: true
+      reconnect-delay-seconds: 10
+      health-check-seconds: 15
+collector:
+  candle:
+    enabled: true
+    fixed-delay-ms: 60000
+
+trading:
+  symbols:
+    - BTCUSDT
+    - ETHUSDT
+    - BNBUSDT
+  intervals:
+    - 1m
+    - 5m
+    - 1h
+  candle-limit: 500
+  minimum-buy-score: 75
+  risk-per-trade-percent: 0.5
+  max-daily-loss-percent: 2.0
+  max-open-positions: 3
+  paper-account-balance: 10000
+  scheduled-analysis-enabled: true
+  analysis-delay-ms: 300000
+
+
+sentiment:
+  # Master switch. Keep false until you want sentiment in trade decisions.
+  enabled: ${SENTIMENT_ENABLED:true}
+  active-window: 24h
+
+  scheduler:
+    # Scheduler also requires sentiment.enabled=true.
+    enabled: ${SENTIMENT_SCHEDULER_ENABLED:true}
+    fixed-delay-ms: ${SENTIMENT_SCHEDULER_DELAY_MS:60000}
+
+  providers:
+    cryptopanic:
+      enabled: ${CRYPTOPANIC_ENABLED:false}
+      weight: 0.25
+      api-key: ${CRYPTOPANIC_API_KEY:}
+      base-url: https://cryptopanic.com/api/developer/v2
+    news_api:
+      enabled: ${NEWS_API_ENABLED:false}
+      weight: 0.18
+      api-key: ${NEWS_API_KEY:}
+      base-url: https://newsapi.org/v2
+    reddit:
+      enabled: ${REDDIT_SENTIMENT_ENABLED:false}
+      weight: 0.14
+      api-key: ${REDDIT_ACCESS_TOKEN:}
+    x:
+      enabled: ${X_SENTIMENT_ENABLED:false}
+      weight: 0.12
+      api-key: ${X_BEARER_TOKEN:}
+    fear_greed:
+      # No API key required, but it still follows the master switch.
+      enabled: ${FEAR_GREED_ENABLED:true}
+      weight: 0.15
+      base-url: https://api.alternative.me
+    binance_announcement:
+      enabled: ${BINANCE_ANNOUNCEMENT_ENABLED:false}
+      weight: 0.08
+    whale_alert:
+      enabled: ${WHALE_ALERT_ENABLED:false}
+      weight: 0.20
+      api-key: ${WHALE_ALERT_API_KEY:}
+    manual_news:
+      enabled: ${MANUAL_SENTIMENT_ENABLED:true}
+      weight: 0.03
+
+# Whale monitoring and adaptive wallet weighting.
+# The collector remains inactive unless WHALE_ENABLED=true, WHALE_ALERT_ENABLED=true,
+# and WHALE_ALERT_API_KEY is configured.
+whale:
+  enabled: ${WHALE_ENABLED:false}
+
+  api:
+    base-url: ${WHALE_API_BASE_URL:https://api.whale-alert.io/v1}
+    transactions-path: ${WHALE_API_TRANSACTIONS_PATH:/transactions}
+    api-key: ${WHALE_ALERT_API_KEY:}
+
+  collection:
+    fixed-delay-ms: ${WHALE_COLLECTION_DELAY_MS:300000}
+    minimum-usd-value: ${WHALE_MINIMUM_USD_VALUE:1000000}
+    limit: ${WHALE_COLLECTION_LIMIT:100}
+
+  evaluation:
+    fixed-delay-ms: ${WHALE_EVALUATION_DELAY_MS:60000}
+    price-interval: ${WHALE_PRICE_INTERVAL:1m}
+    horizons:
+      - 1h
+      - 4h
+      - 24h
+    # 0.003 = 0.3%; smaller price movements are considered inconclusive.
+    inconclusive-move-percent: ${WHALE_INCONCLUSIVE_MOVE_PERCENT:0.003}
+
+  learning:
+    initial-weight: ${WHALE_INITIAL_WEIGHT:0.15}
+    minimum-weight: ${WHALE_MINIMUM_WEIGHT:0.05}
+    maximum-weight: ${WHALE_MAXIMUM_WEIGHT:1.00}
+    smoothing-factor: ${WHALE_SMOOTHING_FACTOR:0.20}
+    prior-sample-size: ${WHALE_PRIOR_SAMPLE_SIZE:20}
+
+  aggregation:
+    fixed-delay-ms: ${WHALE_AGGREGATION_DELAY_MS:300000}
+    active-window: ${WHALE_ACTIVE_WINDOW:2h}
+    horizon: ${WHALE_AGGREGATION_HORIZON:4h}
+    provider-confidence-floor: ${WHALE_PROVIDER_CONFIDENCE_FLOOR:0.20}
+
+dashboard:
+  # Browser-side dashboard refresh cadence. This value is also displayed in the schedule panel.
+  refresh-ms: ${DASHBOARD_REFRESH_MS:10000}

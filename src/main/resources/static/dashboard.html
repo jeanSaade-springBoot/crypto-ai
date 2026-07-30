@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Crypto Trading Dashboard</title>
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1"></script>
+</head>
+<body>
+<div class="app-shell">
+    <aside class="sidebar">
+        <div class="brand">
+            <span class="brand-mark">CT</span>
+            <div><strong>Crypto Trader</strong><small>Event-driven monitor</small></div>
+        </div>
+        <nav>
+            <a class="active" href="#overview">Overview</a>
+            <a href="#market">Live market</a>
+            <a href="#indicators">Indicators</a>
+            <a href="#sentiment">Sentiment</a>
+            <a href="#signals">Trade signals</a>
+            <a href="#positions">Paper positions</a>
+            <a href="#pipeline">Event pipeline</a>
+            <a href="#schedules">Schedules</a>
+        </nav>
+        <div class="connection"><span id="connection-dot"></span><div><strong id="connection-label">Connecting</strong><small>Auto refresh every 10s</small></div></div>
+    </aside>
+
+    <main>
+        <header class="topbar">
+            <div><p class="eyebrow">AUTOMATIC TRADING MONITOR</p><h1>Trading dashboard</h1></div>
+            <div class="filters">
+                <label>Symbol<select id="symbol-select"><option>BTCUSDT</option></select></label>
+                <label>Interval<select id="interval-select"><option>1m</option><option>5m</option><option>15m</option><option>1h</option><option>4h</option><option>1d</option></select></label>
+                <button id="refresh-button" type="button">Refresh</button>
+                <form class="logout-form" action="/logout" method="post">
+                    <button class="logout-button" type="submit">Logout</button>
+                </form>
+            </div>
+        </header>
+
+        <section id="error-banner" class="error-banner hidden"></section>
+
+        <section id="overview" class="metrics-grid">
+            <article class="metric-card"><span>Latest price</span><strong id="latest-price">—</strong><small id="price-change">Waiting for candles</small></article>
+            <article class="metric-card"><span>Closed candles</span><strong id="candle-count">0</strong><small id="history-progress">0 / 210 required</small><div class="progress"><div id="history-bar"></div></div></article>
+            <article class="metric-card"><span>Latest decision</span><strong id="latest-decision">NO SIGNAL</strong><small id="latest-score">Analysis not ready</small></article>
+            <article class="metric-card"><span>Open positions</span><strong id="open-positions">0</strong><small>Paper trading account</small></article>
+        </section>
+
+        <section id="pipeline" class="panel">
+            <div class="section-heading"><div><p class="eyebrow">FLOW HEALTH</p><h2>Event pipeline</h2></div><span id="last-updated">—</span></div>
+            <div class="pipeline-grid">
+                <div class="pipeline-step" data-step="candle"><span class="step-icon">1</span><div><strong>Closed candle</strong><small>BinanceKlineService</small><p></p></div></div>
+                <div class="pipeline-arrow">→</div>
+                <div class="pipeline-step" data-step="indicator"><span class="step-icon">2</span><div><strong>Indicators saved</strong><small>TechnicalIndicatorService</small><p></p></div></div>
+                <div class="pipeline-arrow">→</div>
+                <div class="pipeline-step" data-step="analysis"><span class="step-icon">3</span><div><strong>Analysis completed</strong><small>AnalysisService.analyze(...)</small><p></p></div></div>
+                <div class="pipeline-arrow">→</div>
+                <div class="pipeline-step" data-step="paperTrading"><span class="step-icon">4</span><div><strong>Paper trade</strong><small>PaperTradingService</small><p></p></div></div>
+            </div>
+        </section>
+
+
+        <section id="schedules" class="panel">
+            <div class="section-heading">
+                <div><p class="eyebrow">RUNTIME CONFIGURATION</p><h2>Collection and analysis schedules</h2></div>
+                <span>Values loaded from application.yml and provider configuration</span>
+            </div>
+            <div id="schedule-groups" class="schedule-groups">
+                <div class="empty">Loading schedule configuration...</div>
+            </div>
+        </section>
+
+        <section id="market" class="panel chart-panel">
+            <div class="section-heading"><div><p class="eyebrow">MARKET DATA</p><h2>Price and volume</h2></div><span id="market-subtitle">BTCUSDT · 1m</span></div>
+            <div id="candlestick-chart"></div>
+            <div id="volume-chart"></div>
+        </section>
+
+        <section id="indicators" class="content-grid">
+            <article class="panel">
+                <div class="section-heading"><div><p class="eyebrow">TREND</p><h2>Moving averages</h2></div></div>
+                <div class="indicator-list">
+                    <div><span>SMA 20</span><strong id="sma20">—</strong></div>
+                    <div><span>EMA 20</span><strong id="ema20">—</strong></div>
+                    <div><span>EMA 50</span><strong id="ema50">—</strong></div>
+                    <div><span>EMA 200</span><strong id="ema200">—</strong></div>
+                </div>
+            </article>
+            <article class="panel">
+                <div class="section-heading"><div><p class="eyebrow">MOMENTUM</p><h2>RSI and MACD</h2></div></div>
+                <div class="indicator-list">
+                    <div><span>RSI 14</span><strong id="rsi14">—</strong></div>
+                    <div><span>MACD</span><strong id="macd">—</strong></div>
+                    <div><span>Signal</span><strong id="macd-signal">—</strong></div>
+                    <div><span>Histogram</span><strong id="macd-histogram">—</strong></div>
+                </div>
+            </article>
+            <article class="panel">
+                <div class="section-heading"><div><p class="eyebrow">VOLATILITY</p><h2>Bands and volume</h2></div></div>
+                <div class="indicator-list">
+                    <div><span>Bollinger upper</span><strong id="bb-upper">—</strong></div>
+                    <div><span>Bollinger middle</span><strong id="bb-middle">—</strong></div>
+                    <div><span>Bollinger lower</span><strong id="bb-lower">—</strong></div>
+                    <div><span>ATR 14</span><strong id="atr14">—</strong></div>
+                    <div><span>Relative volume</span><strong id="relative-volume">—</strong></div>
+                </div>
+            </article>
+        </section>
+
+
+        <section id="sentiment" class="sentiment-section">
+            <article class="panel sentiment-overview-panel">
+                <div class="section-heading"><div><p class="eyebrow">MARKET SENTIMENT</p><h2>Provider status and evaluated score</h2></div><div class="heading-actions"><button id="collect-sentiment-button" type="button">Collect enabled providers</button><span id="sentiment-master-status" class="badge neutral">CHECKING</span></div></div>
+
+                <div class="sentiment-summary-grid">
+                    <div class="sentiment-summary-card"><span>Master status</span><strong id="sentiment-master-text">—</strong><small id="sentiment-master-message">Loading configuration</small></div>
+                    <div class="sentiment-summary-card"><span>Combined evaluated score</span><strong id="sentiment-score">+0.000</strong><small><span id="sentiment-label" class="badge neutral">NEUTRAL</span></small></div>
+                    <div class="sentiment-summary-card"><span>Enabled providers</span><strong id="sentiment-enabled-count">0 / 0</strong><small>Providers participating in collection</small></div>
+                    <div class="sentiment-summary-card"><span>Total configured weight</span><strong id="sentiment-total-weight">0.000</strong><small>Enabled provider weights are normalized</small></div>
+                </div>
+
+                <div class="sentiment-score-wrap">
+                    <div class="sentiment-scale"><div id="sentiment-marker"></div></div>
+                    <div class="sentiment-scale-labels"><span>Bearish -1</span><span>Neutral 0</span><span>Bullish +1</span></div>
+                </div>
+                <p id="sentiment-samples" class="muted">No sentiment samples yet.</p>
+                <div class="table-wrap provider-breakdown"><table><thead><tr><th>Provider</th><th>Enabled</th><th>API key</th><th>Weight</th><th>Latest score</th><th>Evaluated contribution</th><th>Confidence</th><th>Samples</th><th>Interval</th><th>Last run</th><th>Status</th><th>Actions</th></tr></thead><tbody id="sentiment-provider-body"></tbody></table></div>
+                <small id="sentiment-collect-feedback" aria-live="polite"></small>
+            </article>
+
+            <div class="sentiment-lower-grid">
+            <article class="panel">
+                <div class="section-heading"><div><p class="eyebrow">TEXT ANALYZER</p><h2>Add news or social text</h2></div></div>
+                <div class="sentiment-form">
+                    <label>Source<input id="sentiment-source" type="text" value="MANUAL_NEWS" maxlength="30"></label>
+                    <label>Headline or text<textarea id="sentiment-text" rows="5" maxlength="4000" placeholder="Paste a crypto headline, article summary, or social post..."></textarea></label>
+                    <button id="analyze-sentiment-button" type="button">Analyze and save</button>
+                    <small id="sentiment-feedback" aria-live="polite"></small>
+                </div>
+            </article>
+            <article class="panel sentiment-history-panel">
+                <div class="section-heading"><div><p class="eyebrow">RECENT INPUTS</p><h2>Sentiment history</h2></div></div>
+                <div class="table-wrap"><table><thead><tr><th>Time</th><th>Source</th><th>Score</th><th>Confidence</th><th>Summary</th></tr></thead><tbody id="sentiment-body"></tbody></table></div>
+            </article>
+            </div>
+        </section>
+
+        <section id="signals" class="panel">
+            <div class="section-heading"><div><p class="eyebrow">ANALYSIS OUTPUT</p><h2>Recent trade signals</h2></div></div>
+            <div class="table-wrap"><table><thead><tr><th>Time</th><th>Decision</th><th>Score</th><th>Price</th><th>Stop loss</th><th>Take profit</th><th>Explanation</th></tr></thead><tbody id="signals-body"></tbody></table></div>
+        </section>
+
+        <section id="positions" class="panel">
+            <div class="section-heading"><div><p class="eyebrow">EXECUTION</p><h2>Paper positions</h2></div></div>
+            <div class="table-wrap"><table><thead><tr><th>Opened</th><th>Side</th><th>Status</th><th>Quantity</th><th>Entry</th><th>Stop loss</th><th>Take profit</th><th>PnL</th></tr></thead><tbody id="positions-body"></tbody></table></div>
+        </section>
+    </main>
+</div>
+<script src="/js/dashboard.js"></script>
+</body>
+</html>

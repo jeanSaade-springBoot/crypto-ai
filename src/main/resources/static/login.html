@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Login · Crypto Trader</title>
+    <link rel="stylesheet" href="/css/login.css">
+</head>
+<body>
+<main class="login-shell">
+    <section class="login-card">
+        <div class="brand-mark">CT</div>
+        <p class="eyebrow">PRIVATE TRADING MONITOR</p>
+        <h1>Sign in</h1>
+        <p class="intro">Use the username and password stored in the <code>app_user</code> table.</p>
+
+        <div id="login-error" class="message error" hidden>
+            Invalid username or password.
+        </div>
+        <div id="logout-message" class="message success" hidden>
+            You have been signed out.
+        </div>
+
+        <form action="/login" method="post" autocomplete="on">
+            <label for="username">Username</label>
+            <input id="username" name="username" type="text" autocomplete="username" required autofocus>
+
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+            <button type="submit">Sign in</button>
+        </form>
+
+        <small>Access is restricted to enabled users in the database.</small>
+    </section>
+</main>
+<script>
+    const params = new URLSearchParams(window.location.search);
+    document.getElementById('login-error').hidden = !params.has('error');
+    document.getElementById('logout-message').hidden = !params.has('logout');
+</script>
+</body>
+</html>
