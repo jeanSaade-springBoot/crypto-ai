@@ -26,7 +26,7 @@ pipeline {
                 bat '''
                 @echo off
 
-                echo Building Crypto AI...
+                echo Building Crypto AI ...
 
                 mvn clean package -DskipTests
 
