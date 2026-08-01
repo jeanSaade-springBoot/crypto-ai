@@ -75,6 +75,16 @@ public class FinalDecisionService {
                     before, current, true, false,
                     atrRisk.explanation()
             ));
+        } else if (!atrRisk.immediateEntryAllowed() && isBullish(current)) {
+            // Preserve the BUY recommendation, but do not execute at the current price.
+            // The dashboard exposes PULLBACK_ENTRY or WAIT_FOR_RETRACEMENT.
+            boolean entryBefore = entryAllowed;
+            entryAllowed = false;
+            path.add(new DecisionAdjustment(
+                    sequence++, "ATR_RISK", DecisionAdjustmentType.DOWNGRADE,
+                    current, current, entryBefore, false,
+                    atrRisk.explanation()
+            ));
         } else {
             path.add(new DecisionAdjustment(
                     sequence++, "ATR_RISK", DecisionAdjustmentType.PASS,

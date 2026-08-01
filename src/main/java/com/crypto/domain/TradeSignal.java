@@ -329,6 +329,14 @@ public class TradeSignal {
     private String volatilityLevel;
     @Column(name = "atr_overextended", nullable = false)
     private boolean atrOverextended;
+    @Column(name = "atr_entry_type", length = 40)
+    private String atrEntryType;
+    @Column(name = "atr_recommended_position_percent", nullable = false)
+    private int atrRecommendedPositionPercent;
+    @Column(name = "atr_immediate_entry_allowed", nullable = false)
+    private boolean atrImmediateEntryAllowed;
+    @Column(name = "atr_retracement_entry_price", precision = 30, scale = 12)
+    private BigDecimal atrRetracementEntryPrice;
     @Column(name = "atr_explanation", length = 1000)
     private String atrExplanation;
 

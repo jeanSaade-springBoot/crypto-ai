@@ -14,7 +14,12 @@ public record AtrRiskProperties(
         BigDecimal extremeVolatilityPercent,
         BigDecimal overextensionMultiplier,
         BigDecimal minimumStopPercent,
-        BigDecimal maximumStopPercent
+        BigDecimal maximumStopPercent,
+        BigDecimal reducedPositionMultiplier,
+        BigDecimal pullbackEntryMultiplier,
+        BigDecimal waitForRetracementMultiplier,
+        BigDecimal hardVetoMultiplier,
+        int reducedPositionPercent
 ) {
     public AtrRiskProperties {
         period = period <= 0 ? 14 : period;
@@ -26,6 +31,12 @@ public record AtrRiskProperties(
         overextensionMultiplier = positiveOrDefault(overextensionMultiplier, "2.50");
         minimumStopPercent = positiveOrDefault(minimumStopPercent, "0.50");
         maximumStopPercent = positiveOrDefault(maximumStopPercent, "8.00");
+        reducedPositionMultiplier = positiveOrDefault(reducedPositionMultiplier, "2.00");
+        pullbackEntryMultiplier = positiveOrDefault(pullbackEntryMultiplier, "2.75");
+        waitForRetracementMultiplier = positiveOrDefault(waitForRetracementMultiplier, "3.50");
+        hardVetoMultiplier = positiveOrDefault(hardVetoMultiplier, "4.50");
+        reducedPositionPercent = reducedPositionPercent <= 0 || reducedPositionPercent > 100
+                ? 60 : reducedPositionPercent;
     }
 
     private static BigDecimal positiveOrDefault(BigDecimal value, String fallback) {

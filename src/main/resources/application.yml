@@ -100,6 +100,14 @@ trading:
     minimum-stop-percent: ${ATR_MINIMUM_STOP_PERCENT:0.50}
     maximum-stop-percent: ${ATR_MAXIMUM_STOP_PERCENT:8.00}
 
+    # Strategy-aware entry planning. Trend-following uses these base thresholds.
+    # BREAKOUT receives more room; RANGE and DEFENSIVE receive less room.
+    reduced-position-multiplier: ${ATR_REDUCED_POSITION_MULTIPLIER:2.00}
+    pullback-entry-multiplier: ${ATR_PULLBACK_ENTRY_MULTIPLIER:2.75}
+    wait-for-retracement-multiplier: ${ATR_WAIT_FOR_RETRACEMENT_MULTIPLIER:3.50}
+    hard-veto-multiplier: ${ATR_HARD_VETO_MULTIPLIER:4.50}
+    reduced-position-percent: ${ATR_REDUCED_POSITION_PERCENT:60}
+
 
 sentiment:
   # Master switch. Keep false until you want sentiment in trade decisions.

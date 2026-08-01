@@ -668,7 +668,10 @@ function scoreBreakdownHtml(signal) {
             <div class="score-component"><span>Calculated target</span><strong>${money(signal.takeProfit)}</strong></div>
             <div class="score-component"><span>Risk / Reward</span><strong>${signal.riskRewardRatio == null ? '—' : `1 : ${Number(signal.riskRewardRatio).toFixed(2)}`}</strong></div>
             <div class="score-component"><span>Distance from SMA20</span><strong>${signal.candleRangeAtrMultiple == null ? '—' : `${Number(signal.candleRangeAtrMultiple).toFixed(2)} ATR`}</strong></div>
-            <div class="score-component"><span>Entry condition</span><strong>${signal.atrOverextended ? 'WAIT FOR PULLBACK' : 'ACCEPTABLE'}</strong></div>
+            <div class="score-component"><span>Entry type</span><strong>${escapeHtml(String(signal.atrEntryType || (signal.atrOverextended ? 'WAIT_FOR_RETRACEMENT' : 'STANDARD_ENTRY')).replaceAll('_', ' '))}</strong></div>
+            <div class="score-component"><span>Immediate entry</span><strong>${signal.atrImmediateEntryAllowed === false ? 'NO — WAIT FOR RETRACEMENT' : 'YES'}</strong></div>
+            <div class="score-component"><span>Recommended position</span><strong>${signal.atrRecommendedPositionPercent == null ? '100%' : `${signal.atrRecommendedPositionPercent}%`}</strong></div>
+            <div class="score-component"><span>Retracement entry reference</span><strong>${signal.atrRetracementEntryPrice == null ? '—' : money(signal.atrRetracementEntryPrice)}</strong></div>
             <small>${escapeHtml(signal.atrExplanation || 'ATR risk details are available for newly generated signals.')}</small>
         </section>
         <div class="signal-explanation"><strong>Why this signal:</strong> ${escapeHtml(signal.explanation || 'No explanation available.')}</div>`;

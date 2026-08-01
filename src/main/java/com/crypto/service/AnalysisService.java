@@ -128,6 +128,7 @@ public class AnalysisService {
         MarketContextSnapshot marketContext = marketContextService.build(
                 i, atrRisk, sentimentOverview, sentimentEnabled, signalGeneratedAt);
         StrategyProfile strategyProfile = marketStrategyService.select(regimeAssessment, marketContext);
+        atrRisk = atrRiskService.applyStrategyEntryPlan(atrRisk, i, strategyProfile.strategy());
         StrategyScoreResult strategyScore = marketStrategyService.score(
                 strategyProfile,
                 trend,
@@ -144,9 +145,10 @@ public class AnalysisService {
         int total = strategyScore.normalizedScore();
         SignalDecision baseDecision = strategyScore.decision();
         SignalDecision atrAdjustedDecision = baseDecision;
-        // ATR is a risk/quality filter, not a directional indicator.
-        // Do not enter an already overextended BUY; wait for a pullback.
-        if (atrRisk.overextended()
+        // ATR controls entry execution, not bullish direction. Keep BUY as BUY for
+        // REDUCED_POSITION, PULLBACK_ENTRY and WAIT_FOR_RETRACEMENT. Only an
+        // extreme NO_ENTRY extension downgrades the directional recommendation.
+        if (atrRisk.entryType() == com.crypto.domain.AtrEntryType.NO_ENTRY
                 && (atrAdjustedDecision == SignalDecision.BUY || atrAdjustedDecision == SignalDecision.STRONG_BUY)) {
             atrAdjustedDecision = SignalDecision.WATCH;
         }
@@ -328,6 +330,10 @@ public class AnalysisService {
                 .candleRangeAtrMultiple(atrRisk.candleRangeAtrMultiple())
                 .volatilityLevel(atrRisk.volatilityLevel())
                 .atrOverextended(atrRisk.overextended())
+                .atrEntryType(atrRisk.entryType().name())
+                .atrRecommendedPositionPercent(atrRisk.recommendedPositionPercent())
+                .atrImmediateEntryAllowed(atrRisk.immediateEntryAllowed())
+                .atrRetracementEntryPrice(atrRisk.retracementEntryPrice())
                 .atrExplanation(atrRisk.explanation())
                 .explanation(explanation)
                 .generatedAt(signalGeneratedAt)

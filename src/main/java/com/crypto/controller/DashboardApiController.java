@@ -359,6 +359,10 @@ public class DashboardApiController {
         result.put("candleRangeAtrMultiple", signal.getCandleRangeAtrMultiple());
         result.put("volatilityLevel", signal.getVolatilityLevel());
         result.put("atrOverextended", signal.isAtrOverextended());
+        result.put("atrEntryType", signal.getAtrEntryType());
+        result.put("atrRecommendedPositionPercent", signal.getAtrRecommendedPositionPercent());
+        result.put("atrImmediateEntryAllowed", signal.isAtrImmediateEntryAllowed());
+        result.put("atrRetracementEntryPrice", signal.getAtrRetracementEntryPrice());
         result.put("atrExplanation", signal.getAtrExplanation());
         result.put("explanation", signal.getExplanation());
         return result;

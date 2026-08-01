@@ -1,5 +1,7 @@
 package com.crypto.dto;
 
+import com.crypto.domain.AtrEntryType;
+
 import java.math.BigDecimal;
 
 public record AtrRiskAssessment(
@@ -13,6 +15,10 @@ public record AtrRiskAssessment(
         BigDecimal candleRangeAtrMultiple,
         String volatilityLevel,
         boolean overextended,
+        AtrEntryType entryType,
+        int recommendedPositionPercent,
+        boolean immediateEntryAllowed,
+        BigDecimal retracementEntryPrice,
         String explanation
 ) {
 }

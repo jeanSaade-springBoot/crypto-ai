@@ -89,9 +89,15 @@ public class PaperTradingService {
 
         enforceDailyLossLimit();
 
+        BigDecimal positionScale = BigDecimal.valueOf(
+                signal.getAtrRecommendedPositionPercent() <= 0
+                        ? 100
+                        : signal.getAtrRecommendedPositionPercent()
+        ).divide(BigDecimal.valueOf(100), MC);
         BigDecimal riskAmount = properties.paperAccountBalance()
                 .multiply(properties.riskPerTradePercent(), MC)
-                .divide(BigDecimal.valueOf(100), MC);
+                .divide(BigDecimal.valueOf(100), MC)
+                .multiply(positionScale, MC);
         BigDecimal riskPerUnit = signal.getLatestPrice().subtract(signal.getStopLoss(), MC).abs();
 
         if (riskPerUnit.signum() == 0) {
@@ -172,7 +178,9 @@ public class PaperTradingService {
     }
 
     private boolean isBuyEligible(TradeSignal signal) {
-        return signal.getTotalScore() >= properties.minimumBuyScore()
+        return signal.isFinalEntryAllowed()
+                && signal.isAtrImmediateEntryAllowed()
+                && signal.getTotalScore() >= properties.minimumBuyScore()
                 && (signal.getDecision() == SignalDecision.BUY
                 || signal.getDecision() == SignalDecision.STRONG_BUY);
     }
