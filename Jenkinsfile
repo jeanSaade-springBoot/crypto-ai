@@ -11,7 +11,7 @@ pipeline {
         APP_JAR = 'crypto-ai.jar'
         APP_LOG = 'crypto-ai.log'
         BACKUP_JAR = 'crypto-ai-backup.jar'
-        HEALTH_URL = 'http://localhost:8080/login'
+        HEALTH_URL = 'http://169.58.108.119:8080/login'
     }
 
     stages {
@@ -324,7 +324,7 @@ pipeline {
     post {
         success {
             echo 'Crypto AI was built, deployed, started, and verified successfully.'
-            echo "Local URL: http://localhost:${APP_PORT}"
+            echo "Local URL: http://169.58.108.119:${APP_PORT}"
             echo "External URL: http://YOUR_PUBLIC_SERVER_IP:${APP_PORT}"
             echo "Health URL: ${HEALTH_URL}"
             echo "Log file: ${DEPLOY_DIR}\\${APP_LOG}"
