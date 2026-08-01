@@ -65,6 +65,27 @@
         </section>
 
 
+
+        <section id="score-diagnostics" class="panel">
+            <div class="section-heading">
+                <div><p class="eyebrow">LAST 24 HOURS</p><h2>Score diagnostics</h2></div>
+                <span id="diagnostics-window">Waiting for signals</span>
+            </div>
+            <div id="diagnostics-warnings" class="diagnostics-warnings"></div>
+            <div class="diagnostics-summary-grid">
+                <article><span>Signals</span><strong id="diagnostics-count">0</strong></article>
+                <article><span>Average score</span><strong id="diagnostics-average">—</strong></article>
+                <article><span>Score range</span><strong id="diagnostics-range">—</strong></article>
+                <article><span>Normalization</span><strong id="diagnostics-normalization">—</strong></article>
+            </div>
+            <div class="diagnostics-grid">
+                <div><h3>Category utilization</h3><div id="diagnostics-categories" class="diagnostics-list"></div></div>
+                <div><h3>Original decisions</h3><div id="diagnostics-decisions" class="diagnostics-list"></div></div>
+                <div><h3>Strategy performance</h3><div id="diagnostics-strategies" class="diagnostics-list"></div></div>
+                <div><h3>Lowest symbol / intervals</h3><div id="diagnostics-symbols" class="diagnostics-list"></div></div>
+            </div>
+        </section>
+
         <section id="schedules" class="panel">
             <div class="section-heading">
                 <div><p class="eyebrow">RUNTIME CONFIGURATION</p><h2>Collection and analysis schedules</h2></div>

@@ -88,16 +88,18 @@ public class MarketStrategyService {
             int baseMomentum,
             int baseSentiment,
             int baseFundamentals,
-            boolean sentimentEnabled
+            boolean sentimentAvailable,
+            boolean fundamentalAvailable
     ) {
         int trend = scale(baseTrend, BASE_TREND_MAX, profile.trendMaximum());
         int volume = scale(baseVolume, BASE_VOLUME_MAX, profile.volumeMaximum());
         int momentum = scale(baseMomentum, BASE_MOMENTUM_MAX, profile.momentumMaximum());
-        int sentiment = sentimentEnabled
+        int sentiment = sentimentAvailable
                 ? scale(baseSentiment, BASE_SENTIMENT_MAX, profile.sentimentMaximum()) : 0;
-        int fundamentals = scale(baseFundamentals, BASE_FUNDAMENTAL_MAX, profile.fundamentalMaximum());
+        int fundamentals = fundamentalAvailable
+                ? scale(baseFundamentals, BASE_FUNDAMENTAL_MAX, profile.fundamentalMaximum()) : 0;
         int raw = trend + volume + momentum + sentiment + fundamentals;
-        int maximum = profile.maximum(sentimentEnabled);
+        int maximum = profile.maximum(sentimentAvailable, fundamentalAvailable);
         int normalized = maximum <= 0 ? 0 : (int) Math.round(raw * 100.0 / maximum);
         SignalDecision decision = decision(normalized, profile);
         if (!profile.entryAllowed() && (decision == SignalDecision.BUY || decision == SignalDecision.STRONG_BUY)) {

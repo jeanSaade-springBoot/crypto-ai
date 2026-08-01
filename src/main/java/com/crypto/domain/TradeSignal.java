@@ -295,6 +295,15 @@ public class TradeSignal {
     @Column(name = "maximum_available_score", nullable = false)
     private int maximumAvailableScore;
 
+    @Column(name = "sentiment_available", nullable = false)
+    private boolean sentimentAvailable;
+
+    @Column(name = "fundamental_available", nullable = false)
+    private boolean fundamentalAvailable;
+
+    @Column(name = "excluded_categories", columnDefinition = "json")
+    private String excludedCategories;
+
     @Column(name = "sentiment_breakdown", columnDefinition = "json")
     private String sentimentBreakdown;
 

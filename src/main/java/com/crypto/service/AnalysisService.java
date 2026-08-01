@@ -97,6 +97,12 @@ public class AnalysisService {
         SentimentOverview sentimentOverview = sentimentService.overview(symbol);
         BigDecimal sentiment = sentimentOverview.weightedScore();
         MarketFundamental fundamental = fundamentalService.latest(symbol).orElse(null);
+        Instant signalGeneratedAt = Instant.now();
+        boolean sentimentAvailable = sentimentEnabled && sentimentOverview != null
+                && sentimentOverview.providers() != null
+                && sentimentOverview.providers().stream().anyMatch(provider -> provider.enabled()
+                && provider.effectiveWeight() != null && provider.effectiveWeight().signum() > 0);
+        boolean fundamentalAvailable = fundamentalService.isAvailable(fundamental, signalGeneratedAt);
 
         IndicatorSnapshot previous = previousSnapshot(i);
         MovingAverageBreakdown movingAverages = movingAverageScore(i, previous);
@@ -105,19 +111,18 @@ public class AnalysisService {
         int trend = movingAverages.total();
         int volume = bandsVolume.total();
         int momentum = momentumBreakdown.total();
-        int sentimentPoints = sentimentEnabled ? sentimentScore(sentiment) : 0;
-        FundamentalScoreResult fundamentalBreakdown = fundamentalScoringService.score(fundamental);
-        int fundamentals = fundamentalBreakdown.total();
+        int sentimentPoints = sentimentAvailable ? sentimentScore(sentiment) : 0;
+        FundamentalScoreResult fundamentalBreakdown = fundamentalScoringService.score(fundamentalAvailable ? fundamental : null);
+        int fundamentals = fundamentalAvailable ? fundamentalBreakdown.total() : 0;
 
         int baseRawTotal = trend + volume + momentum + sentimentPoints + fundamentals;
         int baseMaximumAvailableScore = MAX_TREND_SCORE
                 + MAX_VOLUME_SCORE
                 + MAX_MOMENTUM_SCORE
-                + MAX_FUNDAMENTAL_SCORE
-                + (sentimentEnabled ? MAX_SENTIMENT_SCORE : 0);
+                + (fundamentalAvailable ? MAX_FUNDAMENTAL_SCORE : 0)
+                + (sentimentAvailable ? MAX_SENTIMENT_SCORE : 0);
 
         AtrRiskAssessment atrRisk = atrRiskService.assess(i);
-        Instant signalGeneratedAt = Instant.now();
         MarketRegimeAssessment regimeAssessment = marketRegimeService.assess(i);
         MarketRegime marketRegime = regimeAssessment.regime();
         MarketContextSnapshot marketContext = marketContextService.build(
@@ -130,7 +135,8 @@ public class AnalysisService {
                 momentum,
                 sentimentPoints,
                 fundamentals,
-                sentimentEnabled
+                sentimentAvailable,
+                fundamentalAvailable
         );
 
         int rawTotal = strategyScore.rawScore();
@@ -188,6 +194,8 @@ public class AnalysisService {
                 sentimentPoints,
                 fundamentals,
                 sentimentEnabled,
+                sentimentAvailable,
+                fundamentalAvailable,
                 rawTotal,
                 maximumAvailableScore,
                 total
@@ -275,8 +283,8 @@ public class AnalysisService {
                 .strategyTrendMaximum(strategyProfile.trendMaximum())
                 .strategyVolumeMaximum(strategyProfile.volumeMaximum())
                 .strategyMomentumMaximum(strategyProfile.momentumMaximum())
-                .strategySentimentMaximum(sentimentEnabled ? strategyProfile.sentimentMaximum() : 0)
-                .strategyFundamentalMaximum(strategyProfile.fundamentalMaximum())
+                .strategySentimentMaximum(sentimentAvailable ? strategyProfile.sentimentMaximum() : 0)
+                .strategyFundamentalMaximum(fundamentalAvailable ? strategyProfile.fundamentalMaximum() : 0)
                 .totalScore(total)
                 .confidenceScore(finalDecision.confidenceScore())
                 .finalEntryAllowed(finalDecision.entryAllowed())
@@ -303,6 +311,9 @@ public class AnalysisService {
                 .volumeSma20Score(bandsVolume.volumeSma20())
                 .rawScore(rawTotal)
                 .maximumAvailableScore(maximumAvailableScore)
+                .sentimentAvailable(sentimentAvailable)
+                .fundamentalAvailable(fundamentalAvailable)
+                .excludedCategories(serializeExcludedCategories(sentimentEnabled, sentimentAvailable, fundamentalAvailable, fundamental))
                 .sentimentBreakdown(serializeSentiment(sentimentOverview.providers()))
                 .analysisBreakdown(serializeAnalysisBreakdown(
                         i, movingAverages, momentumBreakdown, bandsVolume, fundamentalBreakdown,
@@ -596,6 +607,8 @@ public class AnalysisService {
             int sentimentPoints,
             int fundamentals,
             boolean sentimentEnabled,
+            boolean sentimentAvailable,
+            boolean fundamentalAvailable,
             int rawTotal,
             int maximumAvailableScore,
             int normalizedTotal
@@ -606,19 +619,45 @@ public class AnalysisService {
                 + i.relativeVolume().setScale(2, java.math.RoundingMode.HALF_UP));
         reasons.add("Momentum " + momentum + "/15; RSI="
                 + i.rsi14().setScale(2, java.math.RoundingMode.HALF_UP));
-        if (sentimentEnabled) {
+        if (sentimentAvailable) {
             reasons.add("Sentiment " + sentimentPoints + "/15; raw="
                     + sentiment.setScale(3, java.math.RoundingMode.HALF_UP));
+        } else if (sentimentEnabled) {
+            reasons.add("Sentiment unavailable/stale; excluded from normalization");
         } else {
-            reasons.add("Sentiment disabled; technical/fundamental score normalized to 100");
+            reasons.add("Sentiment disabled; excluded from normalization");
         }
-        reasons.add("Fundamentals " + fundamentals + "/10");
+        if (fundamentalAvailable) {
+            reasons.add("Fundamentals " + fundamentals + "/10");
+        } else {
+            reasons.add("Fundamentals unavailable/stale; excluded from normalization");
+        }
         reasons.add("Raw score " + rawTotal + "/" + maximumAvailableScore
                 + "; normalized=" + normalizedTotal + "/100");
-        if (fundamental == null) {
-            reasons.add("No recent market-cap/FDV record; neutral default applied");
+        if (!fundamentalAvailable) {
+            reasons.add("No fresh complete market-cap/supply record was used");
         }
         return String.join(" | ", reasons);
+    }
+
+    private String serializeExcludedCategories(boolean sentimentEnabled, boolean sentimentAvailable,
+                                               boolean fundamentalAvailable, MarketFundamental fundamental) {
+        Map<String, String> excluded = new LinkedHashMap<>();
+        if (!sentimentAvailable) {
+            excluded.put("SENTIMENT", sentimentEnabled
+                    ? "No healthy contributing provider; maximum excluded"
+                    : "Feature disabled; maximum excluded");
+        }
+        if (!fundamentalAvailable) {
+            excluded.put("FUNDAMENTALS", fundamental == null
+                    ? "No collected record; maximum excluded"
+                    : "Record stale or missing required fields; maximum excluded");
+        }
+        try {
+            return objectMapper.writeValueAsString(excluded);
+        } catch (JsonProcessingException exception) {
+            return "{}";
+        }
     }
 
     private String serializeSentiment(List<ProviderSentiment> providers) {

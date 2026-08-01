@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.crypto.config.FundamentalCollectionProperties;
 import java.time.Instant;
 import java.util.Optional;
 
@@ -15,6 +16,7 @@ import java.util.Optional;
 public class FundamentalService {
 
     private final MarketFundamentalRepository repository;
+    private final FundamentalCollectionProperties properties;
 
     @Transactional
     public MarketFundamental save(FundamentalRequest request) {
@@ -39,5 +41,17 @@ public class FundamentalService {
     @Transactional(readOnly = true)
     public Optional<MarketFundamental> latest(String symbol) {
         return repository.findTopBySymbolOrderByObservedAtDesc(symbol.toUpperCase());
+    }
+
+    public boolean isAvailable(MarketFundamental fundamental, Instant evaluatedAt) {
+        if (fundamental == null || fundamental.getObservedAt() == null) return false;
+        Instant reference = evaluatedAt == null ? Instant.now() : evaluatedAt;
+        if (fundamental.getObservedAt().isBefore(reference.minus(properties.staleAfter()))) return false;
+        return fundamental.getMarketCap() != null
+                && fundamental.getMarketCap().signum() > 0
+                && fundamental.getVolume24h() != null
+                && fundamental.getVolume24h().signum() >= 0
+                && fundamental.getCirculatingSupply() != null
+                && fundamental.getCirculatingSupply().signum() > 0;
     }
 }

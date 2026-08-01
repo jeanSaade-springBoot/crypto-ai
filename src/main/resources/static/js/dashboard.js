@@ -75,6 +75,7 @@ function render(data) {
     el('last-updated').textContent = `Updated ${dateTime(data.updatedAt)}`;
     el('market-subtitle').textContent = `${data.symbol} · ${data.interval}`;
     renderPipeline(data.pipeline);
+    renderScoreDiagnostics(data.scoreDiagnostics || {});
     renderIndicators(data.indicator || {});
     renderSentiment(data.sentiment || {}, data.sentimentProviderStatuses || [], data.sentimentSystemStatus || {});
     renderSchedules(data.schedule || {});
@@ -83,6 +84,49 @@ function render(data) {
     renderSignals(data.signals || []);
     renderOpenTrades(data.openPositions || []);
     renderTradeHistory(data.closedPositions || []);
+}
+
+
+function renderScoreDiagnostics(diagnostics) {
+    const score = diagnostics.score || {};
+    const count = Number(diagnostics.signalCount || 0);
+    el('diagnostics-count').textContent = count.toLocaleString();
+    el('diagnostics-average').textContent = score.average == null ? '—' : `${Number(score.average).toFixed(2)}/100`;
+    el('diagnostics-range').textContent = score.minimum == null ? '—' : `${score.minimum}–${score.maximum}`;
+    const mismatches = Number(score.normalizationMismatches || 0);
+    el('diagnostics-normalization').textContent = mismatches === 0 ? 'PASS' : `${mismatches} mismatch${mismatches === 1 ? '' : 'es'}`;
+    el('diagnostics-normalization').className = mismatches === 0 ? 'positive' : 'negative';
+    el('diagnostics-window').textContent = diagnostics.from ? `${dateTime(diagnostics.from)} → now` : 'No 24-hour data';
+
+    const warnings = diagnostics.warnings || [];
+    el('diagnostics-warnings').innerHTML = warnings.length
+        ? warnings.map(warning => `<div class="diagnostic-warning">⚠ ${escapeHtml(warning)}</div>`).join('')
+        : '<div class="diagnostic-ok">✓ No score-distribution warning detected.</div>';
+
+    el('diagnostics-categories').innerHTML = (diagnostics.categories || []).map(category => `
+        <div class="diagnostic-row ${String(category.status || '').toLowerCase()}">
+            <span>${escapeHtml(category.name)}</span>
+            <strong>${Number(category.average || 0).toFixed(2)}/${category.maximum}</strong>
+            <small>${Number(category.utilizationPercent || 0).toFixed(1)}%</small>
+        </div>`).join('') || '<div class="empty">No category data.</div>';
+
+    const original = diagnostics.originalDecisions || {};
+    el('diagnostics-decisions').innerHTML = Object.entries(original).map(([decision, value]) => `
+        <div class="diagnostic-row"><span>${escapeHtml(decision.replaceAll('_', ' '))}</span><strong>${Number(value).toLocaleString()}</strong></div>`).join('') || '<div class="empty">No decisions.</div>';
+
+    el('diagnostics-strategies').innerHTML = (diagnostics.strategies || []).map(strategy => `
+        <div class="diagnostic-row">
+            <span>${escapeHtml(String(strategy.strategy).replaceAll('_', ' '))}<small>${strategy.count} signals</small></span>
+            <strong>${Number(strategy.averageScore || 0).toFixed(1)}</strong>
+            <small>${strategy.finalBuyCount}/${strategy.buyCount} final/base buys</small>
+        </div>`).join('') || '<div class="empty">No strategy data.</div>';
+
+    el('diagnostics-symbols').innerHTML = (diagnostics.symbolIntervals || []).slice(0, 8).map(item => `
+        <div class="diagnostic-row">
+            <span>${escapeHtml(item.symbol)} · ${escapeHtml(displayInterval(item.interval))}<small>${item.count} signals</small></span>
+            <strong>${Number(item.averageScore || 0).toFixed(1)}</strong>
+            <small>${item.minimumScore}–${item.maximumScore} · ${item.buyCount} buys</small>
+        </div>`).join('') || '<div class="empty">No symbol data.</div>';
 }
 
 function renderSchedules(schedule) {
@@ -439,14 +483,15 @@ function scoreBreakdownHtml(signal) {
             <div><span>Strategy version</span><strong>${escapeHtml(String(signal.strategyVersion || strategy.strategyVersion || '—'))}</strong></div>
             <div><span>Strategy entry</span><strong>${signal.strategyEntryAllowed === false ? 'DISABLED' : 'ALLOWED'}</strong></div>
             <div><span>Active raw score</span><strong>${activeStrategy.raw ?? signal.rawScore ?? 0}/${activeStrategy.maximum ?? signal.maximumAvailableScore ?? 85}</strong></div>
+            <div><span>Excluded categories</span><strong>${Object.keys(signal.excludedCategories || {}).length ? Object.keys(signal.excludedCategories).join(", ") : "None"}</strong></div>
             <div><span>Normalized score</span><strong>${activeStrategy.normalized ?? signal.totalScore ?? 0}/100</strong></div>
         </div>
         <div class="dynamic-weight-grid">
             <div><span>Trend</span><strong>${activeStrategy.trend?.score ?? signal.trendScore ?? 0}/${signal.strategyTrendMaximum ?? activeStrategy.trend?.maximum ?? 25}</strong></div>
             <div><span>Volume</span><strong>${activeStrategy.volume?.score ?? signal.volumeScore ?? 0}/${signal.strategyVolumeMaximum ?? activeStrategy.volume?.maximum ?? 20}</strong></div>
             <div><span>Momentum</span><strong>${activeStrategy.momentum?.score ?? signal.momentumScore ?? 0}/${signal.strategyMomentumMaximum ?? activeStrategy.momentum?.maximum ?? 15}</strong></div>
-            <div><span>Sentiment</span><strong>${activeStrategy.sentiment?.score ?? signal.sentimentScore ?? 0}/${signal.strategySentimentMaximum ?? activeStrategy.sentiment?.maximum ?? 15}</strong></div>
-            <div><span>Fundamentals</span><strong>${activeStrategy.fundamentals?.score ?? signal.fundamentalScore ?? 0}/${signal.strategyFundamentalMaximum ?? activeStrategy.fundamentals?.maximum ?? 10}</strong></div>
+            <div><span>Sentiment</span><strong>${signal.sentimentAvailable === false ? 'EXCLUDED' : `${activeStrategy.sentiment?.score ?? signal.sentimentScore ?? 0}/${signal.strategySentimentMaximum ?? activeStrategy.sentiment?.maximum ?? 15}`}</strong></div>
+            <div><span>Fundamentals</span><strong>${signal.fundamentalAvailable === false ? 'EXCLUDED' : `${activeStrategy.fundamentals?.score ?? signal.fundamentalScore ?? 0}/${signal.strategyFundamentalMaximum ?? activeStrategy.fundamentals?.maximum ?? 10}`}</strong></div>
         </div>
         <div class="market-context-grid">
             <div><span>Higher timeframe</span><strong>${escapeHtml(String(marketContext.higherTimeframeStatus || signal.confluenceStatus || 'UNAVAILABLE').replaceAll('_', ' '))}</strong></div>
@@ -577,8 +622,8 @@ function scoreBreakdownHtml(signal) {
             <div><span>Trend</span><strong>${activeStrategy.trend?.score ?? b.movingAverages?.score ?? 0}<small>/${signal.strategyTrendMaximum ?? 25}</small></strong></div>
             <div><span>Volume</span><strong>${activeStrategy.volume?.score ?? b.bandsVolume?.score ?? 0}<small>/${signal.strategyVolumeMaximum ?? 20}</small></strong></div>
             <div><span>Momentum</span><strong>${activeStrategy.momentum?.score ?? b.momentum?.score ?? 0}<small>/${signal.strategyMomentumMaximum ?? 15}</small></strong></div>
-            <div><span>Sentiment</span><strong>${activeStrategy.sentiment?.score ?? b.sentiment?.score ?? 0}<small>/${signal.strategySentimentMaximum ?? 15}</small></strong></div>
-            <div><span>Fundamentals</span><strong>${activeStrategy.fundamentals?.score ?? b.fundamentals?.score ?? 0}<small>/${signal.strategyFundamentalMaximum ?? 10}</small></strong></div>
+            <div><span>Sentiment</span><strong>${signal.sentimentAvailable === false ? 'EXCLUDED' : `${activeStrategy.sentiment?.score ?? b.sentiment?.score ?? 0}<small>/${signal.strategySentimentMaximum ?? 15}</small>`}</strong></div>
+            <div><span>Fundamentals</span><strong>${signal.fundamentalAvailable === false ? 'EXCLUDED' : `${activeStrategy.fundamentals?.score ?? b.fundamentals?.score ?? 0}<small>/${signal.strategyFundamentalMaximum ?? 10}</small>`}</strong></div>
         </section>
         <div class="indicator-key-list">
             <span>EMA20</span><span>EMA50</span><span>EMA200</span><span>SMA20</span><span>RSI</span><span>MACD</span><span>Bollinger Bands</span><span>ATR</span><span>Relative Volume</span><span>Volume SMA20</span>

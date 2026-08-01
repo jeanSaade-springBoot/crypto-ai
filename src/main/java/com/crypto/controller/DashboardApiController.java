@@ -8,6 +8,7 @@ import com.crypto.domain.TradeSignal;
 import com.crypto.dto.SentimentOverview;
 import com.crypto.service.SentimentService;
 import com.crypto.service.ScheduleConfigurationService;
+import com.crypto.service.ScoreDiagnosticsService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.crypto.repository.CandleRepository;
@@ -41,6 +42,7 @@ public class DashboardApiController {
     private final SentimentService sentimentService;
     private final ScheduleConfigurationService scheduleConfigurationService;
     private final ObjectMapper objectMapper;
+    private final ScoreDiagnosticsService scoreDiagnosticsService;
 
     public DashboardApiController(
             CandleRepository candleRepository,
@@ -49,7 +51,8 @@ public class DashboardApiController {
             PaperPositionRepository paperPositionRepository,
             SentimentService sentimentService,
             ScheduleConfigurationService scheduleConfigurationService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            ScoreDiagnosticsService scoreDiagnosticsService
     ) {
         this.candleRepository = candleRepository;
         this.technicalIndicatorRepository = technicalIndicatorRepository;
@@ -58,6 +61,7 @@ public class DashboardApiController {
         this.sentimentService = sentimentService;
         this.scheduleConfigurationService = scheduleConfigurationService;
         this.objectMapper = objectMapper;
+        this.scoreDiagnosticsService = scoreDiagnosticsService;
     }
 
     @GetMapping("/symbols")
@@ -113,6 +117,7 @@ public class DashboardApiController {
         response.put("indicator", indicatorDto(latestIndicator));
         response.put("sentiment", sentiment);
         response.put("schedule", scheduleConfigurationService.dashboardSchedule());
+        response.put("scoreDiagnostics", scoreDiagnosticsService.last24Hours());
         response.put("signals", signals.stream().map(this::signalDto).toList());
         BigDecimal currentPrice = candles.isEmpty()
                 ? (latestSignal == null ? null : latestSignal.getLatestPrice())
@@ -315,6 +320,9 @@ public class DashboardApiController {
         result.put("fundamentalScore", signal.getFundamentalScore());
         result.put("rawScore", signal.getRawScore());
         result.put("maximumAvailableScore", signal.getMaximumAvailableScore());
+        result.put("sentimentAvailable", signal.isSentimentAvailable());
+        result.put("fundamentalAvailable", signal.isFundamentalAvailable());
+        result.put("excludedCategories", parseAnalysisBreakdown(signal.getExcludedCategories()));
         Map<String, Object> analysisDetails = parseAnalysisBreakdown(signal.getAnalysisBreakdown());
         result.put("scoreBreakdown", Map.of(
                 "movingAverages", Map.of(

@@ -365,3 +365,19 @@ analysis:
     open-interest-change-threshold: ${OPEN_INTEREST_CHANGE_THRESHOLD:2.0}
     strong-open-interest-change-threshold: ${OPEN_INTEREST_STRONG_CHANGE_THRESHOLD:5.0}
     veto-extreme-crowding: ${DERIVATIVES_VETO_EXTREME_CROWDING:true}
+
+
+# Automatic market-fundamental collection. Coin IDs stay configuration-only,
+# so adding another trading symbol requires YAML changes rather than Java code.
+fundamentals:
+  collection:
+    enabled: ${FUNDAMENTAL_COLLECTION_ENABLED:true}
+    base-url: ${COINGECKO_BASE_URL:https://api.coingecko.com/api/v3}
+    fixed-delay: ${FUNDAMENTAL_COLLECTION_DELAY:1h}
+    stale-after: ${FUNDAMENTAL_STALE_AFTER:6h}
+    vs-currency: ${FUNDAMENTAL_VS_CURRENCY:usd}
+    coin-ids:
+      BTCUSDT: bitcoin
+      ETHUSDT: ethereum
+      BNBUSDT: binancecoin
+      XRPUSDT: ripple

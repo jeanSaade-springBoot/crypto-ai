@@ -18,8 +18,9 @@ public record StrategyProfile(
         boolean entryAllowed,
         String explanation
 ) {
-    public int maximum(boolean sentimentEnabled) {
+    public int maximum(boolean sentimentAvailable, boolean fundamentalAvailable) {
         return trendMaximum + volumeMaximum + momentumMaximum
-                + fundamentalMaximum + (sentimentEnabled ? sentimentMaximum : 0);
+                + (fundamentalAvailable ? fundamentalMaximum : 0)
+                + (sentimentAvailable ? sentimentMaximum : 0);
     }
 }
