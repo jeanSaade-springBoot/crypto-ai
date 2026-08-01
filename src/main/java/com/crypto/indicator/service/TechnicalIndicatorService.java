@@ -252,9 +252,12 @@ public class TechnicalIndicatorService {
                         14
                 );
 
+        // Use the previous 20 closed candles as the volume baseline.
+        // The latest candle is deliberately excluded so RVOL is not diluted
+        // by including the value being compared in its own average.
         BigDecimal volumeSma20 =
                 smaCalculator.calculate(
-                        volumes,
+                        volumes.subList(0, volumes.size() - 1),
                         20
                 );
 
@@ -294,6 +297,7 @@ public class TechnicalIndicatorService {
 
                 atr14,
 
+                latest.getVolume(),
                 volumeSma20,
                 relativeVolume
         );
@@ -348,6 +352,7 @@ public class TechnicalIndicatorService {
         );
 
         indicator.setAtr14(snapshot.atr14());
+        indicator.setLatestVolume(snapshot.latestVolume());
         indicator.setVolumeSma20(
                 snapshot.volumeSma20()
         );

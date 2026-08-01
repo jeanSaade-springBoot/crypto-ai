@@ -31,6 +31,27 @@ public class MarketFundamental {
     @Column(name = "total_supply", precision = 38, scale = 8)
     private BigDecimal totalSupply;
 
+    @Column(name = "max_supply", precision = 38, scale = 8)
+    private BigDecimal maxSupply;
+
+    @Column(name = "tier1_exchange_count")
+    private Integer tier1ExchangeCount;
+
+    @Column(name = "exchange_count")
+    private Integer exchangeCount;
+
+    @Column(name = "team_supply", precision = 38, scale = 8)
+    private BigDecimal teamSupply;
+
+    @Column(name = "treasury_supply", precision = 38, scale = 8)
+    private BigDecimal treasurySupply;
+
+    @Column(name = "private_investor_supply", precision = 38, scale = 8)
+    private BigDecimal privateInvestorSupply;
+
+    @Column(name = "locked_supply", precision = 38, scale = 8)
+    private BigDecimal lockedSupply;
+
     @Column(name = "observed_at", nullable = false)
     private Instant observedAt;
 }

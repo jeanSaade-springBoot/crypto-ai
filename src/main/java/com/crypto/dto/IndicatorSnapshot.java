@@ -28,6 +28,7 @@ public record IndicatorSnapshot(
 
         BigDecimal atr14,
 
+        BigDecimal latestVolume,
         BigDecimal volumeSma20,
         BigDecimal relativeVolume
 ) {

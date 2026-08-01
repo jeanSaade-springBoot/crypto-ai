@@ -1,0 +1,16 @@
+ALTER TABLE trade_signal
+    ADD COLUMN liquidity_status VARCHAR(30) NOT NULL DEFAULT 'UNAVAILABLE',
+    ADD COLUMN liquidity_entry_allowed BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN order_book_imbalance DECIMAL(12,8) NULL,
+    ADD COLUMN order_book_bid_depth DECIMAL(30,8) NULL,
+    ADD COLUMN order_book_ask_depth DECIMAL(30,8) NULL,
+    ADD COLUMN order_book_spread_percent DECIMAL(20,10) NULL,
+    ADD COLUMN nearest_bid_wall_price DECIMAL(30,12) NULL,
+    ADD COLUMN nearest_bid_wall_size DECIMAL(30,8) NULL,
+    ADD COLUMN nearest_ask_wall_price DECIMAL(30,12) NULL,
+    ADD COLUMN nearest_ask_wall_size DECIMAL(30,8) NULL,
+    ADD COLUMN order_book_target_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN order_book_stop_exposed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN order_book_observations INT NOT NULL DEFAULT 0,
+    ADD COLUMN liquidity_explanation VARCHAR(2000) NULL,
+    ADD COLUMN liquidity_evaluated_at TIMESTAMP(6) NULL;

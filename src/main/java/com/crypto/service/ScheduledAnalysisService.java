@@ -52,7 +52,7 @@ public class ScheduledAnalysisService {
             }
 
             TradeSignal signal = analysisService.analyze(indicator);
-            paperTradingService.openFromSignal(signal);
+            paperTradingService.processSignal(signal);
 
             log.info(
                     "Scheduled recovery analysis completed: symbol={}, interval={}, score={}, decision={}",

@@ -16,6 +16,10 @@ public record SentimentProviderStatus(
         Instant lastCollectionAt,
         Instant lastSuccessAt,
         String status,
+        String healthStatus,
+        boolean contributing,
+        long hoursSinceSuccess,
+        String healthMessage,
         String message,
         boolean apiKeyConfigured,
         String apiKeyEnvironmentVariable

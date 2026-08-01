@@ -46,6 +46,19 @@ public class PaperPosition {
     @JoinColumn(name = "signal_id")
     private TradeSignal signal;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "exit_signal_id")
+    private TradeSignal exitSignal;
+
+    @Column(name = "close_reason", length = 40)
+    private String closeReason;
+
+    @Column(name = "entry_reason", length = 2000)
+    private String entryReason;
+
+    @Column(name = "exit_reason", length = 2000)
+    private String exitReason;
+
     @Column(name = "opened_at", nullable = false)
     private Instant openedAt;
 

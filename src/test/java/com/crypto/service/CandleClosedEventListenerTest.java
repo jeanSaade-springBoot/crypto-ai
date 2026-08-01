@@ -52,7 +52,7 @@ class CandleClosedEventListenerTest {
                 openTime
         )).thenReturn(Optional.of(indicator));
         when(analysisService.analyze(indicator)).thenReturn(signal);
-        when(paperTradingService.openFromSignal(signal))
+        when(paperTradingService.processSignal(signal))
                 .thenReturn(Optional.of(position));
 
         listener.handle(event);

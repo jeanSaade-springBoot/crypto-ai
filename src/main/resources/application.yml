@@ -2,9 +2,9 @@ spring:
   application:
     name: crypto-ai-trader
   datasource:
-    url: ${JAWSDB_URL:jdbc:mysql://localhost:3307/crypto_ai?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
-    username: ${DB_USERNAME:crypto}
-    password: ${DB_PASSWORD:password}
+    url: ${DB_URL:jdbc:mysql://localhost:3307/crypto_ai?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: crypto
+    password: password
     hikari:
       maximum-pool-size: 15
       minimum-idle: 3
@@ -49,6 +49,7 @@ binance:
       - BTCUSDT
       - ETHUSDT
       - BNBUSDT
+      - XRPUSDT
     intervals:
       - 1m
       - 5m
@@ -70,6 +71,7 @@ trading:
     - BTCUSDT
     - ETHUSDT
     - BNBUSDT
+    - XRPUSDT
   intervals:
     - 1m
     - 5m
@@ -82,12 +84,27 @@ trading:
   paper-account-balance: 10000
   scheduled-analysis-enabled: true
   analysis-delay-ms: 300000
+  # ATR is a risk engine, not a directional score.
+  atr-risk:
+    period: ${ATR_PERIOD:14}
+    stop-loss-multiplier: ${ATR_STOP_LOSS_MULTIPLIER:2.0}
+    take-profit-multiplier: ${ATR_TAKE_PROFIT_MULTIPLIER:3.0}
+    low-volatility-percent: ${ATR_LOW_VOLATILITY_PERCENT:0.50}
+    high-volatility-percent: ${ATR_HIGH_VOLATILITY_PERCENT:2.50}
+    extreme-volatility-percent: ${ATR_EXTREME_VOLATILITY_PERCENT:5.00}
+    overextension-multiplier: ${ATR_OVEREXTENSION_MULTIPLIER:2.50}
+    minimum-stop-percent: ${ATR_MINIMUM_STOP_PERCENT:0.50}
+    maximum-stop-percent: ${ATR_MAXIMUM_STOP_PERCENT:8.00}
 
 
 sentiment:
   # Master switch. Keep false until you want sentiment in trade decisions.
   enabled: ${SENTIMENT_ENABLED:true}
   active-window: 24h
+
+  health:
+    stale-after: ${SENTIMENT_PROVIDER_STALE_AFTER:2h}
+    down-after: ${SENTIMENT_PROVIDER_DOWN_AFTER:6h}
 
   scheduler:
     # Scheduler also requires sentiment.enabled=true.
@@ -171,3 +188,180 @@ whale:
 dashboard:
   # Browser-side dashboard refresh cadence. This value is also displayed in the schedule panel.
   refresh-ms: ${DASHBOARD_REFRESH_MS:10000}
+
+# Scoring parameters are explicit and configurable so they can later be calibrated
+# by strategy and market regime without changing Java code.
+analysis:
+  # Live order-book liquidity context. This does not change the /85 score.
+  # Persistent walls and depth imbalance are stored as an immutable signal snapshot.
+  order-book:
+    enabled: ${ORDER_BOOK_ENABLED:true}
+    depth-limit: ${ORDER_BOOK_DEPTH_LIMIT:100}
+    range-percent: ${ORDER_BOOK_RANGE_PERCENT:2.0}
+    snapshot-interval-ms: ${ORDER_BOOK_SNAPSHOT_INTERVAL_MS:5000}
+    # Retain enough observations for the longest configured interval window.
+    history-size: ${ORDER_BOOK_HISTORY_SIZE:5000}
+    minimum-observations: ${ORDER_BOOK_MINIMUM_OBSERVATIONS:5}
+    moderate-imbalance: ${ORDER_BOOK_MODERATE_IMBALANCE:0.20}
+    strong-imbalance: ${ORDER_BOOK_STRONG_IMBALANCE:0.40}
+    wall-size-multiplier: ${ORDER_BOOK_WALL_SIZE_MULTIPLIER:4.0}
+    wall-price-tolerance-percent: ${ORDER_BOOK_WALL_PRICE_TOLERANCE_PERCENT:0.15}
+    veto-strong-conflict: ${ORDER_BOOK_VETO_STRONG_CONFLICT:true}
+
+    # A shared collector is used, but each signal interval evaluates a different
+    # rolling depth window, wall persistence, influence, and veto policy.
+    intervals:
+      1m:
+        window-seconds: ${ORDER_BOOK_1M_WINDOW_SECONDS:60}
+        minimum-observations: ${ORDER_BOOK_1M_MINIMUM_OBSERVATIONS:6}
+        minimum-wall-persistence-seconds: ${ORDER_BOOK_1M_WALL_PERSISTENCE_SECONDS:20}
+        influence: ${ORDER_BOOK_1M_INFLUENCE:1.00}
+        allow-veto: ${ORDER_BOOK_1M_ALLOW_VETO:true}
+      5m:
+        window-seconds: ${ORDER_BOOK_5M_WINDOW_SECONDS:300}
+        minimum-observations: ${ORDER_BOOK_5M_MINIMUM_OBSERVATIONS:24}
+        minimum-wall-persistence-seconds: ${ORDER_BOOK_5M_WALL_PERSISTENCE_SECONDS:60}
+        influence: ${ORDER_BOOK_5M_INFLUENCE:0.80}
+        allow-veto: ${ORDER_BOOK_5M_ALLOW_VETO:true}
+      15m:
+        window-seconds: ${ORDER_BOOK_15M_WINDOW_SECONDS:900}
+        minimum-observations: ${ORDER_BOOK_15M_MINIMUM_OBSERVATIONS:60}
+        minimum-wall-persistence-seconds: ${ORDER_BOOK_15M_WALL_PERSISTENCE_SECONDS:180}
+        influence: ${ORDER_BOOK_15M_INFLUENCE:0.60}
+        allow-veto: ${ORDER_BOOK_15M_ALLOW_VETO:true}
+      1h:
+        window-seconds: ${ORDER_BOOK_1H_WINDOW_SECONDS:3600}
+        minimum-observations: ${ORDER_BOOK_1H_MINIMUM_OBSERVATIONS:120}
+        minimum-wall-persistence-seconds: ${ORDER_BOOK_1H_WALL_PERSISTENCE_SECONDS:900}
+        influence: ${ORDER_BOOK_1H_INFLUENCE:0.30}
+        allow-veto: ${ORDER_BOOK_1H_ALLOW_VETO:false}
+      4h:
+        window-seconds: ${ORDER_BOOK_4H_WINDOW_SECONDS:14400}
+        minimum-observations: ${ORDER_BOOK_4H_MINIMUM_OBSERVATIONS:180}
+        minimum-wall-persistence-seconds: ${ORDER_BOOK_4H_WALL_PERSISTENCE_SECONDS:1800}
+        influence: ${ORDER_BOOK_4H_INFLUENCE:0.15}
+        allow-veto: ${ORDER_BOOK_4H_ALLOW_VETO:false}
+      1d:
+        window-seconds: ${ORDER_BOOK_1D_WINDOW_SECONDS:21600}
+        minimum-observations: ${ORDER_BOOK_1D_MINIMUM_OBSERVATIONS:180}
+        minimum-wall-persistence-seconds: ${ORDER_BOOK_1D_WALL_PERSISTENCE_SECONDS:3600}
+        influence: ${ORDER_BOOK_1D_INFLUENCE:0.00}
+        allow-veto: ${ORDER_BOOK_1D_ALLOW_VETO:false}
+
+  # Dynamic BTC relationship/context layer. Every configured altcoin is measured
+  # against BTC using aligned closed-candle returns; no symbol-specific Java code is needed.
+  btc-context:
+    enabled: ${BTC_CONTEXT_ENABLED:true}
+    reference-symbol: ${BTC_CONTEXT_REFERENCE_SYMBOL:BTCUSDT}
+    window-size: ${BTC_CONTEXT_WINDOW_SIZE:200}
+    minimum-samples: ${BTC_CONTEXT_MINIMUM_SAMPLES:120}
+    moderate-correlation: ${BTC_CONTEXT_MODERATE_CORRELATION:0.40}
+    strong-correlation: ${BTC_CONTEXT_STRONG_CORRELATION:0.70}
+    high-beta: ${BTC_CONTEXT_HIGH_BETA:1.30}
+    veto-strong-conflict: ${BTC_CONTEXT_VETO_STRONG_CONFLICT:true}
+  scoring:
+    trend:
+      ema-gap-very-weak: 0.25
+      ema-gap-weak: 0.50
+      ema-gap-moderate: 1.00
+      ema-gap-good: 2.00
+      ema-gap-strong: 3.00
+      ema-gap-optimal: 5.00
+      ema-gap-overextended: 8.00
+      price-ema200-weak: 1.00
+      price-ema200-moderate: 3.00
+      price-ema200-strong: 6.00
+      price-ema200-optimal: 12.00
+      price-ema200-overextended: 20.00
+      sma20-weak: 0.25
+      sma20-moderate: 1.00
+      sma20-optimal: 3.00
+      sma20-overextended: 6.00
+      ema-separation-atr-weak: 0.50
+      ema-separation-atr-moderate: 1.00
+      ema-separation-atr-strong: 3.00
+    momentum:
+      rsi-oversold: 30
+      rsi-weak: 40
+      rsi-recovering: 45
+      rsi-bullish: 50
+      rsi-strong: 60
+      rsi-hot: 68
+      rsi-overbought: 72
+      macd-atr-weak: 2
+      macd-atr-moderate: 5
+      macd-atr-strong: 10
+    data-quality:
+      minimum-candles: 210
+      maximum-missing-candles: 0
+      block-on-invalid-ohlc: true
+
+  # Market-driven strategy selection. The system first classifies the current
+  # regime, then applies one transparent/versioned profile. Scores are always
+  # normalized against the active profile maximum.
+  dynamic-strategy:
+    enabled: ${DYNAMIC_STRATEGY_ENABLED:true}
+    version: ${DYNAMIC_STRATEGY_VERSION:1.0}
+    minimum-regime-confidence: ${DYNAMIC_STRATEGY_MINIMUM_CONFIDENCE:55}
+
+    trend-following:
+      trend-maximum: 30
+      volume-maximum: 20
+      momentum-maximum: 15
+      sentiment-maximum: 10
+      fundamental-maximum: 10
+      strong-buy-threshold: 85
+      buy-threshold: 75
+      watch-threshold: 60
+      neutral-threshold: 45
+      sell-threshold: 30
+
+    range-mean-reversion:
+      trend-maximum: 15
+      volume-maximum: 18
+      momentum-maximum: 22
+      sentiment-maximum: 15
+      fundamental-maximum: 15
+      strong-buy-threshold: 88
+      buy-threshold: 78
+      watch-threshold: 65
+      neutral-threshold: 45
+      sell-threshold: 30
+
+    breakout:
+      trend-maximum: 20
+      volume-maximum: 30
+      momentum-maximum: 20
+      sentiment-maximum: 10
+      fundamental-maximum: 5
+      strong-buy-threshold: 90
+      buy-threshold: 80
+      watch-threshold: 65
+      neutral-threshold: 45
+      sell-threshold: 30
+
+    defensive:
+      trend-maximum: 25
+      volume-maximum: 20
+      momentum-maximum: 15
+      sentiment-maximum: 10
+      fundamental-maximum: 15
+      strong-buy-threshold: 90
+      buy-threshold: 82
+      watch-threshold: 68
+      neutral-threshold: 50
+      sell-threshold: 35
+
+  # Binance USDⓈ-M futures positioning context. Funding and open interest do not
+  # add points to the /85 score; they influence strategy, confidence and safety.
+  derivatives-positioning:
+    enabled: ${DERIVATIVES_POSITIONING_ENABLED:true}
+    base-url: ${BINANCE_FUTURES_BASE_URL:https://fapi.binance.com}
+    funding-history-limit: ${FUNDING_HISTORY_LIMIT:100}
+    open-interest-history-limit: ${OPEN_INTEREST_HISTORY_LIMIT:3}
+    minimum-funding-samples: ${FUNDING_MINIMUM_SAMPLES:20}
+    moderate-funding-rate: ${FUNDING_MODERATE_RATE:0.0005}
+    extreme-funding-rate: ${FUNDING_EXTREME_RATE:0.0010}
+    open-interest-change-threshold: ${OPEN_INTEREST_CHANGE_THRESHOLD:2.0}
+    strong-open-interest-change-threshold: ${OPEN_INTEREST_STRONG_CHANGE_THRESHOLD:5.0}
+    veto-extreme-crowding: ${DERIVATIVES_VETO_EXTREME_CROWDING:true}

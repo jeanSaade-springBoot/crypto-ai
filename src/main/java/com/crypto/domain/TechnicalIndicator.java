@@ -76,6 +76,9 @@ public class TechnicalIndicator {
     @Column(name = "atr_14", precision = 30, scale = 12)
     private BigDecimal atr14;
 
+    @Column(name = "latest_volume", precision = 30, scale = 12)
+    private BigDecimal latestVolume;
+
     @Column(name = "volume_sma_20", precision = 30, scale = 12)
     private BigDecimal volumeSma20;
 
@@ -226,6 +229,14 @@ public class TechnicalIndicator {
 
     public void setAtr14(BigDecimal atr14) {
         this.atr14 = atr14;
+    }
+
+    public BigDecimal getLatestVolume() {
+        return latestVolume;
+    }
+
+    public void setLatestVolume(BigDecimal latestVolume) {
+        this.latestVolume = latestVolume;
     }
 
     public BigDecimal getVolumeSma20() {

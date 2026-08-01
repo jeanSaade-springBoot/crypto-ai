@@ -11,6 +11,7 @@ import org.springframework.web.client.RestClient;
 
 import com.crypto.client.config.binance.BinanceMarketDataProperties;
 import com.crypto.client.binance.dto.BinanceKline;
+import com.crypto.client.binance.dto.BinanceOrderBook;
 
 @Component
 public class BinanceMarketDataClient {
@@ -57,6 +58,29 @@ public class BinanceMarketDataClient {
         }
 
         return candles;
+    }
+
+    public BinanceOrderBook getOrderBook(String symbol, int limit) {
+        if (symbol == null || symbol.isBlank()) {
+            throw new IllegalArgumentException("Symbol is required");
+        }
+        if (limit < 1 || limit > 1000) {
+            throw new IllegalArgumentException("Depth limit must be between 1 and 1000");
+        }
+
+        BinanceOrderBook response = restClient.get()
+            .uri(uriBuilder -> uriBuilder
+                .path("/api/v3/depth")
+                .queryParam("symbol", symbol.toUpperCase())
+                .queryParam("limit", limit)
+                .build())
+            .retrieve()
+            .body(BinanceOrderBook.class);
+
+        if (response == null) {
+            throw new IllegalStateException("Empty Binance order-book response for " + symbol);
+        }
+        return response;
     }
 
     private BinanceKline mapKline(List<Object> row) {

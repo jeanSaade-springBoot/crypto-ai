@@ -1,0 +1,15 @@
+ALTER TABLE trade_signal
+    ADD COLUMN btc_relationship_type VARCHAR(30) NOT NULL DEFAULT 'UNAVAILABLE',
+    ADD COLUMN btc_context_status VARCHAR(30) NOT NULL DEFAULT 'UNAVAILABLE',
+    ADD COLUMN btc_context_entry_allowed BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN btc_context_interval VARCHAR(10) NULL,
+    ADD COLUMN btc_context_decision VARCHAR(30) NULL,
+    ADD COLUMN btc_context_trend_score INT NULL,
+    ADD COLUMN btc_correlation DECIMAL(12,8) NULL,
+    ADD COLUMN btc_beta DECIMAL(12,8) NULL,
+    ADD COLUMN btc_relationship_sample_size INT NOT NULL DEFAULT 0,
+    ADD COLUMN btc_influence_factor DECIMAL(8,6) NULL,
+    ADD COLUMN btc_relationship_stable BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN btc_context_explanation VARCHAR(1500) NULL,
+    ADD COLUMN btc_context_evaluated_at DATETIME(6) NULL,
+    ADD COLUMN btc_signal_generated_at DATETIME(6) NULL;

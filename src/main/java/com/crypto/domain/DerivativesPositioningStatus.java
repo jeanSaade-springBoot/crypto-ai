@@ -1,0 +1,17 @@
+package com.crypto.domain;
+
+public enum DerivativesPositioningStatus {
+    HEALTHY_BULLISH,
+    HEALTHY_BEARISH,
+    LONGS_CROWDED,
+    SHORTS_CROWDED,
+    FRESH_LONG_BUILDUP,
+    FRESH_SHORT_BUILDUP,
+    SHORT_COVERING,
+    LONG_LIQUIDATION,
+    LOW_CONVICTION,
+    BALANCED,
+    LEARNING,
+    NOT_APPLICABLE,
+    UNAVAILABLE
+}

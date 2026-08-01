@@ -179,7 +179,9 @@ public class SentimentService {
             BigDecimal configuredWeight = providerConfig.getWeight();
             BigDecimal effectiveWeight = provider.confidence().multiply(configuredWeight, MC);
 
-            if (properties.enabled() && providerConfig.isEnabled() && provider.sampleCount() > 0 && effectiveWeight.signum() > 0) {
+            boolean healthyEnough = providerConfigService.contributes(providerConfig, now);
+            if (properties.enabled() && providerConfig.isEnabled() && healthyEnough
+                    && provider.sampleCount() > 0 && effectiveWeight.signum() > 0) {
                 total = total.add(provider.score().multiply(effectiveWeight, MC), MC);
                 denominator = denominator.add(effectiveWeight, MC);
             }
@@ -190,7 +192,8 @@ public class SentimentService {
                     configuredWeight,
                     provider.score(),
                     provider.confidence(),
-                    properties.enabled() && providerConfig.isEnabled() ? effectiveWeight : BigDecimal.ZERO,
+                    properties.enabled() && providerConfig.isEnabled() && healthyEnough
+                            ? effectiveWeight : BigDecimal.ZERO,
                     provider.sampleCount(),
                     provider.latestObservedAt()
             ));

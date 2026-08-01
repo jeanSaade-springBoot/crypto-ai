@@ -20,7 +20,8 @@
             <a href="#indicators">Indicators</a>
             <a href="#sentiment">Sentiment</a>
             <a href="#signals">Trade signals</a>
-            <a href="#positions">Paper positions</a>
+            <a href="#positions">Open trades</a>
+            <a href="#trade-history">Trade history</a>
             <a href="#pipeline">Event pipeline</a>
             <a href="#schedules">Schedules</a>
         </nav>
@@ -51,14 +52,15 @@
 
         <section id="pipeline" class="panel">
             <div class="section-heading"><div><p class="eyebrow">FLOW HEALTH</p><h2>Event pipeline</h2></div><span id="last-updated">—</span></div>
-            <div class="pipeline-grid">
-                <div class="pipeline-step" data-step="candle"><span class="step-icon">1</span><div><strong>Closed candle</strong><small>BinanceKlineService</small><p></p></div></div>
-                <div class="pipeline-arrow">→</div>
-                <div class="pipeline-step" data-step="indicator"><span class="step-icon">2</span><div><strong>Indicators saved</strong><small>TechnicalIndicatorService</small><p></p></div></div>
-                <div class="pipeline-arrow">→</div>
-                <div class="pipeline-step" data-step="analysis"><span class="step-icon">3</span><div><strong>Analysis completed</strong><small>AnalysisService.analyze(...)</small><p></p></div></div>
-                <div class="pipeline-arrow">→</div>
-                <div class="pipeline-step" data-step="paperTrading"><span class="step-icon">4</span><div><strong>Paper trade</strong><small>PaperTradingService</small><p></p></div></div>
+            <div class="pipeline-grid pipeline-grid-compact">
+                <div class="pipeline-step" data-step="candle"><span class="step-icon">1</span><div><strong>Closed candle</strong><small>Kline</small><p></p></div></div>
+                <div class="pipeline-step" data-step="indicator"><span class="step-icon">2</span><div><strong>Indicators</strong><small>Technical</small><p></p></div></div>
+                <div class="pipeline-step" data-step="marketContext"><span class="step-icon">3</span><div><strong>Market context</strong><small>Context</small><p></p></div></div>
+                <div class="pipeline-step" data-step="strategy"><span class="step-icon">4</span><div><strong>Strategy</strong><small>Dynamic</small><p></p></div></div>
+                <div class="pipeline-step" data-step="derivatives"><span class="step-icon">5</span><div><strong>Funding & OI</strong><small>Futures</small><p></p></div></div>
+                <div class="pipeline-step" data-step="orderBook"><span class="step-icon">6</span><div><strong>Order book</strong><small>Liquidity</small><p></p></div></div>
+                <div class="pipeline-step" data-step="analysis"><span class="step-icon">7</span><div><strong>Final decision</strong><small>Analysis</small><p></p></div></div>
+                <div class="pipeline-step" data-step="paperTrading"><span class="step-icon">8</span><div><strong>Paper trade</strong><small>Execution</small><p></p></div></div>
             </div>
         </section>
 
@@ -115,6 +117,8 @@
             <article class="panel sentiment-overview-panel">
                 <div class="section-heading"><div><p class="eyebrow">MARKET SENTIMENT</p><h2>Provider status and evaluated score</h2></div><div class="heading-actions"><button id="collect-sentiment-button" type="button">Collect enabled providers</button><span id="sentiment-master-status" class="badge neutral">CHECKING</span></div></div>
 
+                <div id="sentiment-health-alert" class="provider-health-alert hidden" role="alert"></div>
+
                 <div class="sentiment-summary-grid">
                     <div class="sentiment-summary-card"><span>Master status</span><strong id="sentiment-master-text">—</strong><small id="sentiment-master-message">Loading configuration</small></div>
                     <div class="sentiment-summary-card"><span>Combined evaluated score</span><strong id="sentiment-score">+0.000</strong><small><span id="sentiment-label" class="badge neutral">NEUTRAL</span></small></div>
@@ -127,7 +131,7 @@
                     <div class="sentiment-scale-labels"><span>Bearish -1</span><span>Neutral 0</span><span>Bullish +1</span></div>
                 </div>
                 <p id="sentiment-samples" class="muted">No sentiment samples yet.</p>
-                <div class="table-wrap provider-breakdown"><table><thead><tr><th>Provider</th><th>Enabled</th><th>API key</th><th>Weight</th><th>Latest score</th><th>Evaluated contribution</th><th>Confidence</th><th>Samples</th><th>Interval</th><th>Last run</th><th>Status</th><th>Actions</th></tr></thead><tbody id="sentiment-provider-body"></tbody></table></div>
+                <div class="table-wrap provider-breakdown"><table><thead><tr><th>Provider</th><th>Enabled</th><th>API key</th><th>Weight</th><th>Latest score</th><th>Evaluated contribution</th><th>Confidence</th><th>Samples</th><th>Interval</th><th>Last run</th><th>Health</th><th>Status</th><th>Actions</th></tr></thead><tbody id="sentiment-provider-body"></tbody></table></div>
                 <small id="sentiment-collect-feedback" aria-live="polite"></small>
             </article>
 
@@ -150,12 +154,28 @@
 
         <section id="signals" class="panel">
             <div class="section-heading"><div><p class="eyebrow">ANALYSIS OUTPUT</p><h2>Recent trade signals</h2></div></div>
-            <div class="table-wrap"><table><thead><tr><th>Time</th><th>Decision</th><th>Score</th><th>Price</th><th>Stop loss</th><th>Take profit</th><th>Explanation</th></tr></thead><tbody id="signals-body"></tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Interval</th><th>Time</th><th>Decision</th><th>Score</th><th>Price</th><th>Stop loss</th><th>Take profit</th><th>Analysis</th></tr></thead><tbody id="signals-body"></tbody></table></div>
         </section>
 
         <section id="positions" class="panel">
-            <div class="section-heading"><div><p class="eyebrow">EXECUTION</p><h2>Paper positions</h2></div></div>
-            <div class="table-wrap"><table><thead><tr><th>Opened</th><th>Side</th><th>Status</th><th>Quantity</th><th>Entry</th><th>Stop loss</th><th>Take profit</th><th>PnL</th></tr></thead><tbody id="positions-body"></tbody></table></div>
+            <div class="section-heading">
+                <div><p class="eyebrow">EXECUTION</p><h2>Open trades</h2></div>
+                <span>What the simulated trade looks like right now</span>
+            </div>
+            <div id="open-trades" class="trade-card-grid"></div>
+        </section>
+
+        <section id="trade-history" class="panel">
+            <div class="section-heading">
+                <div><p class="eyebrow">RESULTS</p><h2>Trade history</h2></div>
+                <span>Completed trades and signal accuracy</span>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Symbol</th><th>Opened</th><th>Closed</th><th>Entry</th><th>Exit</th><th>Quantity</th><th>P&amp;L</th><th>Closed by</th><th>Prediction</th></tr></thead>
+                    <tbody id="trade-history-body"></tbody>
+                </table>
+            </div>
         </section>
     </main>
 </div>

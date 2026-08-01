@@ -5,5 +5,6 @@ public enum SignalDecision {
     BUY,
     WATCH,
     NEUTRAL,
-    REJECT
+    SELL,
+    STRONG_SELL
 }

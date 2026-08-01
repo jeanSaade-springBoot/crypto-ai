@@ -25,6 +25,13 @@ public class FundamentalService {
                 .volume24h(request.volume24h())
                 .circulatingSupply(request.circulatingSupply())
                 .totalSupply(request.totalSupply())
+                .maxSupply(request.maxSupply())
+                .tier1ExchangeCount(request.tier1ExchangeCount())
+                .exchangeCount(request.exchangeCount())
+                .teamSupply(request.teamSupply())
+                .treasurySupply(request.treasurySupply())
+                .privateInvestorSupply(request.privateInvestorSupply())
+                .lockedSupply(request.lockedSupply())
                 .observedAt(Instant.now())
                 .build());
     }

@@ -59,6 +59,8 @@ public class SentimentController {
                 .collect(Collectors.toMap(ProviderSentiment::provider, Function.identity(), (a, b) -> a));
         return providerConfigService.findAll().stream().map(config -> {
             ProviderSentiment score = scores.get(config.getProviderCode());
+            SentimentProviderConfigService.ProviderHealth health =
+                    providerConfigService.health(config, java.time.Instant.now());
             return new SentimentProviderStatus(
                     config.getProviderCode(),
                     config.getDisplayName(),
@@ -72,6 +74,10 @@ public class SentimentController {
                     config.getLastCollectionAt(),
                     config.getLastSuccessAt(),
                     config.getLastStatus(),
+                    health.status(),
+                    health.contributing(),
+                    health.hoursSinceSuccess(),
+                    health.message(),
                     config.getLastMessage(),
                     providerConfigService.apiKeyConfigured(config.getProviderCode()),
                     config.getApiKeyEnvVar()

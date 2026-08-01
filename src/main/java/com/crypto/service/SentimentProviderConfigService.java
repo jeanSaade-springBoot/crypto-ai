@@ -104,5 +104,39 @@ public class SentimentProviderConfigService implements CommandLineRunner {
         return properties.enabled();
     }
 
+    public ProviderHealth health(SentimentProviderConfig config, Instant now) {
+        if (!properties.enabled() || !config.isEnabled()) {
+            return new ProviderHealth("DISABLED", false, 0, "Provider is disabled");
+        }
+        Instant success = config.getLastSuccessAt();
+        if (success == null) {
+            String state = "NEVER_RUN".equals(config.getLastStatus()) ? "STALE" : "DOWN";
+            return new ProviderHealth(state, false, -1,
+                    "No successful collection has been recorded");
+        }
+        java.time.Duration age = java.time.Duration.between(success, now);
+        long hours = Math.max(0, age.toHours());
+        if (age.compareTo(properties.health().downAfter()) >= 0) {
+            return new ProviderHealth("DOWN", false, hours,
+                    "No successful collection for " + hours + " hours");
+        }
+        if (age.compareTo(properties.health().staleAfter()) >= 0) {
+            return new ProviderHealth("STALE", false, hours,
+                    "Latest successful data is " + hours + " hours old");
+        }
+        if ("FAILED".equals(config.getLastStatus())) {
+            return new ProviderHealth("DEGRADED", true, hours,
+                    "Latest attempt failed; recent successful data is still active");
+        }
+        return new ProviderHealth("HEALTHY", true, hours, "Provider is collecting normally");
+    }
+
+    public boolean contributes(SentimentProviderConfig config, Instant now) {
+        return health(config, now).contributing();
+    }
+
+    public record ProviderHealth(String status, boolean contributing, long hoursSinceSuccess, String message) {}
+
+
     private record Seed(String displayName, String apiKeyEnvVar, long defaultIntervalSeconds) {}
 }

@@ -12,11 +12,13 @@ public record SentimentProperties(
         boolean enabled,
         Duration activeWindow,
         Scheduler scheduler,
+        Health health,
         Map<String, Provider> providers
 ) {
     public SentimentProperties {
         activeWindow = activeWindow == null ? Duration.ofHours(24) : activeWindow;
         scheduler = scheduler == null ? Scheduler.defaults() : scheduler;
+        health = health == null ? Health.defaults() : health;
         providers = providers == null ? new LinkedHashMap<>() : providers;
     }
 
@@ -42,6 +44,22 @@ public record SentimentProperties(
 
         public static Scheduler defaults() {
             return new Scheduler(false, 300_000L);
+        }
+    }
+
+
+    public record Health(
+            Duration staleAfter,
+            Duration downAfter
+    ) {
+        public Health {
+            staleAfter = staleAfter == null ? Duration.ofHours(2) : staleAfter;
+            downAfter = downAfter == null ? Duration.ofHours(6) : downAfter;
+            if (downAfter.compareTo(staleAfter) < 0) downAfter = staleAfter;
+        }
+
+        public static Health defaults() {
+            return new Health(Duration.ofHours(2), Duration.ofHours(6));
         }
     }
 

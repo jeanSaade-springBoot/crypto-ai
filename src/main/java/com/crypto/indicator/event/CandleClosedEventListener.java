@@ -5,6 +5,8 @@ import com.crypto.domain.TechnicalIndicator;
 import com.crypto.domain.TradeSignal;
 import com.crypto.indicator.service.TechnicalIndicatorService;
 import com.crypto.service.AnalysisService;
+import com.crypto.service.CandleDataQualityService;
+import com.crypto.dto.CandleDataQualityResult;
 import com.crypto.service.PaperTradingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,15 +25,18 @@ public class CandleClosedEventListener {
     private final TechnicalIndicatorService technicalIndicatorService;
     private final AnalysisService analysisService;
     private final PaperTradingService paperTradingService;
+    private final CandleDataQualityService candleDataQualityService;
 
     public CandleClosedEventListener(
             TechnicalIndicatorService technicalIndicatorService,
             AnalysisService analysisService,
-            PaperTradingService paperTradingService
+            PaperTradingService paperTradingService,
+            CandleDataQualityService candleDataQualityService
     ) {
         this.technicalIndicatorService = technicalIndicatorService;
         this.analysisService = analysisService;
         this.paperTradingService = paperTradingService;
+        this.candleDataQualityService = candleDataQualityService;
     }
 
     /**
@@ -47,6 +52,17 @@ public class CandleClosedEventListener {
         	            event.symbol(),
         	            event.intervalCode()
         	        );
+            CandleDataQualityResult dataQuality = candleDataQualityService.validate(
+                    event.symbol(), event.intervalCode()
+            );
+            if (!dataQuality.valid()) {
+                log.warn(
+                        "Automatic analysis blocked by candle data quality: symbol={}, interval={}, warnings={}",
+                        event.symbol(), event.intervalCode(), dataQuality.warnings()
+                );
+                return;
+            }
+
             Optional<TechnicalIndicator> indicatorResult =
                     technicalIndicatorService.calculateAndPersist(
                             event.symbol(),
@@ -82,7 +98,7 @@ public class CandleClosedEventListener {
                     event.intervalCode(),
                     event.openTime()
             );
-            Optional<PaperPosition> position = paperTradingService.openFromSignal(signal);
+            Optional<PaperPosition> position = paperTradingService.processSignal(signal);
 
             log.info(
                     "Automatic candle flow completed: symbol={}, interval={}, openTime={}, " +

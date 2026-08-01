@@ -8,10 +8,12 @@ import org.springframework.data.jpa.repository.Query;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 public interface PaperPositionRepository extends JpaRepository<PaperPosition, Long> {
     long countByStatus(PositionStatus status);
     boolean existsBySymbolAndStatus(String symbol, PositionStatus status);
+    Optional<PaperPosition> findBySymbolAndStatus(String symbol, PositionStatus status);
     List<PaperPosition> findTop100ByOrderByOpenedAtDesc();
     List<PaperPosition> findTop20BySymbolOrderByOpenedAtDesc(String symbol);
 

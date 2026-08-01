@@ -1,11 +1,7 @@
 package com.crypto.service;
 
 import com.crypto.config.TradingProperties;
-import com.crypto.domain.PaperPosition;
-import com.crypto.domain.PositionSide;
-import com.crypto.domain.PositionStatus;
-import com.crypto.domain.SignalDecision;
-import com.crypto.domain.TradeSignal;
+import com.crypto.domain.*;
 import com.crypto.repository.PaperPositionRepository;
 import com.crypto.repository.TradeSignalRepository;
 import lombok.RequiredArgsConstructor;
@@ -30,48 +26,64 @@ public class PaperTradingService {
     private final TradeSignalRepository signalRepository;
     private final PaperPositionRepository positionRepository;
 
-    /**
-     * Manual entry point used by the controller.
-     */
     @Transactional
     public PaperPosition openFromLatestSignal(String symbol) {
         String normalized = normalizeSymbol(symbol);
-
         TradeSignal signal = signalRepository
                 .findTopBySymbolOrderByGeneratedAtDesc(normalized)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "No signal found for " + normalized
-                ));
+                .orElseThrow(() -> new IllegalArgumentException("No signal found for " + normalized));
 
-        return openFromSignal(signal)
+        return processSignal(signal)
                 .orElseThrow(() -> new IllegalStateException(
-                        "Latest signal is not eligible for a paper trade " +
-                                "or an open-position limit prevents it"
+                        "The latest signal did not open a new position. It may be WATCH/NEUTRAL/SELL, " +
+                                "or a position for this symbol is already open."
                 ));
     }
 
     /**
-     * Automatic entry point. It uses the exact TradeSignal just created by
-     * AnalysisService, avoiding a second latest-signal lookup or race condition.
+     * Applies the complete paper-trade lifecycle for one newly-created signal.
+     * BUY opens one position, WATCH/NEUTRAL holds it, and SELL closes it.
+     * Stop-loss and take-profit are checked before the signal decision.
      */
     @Transactional
-    public Optional<PaperPosition> openFromSignal(TradeSignal signal) {
+    public Optional<PaperPosition> processSignal(TradeSignal signal) {
         if (signal == null) {
             throw new IllegalArgumentException("Trade signal is required");
         }
 
         String symbol = normalizeSymbol(signal.getSymbol());
+        Optional<PaperPosition> openPosition = positionRepository
+                .findBySymbolAndStatus(symbol, PositionStatus.OPEN);
 
-        if (!isEligible(signal)) {
+        if (openPosition.isPresent()) {
+            PaperPosition position = openPosition.get();
+            BigDecimal price = signal.getLatestPrice();
+
+            if (price.compareTo(position.getStopLoss()) <= 0) {
+                return Optional.of(closeFromSignal(position, signal, PositionStatus.STOPPED,
+                        "STOP_LOSS", "Price reached the configured stop loss."));
+            }
+
+            if (price.compareTo(position.getTakeProfit()) >= 0) {
+                return Optional.of(closeFromSignal(position, signal, PositionStatus.CLOSED,
+                        "TAKE_PROFIT", "Price reached the configured take-profit target."));
+            }
+
+            if (signal.getDecision() == SignalDecision.SELL
+                    || signal.getDecision() == SignalDecision.STRONG_SELL) {
+                return Optional.of(closeFromSignal(position, signal, PositionStatus.CLOSED,
+                        signal.getDecision().name(), signal.getExplanation()));
+            }
+
+            // BUY, STRONG_BUY, WATCH and NEUTRAL do not create another trade.
+            return Optional.of(position);
+        }
+
+        if (!isBuyEligible(signal)) {
             return Optional.empty();
         }
 
-        if (positionRepository.countByStatus(PositionStatus.OPEN)
-                >= properties.maxOpenPositions()) {
-            return Optional.empty();
-        }
-
-        if (positionRepository.existsBySymbolAndStatus(symbol, PositionStatus.OPEN)) {
+        if (positionRepository.countByStatus(PositionStatus.OPEN) >= properties.maxOpenPositions()) {
             return Optional.empty();
         }
 
@@ -80,17 +92,13 @@ public class PaperTradingService {
         BigDecimal riskAmount = properties.paperAccountBalance()
                 .multiply(properties.riskPerTradePercent(), MC)
                 .divide(BigDecimal.valueOf(100), MC);
-
-        BigDecimal riskPerUnit = signal.getLatestPrice()
-                .subtract(signal.getStopLoss(), MC)
-                .abs();
+        BigDecimal riskPerUnit = signal.getLatestPrice().subtract(signal.getStopLoss(), MC).abs();
 
         if (riskPerUnit.signum() == 0) {
             throw new IllegalStateException("Invalid stop-loss distance");
         }
 
         BigDecimal quantity = riskAmount.divide(riskPerUnit, MC);
-
         PaperPosition position = positionRepository.save(PaperPosition.builder()
                 .symbol(symbol)
                 .side(PositionSide.BUY)
@@ -100,10 +108,17 @@ public class PaperTradingService {
                 .stopLoss(signal.getStopLoss())
                 .takeProfit(signal.getTakeProfit())
                 .signal(signal)
+                .entryReason(signal.getExplanation())
                 .openedAt(Instant.now())
                 .build());
 
         return Optional.of(position);
+    }
+
+    /** Kept for compatibility with older callers. */
+    @Transactional
+    public Optional<PaperPosition> openFromSignal(TradeSignal signal) {
+        return processSignal(signal);
     }
 
     @Transactional
@@ -115,16 +130,9 @@ public class PaperTradingService {
             throw new IllegalStateException("Position is already closed");
         }
 
-        BigDecimal pnl = exitPrice.subtract(position.getEntryPrice(), MC)
-                .multiply(position.getQuantity(), MC);
-
-        position.setExitPrice(exitPrice);
-        position.setRealizedPnl(pnl);
-        position.setStatus(exitPrice.compareTo(position.getStopLoss()) <= 0
-                ? PositionStatus.STOPPED
-                : PositionStatus.CLOSED);
-        position.setClosedAt(Instant.now());
-        return positionRepository.save(position);
+        return completeClose(position, exitPrice,
+                exitPrice.compareTo(position.getStopLoss()) <= 0 ? PositionStatus.STOPPED : PositionStatus.CLOSED,
+                "MANUAL_CLOSE", "Position was manually closed.", null);
     }
 
     @Transactional(readOnly = true)
@@ -132,7 +140,38 @@ public class PaperTradingService {
         return positionRepository.findTop100ByOrderByOpenedAtDesc();
     }
 
-    private boolean isEligible(TradeSignal signal) {
+    private PaperPosition closeFromSignal(
+            PaperPosition position,
+            TradeSignal signal,
+            PositionStatus status,
+            String closeReason,
+            String explanation
+    ) {
+        return completeClose(position, signal.getLatestPrice(), status, closeReason, explanation, signal);
+    }
+
+    private PaperPosition completeClose(
+            PaperPosition position,
+            BigDecimal exitPrice,
+            PositionStatus status,
+            String closeReason,
+            String explanation,
+            TradeSignal exitSignal
+    ) {
+        BigDecimal pnl = exitPrice.subtract(position.getEntryPrice(), MC)
+                .multiply(position.getQuantity(), MC);
+
+        position.setExitPrice(exitPrice);
+        position.setRealizedPnl(pnl);
+        position.setStatus(status);
+        position.setCloseReason(closeReason);
+        position.setExitReason(explanation);
+        position.setExitSignal(exitSignal);
+        position.setClosedAt(Instant.now());
+        return positionRepository.save(position);
+    }
+
+    private boolean isBuyEligible(TradeSignal signal) {
         return signal.getTotalScore() >= properties.minimumBuyScore()
                 && (signal.getDecision() == SignalDecision.BUY
                 || signal.getDecision() == SignalDecision.STRONG_BUY);
@@ -146,10 +185,7 @@ public class PaperTradingService {
     }
 
     private void enforceDailyLossLimit() {
-        Instant startOfDay = LocalDate.now(ZoneOffset.UTC)
-                .atStartOfDay()
-                .toInstant(ZoneOffset.UTC);
-
+        Instant startOfDay = LocalDate.now(ZoneOffset.UTC).atStartOfDay().toInstant(ZoneOffset.UTC);
         BigDecimal pnl = positionRepository.sumRealizedPnlSince(startOfDay);
         BigDecimal maximumLoss = properties.paperAccountBalance()
                 .multiply(properties.maxDailyLossPercent(), MC)

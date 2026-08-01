@@ -83,7 +83,7 @@ public class MarketDataBootstrapService implements ApplicationRunner {
             }
 
             TradeSignal signal = analysisService.analyze(indicator);
-            paperTradingService.openFromSignal(signal);
+            paperTradingService.processSignal(signal);
 
             log.info(
                     "Initial signal generated: symbol={}, interval={}, score={}, decision={}",
