@@ -38,6 +38,10 @@ management:
       exposure:
         include: health,info,metrics
 
+  endpoint:
+    health:
+    show-details: when-authorized
+
 binance:
   market-data:
     enabled: true
