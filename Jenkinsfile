@@ -10,8 +10,8 @@ pipeline {
         APP_PORT = '8080'
         APP_JAR = 'crypto-ai.jar'
         APP_LOG = 'crypto-ai.log'
+        APP_ERROR_LOG = 'crypto-ai-error.log'
         BACKUP_JAR = 'crypto-ai-backup.jar'
-        HEALTH_URL = 'http://169.58.108.119:8080/login'
     }
 
     stages {
@@ -26,7 +26,9 @@ pipeline {
             steps {
                 bat '''
                 @echo off
+
                 echo Building Crypto AI...
+
                 call mvn clean package -DskipTests
 
                 if errorlevel 1 (
@@ -46,6 +48,7 @@ pipeline {
                 setlocal EnableDelayedExpansion
 
                 echo Checking for an existing Crypto AI process on port %APP_PORT%...
+
                 set "FOUND_PROCESS=false"
 
                 for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":%APP_PORT%" ^| findstr "LISTENING"') do (
@@ -113,7 +116,10 @@ pipeline {
 
                 if exist "%DEPLOY_DIR%\\%APP_JAR%" (
                     echo Creating backup of the current JAR...
-                    copy /Y "%DEPLOY_DIR%\\%APP_JAR%" "%DEPLOY_DIR%\\%BACKUP_JAR%" >nul
+
+                    copy /Y ^
+                        "%DEPLOY_DIR%\\%APP_JAR%" ^
+                        "%DEPLOY_DIR%\\%BACKUP_JAR%" >nul
 
                     if errorlevel 1 (
                         echo Failed to create backup.
@@ -146,7 +152,10 @@ pipeline {
                 )
 
                 echo Deploying !FOUND_JAR!...
-                copy /Y "!FOUND_JAR!" "%DEPLOY_DIR%\\%APP_JAR%" >nul
+
+                copy /Y ^
+                    "!FOUND_JAR!" ^
+                    "%DEPLOY_DIR%\\%APP_JAR%" >nul
 
                 if errorlevel 1 (
                     echo Failed to copy the application JAR.
@@ -154,6 +163,7 @@ pipeline {
                 )
 
                 echo New JAR deployed successfully.
+
                 endlocal
                 '''
             }
@@ -170,13 +180,19 @@ pipeline {
                     del /Q "%APP_LOG%"
                 )
 
+                if exist "%APP_ERROR_LOG%" (
+                    del /Q "%APP_ERROR_LOG%"
+                )
+
                 echo Starting Crypto AI on port %APP_PORT%...
+
                 set JENKINS_NODE_COOKIE=crypto-ai-dont-kill
 
-                start "Crypto AI" /B javaw ^
-                    -jar "%APP_JAR%" ^
+                start "Crypto AI" /B cmd /c ^
+                    javaw -jar "%APP_JAR%" ^
                     --server.port=%APP_PORT% ^
-                    > "%APP_LOG%" 2>&1
+                    1^> "%APP_LOG%" ^
+                    2^> "%APP_ERROR_LOG%"
 
                 echo Startup command executed.
                 '''
@@ -212,81 +228,32 @@ pipeline {
                     if (-not $listening) {
                         Write-Host ""
                         Write-Host "Crypto AI did not start successfully."
-                        Write-Host "Application log:"
+                        Write-Host ""
+                        Write-Host "Application output:"
                         Write-Host "----------------------------------------"
 
                         $logPath = Join-Path $env:DEPLOY_DIR $env:APP_LOG
+                        $errorLogPath = Join-Path $env:DEPLOY_DIR $env:APP_ERROR_LOG
 
                         if (Test-Path $logPath) {
                             Get-Content $logPath
                         } else {
-                            Write-Host "Log file not found: $logPath"
+                            Write-Host "Output log not found: $logPath"
+                        }
+
+                        Write-Host ""
+                        Write-Host "Application errors:"
+                        Write-Host "----------------------------------------"
+
+                        if (Test-Path $errorLogPath) {
+                            Get-Content $errorLogPath
+                        } else {
+                            Write-Host "Error log not found: $errorLogPath"
                         }
 
                         Write-Host "----------------------------------------"
                         exit 1
                     }
-                '''
-            }
-        }
-
-        stage('Verify HTTP') {
-            steps {
-                powershell '''
-                    Write-Host "Running HTTP verification..."
-
-                    $url = $env:HEALTH_URL
-                    $maxAttempts = 12
-                    $delaySeconds = 5
-                    $success = $false
-
-                    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-                        Write-Host "HTTP check attempt $attempt of $maxAttempts..."
-                        Write-Host "URL: $url"
-
-                        try {
-                            $response = Invoke-WebRequest `
-                                -Uri $url `
-                                -UseBasicParsing `
-                                -TimeoutSec 20 `
-                                -MaximumRedirection 5
-
-                            Write-Host "HTTP status: $($response.StatusCode)"
-
-                            if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
-                                $success = $true
-                                break
-                            }
-                        }
-                        catch {
-                            Write-Host "HTTP verification attempt failed: $($_.Exception.Message)"
-                        }
-
-                        if ($attempt -lt $maxAttempts) {
-                            Start-Sleep -Seconds $delaySeconds
-                        }
-                    }
-
-                    if (-not $success) {
-                        Write-Host ""
-                        Write-Host "Crypto AI is listening, but HTTP verification failed."
-                        Write-Host ""
-                        Write-Host "Application log:"
-                        Write-Host "----------------------------------------"
-
-                        $logPath = Join-Path $env:DEPLOY_DIR $env:APP_LOG
-
-                        if (Test-Path $logPath) {
-                            Get-Content $logPath
-                        } else {
-                            Write-Host "Log file not found: $logPath"
-                        }
-
-                        Write-Host "----------------------------------------"
-                        exit 1
-                    }
-
-                    Write-Host "Crypto AI HTTP verification succeeded."
                 '''
             }
         }
@@ -295,6 +262,7 @@ pipeline {
             steps {
                 powershell '''
                     Write-Host "Confirming that Crypto AI remains running..."
+
                     Start-Sleep -Seconds 10
 
                     $listener = Get-NetTCPConnection `
@@ -306,9 +274,18 @@ pipeline {
                         Write-Host "Crypto AI stopped after deployment."
 
                         $logPath = Join-Path $env:DEPLOY_DIR $env:APP_LOG
+                        $errorLogPath = Join-Path $env:DEPLOY_DIR $env:APP_ERROR_LOG
 
+                        Write-Host ""
+                        Write-Host "Application output:"
                         if (Test-Path $logPath) {
                             Get-Content $logPath
+                        }
+
+                        Write-Host ""
+                        Write-Host "Application errors:"
+                        if (Test-Path $errorLogPath) {
+                            Get-Content $errorLogPath
                         }
 
                         exit 1
@@ -324,10 +301,10 @@ pipeline {
     post {
         success {
             echo 'Crypto AI was built, deployed, started, and verified successfully.'
-            echo "Local URL: http://169.58.108.119:${APP_PORT}"
-            echo "External URL: http://YOUR_PUBLIC_SERVER_IP:${APP_PORT}"
-            echo "Health URL: ${HEALTH_URL}"
-            echo "Log file: ${DEPLOY_DIR}\\${APP_LOG}"
+            echo "Local URL: http://localhost:${APP_PORT}"
+            echo "External URL: http://169.58.108.119:${APP_PORT}"
+            echo "Application log: ${DEPLOY_DIR}\\${APP_LOG}"
+            echo "Error log: ${DEPLOY_DIR}\\${APP_ERROR_LOG}"
         }
 
         failure {
@@ -338,17 +315,23 @@ pipeline {
                 $appJar = Join-Path $deployDir $env:APP_JAR
                 $backupJar = Join-Path $deployDir $env:BACKUP_JAR
                 $logPath = Join-Path $deployDir $env:APP_LOG
+                $errorLogPath = Join-Path $deployDir $env:APP_ERROR_LOG
 
-                $listener = Get-NetTCPConnection `
+                $listeners = Get-NetTCPConnection `
                     -LocalPort ([int]$env:APP_PORT) `
                     -State Listen `
                     -ErrorAction SilentlyContinue
 
-                if ($listener) {
+                foreach ($listener in $listeners) {
                     Write-Host "Stopping failed deployment process PID $($listener.OwningProcess)..."
-                    Stop-Process -Id $listener.OwningProcess -Force -ErrorAction SilentlyContinue
-                    Start-Sleep -Seconds 3
+
+                    Stop-Process `
+                        -Id $listener.OwningProcess `
+                        -Force `
+                        -ErrorAction SilentlyContinue
                 }
+
+                Start-Sleep -Seconds 3
 
                 if (-not (Test-Path $backupJar)) {
                     Write-Host "No backup JAR exists. Automatic rollback is unavailable."
@@ -356,28 +339,36 @@ pipeline {
                 }
 
                 Write-Host "Restoring backup JAR..."
-                Copy-Item -Path $backupJar -Destination $appJar -Force
+
+                Copy-Item `
+                    -Path $backupJar `
+                    -Destination $appJar `
+                    -Force
 
                 if (Test-Path $logPath) {
                     Remove-Item $logPath -Force
+                }
+
+                if (Test-Path $errorLogPath) {
+                    Remove-Item $errorLogPath -Force
                 }
 
                 Write-Host "Starting restored application..."
 
                 $javaArguments = @(
                     "-jar"
-                    $appJar
+                    "`"$appJar`""
                     "--server.port=$env:APP_PORT"
                 )
 
                 Start-Process `
-                    -FilePath "javaw" `
+                    -FilePath "javaw.exe" `
                     -ArgumentList $javaArguments `
                     -WorkingDirectory $deployDir `
                     -RedirectStandardOutput $logPath `
-                    -RedirectStandardError $logPath
+                    -RedirectStandardError $errorLogPath
 
-                Start-Sleep -Seconds 30
+                Start-Sleep -Seconds 35
 
                 $restoredListener = Get-NetTCPConnection `
                     -LocalPort ([int]$env:APP_PORT) `
@@ -385,17 +376,31 @@ pipeline {
                     -ErrorAction SilentlyContinue
 
                 if ($restoredListener) {
-                    Write-Host "Rollback succeeded. Restored application is listening on port $env:APP_PORT."
+                    Write-Host "Rollback succeeded."
+                    Write-Host "Restored application is listening on port $env:APP_PORT."
+                    Write-Host "PID: $($restoredListener.OwningProcess)"
                 } else {
-                    Write-Host "Rollback failed. Check the application log:"
+                    Write-Host "Rollback failed."
+
+                    Write-Host ""
+                    Write-Host "Application output:"
                     if (Test-Path $logPath) {
                         Get-Content $logPath
                     }
+
+                    Write-Host ""
+                    Write-Host "Application errors:"
+                    if (Test-Path $errorLogPath) {
+                        Get-Content $errorLogPath
+                    }
+
+                    exit 1
                 }
             '''
 
             echo 'Check Jenkins Console Output.'
-            echo "Also check: ${DEPLOY_DIR}\\${APP_LOG}"
+            echo "Application log: ${DEPLOY_DIR}\\${APP_LOG}"
+            echo "Error log: ${DEPLOY_DIR}\\${APP_ERROR_LOG}"
         }
 
         always {
