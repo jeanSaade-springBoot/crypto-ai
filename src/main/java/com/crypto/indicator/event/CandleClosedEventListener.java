@@ -4,6 +4,7 @@ import com.crypto.domain.PaperPosition;
 import com.crypto.domain.TechnicalIndicator;
 import com.crypto.domain.TradeSignal;
 import com.crypto.indicator.service.TechnicalIndicatorService;
+import com.crypto.repository.TradeSignalRepository;
 import com.crypto.service.AnalysisService;
 import com.crypto.service.CandleDataQualityService;
 import com.crypto.dto.CandleDataQualityResult;
@@ -26,17 +27,20 @@ public class CandleClosedEventListener {
     private final AnalysisService analysisService;
     private final PaperTradingService paperTradingService;
     private final CandleDataQualityService candleDataQualityService;
+    private final TradeSignalRepository tradeSignalRepository;
 
     public CandleClosedEventListener(
             TechnicalIndicatorService technicalIndicatorService,
             AnalysisService analysisService,
             PaperTradingService paperTradingService,
-            CandleDataQualityService candleDataQualityService
+            CandleDataQualityService candleDataQualityService,
+            TradeSignalRepository tradeSignalRepository
     ) {
         this.technicalIndicatorService = technicalIndicatorService;
         this.analysisService = analysisService;
         this.paperTradingService = paperTradingService;
         this.candleDataQualityService = candleDataQualityService;
+        this.tradeSignalRepository = tradeSignalRepository;
     }
 
     /**
@@ -89,6 +93,21 @@ public class CandleClosedEventListener {
             );
 
             TechnicalIndicator indicator = indicatorResult.get();
+
+            if (tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime(
+                    indicator.getSymbol(),
+                    indicator.getIntervalCode(),
+                    indicator.getCandleOpenTime()
+            )) {
+                log.info(
+                        "Automatic analysis skipped: signal already exists for symbol={}, interval={}, candleOpenTime={}",
+                        indicator.getSymbol(),
+                        indicator.getIntervalCode(),
+                        indicator.getCandleOpenTime()
+                );
+                return;
+            }
+
             TradeSignal signal = analysisService.analyze(indicator);
             
             log.info(

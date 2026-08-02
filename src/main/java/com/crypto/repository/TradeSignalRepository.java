@@ -8,6 +8,10 @@ import java.util.List;
 import java.util.Optional;
 
 public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> {
+    boolean existsBySymbolAndIntervalAndCandleOpenTime(
+            String symbol, String interval, Instant candleOpenTime
+    );
+
     Optional<TradeSignal> findTopBySymbolOrderByGeneratedAtDesc(String symbol);
     Optional<TradeSignal> findTopBySymbolAndIntervalOrderByGeneratedAtDesc(String symbol, String interval);
     Optional<TradeSignal> findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(

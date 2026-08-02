@@ -4,6 +4,7 @@ import com.crypto.config.TradingProperties;
 import com.crypto.domain.TechnicalIndicator;
 import com.crypto.domain.TradeSignal;
 import com.crypto.indicator.service.TechnicalIndicatorService;
+import com.crypto.repository.TradeSignalRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -18,6 +19,7 @@ public class ScheduledAnalysisService {
     private final TechnicalIndicatorService technicalIndicatorService;
     private final AnalysisService analysisService;
     private final PaperTradingService paperTradingService;
+    private final TradeSignalRepository tradeSignalRepository;
 
     /**
      * Recovery flow for every configured symbol and interval.
@@ -47,6 +49,20 @@ public class ScheduledAnalysisService {
                         "Scheduled analysis skipped: symbol={}, interval={}, reason=insufficient closed-candle history",
                         symbol,
                         interval
+                );
+                return;
+            }
+
+            if (tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime(
+                    indicator.getSymbol(),
+                    indicator.getIntervalCode(),
+                    indicator.getCandleOpenTime()
+            )) {
+                log.info(
+                        "Scheduled recovery skipped: signal already exists for symbol={}, interval={}, candleOpenTime={}",
+                        indicator.getSymbol(),
+                        indicator.getIntervalCode(),
+                        indicator.getCandleOpenTime()
                 );
                 return;
             }

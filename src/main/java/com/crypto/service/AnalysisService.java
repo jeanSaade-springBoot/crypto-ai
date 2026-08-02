@@ -220,6 +220,7 @@ public class AnalysisService {
         return signalRepository.save(TradeSignal.builder()
                 .symbol(symbol)
                 .interval(i.intervalCode())
+                .candleOpenTime(i.candleOpenTime())
                 .decision(decision)
                 .originalDecision(baseDecision)
                 .confluenceStatus(confluence.status())

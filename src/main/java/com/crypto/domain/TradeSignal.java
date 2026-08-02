@@ -20,6 +20,9 @@ public class TradeSignal {
     @Column(name = "interval_code", nullable = false, length = 10)
     private String interval;
 
+    @Column(name = "candle_open_time")
+    private Instant candleOpenTime;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     private SignalDecision decision;

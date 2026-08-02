@@ -7,6 +7,7 @@ import com.crypto.dto.CandleDataQualityResult;
 import com.crypto.indicator.event.CandleClosedEvent;
 import com.crypto.indicator.event.CandleClosedEventListener;
 import com.crypto.indicator.service.TechnicalIndicatorService;
+import com.crypto.repository.TradeSignalRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -17,6 +18,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -35,65 +37,63 @@ class CandleClosedEventListenerTest {
     @Mock
     private CandleDataQualityService candleDataQualityService;
 
+    @Mock
+    private TradeSignalRepository tradeSignalRepository;
+
     @InjectMocks
     private CandleClosedEventListener listener;
 
     @Test
     void shouldAnalyzeSavedIndicatorAndPassSignalToPaperTrading() {
         Instant openTime = Instant.parse("2026-07-30T06:00:00Z");
-
-        CandleClosedEvent event = new CandleClosedEvent(
-                "BTCUSDT",
-                "1h",
-                openTime
-        );
+        CandleClosedEvent event = new CandleClosedEvent("BTCUSDT", "1h", openTime);
 
         TechnicalIndicator indicator = new TechnicalIndicator();
+        indicator.setSymbol("BTCUSDT");
+        indicator.setIntervalCode("1h");
+        indicator.setCandleOpenTime(openTime);
+
         TradeSignal signal = new TradeSignal();
         PaperPosition position = new PaperPosition();
 
-        CandleDataQualityResult validDataQuality =
-                new CandleDataQualityResult(
-                        true,
-                        210,
-                        210,
-                        0,
-                        0,
-                        List.of()
-                );
-
-        when(candleDataQualityService.validate(
-                "BTCUSDT",
-                "1h"
-        )).thenReturn(validDataQuality);
-
-        when(technicalIndicatorService.calculateAndPersist(
-                "BTCUSDT",
-                "1h",
-                openTime
-        )).thenReturn(Optional.of(indicator));
-
-        when(analysisService.analyze(indicator))
-                .thenReturn(signal);
-
-        when(paperTradingService.processSignal(signal))
-                .thenReturn(Optional.of(position));
+        when(candleDataQualityService.validate("BTCUSDT", "1h"))
+                .thenReturn(new CandleDataQualityResult(true, 210, 210, 0, 0, List.of()));
+        when(technicalIndicatorService.calculateAndPersist("BTCUSDT", "1h", openTime))
+                .thenReturn(Optional.of(indicator));
+        when(tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime(
+                "BTCUSDT", "1h", openTime
+        )).thenReturn(false);
+        when(analysisService.analyze(indicator)).thenReturn(signal);
+        when(paperTradingService.processSignal(signal)).thenReturn(Optional.of(position));
 
         listener.handle(event);
 
-        verify(candleDataQualityService).validate(
-                "BTCUSDT",
-                "1h"
-        );
-
-        verify(technicalIndicatorService).calculateAndPersist(
-                "BTCUSDT",
-                "1h",
-                openTime
-        );
-
+        verify(technicalIndicatorService).calculateAndPersist("BTCUSDT", "1h", openTime);
         verify(analysisService).analyze(indicator);
-
         verify(paperTradingService).processSignal(signal);
+    }
+
+    @Test
+    void shouldSkipWhenSignalAlreadyExistsForCandle() {
+        Instant openTime = Instant.parse("2026-07-30T06:00:00Z");
+        CandleClosedEvent event = new CandleClosedEvent("BTCUSDT", "1h", openTime);
+
+        TechnicalIndicator indicator = new TechnicalIndicator();
+        indicator.setSymbol("BTCUSDT");
+        indicator.setIntervalCode("1h");
+        indicator.setCandleOpenTime(openTime);
+
+        when(candleDataQualityService.validate("BTCUSDT", "1h"))
+                .thenReturn(new CandleDataQualityResult(true, 210, 210, 0, 0, List.of()));
+        when(technicalIndicatorService.calculateAndPersist("BTCUSDT", "1h", openTime))
+                .thenReturn(Optional.of(indicator));
+        when(tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime(
+                "BTCUSDT", "1h", openTime
+        )).thenReturn(true);
+
+        listener.handle(event);
+
+        verify(analysisService, never()).analyze(indicator);
+        verify(paperTradingService, never()).processSignal(org.mockito.ArgumentMatchers.any());
     }
 }
