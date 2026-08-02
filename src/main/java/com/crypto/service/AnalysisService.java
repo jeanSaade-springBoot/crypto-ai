@@ -402,7 +402,7 @@ public class AnalysisService {
     ) {
         int direction = scoreTrendDirection(current);
         int structure = scoreTrendStructure(current, previous);
-        int strength = scoreTrendStrength(current);
+        int strength = scoreTrendStrength(current, previous);
         int priceLocation = scoreTrendPriceLocation(current);
         return new MovingAverageBreakdown(direction, structure, strength, priceLocation);
     }
@@ -433,31 +433,60 @@ public class AnalysisService {
         return score;
     }
 
-    private int scoreTrendStrength(IndicatorSnapshot i) {
-        BigDecimal separationPercent = percentDifference(i.ema20(), i.ema50());
-        if (separationPercent.signum() <= 0) {
+    int scoreTrendStrength(IndicatorSnapshot current, IndicatorSnapshot previous) {
+        BigDecimal separationPercent = percentDifference(current.ema20(), current.ema50());
+
+        // Preserve the existing established-bullish scoring when EMA20 is above EMA50.
+        if (separationPercent.signum() > 0) {
+            var thresholds = scoringProperties.trend();
+            int separationScore;
+            if (separationPercent.compareTo(thresholds.emaGapWeak()) < 0) separationScore = 1;
+            else if (separationPercent.compareTo(thresholds.emaGapModerate()) < 0) separationScore = 2;
+            else if (separationPercent.compareTo(thresholds.emaGapOptimal()) <= 0) separationScore = 3;
+            else if (separationPercent.compareTo(thresholds.emaGapOverextended()) <= 0) separationScore = 2;
+            else separationScore = 1;
+
+            BigDecimal atrRatio = current.atr14().signum() == 0
+                    ? BigDecimal.ZERO
+                    : current.ema20().subtract(current.ema50()).abs()
+                        .divide(current.atr14(), MC);
+            int atrStrengthScore;
+            if (atrRatio.compareTo(thresholds.emaSeparationAtrWeak()) < 0) atrStrengthScore = 0;
+            else if (atrRatio.compareTo(thresholds.emaSeparationAtrModerate()) < 0) atrStrengthScore = 1;
+            else if (atrRatio.compareTo(thresholds.emaSeparationAtrStrong()) <= 0) atrStrengthScore = 3;
+            else atrStrengthScore = 2;
+
+            return Math.min(6, separationScore + atrStrengthScore);
+        }
+
+        // Phase 1: recognize a weakening bearish trend without calling it bullish.
+        // This path only applies while EMA20 is still at or below EMA50.
+        if (previous == null) {
             return 0;
         }
 
-        var thresholds = scoringProperties.trend();
-        int separationScore;
-        if (separationPercent.compareTo(thresholds.emaGapWeak()) < 0) separationScore = 1;
-        else if (separationPercent.compareTo(thresholds.emaGapModerate()) < 0) separationScore = 2;
-        else if (separationPercent.compareTo(thresholds.emaGapOptimal()) <= 0) separationScore = 3;
-        else if (separationPercent.compareTo(thresholds.emaGapOverextended()) <= 0) separationScore = 2;
-        else separationScore = 1;
+        int transitionScore = 0;
 
-        BigDecimal atrRatio = i.atr14().signum() == 0
-                ? BigDecimal.ZERO
-                : i.ema20().subtract(i.ema50()).abs()
-                    .divide(i.atr14(), MC);
-        int atrStrengthScore;
-        if (atrRatio.compareTo(thresholds.emaSeparationAtrWeak()) < 0) atrStrengthScore = 0;
-        else if (atrRatio.compareTo(thresholds.emaSeparationAtrModerate()) < 0) atrStrengthScore = 1;
-        else if (atrRatio.compareTo(thresholds.emaSeparationAtrStrong()) <= 0) atrStrengthScore = 3;
-        else atrStrengthScore = 2;
+        BigDecimal currentGap = current.ema20().subtract(current.ema50()).abs();
+        BigDecimal previousGap = previous.ema20().subtract(previous.ema50()).abs();
+        if (currentGap.compareTo(previousGap) < 0) {
+            transitionScore += 2; // bearish EMA gap is narrowing
+        }
 
-        return Math.min(6, separationScore + atrStrengthScore);
+        if (current.ema20().compareTo(previous.ema20()) > 0) {
+            transitionScore += 1;
+        }
+        if (current.ema50().compareTo(previous.ema50()) > 0) {
+            transitionScore += 1;
+        }
+        if (current.macdHistogram().compareTo(previous.macdHistogram()) > 0) {
+            transitionScore += 1;
+        }
+        if (current.macdHistogram().signum() > 0) {
+            transitionScore += 1;
+        }
+
+        return Math.min(6, transitionScore);
     }
 
     int scoreTrendPriceLocation(IndicatorSnapshot i) {
