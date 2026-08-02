@@ -51,6 +51,12 @@ public class AnalysisService {
     private static final int MAX_SENTIMENT_SCORE = 15;
     private static final int MAX_FUNDAMENTAL_SCORE = 10;
 
+    /**
+     * Awards partial price-location credit when price is effectively testing EMA200
+     * instead of treating a very small downside distance as fully bearish.
+     */
+    private static final BigDecimal EMA200_PROXIMITY_ATR_MULTIPLE = new BigDecimal("0.25");
+
     private final TechnicalIndicatorService technicalIndicatorService;
     private final SentimentService sentimentService;
     private final FundamentalService fundamentalService;
@@ -454,9 +460,17 @@ public class AnalysisService {
         return Math.min(6, separationScore + atrStrengthScore);
     }
 
-    private int scoreTrendPriceLocation(IndicatorSnapshot i) {
+    int scoreTrendPriceLocation(IndicatorSnapshot i) {
         int score = 0;
-        if (i.latestPrice().compareTo(i.ema200()) > 0) score += 2;
+
+        if (i.latestPrice().compareTo(i.ema200()) > 0) {
+            score += 2;
+        } else if (isTestingEma200(i)) {
+            // Price is slightly below EMA200, but still within 0.25 ATR.
+            // Treat this as an EMA200 test and award partial credit.
+            score += 1;
+        }
+
         if (i.latestPrice().compareTo(i.sma20()) > 0) score += 2;
 
         BigDecimal smaDistance = percentDifference(i.latestPrice(), i.sma20());
@@ -464,6 +478,22 @@ public class AnalysisService {
             score = Math.max(0, score - 1);
         }
         return score;
+    }
+
+    private boolean isTestingEma200(IndicatorSnapshot i) {
+        if (i.latestPrice() == null || i.ema200() == null || i.atr14() == null
+                || i.atr14().signum() <= 0) {
+            return false;
+        }
+
+        BigDecimal downsideDistance = i.ema200().subtract(i.latestPrice());
+        if (downsideDistance.signum() < 0) {
+            return false;
+        }
+
+        BigDecimal maximumTestingDistance = i.atr14()
+                .multiply(EMA200_PROXIMITY_ATR_MULTIPLE, MC);
+        return downsideDistance.compareTo(maximumTestingDistance) <= 0;
     }
 
     private MomentumBreakdown momentumScore(IndicatorSnapshot i) {
