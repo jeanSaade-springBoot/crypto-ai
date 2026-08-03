@@ -102,13 +102,17 @@ public class MultiTimeframeConfluenceService {
             List<TradeSignal> contexts,
             ContextCounts counts
     ) {
-        if (isBullish(decision) && counts.strongBearish() > 0) {
+        if (isBullish(decision) && hasHardBearishOpposition(contexts)) {
             return veto(ConfluenceStatus.STRONG_CONFLICT, SignalDecision.WATCH,
-                    "Trend-following long entry was vetoed by a strongly bearish higher timeframe.");
+                    "Trend-following long entry was vetoed by explicit strongly bearish higher-timeframe opposition.");
         }
-        if (isBullish(decision) && counts.bearish() > 0) {
-            return veto(ConfluenceStatus.CONFLICT, SignalDecision.WATCH,
-                    "Trend-following long entry conflicts with bearish higher-timeframe structure.");
+        if (isBullish(decision) && hasExplicitBearishOpposition(contexts)) {
+            return preserve(ConfluenceStatus.CONFLICT, decision, true,
+                    "A bearish higher-timeframe decision reduced confidence, but did not veto the lower-timeframe BUY.");
+        }
+        if (isBullish(decision) && hasNeutralWeakStructure(contexts)) {
+            return preserve(ConfluenceStatus.CONFLICT, decision, true,
+                    "Higher-timeframe direction is NEUTRAL/WATCH with weak structure; confidence was reduced without blocking the BUY.");
         }
         if (isBearish(decision) && counts.strongBullish() > 0) {
             return preserve(ConfluenceStatus.STRONG_CONFLICT, SignalDecision.NEUTRAL, true,
@@ -121,6 +125,25 @@ public class MultiTimeframeConfluenceService {
         return agreementOrMixed(decision, contexts, counts,
                 "Trend-following setup is aligned with higher-timeframe direction.",
                 "Higher-timeframe direction is mixed; no trend-following adjustment was applied.");
+    }
+
+
+    private boolean hasHardBearishOpposition(List<TradeSignal> contexts) {
+        return contexts.stream().anyMatch(signal ->
+                signal.getDecision() == SignalDecision.STRONG_SELL
+                        || (signal.getDecision() == SignalDecision.SELL
+                        && signal.getTrendScore() <= STRONG_BEARISH_TREND_MAXIMUM));
+    }
+
+    private boolean hasExplicitBearishOpposition(List<TradeSignal> contexts) {
+        return contexts.stream().anyMatch(signal -> signal.getDecision() == SignalDecision.SELL);
+    }
+
+    private boolean hasNeutralWeakStructure(List<TradeSignal> contexts) {
+        return contexts.stream().anyMatch(signal ->
+                (signal.getDecision() == SignalDecision.NEUTRAL
+                        || signal.getDecision() == SignalDecision.WATCH)
+                        && signal.getTrendScore() <= BEARISH_TREND_MAXIMUM);
     }
 
     private Evaluation rangeMeanReversion(
