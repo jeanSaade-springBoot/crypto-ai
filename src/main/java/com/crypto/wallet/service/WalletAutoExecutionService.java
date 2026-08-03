@@ -1,0 +1,154 @@
+package com.crypto.wallet.service;
+
+import com.crypto.domain.TradeSignal;
+import com.crypto.wallet.domain.*;
+import com.crypto.wallet.repository.*;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.*;
+import java.time.Instant;
+import java.util.Locale;
+
+@Service
+@RequiredArgsConstructor
+public class WalletAutoExecutionService {
+    private static final BigDecimal ZERO = BigDecimal.ZERO;
+    private static final int SCALE = 12;
+
+    private final WalletAssetRepository assetRepository;
+    private final WalletTradeRepository tradeRepository;
+    private final WalletManagedPositionRepository managedPositionRepository;
+    private final WalletSettingsRepository settingsRepository;
+    private final WalletService walletService;
+
+    @Transactional
+    public void executeBuy(TradeSignal signal) {
+        if (signal == null || signal.getId() == null) return;
+        WalletSettings settings = settings();
+        if (!settings.isAutomaticExecutionEnabled()) return;
+
+        String key = signal.getId() + ":BUY";
+        if (tradeRepository.existsByExecutionKey(key)) return;
+
+        String pair = normalizePair(signal.getSymbol());
+        String assetSymbol = pair.substring(0, pair.length() - 4);
+        BigDecimal price = positive(signal.getLatestPrice());
+        BigDecimal positionPercent = BigDecimal.valueOf(signal.getAtrRecommendedPositionPercent() <= 0
+                ? 100 : signal.getAtrRecommendedPositionPercent());
+        BigDecimal requested = settings.getBaseTradeAmountUsdt()
+                .multiply(positionPercent)
+                .divide(BigDecimal.valueOf(100), SCALE, RoundingMode.HALF_UP);
+
+        WalletAsset usdt = getOrCreate("USDT");
+        BigDecimal tradable = usdt.getQuantity().subtract(settings.getMinimumUsdtReserve()).max(ZERO);
+        BigDecimal spend = requested.min(tradable);
+        if (spend.signum() <= 0) return;
+
+        BigDecimal quantity = spend.divide(price, SCALE, RoundingMode.DOWN);
+        if (quantity.signum() <= 0) return;
+
+        WalletAsset coin = getOrCreate(assetSymbol);
+        BigDecimal oldCost = coin.getQuantity().multiply(nvl(coin.getAverageBuyPriceUsdt()));
+        BigDecimal newQuantity = coin.getQuantity().add(quantity);
+        coin.setQuantity(newQuantity);
+        coin.setAverageBuyPriceUsdt(oldCost.add(spend).divide(newQuantity, SCALE, RoundingMode.HALF_UP));
+        usdt.setQuantity(usdt.getQuantity().subtract(spend));
+        assetRepository.save(coin);
+        assetRepository.save(usdt);
+
+        WalletManagedPosition position = managedPositionRepository.findTopBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
+                .orElseGet(() -> WalletManagedPosition.builder()
+                        .symbol(pair).quantity(ZERO).averageEntryPriceUsdt(ZERO).totalCostUsdt(ZERO)
+                        .status("OPEN").openedAt(Instant.now()).build());
+        position.setQuantity(position.getQuantity().add(quantity));
+        position.setTotalCostUsdt(position.getTotalCostUsdt().add(spend));
+        position.setAverageEntryPriceUsdt(position.getTotalCostUsdt()
+                .divide(position.getQuantity(), SCALE, RoundingMode.HALF_UP));
+        position.setUpdatedAt(Instant.now());
+        managedPositionRepository.save(position);
+
+        tradeRepository.save(WalletTrade.builder()
+                .signal(signal).executionKey(key).symbol(pair).side("BUY")
+                .quantity(quantity).priceUsdt(price).grossAmountUsdt(spend)
+                .feeUsdt(ZERO).netAmountUsdt(spend).executionType("PAPER_AUTO")
+                .status("EXECUTED").executedAt(Instant.now())
+                .notes("Automatic paper BUY from approved signal").build());
+        walletService.captureSnapshot();
+    }
+
+    @Transactional
+    public void executeSell(TradeSignal signal) {
+        if (signal == null || signal.getId() == null) return;
+        WalletSettings settings = settings();
+        if (!settings.isAutomaticExecutionEnabled()) return;
+
+        String key = signal.getId() + ":SELL";
+        if (tradeRepository.existsByExecutionKey(key)) return;
+
+        String pair = normalizePair(signal.getSymbol());
+        WalletManagedPosition position = managedPositionRepository.findTopBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN").orElse(null);
+        if (position == null || position.getQuantity().signum() <= 0) return;
+
+        String assetSymbol = pair.substring(0, pair.length() - 4);
+        WalletAsset coin = getOrCreate(assetSymbol);
+        WalletAsset usdt = getOrCreate("USDT");
+        BigDecimal quantity = position.getQuantity().min(coin.getQuantity());
+        if (quantity.signum() <= 0) return;
+
+        BigDecimal price = positive(signal.getLatestPrice());
+        BigDecimal gross = quantity.multiply(price);
+        BigDecimal costBasis = position.getAverageEntryPriceUsdt().multiply(quantity);
+        BigDecimal realized = gross.subtract(costBasis);
+        BigDecimal realizedPercent = costBasis.signum() == 0 ? ZERO : realized
+                .divide(costBasis, 8, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+
+        coin.setQuantity(coin.getQuantity().subtract(quantity));
+        if (coin.getQuantity().signum() == 0) coin.setAverageBuyPriceUsdt(null);
+        usdt.setQuantity(usdt.getQuantity().add(gross));
+        assetRepository.save(coin);
+        assetRepository.save(usdt);
+
+        position.setQuantity(ZERO);
+        position.setTotalCostUsdt(ZERO);
+        position.setAverageEntryPriceUsdt(ZERO);
+        position.setStatus("CLOSED");
+        position.setUpdatedAt(Instant.now());
+        managedPositionRepository.save(position);
+
+        tradeRepository.save(WalletTrade.builder()
+                .signal(signal).executionKey(key).symbol(pair).side("SELL")
+                .quantity(quantity).priceUsdt(price).grossAmountUsdt(gross)
+                .feeUsdt(ZERO).netAmountUsdt(gross).costBasisUsdt(costBasis)
+                .realizedPnlUsdt(realized).realizedPnlPercent(realizedPercent)
+                .executionType("PAPER_AUTO").status("EXECUTED").executedAt(Instant.now())
+                .notes("Automatic paper SELL from exit signal").build());
+        walletService.captureSnapshot();
+    }
+
+    private WalletSettings settings() {
+        return settingsRepository.findById(1L).orElseGet(() -> settingsRepository.save(
+                WalletSettings.builder().id(1L).baseTradeAmountUsdt(BigDecimal.valueOf(100))
+                        .minimumUsdtReserve(ZERO).automaticExecutionEnabled(false)
+                        .updatedAt(Instant.now()).build()));
+    }
+
+    private WalletAsset getOrCreate(String symbol) {
+        return assetRepository.findBySymbol(symbol).orElseGet(() -> assetRepository.save(
+                WalletAsset.builder().symbol(symbol).quantity(ZERO)
+                        .averageBuyPriceUsdt("USDT".equals(symbol) ? BigDecimal.ONE : null)
+                        .enabled(true).build()));
+    }
+    private String normalizePair(String value) {
+        if (value == null || value.isBlank()) throw new IllegalArgumentException("Symbol is required");
+        String pair = value.trim().toUpperCase(Locale.ROOT);
+        if (!pair.endsWith("USDT")) throw new IllegalArgumentException("Only USDT pairs are supported");
+        return pair;
+    }
+    private BigDecimal positive(BigDecimal value) {
+        if (value == null || value.signum() <= 0) throw new IllegalArgumentException("Price must be positive");
+        return value;
+    }
+    private BigDecimal nvl(BigDecimal value) { return value == null ? ZERO : value; }
+}

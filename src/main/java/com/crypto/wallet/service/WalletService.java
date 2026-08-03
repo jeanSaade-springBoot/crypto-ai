@@ -26,6 +26,7 @@ public class WalletService {
     private final WalletSnapshotRepository snapshotRepository;
     private final TradeSignalRepository signalRepository;
     private final CandleRepository candleRepository;
+    private final WalletSettingsRepository settingsRepository;
 
     @Transactional(readOnly = true)
     public Map<String,Object> overview() {
@@ -54,7 +55,18 @@ public class WalletService {
         result.put("portfolioValueUsdt", portfolio); result.put("netInvestedUsdt", netInvested);
         result.put("totalPnlUsdt", totalPnl); result.put("totalReturnPercent", percent(totalPnl, netInvested));
         result.put("realizedPnlUsdt", realized); result.put("unrealizedPnlUsdt", unrealized);
-        result.put("availableUsdt", available); result.put("assets", rows);
+        result.put("availableUsdt", available);
+        WalletSettings settings = settingsRepository.findById(1L).orElse(null);
+        result.put("settings", settings);
+        result.put("portfolioStatus", totalPnl.signum() >= 0 ? "WINNING" : "LOSING");
+        BigDecimal finalPortfolioValue = portfolio;
+        BigDecimal change24h = snapshotRepository.findTop200ByOrderByCapturedAtDesc().stream()
+                .filter(x -> x.getCapturedAt().isAfter(Instant.now().minusSeconds(86400)))
+                .min(Comparator.comparing(WalletSnapshot::getCapturedAt))
+                .map(x -> finalPortfolioValue.subtract(x.getPortfolioValueUsdt()))
+                .orElse(ZERO);
+        result.put("change24hUsdt", change24h);
+        result.put("assets", rows);
         result.put("trades", tradeRepository.findTop100ByOrderByExecutedAtDesc().stream().map(this::tradeDto).toList());
         result.put("cashFlows", cashFlowRepository.findTop100ByOrderByOccurredAtDesc());
         result.put("snapshots", snapshotRepository.findTop200ByOrderByCapturedAtDesc().stream().sorted(Comparator.comparing(WalletSnapshot::getCapturedAt)).toList());
@@ -80,6 +92,20 @@ public class WalletService {
         assetRepository.save(usdt);
         cashFlowRepository.save(WalletCashFlow.builder().flowType(type).amountUsdt(amount).occurredAt(Instant.now()).notes(request.notes()).build());
         captureSnapshot();
+    }
+
+    @Transactional
+    public void updateSettings(WalletSettingsRequest request) {
+        if (request.baseTradeAmountUsdt() == null || request.baseTradeAmountUsdt().signum() <= 0)
+            throw new IllegalArgumentException("Base trade amount must be greater than zero");
+        if (request.minimumUsdtReserve() == null || request.minimumUsdtReserve().signum() < 0)
+            throw new IllegalArgumentException("Minimum reserve cannot be negative");
+        WalletSettings settings = settingsRepository.findById(1L).orElseGet(() -> WalletSettings.builder().id(1L).build());
+        settings.setBaseTradeAmountUsdt(request.baseTradeAmountUsdt());
+        settings.setMinimumUsdtReserve(request.minimumUsdtReserve());
+        settings.setAutomaticExecutionEnabled(request.automaticExecutionEnabled());
+        settings.setUpdatedAt(Instant.now());
+        settingsRepository.save(settings);
     }
 
     @Transactional
@@ -120,7 +146,8 @@ public class WalletService {
         captureSnapshot();
     }
 
-    private void captureSnapshot() {
+    @Transactional
+    public void captureSnapshot() {
         Map<String,Object> o = overviewWithoutHistory();
         snapshotRepository.save(WalletSnapshot.builder().portfolioValueUsdt((BigDecimal)o.get("portfolioValueUsdt"))
                 .netInvestedUsdt((BigDecimal)o.get("netInvestedUsdt")).totalPnlUsdt((BigDecimal)o.get("totalPnlUsdt"))

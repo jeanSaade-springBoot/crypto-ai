@@ -37,10 +37,11 @@ async function refreshDashboard() {
     const interval = el('interval-select').value;
     el('refresh-button').disabled = true;
     try {
-        const [response, providerResponse, sentimentStatusResponse] = await Promise.all([
+        const [response, providerResponse, sentimentStatusResponse, walletResponse] = await Promise.all([
             fetch(`/api/dashboard/overview?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`),
             fetch(`/api/sentiment/providers/${encodeURIComponent(symbol)}`),
-            fetch('/api/sentiment/status')
+            fetch('/api/sentiment/status'),
+            fetch('/api/wallet')
         ]);
         if (!response.ok) throw new Error(`Dashboard API returned ${response.status}`);
         const data = await response.json();
@@ -48,6 +49,7 @@ async function refreshDashboard() {
         data.sentimentSystemStatus = sentimentStatusResponse.ok
             ? await sentimentStatusResponse.json()
             : { enabled: false, message: 'Could not read sentiment master status' };
+        data.wallet = walletResponse.ok ? await walletResponse.json() : {};
         updateConnection(true);
         el('error-banner').classList.add('hidden');
         render(data);
@@ -74,6 +76,7 @@ function render(data) {
     el('open-positions').textContent = s.openPositions;
     el('last-updated').textContent = `Updated ${dateTime(data.updatedAt)}`;
     el('market-subtitle').textContent = `${data.symbol} · ${data.interval}`;
+    renderPortfolio(data.wallet || {});
     renderPipeline(data.pipeline);
     renderScoreDiagnostics(data.scoreDiagnostics || {});
     renderIndicators(data.indicator || {});
@@ -84,6 +87,31 @@ function render(data) {
     renderSignals(data.signals || []);
     renderOpenTrades(data.openPositions || []);
     renderTradeHistory(data.closedPositions || []);
+}
+
+
+function renderPortfolio(wallet) {
+    const pnl = Number(wallet.totalPnlUsdt || 0);
+    const status = wallet.portfolioStatus || 'NOT STARTED';
+    el('portfolio-status').textContent = status;
+    el('portfolio-status').className = status === 'WINNING' ? 'positive' : status === 'LOSING' ? 'negative' : '';
+    el('portfolio-return').textContent = `${Number(wallet.totalReturnPercent || 0).toFixed(2)}% since start`;
+    el('portfolio-value').textContent = money(wallet.portfolioValueUsdt);
+    el('portfolio-invested').textContent = `Net invested ${money(wallet.netInvestedUsdt)}`;
+    el('portfolio-pnl').textContent = `${pnl >= 0 ? '+' : ''}${money(pnl)}`;
+    el('portfolio-pnl').className = pnl >= 0 ? 'positive' : 'negative';
+    const day = Number(wallet.change24hUsdt || 0);
+    el('portfolio-change24h').textContent = `24h ${day >= 0 ? '+' : ''}${money(day)}`;
+    el('portfolio-usdt').textContent = money(wallet.availableUsdt);
+    const settings = wallet.settings || {};
+    el('portfolio-auto-status').textContent = settings.automaticExecutionEnabled
+        ? `Auto paper trading ON · ${money(settings.baseTradeAmountUsdt)} base trade`
+        : 'Automatic paper trading disabled';
+    const holdings = (wallet.assets || []).filter(a => Number(a.quantity || 0) > 0);
+    el('portfolio-holdings').innerHTML = holdings.length ? holdings.map(a => {
+        const assetPnl = Number(a.unrealizedPnlUsdt || 0);
+        return `<div class="portfolio-asset"><strong>${escapeHtml(a.symbol)}</strong><span>${value(a.quantity)}</span><small class="${assetPnl >= 0 ? 'positive' : 'negative'}">${a.symbol === 'USDT' ? money(a.currentValueUsdt) : `${assetPnl >= 0 ? '+' : ''}${money(assetPnl)}`}</small></div>`;
+    }).join('') : '<span class="empty">No wallet assets yet.</span>';
 }
 
 

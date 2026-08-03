@@ -5,6 +5,8 @@ import com.crypto.domain.*;
 import com.crypto.repository.PaperPositionRepository;
 import com.crypto.repository.TradeSignalRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import com.crypto.wallet.service.WalletAutoExecutionService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,6 +20,7 @@ import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class PaperTradingService {
 
     private static final MathContext MC = MathContext.DECIMAL64;
@@ -25,6 +28,7 @@ public class PaperTradingService {
     private final TradingProperties properties;
     private final TradeSignalRepository signalRepository;
     private final PaperPositionRepository positionRepository;
+    private final WalletAutoExecutionService walletAutoExecutionService;
 
     @Transactional
     public PaperPosition openFromLatestSignal(String symbol) {
@@ -118,6 +122,11 @@ public class PaperTradingService {
                 .openedAt(Instant.now())
                 .build());
 
+        try {
+            walletAutoExecutionService.executeBuy(signal);
+        } catch (RuntimeException ex) {
+            log.error("Automatic wallet BUY failed for signal {}: {}", signal.getId(), ex.getMessage(), ex);
+        }
         return Optional.of(position);
     }
 
@@ -174,7 +183,15 @@ public class PaperTradingService {
         position.setExitReason(explanation);
         position.setExitSignal(exitSignal);
         position.setClosedAt(Instant.now());
-        return positionRepository.save(position);
+        PaperPosition saved = positionRepository.save(position);
+        if (exitSignal != null) {
+            try {
+                walletAutoExecutionService.executeSell(exitSignal);
+            } catch (RuntimeException ex) {
+                log.error("Automatic wallet SELL failed for signal {}: {}", exitSignal.getId(), ex.getMessage(), ex);
+            }
+        }
+        return saved;
     }
 
     private boolean isBuyEligible(TradeSignal signal) {

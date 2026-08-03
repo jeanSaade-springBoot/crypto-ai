@@ -15,5 +15,5 @@ public class WalletController {
     @GetMapping public Map<String,Object> overview(){ return walletService.overview(); }
     @PostMapping("/assets") public ResponseEntity<Void> setAsset(@RequestBody WalletAssetRequest request){ walletService.setAsset(request); return ResponseEntity.noContent().build(); }
     @PostMapping("/cash-flows") public ResponseEntity<Void> cashFlow(@RequestBody WalletCashFlowRequest request){ walletService.addCashFlow(request); return ResponseEntity.noContent().build(); }
-    @PostMapping("/trades") public ResponseEntity<Void> trade(@RequestBody WalletTradeRequest request){ walletService.execute(request); return ResponseEntity.noContent().build(); }
+    @PutMapping("/settings") public ResponseEntity<Void> settings(@RequestBody WalletSettingsRequest request){ walletService.updateSettings(request); return ResponseEntity.noContent().build(); }
 }

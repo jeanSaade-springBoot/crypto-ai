@@ -15,6 +15,8 @@ public class WalletTrade {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "signal_id")
     private TradeSignal signal;
+    @Column(name = "execution_key", length = 100)
+    private String executionKey;
     @Column(nullable = false, length = 30)
     private String symbol;
     @Column(nullable = false, length = 10)
