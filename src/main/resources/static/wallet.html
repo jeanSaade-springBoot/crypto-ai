@@ -1,1 +1,111 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Portfolio Wallet</title><link rel="stylesheet" href="/css/dashboard.css"><link rel="stylesheet" href="/css/wallet.css"><script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1"></script></head><body><div class="app-shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">CT</span><div><strong>Crypto Trader</strong><small>Automatic paper portfolio</small></div></div><nav><a href="/dashboard">Dashboard</a><a class="active" href="/wallet.html">Wallet</a><a href="#settings">Automation</a><a href="#assets">Assets</a><a href="#history">Trade history</a></nav></aside><main><header class="topbar"><div><p class="eyebrow">PORTFOLIO PERFORMANCE</p><h1>Wallet progress</h1></div><button id="refresh">Refresh</button></header><section id="message" class="error-banner hidden"></section><section class="metrics-grid wallet-metrics"><article class="metric-card"><span>Portfolio status</span><strong id="status">—</strong><small id="total-return">—</small></article><article class="metric-card"><span>Portfolio value</span><strong id="portfolio">—</strong><small id="invested">—</small></article><article class="metric-card"><span>Total P&amp;L</span><strong id="total-pnl">—</strong><small id="change24h">—</small></article><article class="metric-card"><span>Available USDT</span><strong id="available">—</strong><small>Buying balance</small></article><article class="metric-card"><span>Realized P&amp;L</span><strong id="realized">—</strong><small>Closed system trades</small></article><article class="metric-card"><span>Unrealized P&amp;L</span><strong id="unrealized">—</strong><small>Current holdings</small></article></section><section class="panel"><div class="section-heading"><div><p class="eyebrow">SINCE START</p><h2>Portfolio vs invested capital</h2></div></div><div id="wallet-chart"></div></section><section class="wallet-form-grid"><article id="settings" class="panel"><h2>Automatic paper trading</h2><form id="settings-form"><label>Base trade amount USDT<input id="base-trade" type="number" min="0.01" step="0.01" required></label><label>Minimum USDT reserve<input id="minimum-reserve" type="number" min="0" step="0.01" required></label><label class="toggle-row"><input id="auto-enabled" type="checkbox"> Enable automatic wallet execution</label><p class="form-note">Approved BUY signals spend the base amount adjusted by the ATR position percentage. SELL/stop/target closes only quantities bought automatically by the system.</p><button>Save automation</button></form></article><article class="panel"><h2>Deposit / withdraw USDT</h2><form id="cash-form"><label>Action<select id="flow-type"><option>DEPOSIT</option><option>WITHDRAWAL</option></select></label><label>Amount USDT<input id="flow-amount" type="number" min="0" step="0.01" required></label><label>Notes<input id="flow-notes"></label><button>Save cash flow</button></form></article><article class="panel"><h2>Initial holding / correction</h2><form id="asset-form"><label>Asset<input id="asset-symbol" placeholder="BTC" required></label><label>Quantity<input id="asset-quantity" type="number" min="0" step="0.00000001" required></label><label>Average entry USDT<input id="asset-average" type="number" min="0" step="0.00000001"></label><p class="form-note">This is for initial balances and corrections only. Normal BUY/SELL executions are created automatically from signals.</p><button>Save asset</button></form></article></section><section id="assets" class="panel"><div class="section-heading"><div><p class="eyebrow">CURRENT HOLDINGS</p><h2>Assets</h2></div></div><div class="table-wrap"><table><thead><tr><th>Asset</th><th>Quantity</th><th>Avg entry</th><th>Current price</th><th>Cost basis</th><th>Value</th><th>Unrealized P&amp;L</th></tr></thead><tbody id="asset-body"></tbody></table></div></section><section id="history" class="panel"><div class="section-heading"><div><p class="eyebrow">AUTOMATIC EXECUTIONS</p><h2>Wallet trades</h2></div></div><div class="table-wrap"><table><thead><tr><th>Time</th><th>Signal</th><th>Pair</th><th>Side</th><th>Quantity</th><th>Price</th><th>Net</th><th>Realized P&amp;L</th></tr></thead><tbody id="trade-body"></tbody></table></div></section></main></div><script src="/js/wallet.js"></script></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Portfolio Wallet</title>
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <link rel="stylesheet" href="/css/wallet.css">
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1"></script>
+</head>
+<body>
+<div class="app-shell">
+    <aside class="sidebar">
+        <div class="brand">
+            <span class="brand-mark">CT</span>
+            <div><strong>Crypto Trader</strong><small>Automatic paper portfolio</small></div>
+        </div>
+        <nav>
+            <a href="/dashboard">Dashboard</a>
+            <a class="active" href="/wallet.html">Wallet</a>
+            <a href="#settings">Automation</a>
+            <a href="#assets">Assets</a>
+            <a href="#history">Trade history</a>
+        </nav>
+    </aside>
+
+    <main>
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">PORTFOLIO PERFORMANCE</p>
+                <h1>Wallet progress</h1>
+            </div>
+            <div class="topbar-actions">
+                <a class="dashboard-button" href="/dashboard">← Dashboard</a>
+                <button id="refresh" type="button">Refresh</button>
+            </div>
+        </header>
+
+        <section id="message" class="error-banner hidden" role="status" aria-live="polite"></section>
+
+        <section class="metrics-grid wallet-metrics">
+            <article class="metric-card"><span>Portfolio status</span><strong id="status">—</strong><small id="total-return">—</small></article>
+            <article class="metric-card"><span>Portfolio value</span><strong id="portfolio">—</strong><small id="invested">—</small></article>
+            <article class="metric-card"><span>Total P&amp;L</span><strong id="total-pnl">—</strong><small id="change24h">—</small></article>
+            <article class="metric-card"><span>Available USDT</span><strong id="available">—</strong><small>Buying balance</small></article>
+            <article class="metric-card"><span>Realized P&amp;L</span><strong id="realized">—</strong><small>Closed system trades</small></article>
+            <article class="metric-card"><span>Unrealized P&amp;L</span><strong id="unrealized">—</strong><small>Current holdings</small></article>
+        </section>
+
+        <section class="panel">
+            <div class="section-heading"><div><p class="eyebrow">SINCE START</p><h2>Portfolio vs invested capital</h2></div></div>
+            <div id="wallet-chart"></div>
+        </section>
+
+        <section class="wallet-form-grid">
+            <article id="settings" class="panel">
+                <h2>Automatic paper trading</h2>
+                <form id="settings-form">
+                    <label>Base trade amount USDT<input id="base-trade" type="number" min="0.01" step="0.01" required></label>
+                    <label>Minimum USDT reserve<input id="minimum-reserve" type="number" min="0" step="0.01" required></label>
+                    <label class="toggle-row"><input id="auto-enabled" type="checkbox"> Enable automatic wallet execution</label>
+                    <p class="form-note">Approved BUY signals spend the base amount adjusted by the ATR position percentage. SELL/stop/target closes only quantities bought automatically by the system.</p>
+                    <button type="submit">Save automation</button>
+                </form>
+            </article>
+
+            <article class="panel">
+                <h2>Deposit / withdraw USDT</h2>
+                <form id="cash-form">
+                    <label>Action<select id="flow-type"><option value="DEPOSIT">Deposit</option><option value="WITHDRAWAL">Withdrawal</option></select></label>
+                    <label>Amount USDT<input id="flow-amount" type="number" min="0.01" step="0.01" required></label>
+                    <label>Notes<input id="flow-notes"></label>
+                    <button type="submit">Save cash flow</button>
+                </form>
+            </article>
+
+            <article class="panel">
+                <h2>Initial holding / correction</h2>
+                <form id="asset-form">
+                    <label>Coin
+                        <select id="asset-symbol" required>
+                            <option value="">Choose a coin</option>
+                            <option value="BTC">BTC</option>
+                            <option value="ETH">ETH</option>
+                            <option value="BNB">BNB</option>
+                            <option value="XRP">XRP</option>
+                            <option value="PEPE">PEPE</option>
+                        </select>
+                    </label>
+                    <label>Quantity<input id="asset-quantity" type="number" min="0" step="0.00000001" required></label>
+                    <label>Average entry USDT<input id="asset-average" type="number" min="0" step="0.00000001" required></label>
+                    <p class="form-note">This is for initial balances and corrections only. Normal BUY/SELL executions are created automatically from signals.</p>
+                    <button type="submit">Save coin holding</button>
+                </form>
+            </article>
+        </section>
+
+        <section id="assets" class="panel">
+            <div class="section-heading"><div><p class="eyebrow">CURRENT HOLDINGS</p><h2>Assets</h2></div></div>
+            <div class="table-wrap"><table><thead><tr><th>Asset</th><th>Quantity</th><th>Avg entry</th><th>Current price</th><th>Cost basis</th><th>Value</th><th>Unrealized P&amp;L</th></tr></thead><tbody id="asset-body"></tbody></table></div>
+        </section>
+
+        <section id="history" class="panel">
+            <div class="section-heading"><div><p class="eyebrow">AUTOMATIC EXECUTIONS</p><h2>Wallet trades</h2></div></div>
+            <div class="table-wrap"><table><thead><tr><th>Time</th><th>Signal</th><th>Pair</th><th>Side</th><th>Quantity</th><th>Price</th><th>Net</th><th>Realized P&amp;L</th></tr></thead><tbody id="trade-body"></tbody></table></div>
+        </section>
+    </main>
+</div>
+<script src="/js/wallet.js"></script>
+</body>
+</html>

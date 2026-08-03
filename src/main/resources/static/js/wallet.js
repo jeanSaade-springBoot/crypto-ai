@@ -1,6 +1,170 @@
-let chart;const n=v=>Number(v||0),money=v=>`${n(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:8})} USDT`,qty=v=>n(v).toLocaleString('en-US',{maximumFractionDigits:12}),cls=v=>n(v)>=0?'positive':'negative';
-async function api(url,options){const r=await fetch(url,options);if(!r.ok){let m='Request failed';try{const j=await r.json();m=j.message||j.error||m}catch{}throw new Error(m)}return r.status===204?null:r.json()}
-async function load(){try{const d=await api('/api/wallet');document.querySelector('#status').textContent=d.portfolioStatus||'NOT STARTED';document.querySelector('#status').className=d.portfolioStatus==='WINNING'?'positive':d.portfolioStatus==='LOSING'?'negative':'';document.querySelector('#portfolio').textContent=money(d.portfolioValueUsdt);document.querySelector('#invested').textContent=`Net invested ${money(d.netInvestedUsdt)}`;setPnl('#total-pnl',d.totalPnlUsdt);document.querySelector('#total-return').textContent=`${n(d.totalReturnPercent).toFixed(2)}% since start`;document.querySelector('#change24h').textContent=`24h ${n(d.change24hUsdt)>=0?'+':''}${money(d.change24hUsdt)}`;document.querySelector('#available').textContent=money(d.availableUsdt);setPnl('#realized',d.realizedPnlUsdt);setPnl('#unrealized',d.unrealizedPnlUsdt);const s=d.settings||{};document.querySelector('#base-trade').value=s.baseTradeAmountUsdt||100;document.querySelector('#minimum-reserve').value=s.minimumUsdtReserve||0;document.querySelector('#auto-enabled').checked=Boolean(s.automaticExecutionEnabled);document.querySelector('#asset-body').innerHTML=d.assets.map(a=>`<tr><td><strong>${a.symbol}</strong></td><td>${qty(a.quantity)}</td><td>${a.symbol==='USDT'?'—':money(a.averageBuyPriceUsdt)}</td><td>${money(a.currentPriceUsdt)}</td><td>${money(a.costBasisUsdt)}</td><td>${money(a.currentValueUsdt)}</td><td class="${cls(a.unrealizedPnlUsdt)}">${money(a.unrealizedPnlUsdt)} <small>${n(a.unrealizedPnlPercent).toFixed(2)}%</small></td></tr>`).join('')||'<tr><td colspan="7">No assets</td></tr>';document.querySelector('#trade-body').innerHTML=d.trades.map(t=>`<tr><td>${new Date(t.executedAt).toLocaleString()}</td><td>${t.signalId||'—'}</td><td>${t.symbol}</td><td><span class="badge ${t.side==='BUY'?'positive':'negative'}">${t.side}</span></td><td>${qty(t.quantity)}</td><td>${money(t.priceUsdt)}</td><td>${money(t.netAmountUsdt)}</td><td class="${cls(t.realizedPnlUsdt)}">${t.realizedPnlUsdt==null?'—':money(t.realizedPnlUsdt)}</td></tr>`).join('')||'<tr><td colspan="8">No automatic trades yet</td></tr>';renderChart(d.snapshots)}catch(e){show(e.message,true)}}
-function setPnl(id,v){const e=document.querySelector(id);e.textContent=`${n(v)>=0?'+':''}${money(v)}`;e.className=cls(v)}function renderChart(s){const o={chart:{type:'line',height:320,toolbar:{show:false}},series:[{name:'Portfolio value',data:s.map(x=>[new Date(x.capturedAt).getTime(),n(x.portfolioValueUsdt)])},{name:'Net invested',data:s.map(x=>[new Date(x.capturedAt).getTime(),n(x.netInvestedUsdt)])}],xaxis:{type:'datetime'},yaxis:{labels:{formatter:v=>v.toFixed(0)}},stroke:{curve:'smooth',width:3},noData:{text:'Add a USDT deposit to start'}};if(chart)chart.destroy();chart=new ApexCharts(document.querySelector('#wallet-chart'),o);chart.render()}
-function show(m,error=false){const e=document.querySelector('#message');e.textContent=m;e.classList.remove('hidden');e.classList.toggle('success',!error);setTimeout(()=>e.classList.add('hidden'),3500)}async function save(url,method,body){try{await api(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});show('Saved successfully');await load()}catch(e){show(e.message,true)}}
-document.querySelector('#settings-form').addEventListener('submit',e=>{e.preventDefault();save('/api/wallet/settings','PUT',{baseTradeAmountUsdt:baseTrade.value,minimumUsdtReserve:minimumReserve.value,automaticExecutionEnabled:autoEnabled.checked})});document.querySelector('#cash-form').addEventListener('submit',e=>{e.preventDefault();save('/api/wallet/cash-flows','POST',{flowType:flowType.value,amountUsdt:flowAmount.value,notes:flowNotes.value})});document.querySelector('#asset-form').addEventListener('submit',e=>{e.preventDefault();save('/api/wallet/assets','POST',{symbol:assetSymbol.value,quantity:assetQuantity.value,averageBuyPriceUsdt:assetAverage.value||null})});document.querySelector('#refresh').addEventListener('click',load);load();
+let chart;
+
+const byId = id => document.getElementById(id);
+const n = value => Number(value || 0);
+const money = value => `${n(value).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 8})} USDT`;
+const qty = value => n(value).toLocaleString('en-US', {maximumFractionDigits: 12});
+const pnlClass = value => n(value) >= 0 ? 'positive' : 'negative';
+
+async function api(url, options) {
+    const response = await fetch(url, options);
+    if (!response.ok) {
+        let message = 'Request failed';
+        try {
+            const json = await response.json();
+            message = json.message || json.error || message;
+        } catch (_) {
+            const text = await response.text();
+            if (text) message = text;
+        }
+        throw new Error(message);
+    }
+    return response.status === 204 ? null : response.json();
+}
+
+async function load() {
+    try {
+        const data = await api('/api/wallet');
+        byId('status').textContent = data.portfolioStatus || 'NOT STARTED';
+        byId('status').className = data.portfolioStatus === 'WINNING' ? 'positive' : data.portfolioStatus === 'LOSING' ? 'negative' : '';
+        byId('portfolio').textContent = money(data.portfolioValueUsdt);
+        byId('invested').textContent = `Net invested ${money(data.netInvestedUsdt)}`;
+        setPnl('total-pnl', data.totalPnlUsdt);
+        byId('total-return').textContent = `${n(data.totalReturnPercent).toFixed(2)}% since start`;
+        byId('change24h').textContent = `24h ${n(data.change24hUsdt) >= 0 ? '+' : ''}${money(data.change24hUsdt)}`;
+        byId('available').textContent = money(data.availableUsdt);
+        setPnl('realized', data.realizedPnlUsdt);
+        setPnl('unrealized', data.unrealizedPnlUsdt);
+
+        const settings = data.settings || {};
+        byId('base-trade').value = settings.baseTradeAmountUsdt || 100;
+        byId('minimum-reserve').value = settings.minimumUsdtReserve || 0;
+        byId('auto-enabled').checked = Boolean(settings.automaticExecutionEnabled);
+
+        byId('asset-body').innerHTML = (data.assets || []).map(asset => `
+            <tr>
+                <td><strong>${asset.symbol}</strong></td>
+                <td>${qty(asset.quantity)}</td>
+                <td>${asset.symbol === 'USDT' ? '—' : money(asset.averageBuyPriceUsdt)}</td>
+                <td>${money(asset.currentPriceUsdt)}</td>
+                <td>${money(asset.costBasisUsdt)}</td>
+                <td>${money(asset.currentValueUsdt)}</td>
+                <td class="${pnlClass(asset.unrealizedPnlUsdt)}">${money(asset.unrealizedPnlUsdt)} <small>${n(asset.unrealizedPnlPercent).toFixed(2)}%</small></td>
+            </tr>`).join('') || '<tr><td colspan="7">No assets</td></tr>';
+
+        byId('trade-body').innerHTML = (data.trades || []).map(trade => `
+            <tr>
+                <td>${new Date(trade.executedAt).toLocaleString()}</td>
+                <td>${trade.signalId || '—'}</td>
+                <td>${trade.symbol}</td>
+                <td><span class="badge ${trade.side === 'BUY' ? 'positive' : 'negative'}">${trade.side}</span></td>
+                <td>${qty(trade.quantity)}</td>
+                <td>${money(trade.priceUsdt)}</td>
+                <td>${money(trade.netAmountUsdt)}</td>
+                <td class="${pnlClass(trade.realizedPnlUsdt)}">${trade.realizedPnlUsdt == null ? '—' : money(trade.realizedPnlUsdt)}</td>
+            </tr>`).join('') || '<tr><td colspan="8">No automatic trades yet</td></tr>';
+
+        renderChart(data.snapshots || []);
+    } catch (error) {
+        showMessage(error.message, true);
+    }
+}
+
+function setPnl(id, value) {
+    const element = byId(id);
+    element.textContent = `${n(value) >= 0 ? '+' : ''}${money(value)}`;
+    element.className = pnlClass(value);
+}
+
+function renderChart(snapshots) {
+    const options = {
+        chart: {type: 'line', height: 320, toolbar: {show: false}},
+        series: [
+            {name: 'Portfolio value', data: snapshots.map(x => [new Date(x.capturedAt).getTime(), n(x.portfolioValueUsdt)])},
+            {name: 'Net invested', data: snapshots.map(x => [new Date(x.capturedAt).getTime(), n(x.netInvestedUsdt)])}
+        ],
+        xaxis: {type: 'datetime'},
+        yaxis: {labels: {formatter: value => value.toFixed(0)}},
+        stroke: {curve: 'smooth', width: 3},
+        noData: {text: 'Add a USDT deposit to start'}
+    };
+    if (chart) chart.destroy();
+    chart = new ApexCharts(byId('wallet-chart'), options);
+    chart.render();
+}
+
+function showMessage(message, isError = false) {
+    const element = byId('message');
+    element.textContent = message;
+    element.classList.remove('hidden', 'success');
+    element.classList.toggle('success', !isError);
+    element.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+    window.setTimeout(() => element.classList.add('hidden'), 4500);
+}
+
+async function save(url, method, body, successMessage) {
+    try {
+        await api(url, {
+            method,
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        await load();
+        showMessage(successMessage);
+        return true;
+    } catch (error) {
+        showMessage(error.message, true);
+        return false;
+    }
+}
+
+byId('settings-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    await save('/api/wallet/settings', 'PUT', {
+        baseTradeAmountUsdt: byId('base-trade').value,
+        minimumUsdtReserve: byId('minimum-reserve').value,
+        automaticExecutionEnabled: byId('auto-enabled').checked
+    }, 'Automatic trading settings saved successfully.');
+});
+
+byId('cash-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const type = byId('flow-type').value;
+    const amount = byId('flow-amount').value;
+    const saved = await save('/api/wallet/cash-flows', 'POST', {
+        flowType: type,
+        amountUsdt: amount,
+        notes: byId('flow-notes').value
+    }, `${type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'} of ${amount} USDT saved successfully.`);
+    if (saved) {
+        byId('flow-amount').value = '';
+        byId('flow-notes').value = '';
+    }
+});
+
+byId('asset-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const symbol = byId('asset-symbol').value;
+    const quantityValue = byId('asset-quantity').value;
+    const averageValue = byId('asset-average').value;
+
+    if (!symbol) {
+        showMessage('Please choose a coin.', true);
+        return;
+    }
+
+    const saved = await save('/api/wallet/assets', 'POST', {
+        symbol,
+        quantity: quantityValue,
+        averageBuyPriceUsdt: averageValue
+    }, `${symbol} holding saved successfully: ${quantityValue} ${symbol} at an average entry of ${averageValue} USDT.`);
+
+    if (saved) {
+        byId('asset-symbol').value = '';
+        byId('asset-quantity').value = '';
+        byId('asset-average').value = '';
+    }
+});
+
+byId('refresh').addEventListener('click', load);
+load();
