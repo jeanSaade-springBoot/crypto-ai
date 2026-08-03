@@ -13,6 +13,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.*;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.*;
 
 @Service
@@ -27,6 +29,7 @@ public class WalletService {
     private final TradeSignalRepository signalRepository;
     private final CandleRepository candleRepository;
     private final WalletSettingsRepository settingsRepository;
+    private final WalletDailyStatisticsRepository dailyStatisticsRepository;
 
     @Transactional(readOnly = true)
     public Map<String,Object> overview() {
@@ -58,6 +61,7 @@ public class WalletService {
         result.put("availableUsdt", available);
         WalletSettings settings = settingsRepository.findById(1L).orElse(null);
         result.put("settings", settings);
+        result.put("dailyTrading", dailyTradingSummary(settings, available, portfolio));
         result.put("portfolioStatus", totalPnl.signum() >= 0 ? "WINNING" : "LOSING");
         BigDecimal finalPortfolioValue = portfolio;
         BigDecimal change24h = snapshotRepository.findTop200ByOrderByCapturedAtDesc().stream()
@@ -96,16 +100,78 @@ public class WalletService {
 
     @Transactional
     public void updateSettings(WalletSettingsRequest request) {
-        if (request.baseTradeAmountUsdt() == null || request.baseTradeAmountUsdt().signum() <= 0)
-            throw new IllegalArgumentException("Base trade amount must be greater than zero");
         if (request.minimumUsdtReserve() == null || request.minimumUsdtReserve().signum() < 0)
             throw new IllegalArgumentException("Minimum reserve cannot be negative");
-        WalletSettings settings = settingsRepository.findById(1L).orElseGet(() -> WalletSettings.builder().id(1L).build());
-        settings.setBaseTradeAmountUsdt(request.baseTradeAmountUsdt());
+        if (request.maximumDailyNewPositions() == null
+                || request.maximumDailyNewPositions() < 1
+                || request.maximumDailyNewPositions() > 100)
+            throw new IllegalArgumentException("Maximum daily new positions must be between 1 and 100");
+
+        WalletSettings settings = settingsRepository.findById(1L).orElseGet(() -> WalletSettings.builder()
+                .id(1L)
+                .baseTradeAmountUsdt(BigDecimal.valueOf(100))
+                .build());
         settings.setMinimumUsdtReserve(request.minimumUsdtReserve());
+        settings.setMaximumDailyNewPositions(request.maximumDailyNewPositions());
         settings.setAutomaticExecutionEnabled(request.automaticExecutionEnabled());
         settings.setUpdatedAt(Instant.now());
         settingsRepository.save(settings);
+    }
+
+
+    @Transactional(readOnly = true)
+    public BigDecimal currentPortfolioValue() {
+        BigDecimal portfolio = ZERO;
+        for (WalletAsset asset : assetRepository.findAll()) {
+            portfolio = portfolio.add(asset.getQuantity().multiply(currentPrice(asset.getSymbol())));
+        }
+        return portfolio;
+    }
+
+    private Map<String, Object> dailyTradingSummary(
+            WalletSettings settings,
+            BigDecimal availableUsdt,
+            BigDecimal portfolioValue) {
+
+        int configuredMaximum = settings == null || settings.getMaximumDailyNewPositions() <= 0
+                ? 6 : settings.getMaximumDailyNewPositions();
+        BigDecimal reserve = settings == null ? ZERO : nvl(settings.getMinimumUsdtReserve());
+        BigDecimal tradable = availableUsdt.subtract(reserve).max(ZERO);
+        LocalDate today = LocalDate.now(ZoneId.systemDefault());
+
+        return dailyStatisticsRepository.findByTradeDate(today)
+                .<Map<String, Object>>map(statistics -> {
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("tradeDate", statistics.getTradeDate());
+                    result.put("dailyTradeBudgetUsdt", statistics.getDailyTradeBudgetUsdt());
+                    result.put("executedBuys", statistics.getExecutedBuys());
+                    result.put("maximumNewPositions", statistics.getMaximumNewPositions());
+                    result.put("remainingBuys", Math.max(0,
+                            statistics.getMaximumNewPositions() - statistics.getExecutedBuys()));
+                    result.put("startingUsdt", statistics.getStartingUsdt());
+                    result.put("currentUsdt", availableUsdt);
+                    result.put("startingPortfolioUsdt", statistics.getStartingPortfolioUsdt());
+                    result.put("currentPortfolioUsdt", portfolioValue);
+                    result.put("budgetLocked", true);
+                    return result;
+                })
+                .orElseGet(() -> {
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    BigDecimal previewBudget = tradable.signum() <= 0
+                            ? ZERO
+                            : tradable.divide(BigDecimal.valueOf(configuredMaximum), SCALE, RoundingMode.DOWN);
+                    result.put("tradeDate", today);
+                    result.put("dailyTradeBudgetUsdt", previewBudget);
+                    result.put("executedBuys", 0);
+                    result.put("maximumNewPositions", configuredMaximum);
+                    result.put("remainingBuys", configuredMaximum);
+                    result.put("startingUsdt", availableUsdt);
+                    result.put("currentUsdt", availableUsdt);
+                    result.put("startingPortfolioUsdt", portfolioValue);
+                    result.put("currentPortfolioUsdt", portfolioValue);
+                    result.put("budgetLocked", false);
+                    return result;
+                });
     }
 
     @Transactional

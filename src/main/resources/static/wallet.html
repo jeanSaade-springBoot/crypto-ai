@@ -43,6 +43,8 @@
             <article class="metric-card"><span>Portfolio value</span><strong id="portfolio">—</strong><small id="invested">—</small></article>
             <article class="metric-card"><span>Total P&amp;L</span><strong id="total-pnl">—</strong><small id="change24h">—</small></article>
             <article class="metric-card"><span>Available USDT</span><strong id="available">—</strong><small>Buying balance</small></article>
+            <article class="metric-card"><span>Today's BUY budget</span><strong id="daily-budget">—</strong><small id="budget-state">Calculated at first BUY</small></article>
+            <article class="metric-card"><span>Today's new positions</span><strong id="daily-buys">—</strong><small id="remaining-buys">— remaining</small></article>
             <article class="metric-card"><span>Realized P&amp;L</span><strong id="realized">—</strong><small>Closed system trades</small></article>
             <article class="metric-card"><span>Unrealized P&amp;L</span><strong id="unrealized">—</strong><small>Current holdings</small></article>
         </section>
@@ -56,10 +58,10 @@
             <article id="settings" class="panel">
                 <h2>Automatic paper trading</h2>
                 <form id="settings-form">
-                    <label>Base trade amount USDT<input id="base-trade" type="number" min="0.01" step="0.01" required></label>
+                    <label>Maximum new positions per day<input id="maximum-daily-positions" type="number" min="1" max="100" step="1" required></label>
                     <label>Minimum USDT reserve<input id="minimum-reserve" type="number" min="0" step="0.01" required></label>
                     <label class="toggle-row"><input id="auto-enabled" type="checkbox"> Enable automatic wallet execution</label>
-                    <p class="form-note">Approved BUY signals spend the base amount adjusted by the ATR position percentage. SELL/stop/target closes only quantities bought automatically by the system.</p>
+                    <p class="form-note">At the first BUY of each day, the system locks one fixed budget: (available USDT − reserve) ÷ maximum new positions. Every BUY uses that same amount. SELLs return USDT but never change today's budget and never count toward the daily limit.</p>
                     <button type="submit">Save automation</button>
                 </form>
             </article>

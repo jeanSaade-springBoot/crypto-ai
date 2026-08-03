@@ -37,9 +37,17 @@ async function load() {
         setPnl('unrealized', data.unrealizedPnlUsdt);
 
         const settings = data.settings || {};
-        byId('base-trade').value = settings.baseTradeAmountUsdt || 100;
+        byId('maximum-daily-positions').value = settings.maximumDailyNewPositions || 6;
         byId('minimum-reserve').value = settings.minimumUsdtReserve || 0;
         byId('auto-enabled').checked = Boolean(settings.automaticExecutionEnabled);
+
+        const daily = data.dailyTrading || {};
+        byId('daily-budget').textContent = money(daily.dailyTradeBudgetUsdt);
+        byId('daily-buys').textContent = `${n(daily.executedBuys)} / ${n(daily.maximumNewPositions)}`;
+        byId('remaining-buys').textContent = `${n(daily.remainingBuys)} remaining`;
+        byId('budget-state').textContent = daily.budgetLocked
+            ? 'Locked for today; SELL proceeds do not resize it'
+            : 'Preview; locks when the first BUY executes';
 
         byId('asset-body').innerHTML = (data.assets || []).map(asset => `
             <tr>
@@ -121,7 +129,7 @@ async function save(url, method, body, successMessage) {
 byId('settings-form').addEventListener('submit', async event => {
     event.preventDefault();
     await save('/api/wallet/settings', 'PUT', {
-        baseTradeAmountUsdt: byId('base-trade').value,
+        maximumDailyNewPositions: byId('maximum-daily-positions').value,
         minimumUsdtReserve: byId('minimum-reserve').value,
         automaticExecutionEnabled: byId('auto-enabled').checked
     }, 'Automatic trading settings saved successfully.');

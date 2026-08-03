@@ -15,6 +15,8 @@ public class WalletSettings {
     private BigDecimal baseTradeAmountUsdt;
     @Column(name = "minimum_usdt_reserve", nullable = false, precision = 30, scale = 12)
     private BigDecimal minimumUsdtReserve;
+    @Column(name = "maximum_daily_new_positions", nullable = false)
+    private int maximumDailyNewPositions;
     @Column(name = "automatic_execution_enabled", nullable = false)
     private boolean automaticExecutionEnabled;
     @Column(name = "updated_at", nullable = false)

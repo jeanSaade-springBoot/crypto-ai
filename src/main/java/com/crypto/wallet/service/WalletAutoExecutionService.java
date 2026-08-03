@@ -9,6 +9,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.*;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.Locale;
 
 @Service
@@ -21,10 +23,11 @@ public class WalletAutoExecutionService {
     private final WalletTradeRepository tradeRepository;
     private final WalletManagedPositionRepository managedPositionRepository;
     private final WalletSettingsRepository settingsRepository;
+    private final WalletDailyStatisticsRepository dailyStatisticsRepository;
     private final WalletService walletService;
 
     @Transactional
-    public void executeBuy(TradeSignal signal) {
+    public synchronized void executeBuy(TradeSignal signal) {
         if (signal == null || signal.getId() == null) return;
         WalletSettings settings = settings();
         if (!settings.isAutomaticExecutionEnabled()) return;
@@ -35,16 +38,16 @@ public class WalletAutoExecutionService {
         String pair = normalizePair(signal.getSymbol());
         String assetSymbol = pair.substring(0, pair.length() - 4);
         BigDecimal price = positive(signal.getLatestPrice());
-        BigDecimal positionPercent = BigDecimal.valueOf(signal.getAtrRecommendedPositionPercent() <= 0
-                ? 100 : signal.getAtrRecommendedPositionPercent());
-        BigDecimal requested = settings.getBaseTradeAmountUsdt()
-                .multiply(positionPercent)
-                .divide(BigDecimal.valueOf(100), SCALE, RoundingMode.HALF_UP);
-
         WalletAsset usdt = getOrCreate("USDT");
-        BigDecimal tradable = usdt.getQuantity().subtract(settings.getMinimumUsdtReserve()).max(ZERO);
-        BigDecimal spend = requested.min(tradable);
-        if (spend.signum() <= 0) return;
+        WalletDailyStatistics daily = dailyStatistics(settings, usdt);
+
+        if (daily.getExecutedBuys() >= daily.getMaximumNewPositions()) return;
+
+        BigDecimal availableAboveReserve = usdt.getQuantity()
+                .subtract(settings.getMinimumUsdtReserve())
+                .max(ZERO);
+        BigDecimal spend = daily.getDailyTradeBudgetUsdt();
+        if (spend.signum() <= 0 || availableAboveReserve.compareTo(spend) < 0) return;
 
         BigDecimal quantity = spend.divide(price, SCALE, RoundingMode.DOWN);
         if (quantity.signum() <= 0) return;
@@ -53,15 +56,22 @@ public class WalletAutoExecutionService {
         BigDecimal oldCost = coin.getQuantity().multiply(nvl(coin.getAverageBuyPriceUsdt()));
         BigDecimal newQuantity = coin.getQuantity().add(quantity);
         coin.setQuantity(newQuantity);
-        coin.setAverageBuyPriceUsdt(oldCost.add(spend).divide(newQuantity, SCALE, RoundingMode.HALF_UP));
+        coin.setAverageBuyPriceUsdt(oldCost.add(spend)
+                .divide(newQuantity, SCALE, RoundingMode.HALF_UP));
         usdt.setQuantity(usdt.getQuantity().subtract(spend));
         assetRepository.save(coin);
         assetRepository.save(usdt);
 
-        WalletManagedPosition position = managedPositionRepository.findTopBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
+        WalletManagedPosition position = managedPositionRepository
+                .findTopBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
                 .orElseGet(() -> WalletManagedPosition.builder()
-                        .symbol(pair).quantity(ZERO).averageEntryPriceUsdt(ZERO).totalCostUsdt(ZERO)
-                        .status("OPEN").openedAt(Instant.now()).build());
+                        .symbol(pair)
+                        .quantity(ZERO)
+                        .averageEntryPriceUsdt(ZERO)
+                        .totalCostUsdt(ZERO)
+                        .status("OPEN")
+                        .openedAt(Instant.now())
+                        .build());
         position.setQuantity(position.getQuantity().add(quantity));
         position.setTotalCostUsdt(position.getTotalCostUsdt().add(spend));
         position.setAverageEntryPriceUsdt(position.getTotalCostUsdt()
@@ -70,11 +80,26 @@ public class WalletAutoExecutionService {
         managedPositionRepository.save(position);
 
         tradeRepository.save(WalletTrade.builder()
-                .signal(signal).executionKey(key).symbol(pair).side("BUY")
-                .quantity(quantity).priceUsdt(price).grossAmountUsdt(spend)
-                .feeUsdt(ZERO).netAmountUsdt(spend).executionType("PAPER_AUTO")
-                .status("EXECUTED").executedAt(Instant.now())
-                .notes("Automatic paper BUY from approved signal").build());
+                .signal(signal)
+                .executionKey(key)
+                .symbol(pair)
+                .side("BUY")
+                .quantity(quantity)
+                .priceUsdt(price)
+                .grossAmountUsdt(spend)
+                .feeUsdt(ZERO)
+                .netAmountUsdt(spend)
+                .executionType("PAPER_AUTO")
+                .status("EXECUTED")
+                .executedAt(Instant.now())
+                .notes("Automatic paper BUY using fixed daily budget")
+                .build());
+
+        daily.setExecutedBuys(daily.getExecutedBuys() + 1);
+        daily.setEndingUsdt(usdt.getQuantity());
+        daily.setEndingPortfolioUsdt(walletService.currentPortfolioValue());
+        daily.setUpdatedAt(Instant.now());
+        dailyStatisticsRepository.save(daily);
         walletService.captureSnapshot();
     }
 
@@ -124,13 +149,53 @@ public class WalletAutoExecutionService {
                 .realizedPnlUsdt(realized).realizedPnlPercent(realizedPercent)
                 .executionType("PAPER_AUTO").status("EXECUTED").executedAt(Instant.now())
                 .notes("Automatic paper SELL from exit signal").build());
+
+        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneId.systemDefault()))
+                .ifPresent(daily -> {
+                    daily.setEndingUsdt(usdt.getQuantity());
+                    daily.setEndingPortfolioUsdt(walletService.currentPortfolioValue());
+                    daily.setUpdatedAt(Instant.now());
+                    dailyStatisticsRepository.save(daily);
+                });
         walletService.captureSnapshot();
+    }
+
+    private WalletDailyStatistics dailyStatistics(WalletSettings settings, WalletAsset usdt) {
+        LocalDate today = LocalDate.now(ZoneId.systemDefault());
+        WalletDailyStatistics existing = dailyStatisticsRepository
+                .findForUpdateByTradeDate(today)
+                .orElse(null);
+        if (existing != null) return existing;
+
+        int maximum = settings.getMaximumDailyNewPositions() <= 0
+                ? 6 : settings.getMaximumDailyNewPositions();
+        BigDecimal tradable = usdt.getQuantity()
+                .subtract(settings.getMinimumUsdtReserve())
+                .max(ZERO);
+        BigDecimal budget = tradable.signum() <= 0
+                ? ZERO
+                : tradable.divide(BigDecimal.valueOf(maximum), SCALE, RoundingMode.DOWN);
+        BigDecimal portfolio = walletService.currentPortfolioValue();
+        Instant now = Instant.now();
+
+        return dailyStatisticsRepository.save(WalletDailyStatistics.builder()
+                .tradeDate(today)
+                .maximumNewPositions(maximum)
+                .dailyTradeBudgetUsdt(budget)
+                .executedBuys(0)
+                .startingUsdt(usdt.getQuantity())
+                .endingUsdt(usdt.getQuantity())
+                .startingPortfolioUsdt(portfolio)
+                .endingPortfolioUsdt(portfolio)
+                .createdAt(now)
+                .updatedAt(now)
+                .build());
     }
 
     private WalletSettings settings() {
         return settingsRepository.findById(1L).orElseGet(() -> settingsRepository.save(
                 WalletSettings.builder().id(1L).baseTradeAmountUsdt(BigDecimal.valueOf(100))
-                        .minimumUsdtReserve(ZERO).automaticExecutionEnabled(false)
+                        .minimumUsdtReserve(ZERO).maximumDailyNewPositions(6).automaticExecutionEnabled(false)
                         .updatedAt(Instant.now()).build()));
     }
 

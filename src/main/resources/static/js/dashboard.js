@@ -105,8 +105,11 @@ function renderPortfolio(wallet) {
     el('portfolio-usdt').textContent = money(wallet.availableUsdt);
     const settings = wallet.settings || {};
     el('portfolio-auto-status').textContent = settings.automaticExecutionEnabled
-        ? `Auto paper trading ON · ${money(settings.baseTradeAmountUsdt)} base trade`
+        ? 'Automatic paper trading enabled'
         : 'Automatic paper trading disabled';
+    const daily = wallet.dailyTrading || {};
+    el('portfolio-daily-budget').textContent = money(daily.dailyTradeBudgetUsdt);
+    el('portfolio-daily-buys').textContent = `${Number(daily.executedBuys || 0)} / ${Number(daily.maximumNewPositions || settings.maximumDailyNewPositions || 6)} new positions`;
     const holdings = (wallet.assets || []).filter(a => Number(a.quantity || 0) > 0);
     el('portfolio-holdings').innerHTML = holdings.length ? holdings.map(a => {
         const assetPnl = Number(a.unrealizedPnlUsdt || 0);
