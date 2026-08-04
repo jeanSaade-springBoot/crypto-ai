@@ -21,6 +21,7 @@ import com.crypto.dto.StrategyScoreResult;
 import com.crypto.dto.MarketContextSnapshot;
 import com.crypto.dto.FinalDecisionResult;
 import com.crypto.dto.DerivativesPositioningResult;
+import com.crypto.dto.TrendStructureResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.crypto.indicator.service.TechnicalIndicatorService;
@@ -74,6 +75,7 @@ public class AnalysisService {
     private final OrderBookLiquidityService orderBookLiquidityService;
     private final DerivativesPositioningService derivativesPositioningService;
     private final FinalDecisionService finalDecisionService;
+    private final TrendStructureService trendStructureService;
 
     /**
      * Manual entry point used by controllers or recovery jobs.
@@ -111,7 +113,8 @@ public class AnalysisService {
         boolean fundamentalAvailable = fundamentalService.isAvailable(fundamental, signalGeneratedAt);
 
         IndicatorSnapshot previous = previousSnapshot(i);
-        MovingAverageBreakdown movingAverages = movingAverageScore(i, previous);
+        TrendStructureResult trendStructure = trendStructureService.evaluate(i);
+        MovingAverageBreakdown movingAverages = movingAverageScore(i, previous, trendStructure);
         MomentumBreakdown momentumBreakdown = momentumScore(i);
         BandsVolumeBreakdown bandsVolume = bandsVolumeScore(i);
         int trend = movingAverages.total();
@@ -310,7 +313,7 @@ public class AnalysisService {
                 .emaAlignmentScore(movingAverages.structure())
                 .sma20Score(movingAverages.priceLocation())
                 .trendDirectionScore(movingAverages.direction())
-                .trendStructureScore(movingAverages.structure())
+                .trendStructureScore(trendStructure.score())
                 .trendStrengthScore(movingAverages.strength())
                 .trendPriceLocationScore(movingAverages.priceLocation())
                 .rsiScore(momentumBreakdown.rsi())
@@ -325,7 +328,7 @@ public class AnalysisService {
                 .excludedCategories(serializeExcludedCategories(sentimentEnabled, sentimentAvailable, fundamentalAvailable, fundamental))
                 .sentimentBreakdown(serializeSentiment(sentimentOverview.providers()))
                 .analysisBreakdown(serializeAnalysisBreakdown(
-                        i, movingAverages, momentumBreakdown, bandsVolume, fundamentalBreakdown,
+                        i, movingAverages, trendStructure, momentumBreakdown, bandsVolume, fundamentalBreakdown,
                         regimeAssessment, strategyProfile, strategyScore
                 ))
                 .latestPrice(i.latestPrice())
@@ -399,10 +402,11 @@ public class AnalysisService {
 
     private MovingAverageBreakdown movingAverageScore(
             IndicatorSnapshot current,
-            IndicatorSnapshot previous
+            IndicatorSnapshot previous,
+            TrendStructureResult trendStructure
     ) {
         int direction = scoreTrendDirection(current);
-        int structure = scoreTrendStructure(current, previous);
+        int structure = trendStructure.score();
         int strength = scoreTrendStrength(current, previous);
         int priceLocation = scoreTrendPriceLocation(current);
         return new MovingAverageBreakdown(direction, structure, strength, priceLocation);
@@ -415,21 +419,6 @@ public class AnalysisService {
         }
         if (i.ema50().compareTo(i.ema200()) > 0) {
             score += 4;
-        }
-        return score;
-    }
-
-    private int scoreTrendStructure(IndicatorSnapshot current, IndicatorSnapshot previous) {
-        int score = 0;
-        boolean bullishAlignment = current.ema20().compareTo(current.ema50()) > 0
-                && current.ema50().compareTo(current.ema200()) > 0;
-        if (bullishAlignment) {
-            score += 4;
-        }
-        if (previous != null) {
-            if (current.ema20().compareTo(previous.ema20()) > 0) score += 1;
-            if (current.ema50().compareTo(previous.ema50()) > 0) score += 1;
-            if (current.ema200().compareTo(previous.ema200()) > 0) score += 1;
         }
         return score;
     }
@@ -737,6 +726,7 @@ public class AnalysisService {
     private String serializeAnalysisBreakdown(
             IndicatorSnapshot i,
             MovingAverageBreakdown movingAverages,
+            TrendStructureResult trendStructure,
             MomentumBreakdown momentum,
             BandsVolumeBreakdown bandsVolume,
             FundamentalScoreResult fundamentals,
@@ -766,11 +756,7 @@ public class AnalysisService {
                         "Directional hierarchy", movingAverages.direction(), 8,
                         movingAverages.direction() == 8 ? "Both bullish direction checks confirmed"
                                 : movingAverages.direction() > 0 ? "Partial bullish direction" : "No bullish direction confirmation"),
-                "structure", componentDetail(
-                        "Bullish EMA alignment plus EMA slopes",
-                        "Alignment and persistence", movingAverages.structure(), 7,
-                        movingAverages.structure() >= 6 ? "Aligned trend with rising averages"
-                                : movingAverages.structure() >= 4 ? "Bullish alignment; slopes are mixed" : "Trend structure is incomplete"),
+                "structure", trendStructureDetail(trendStructure),
                 "strength", componentDetail(
                         "EMA20/EMA50 separation",
                         "Percentage gap and gap relative to ATR", movingAverages.strength(), 6,
@@ -801,9 +787,9 @@ public class AnalysisService {
         breakdown.put("emaAlignment", componentDetail(
                 "EMA20 / EMA50 / EMA200",
                 "20=" + i.ema20() + ", 50=" + i.ema50() + ", 200=" + i.ema200(),
-                movingAverages.structure(), 7,
-                movingAverages.structure() >= 6 ? "Strong bullish EMA alignment"
-                        : movingAverages.structure() > 0 ? "Bullish alignment with limited spacing" : "EMAs are not bullishly aligned"
+                movingAverages.direction() == 8 ? 7 : movingAverages.direction() == 4 ? 4 : 0, 7,
+                movingAverages.direction() == 8 ? "Strong bullish EMA alignment"
+                        : movingAverages.direction() > 0 ? "Partial bullish EMA alignment" : "EMAs are not bullishly aligned"
         ));
         breakdown.put("sma20", componentDetail(
                 i.latestPrice() + " vs " + i.sma20(),
@@ -959,6 +945,23 @@ public class AnalysisService {
         result.put("status", component.status());
         return result;
     }
+
+    private Map<String, Object> trendStructureDetail(TrendStructureResult result) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("score", result.score());
+        detail.put("maximum", 7);
+        detail.put("value", result.explanation());
+        detail.put("metric", "Price-action transition structure");
+        detail.put("status", result.explanation());
+        detail.put("marketStructureScore", result.marketStructureScore());
+        detail.put("pullbackQualityScore", result.pullbackQualityScore());
+        detail.put("ema20RespectScore", result.ema20RespectScore());
+        detail.put("breakoutPreparationScore", result.breakoutPreparationScore());
+        detail.put("continuationScore", result.continuationScore());
+        detail.put("evidence", result.evidence());
+        return detail;
+    }
+
     private Map<String, Object> componentDetail(String value, String metric, int score, int maximum, String status) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("value", value);
