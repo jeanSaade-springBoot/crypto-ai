@@ -8,6 +8,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import com.crypto.wallet.service.WalletAutoExecutionService;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.crypto.position.service.PositionManagementService;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -29,6 +31,10 @@ public class PaperTradingService {
     private final TradeSignalRepository signalRepository;
     private final PaperPositionRepository positionRepository;
     private final WalletAutoExecutionService walletAutoExecutionService;
+
+    /** Advisory-only; optional injection preserves existing constructor-based tests. */
+    @Autowired(required = false)
+    private PositionManagementService positionManagementService;
 
     @Transactional
     public PaperPosition openFromLatestSignal(String symbol) {
@@ -56,6 +62,16 @@ public class PaperTradingService {
         }
 
         String symbol = normalizeSymbol(signal.getSymbol());
+
+        // Shadow-mode position management. This persists HOLD/REDUCE/EXIT advice only.
+        // It never changes the market signal and never executes a wallet transaction.
+        if (positionManagementService != null) {
+            try {
+                positionManagementService.analyze(signal);
+            } catch (RuntimeException ex) {
+                log.warn("Position advisory failed for signal {}: {}", signal.getId(), ex.getMessage());
+            }
+        }
         Optional<PaperPosition> openPosition = positionRepository
                 .findBySymbolAndStatus(symbol, PositionStatus.OPEN);
 
