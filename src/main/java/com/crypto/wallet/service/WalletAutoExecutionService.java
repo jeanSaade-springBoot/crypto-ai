@@ -1,6 +1,8 @@
 package com.crypto.wallet.service;
 
 import com.crypto.domain.TradeSignal;
+import com.crypto.position.domain.PositionAnalysis;
+import com.crypto.position.domain.PositionRecommendation;
 import com.crypto.wallet.domain.*;
 import com.crypto.wallet.repository.*;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -86,9 +88,12 @@ public class WalletAutoExecutionService {
                 .feeUsdt(ZERO)
                 .netAmountUsdt(spend)
                 .executionType("PAPER_AUTO")
+                .executionReason("ENTRY_BUY")
                 .status("EXECUTED")
                 .executedAt(Instant.now())
                 .notes("Automatic paper BUY using fixed daily budget")
+                .executionMessage("BUY decision from trade signal #" + signal.getId()
+                        + " applied to wallet for " + pair)
                 .build());
 
         daily.setExecutedBuys(daily.getExecutedBuys() + 1);
@@ -143,8 +148,12 @@ public class WalletAutoExecutionService {
                 .quantity(quantity).priceUsdt(price).grossAmountUsdt(gross)
                 .feeUsdt(ZERO).netAmountUsdt(gross).costBasisUsdt(costBasis)
                 .realizedPnlUsdt(realized).realizedPnlPercent(realizedPercent)
-                .executionType("PAPER_AUTO").status("EXECUTED").executedAt(Instant.now())
-                .notes("Automatic paper SELL from exit signal").build());
+                .executionType("PAPER_AUTO").executionReason("SIGNAL_SELL")
+                .status("EXECUTED").executedAt(Instant.now())
+                .notes("Automatic paper SELL from exit signal")
+                .executionMessage("SELL decision from trade signal #" + signal.getId()
+                        + " applied to wallet for " + pair)
+                .build());
 
         dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneId.systemDefault()))
                 .ifPresent(daily -> {
@@ -154,6 +163,95 @@ public class WalletAutoExecutionService {
                     dailyStatisticsRepository.save(daily);
                 });
         walletService.captureSnapshot();
+    }
+
+    /**
+     * Applies an already-persisted Position Manager STOP_LOSS decision to the wallet.
+     * Other position recommendations remain advisory-only until separately validated.
+     */
+    @Transactional
+    public synchronized boolean executePositionStopLoss(PositionAnalysis analysis) {
+        if (analysis == null || analysis.getId() == null
+                || analysis.getRecommendation() != PositionRecommendation.STOP_LOSS) {
+            return false;
+        }
+
+        WalletSettings settings = settings();
+        if (!settings.isAutomaticExecutionEnabled()) return false;
+
+        String key = "POSITION_ANALYSIS:" + analysis.getId() + ":STOP_LOSS";
+        if (tradeRepository.existsByExecutionKey(key)) return true;
+
+        String pair = normalizePair(analysis.getSymbol());
+        WalletManagedPosition position = managedPositionRepository
+                .findTopBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
+                .orElse(null);
+        if (position == null || position.getQuantity() == null
+                || position.getQuantity().signum() <= 0) {
+            return false;
+        }
+
+        String assetSymbol = pair.substring(0, pair.length() - 4);
+        WalletAsset coin = getOrCreate(assetSymbol);
+        WalletAsset usdt = getOrCreate("USDT");
+        BigDecimal quantity = position.getQuantity().min(coin.getQuantity());
+        if (quantity.signum() <= 0) return false;
+
+        BigDecimal price = positive(analysis.getCurrentPriceUsdt());
+        BigDecimal gross = quantity.multiply(price);
+        BigDecimal costBasis = position.getAverageEntryPriceUsdt().multiply(quantity);
+        BigDecimal realized = gross.subtract(costBasis);
+        BigDecimal realizedPercent = costBasis.signum() == 0 ? ZERO : realized
+                .divide(costBasis, 8, RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(100));
+
+        coin.setQuantity(coin.getQuantity().subtract(quantity));
+        if (coin.getQuantity().signum() == 0) coin.setAverageBuyPriceUsdt(null);
+        usdt.setQuantity(usdt.getQuantity().add(gross));
+        assetRepository.save(coin);
+        assetRepository.save(usdt);
+
+        position.setQuantity(ZERO);
+        position.setTotalCostUsdt(ZERO);
+        position.setAverageEntryPriceUsdt(ZERO);
+        position.setStatus("CLOSED");
+        position.setUpdatedAt(Instant.now());
+        managedPositionRepository.save(position);
+
+        TradeSignal sourceSignal = analysis.getTradeSignal();
+        tradeRepository.save(WalletTrade.builder()
+                .signal(sourceSignal)
+                .positionAnalysis(analysis)
+                .executionKey(key)
+                .symbol(pair)
+                .side("SELL")
+                .quantity(quantity)
+                .priceUsdt(price)
+                .grossAmountUsdt(gross)
+                .feeUsdt(ZERO)
+                .netAmountUsdt(gross)
+                .costBasisUsdt(costBasis)
+                .realizedPnlUsdt(realized)
+                .realizedPnlPercent(realizedPercent)
+                .executionType("PAPER_AUTO")
+                .executionReason("POSITION_STOP_LOSS")
+                .status("EXECUTED")
+                .executedAt(Instant.now())
+                .notes("Position Manager STOP_LOSS applied to wallet")
+                .executionMessage("Position analysis #" + analysis.getId()
+                        + " generated STOP_LOSS and sold " + quantity + " " + assetSymbol
+                        + " at " + price + " USDT")
+                .build());
+
+        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneId.systemDefault()))
+                .ifPresent(daily -> {
+                    daily.setEndingUsdt(usdt.getQuantity());
+                    daily.setEndingPortfolioUsdt(walletService.currentPortfolioValue());
+                    daily.setUpdatedAt(Instant.now());
+                    dailyStatisticsRepository.save(daily);
+                });
+        walletService.captureSnapshot();
+        return true;
     }
 
     private WalletDailyStatistics dailyStatistics(WalletSettings settings, WalletAsset usdt) {

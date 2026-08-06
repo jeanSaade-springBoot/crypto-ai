@@ -8,6 +8,7 @@ import com.crypto.position.dto.PositionAnalysisView;
 import com.crypto.position.repository.PositionAnalysisRepository;
 import com.crypto.wallet.domain.WalletManagedPosition;
 import com.crypto.wallet.repository.WalletManagedPositionRepository;
+import com.crypto.wallet.service.WalletAutoExecutionService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -22,11 +23,12 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * Advisory-only manager for positions already owned by the automatic wallet.
+ * Position manager for positions already owned by the automatic wallet.
  *
  * It compares the immutable BUY thesis stored on WalletManagedPosition with the
- * latest TradeSignal. It does not recalculate indicators, change the market
- * decision, modify the wallet, or execute an exit.
+ * latest TradeSignal. It does not recalculate indicators or change the market
+ * decision. HOLD, REDUCE, TAKE_PROFIT and EXIT remain advisory-only in v1.
+ * A hard STOP_LOSS may be applied to the wallet through WalletAutoExecutionService.
  */
 @Service
 @RequiredArgsConstructor
@@ -38,6 +40,7 @@ public class PositionManagementService {
     private final WalletManagedPositionRepository managedPositionRepository;
     private final PositionAnalysisRepository analysisRepository;
     private final ObjectMapper objectMapper;
+    private final WalletAutoExecutionService walletAutoExecutionService;
 
     @Transactional
     public Optional<PositionAnalysis> analyze(TradeSignal signal) {
@@ -110,8 +113,25 @@ public class PositionManagementService {
                 .analyzedAt(Instant.now())
                 .build());
 
-        log.info("Position advisory created: position={}, signal={}, symbol={}, recommendation={}, exitScore={}/25",
-                position.getId(), signal.getId(), symbol, recommendation, exitScore);
+        if (recommendation == PositionRecommendation.STOP_LOSS) {
+            boolean applied = walletAutoExecutionService.executePositionStopLoss(saved);
+            if (applied) {
+                saved.setAdvisoryOnly(false);
+                details.put("advisoryOnly", false);
+                details.put("walletApplied", true);
+                details.put("walletExecutionReason", "POSITION_STOP_LOSS");
+                saved.setDetailsJson(toJson(details));
+                saved = analysisRepository.save(saved);
+                log.warn("Position STOP_LOSS applied to wallet: position={}, analysis={}, signal={}, symbol={}",
+                        position.getId(), saved.getId(), signal.getId(), symbol);
+            } else {
+                log.error("Position STOP_LOSS was generated but not applied to wallet: position={}, analysis={}, signal={}, symbol={}",
+                        position.getId(), saved.getId(), signal.getId(), symbol);
+            }
+        }
+
+        log.info("Position analysis created: position={}, signal={}, symbol={}, recommendation={}, exitScore={}/25, advisoryOnly={}",
+                position.getId(), signal.getId(), symbol, recommendation, exitScore, saved.isAdvisoryOnly());
         return Optional.of(saved);
     }
 

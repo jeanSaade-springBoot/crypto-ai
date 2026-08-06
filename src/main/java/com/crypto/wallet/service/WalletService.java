@@ -208,7 +208,10 @@ public class WalletService {
                 .grossAmountUsdt(gross).feeUsdt(fee).netAmountUsdt(net).costBasisUsdt(costBasis)
                 .realizedPnlUsdt(realized).realizedPnlPercent(realizedPct)
                 .executionType(Optional.ofNullable(request.executionType()).orElse("MANUAL").toUpperCase(Locale.ROOT))
-                .status("EXECUTED").executedAt(Instant.now()).notes(request.notes()).build());
+                .executionReason("MANUAL_" + side)
+                .status("EXECUTED").executedAt(Instant.now()).notes(request.notes())
+                .executionMessage("Manual " + side + " applied to wallet for " + pair)
+                .build());
         captureSnapshot();
     }
 
@@ -230,7 +233,7 @@ public class WalletService {
     private BigDecimal netInvested() { return cashFlowRepository.findAll().stream().map(f -> "DEPOSIT".equals(f.getFlowType()) ? f.getAmountUsdt() : f.getAmountUsdt().negate()).reduce(ZERO, BigDecimal::add); }
     private BigDecimal currentPrice(String asset) { if ("USDT".equals(asset)) return BigDecimal.ONE; return candleRepository.findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByCloseTimeDesc(asset+"USDT","1m").map(Candle::getClosePrice).orElse(ZERO); }
     private WalletAsset getOrCreate(String symbol) { return assetRepository.findBySymbol(symbol).orElseGet(() -> assetRepository.save(WalletAsset.builder().symbol(symbol).quantity(ZERO).averageBuyPriceUsdt("USDT".equals(symbol)?BigDecimal.ONE:null).enabled(true).build())); }
-    private Map<String,Object> tradeDto(WalletTrade t) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id",t.getId()); m.put("signalId",t.getSignal()==null?null:t.getSignal().getId()); m.put("symbol",t.getSymbol()); m.put("side",t.getSide()); m.put("quantity",t.getQuantity()); m.put("priceUsdt",t.getPriceUsdt()); m.put("grossAmountUsdt",t.getGrossAmountUsdt()); m.put("feeUsdt",t.getFeeUsdt()); m.put("netAmountUsdt",t.getNetAmountUsdt()); m.put("realizedPnlUsdt",t.getRealizedPnlUsdt()); m.put("realizedPnlPercent",t.getRealizedPnlPercent()); m.put("executedAt",t.getExecutedAt()); return m; }
+    private Map<String,Object> tradeDto(WalletTrade t) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id",t.getId()); m.put("signalId",t.getSignal()==null?null:t.getSignal().getId()); m.put("positionAnalysisId",t.getPositionAnalysis()==null?null:t.getPositionAnalysis().getId()); m.put("symbol",t.getSymbol()); m.put("side",t.getSide()); m.put("quantity",t.getQuantity()); m.put("priceUsdt",t.getPriceUsdt()); m.put("grossAmountUsdt",t.getGrossAmountUsdt()); m.put("feeUsdt",t.getFeeUsdt()); m.put("netAmountUsdt",t.getNetAmountUsdt()); m.put("realizedPnlUsdt",t.getRealizedPnlUsdt()); m.put("realizedPnlPercent",t.getRealizedPnlPercent()); m.put("executionReason",t.getExecutionReason()); m.put("executionMessage",t.getExecutionMessage()); m.put("executedAt",t.getExecutedAt()); return m; }
     private BigDecimal percent(BigDecimal value, BigDecimal base) { return base==null||base.signum()==0?ZERO:value.divide(base,8,RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100)); }
     private BigDecimal nvl(BigDecimal v){return v==null?ZERO:v;} private BigDecimal positive(BigDecimal v,String n){if(v==null||v.signum()<=0)throw new IllegalArgumentException(n+" must be greater than zero");return v;} private BigDecimal nonNegative(BigDecimal v,String n){if(v==null||v.signum()<0)throw new IllegalArgumentException(n+" cannot be negative");return v;} private BigDecimal nonNegativeNullable(BigDecimal v,String n){if(v==null)return null;return nonNegative(v,n);} private String normalizeAsset(String v){if(v==null||v.isBlank())throw new IllegalArgumentException("Symbol is required");String s=v.trim().toUpperCase(Locale.ROOT);return s.endsWith("USDT")&&s.length()>4?s.substring(0,s.length()-4):s;} private String requireOne(String v,Set<String>a,String n){if(v==null||!a.contains(v.trim().toUpperCase(Locale.ROOT)))throw new IllegalArgumentException("Invalid "+n);return v.trim().toUpperCase(Locale.ROOT);}
 }

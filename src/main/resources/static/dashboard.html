@@ -33,6 +33,8 @@
         <header class="topbar">
             <div><p class="eyebrow">AUTOMATIC TRADING MONITOR</p><h1>Trading dashboard</h1></div>
             <div class="filters">
+                <a class="header-link" href="#portfolio-performance">Portfolio</a>
+                <a class="header-link" href="/wallet.html">Wallet</a>
                 <label>Symbol<select id="symbol-select"><option>BTCUSDT</option></select></label>
                 <label>Interval<select id="interval-select"><option>1m</option><option>5m</option><option>15m</option><option>1h</option><option>4h</option><option>1d</option></select></label>
                 <button id="refresh-button" type="button">Refresh</button>
@@ -79,33 +81,43 @@
 
 
 
-        <section id="score-diagnostics" class="panel">
-            <div class="section-heading">
+        <section id="score-diagnostics" class="panel collapsible-panel is-collapsed" data-collapsible="score-diagnostics">
+            <div class="section-heading collapsible-heading">
                 <div><p class="eyebrow">LAST 24 HOURS</p><h2>Score diagnostics</h2></div>
-                <span id="diagnostics-window">Waiting for signals</span>
+                <div class="heading-actions">
+                    <span id="diagnostics-window">Waiting for signals</span>
+                    <button class="collapse-toggle" type="button" aria-expanded="false" aria-controls="score-diagnostics-content">Expand</button>
+                </div>
             </div>
-            <div id="diagnostics-warnings" class="diagnostics-warnings"></div>
-            <div class="diagnostics-summary-grid">
-                <article><span>Signals</span><strong id="diagnostics-count">0</strong></article>
-                <article><span>Average score</span><strong id="diagnostics-average">—</strong></article>
-                <article><span>Score range</span><strong id="diagnostics-range">—</strong></article>
-                <article><span>Normalization</span><strong id="diagnostics-normalization">—</strong></article>
-            </div>
-            <div class="diagnostics-grid">
-                <div><h3>Category utilization</h3><div id="diagnostics-categories" class="diagnostics-list"></div></div>
-                <div><h3>Original decisions</h3><div id="diagnostics-decisions" class="diagnostics-list"></div></div>
-                <div><h3>Strategy performance</h3><div id="diagnostics-strategies" class="diagnostics-list"></div></div>
-                <div><h3>Lowest symbol / intervals</h3><div id="diagnostics-symbols" class="diagnostics-list"></div></div>
+            <div id="score-diagnostics-content" class="collapsible-content">
+                <div id="diagnostics-warnings" class="diagnostics-warnings"></div>
+                <div class="diagnostics-summary-grid">
+                    <article><span>Signals</span><strong id="diagnostics-count">0</strong></article>
+                    <article><span>Average score</span><strong id="diagnostics-average">—</strong></article>
+                    <article><span>Score range</span><strong id="diagnostics-range">—</strong></article>
+                    <article><span>Normalization</span><strong id="diagnostics-normalization">—</strong></article>
+                </div>
+                <div class="diagnostics-grid">
+                    <div><h3>Category utilization</h3><div id="diagnostics-categories" class="diagnostics-list"></div></div>
+                    <div><h3>Original decisions</h3><div id="diagnostics-decisions" class="diagnostics-list"></div></div>
+                    <div><h3>Strategy performance</h3><div id="diagnostics-strategies" class="diagnostics-list"></div></div>
+                    <div><h3>Lowest symbol / intervals</h3><div id="diagnostics-symbols" class="diagnostics-list"></div></div>
+                </div>
             </div>
         </section>
 
-        <section id="schedules" class="panel">
-            <div class="section-heading">
+        <section id="schedules" class="panel collapsible-panel is-collapsed" data-collapsible="runtime-configuration">
+            <div class="section-heading collapsible-heading">
                 <div><p class="eyebrow">RUNTIME CONFIGURATION</p><h2>Collection and analysis schedules</h2></div>
-                <span>Values loaded from application.yml and provider configuration</span>
+                <div class="heading-actions">
+                    <span>Values loaded from application.yml and provider configuration</span>
+                    <button class="collapse-toggle" type="button" aria-expanded="false" aria-controls="runtime-configuration-content">Expand</button>
+                </div>
             </div>
-            <div id="schedule-groups" class="schedule-groups">
-                <div class="empty">Loading schedule configuration...</div>
+            <div id="runtime-configuration-content" class="collapsible-content">
+                <div id="schedule-groups" class="schedule-groups">
+                    <div class="empty">Loading schedule configuration...</div>
+                </div>
             </div>
         </section>
 
@@ -147,10 +159,18 @@
         </section>
 
 
-        <section id="sentiment" class="sentiment-section">
-            <article class="panel sentiment-overview-panel">
-                <div class="section-heading"><div><p class="eyebrow">MARKET SENTIMENT</p><h2>Provider status and evaluated score</h2></div><div class="heading-actions"><button id="collect-sentiment-button" type="button">Collect enabled providers</button><span id="sentiment-master-status" class="badge neutral">CHECKING</span></div></div>
+        <section id="sentiment" class="sentiment-section collapsible-section is-collapsed" data-collapsible="sentiment">
+            <div class="panel collapsible-section-header">
+                <div class="section-heading collapsible-heading">
+                    <div><p class="eyebrow">SENTIMENT</p><h2>Sentiment analysis</h2></div>
+                    <button class="collapse-toggle" type="button" aria-expanded="false" aria-controls="sentiment-section-content">Expand</button>
+                </div>
+            </div>
+            <div id="sentiment-section-content" class="collapsible-content">
+            <article class="panel sentiment-overview-panel collapsible-panel is-collapsed" data-collapsible="market-sentiment">
+                <div class="section-heading collapsible-heading"><div><p class="eyebrow">MARKET SENTIMENT</p><h2>Provider status and evaluated score</h2></div><div class="heading-actions"><button class="collapse-toggle" type="button" aria-expanded="false" aria-controls="market-sentiment-content">Expand</button><button id="collect-sentiment-button" type="button">Collect enabled providers</button><span id="sentiment-master-status" class="badge neutral">CHECKING</span></div></div>
 
+                <div id="market-sentiment-content" class="collapsible-content">
                 <div id="sentiment-health-alert" class="provider-health-alert hidden" role="alert"></div>
 
                 <div class="sentiment-summary-grid">
@@ -167,6 +187,7 @@
                 <p id="sentiment-samples" class="muted">No sentiment samples yet.</p>
                 <div class="table-wrap provider-breakdown"><table><thead><tr><th>Provider</th><th>Enabled</th><th>API key</th><th>Weight</th><th>Latest score</th><th>Evaluated contribution</th><th>Confidence</th><th>Samples</th><th>Interval</th><th>Last run</th><th>Health</th><th>Status</th><th>Actions</th></tr></thead><tbody id="sentiment-provider-body"></tbody></table></div>
                 <small id="sentiment-collect-feedback" aria-live="polite"></small>
+                </div>
             </article>
 
             <div class="sentiment-lower-grid">
@@ -183,6 +204,7 @@
                 <div class="section-heading"><div><p class="eyebrow">RECENT INPUTS</p><h2>Sentiment history</h2></div></div>
                 <div class="table-wrap"><table><thead><tr><th>Time</th><th>Source</th><th>Score</th><th>Confidence</th><th>Summary</th></tr></thead><tbody id="sentiment-body"></tbody></table></div>
             </article>
+            </div>
             </div>
         </section>
 

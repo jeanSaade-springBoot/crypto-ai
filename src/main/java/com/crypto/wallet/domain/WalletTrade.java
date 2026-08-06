@@ -1,6 +1,7 @@
 package com.crypto.wallet.domain;
 
 import com.crypto.domain.TradeSignal;
+import com.crypto.position.domain.PositionAnalysis;
 import jakarta.persistence.*;
 import lombok.*;
 import java.math.BigDecimal;
@@ -15,6 +16,9 @@ public class WalletTrade {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "signal_id")
     private TradeSignal signal;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "position_analysis_id")
+    private PositionAnalysis positionAnalysis;
     @Column(name = "execution_key", length = 100)
     private String executionKey;
     @Column(nullable = false, length = 30)
@@ -39,10 +43,14 @@ public class WalletTrade {
     private BigDecimal realizedPnlPercent;
     @Column(name = "execution_type", nullable = false, length = 20)
     private String executionType;
+    @Column(name = "execution_reason", length = 40)
+    private String executionReason;
     @Column(nullable = false, length = 20)
     private String status;
     @Column(name = "executed_at", nullable = false)
     private Instant executedAt;
     @Column(length = 500)
     private String notes;
+    @Column(name = "execution_message", length = 1000)
+    private String executionMessage;
 }

@@ -1061,9 +1061,35 @@ function escapeHtml(text) {
     return String(text).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 }
 
+
+function setupCollapsibleSections() {
+    document.querySelectorAll('[data-collapsible]').forEach(container => {
+        const directToggle = Array.from(container.children)
+            .flatMap(child => Array.from(child.querySelectorAll ? child.querySelectorAll('.collapse-toggle') : []))
+            .find(button => button.closest('[data-collapsible]') === container);
+        const toggle = directToggle || container.querySelector('.collapse-toggle');
+        if (!toggle) return;
+
+        const sync = () => {
+            const collapsed = container.classList.contains('is-collapsed');
+            toggle.setAttribute('aria-expanded', String(!collapsed));
+            toggle.textContent = collapsed ? 'Expand' : 'Collapse';
+        };
+
+        toggle.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            container.classList.toggle('is-collapsed');
+            sync();
+        });
+        sync();
+    });
+}
+
 el('refresh-button').addEventListener('click', refreshDashboard);
 el('analyze-sentiment-button').addEventListener('click', analyzeSentiment);
 el('collect-sentiment-button').addEventListener('click', collectSentimentProviders);
 el('symbol-select').addEventListener('change', refreshDashboard);
 el('interval-select').addEventListener('change', refreshDashboard);
+setupCollapsibleSections();
 (async () => { await loadSymbols(); await refreshDashboard(); })();
