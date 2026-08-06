@@ -242,7 +242,7 @@ function renderCharts(candles) {
 function renderSignals(signals) {
     const body = el('signals-body');
     if (!signals.length) {
-        body.innerHTML = '<tr><td colspan="9" class="empty">No trade signals yet. The row appears after AnalysisService saves a signal.</td></tr>';
+        body.innerHTML = '<tr><td colspan="10" class="empty">No trade signals yet. The row appears after AnalysisService saves a signal.</td></tr>';
         return;
     }
 
@@ -270,7 +270,7 @@ function renderSignals(signals) {
                 <td><button type="button" class="signal-detail-button" data-signal-id="${signalId}" data-detail-id="${detailId}">${isOpen ? 'Hide analysis' : 'View analysis'}</button></td>
             </tr>
             <tr id="${detailId}" class="signal-detail-row ${isOpen ? '' : 'hidden'}">
-                <td colspan="9">
+                <td colspan="10">
                     <div class="analysis-view ${isPinned ? 'pinned' : ''}" data-signal-id="${signalId}">
                         <div class="analysis-toolbar">
                             <div><strong>${escapeHtml(s.symbol || '—')} · ${escapeHtml(s.interval || '—')}</strong><small>Readable AI analysis</small></div>
@@ -900,8 +900,9 @@ function renderTradeHistory(positions) {
             <td class="${pnlClass}"><strong>${signedMoney(p.realizedPnl)}</strong><small>${signedPercent(p.pnlPercentage)}</small></td>
             <td title="${escapeHtml(p.exitReason || '')}">${escapeHtml(String(p.closeReason || p.status || '—').replaceAll('_',' '))}</td>
             <td><span class="badge ${predictionClass}">${escapeHtml(p.predictionResult || 'PENDING')}</span></td>
+            <td><button type="button" class="replay-button" onclick="openTradeReplay(${p.id})">Replay</button></td>
         </tr>`;
-    }).join('') : '<tr><td colspan="9" class="empty">No completed paper trades yet. Closed trades will appear here with their final P&amp;L and result.</td></tr>';
+    }).join('') : '<tr><td colspan="10" class="empty">No completed paper trades yet. Closed trades will appear here with their final P&amp;L and result.</td></tr>';
 }
 
 
@@ -1093,3 +1094,81 @@ el('symbol-select').addEventListener('change', refreshDashboard);
 el('interval-select').addEventListener('change', refreshDashboard);
 setupCollapsibleSections();
 (async () => { await loadSymbols(); await refreshDashboard(); })();
+
+
+async function openTradeReplay(positionId) {
+    const dialog = el('trade-replay-dialog');
+    const content = el('trade-replay-content');
+    content.innerHTML = '<div class="empty">Loading trade lifecycle…</div>';
+    dialog.showModal();
+    try {
+        const response = await fetch(`/api/paper-trades/${positionId}/replay`);
+        if (!response.ok) throw new Error(`Replay request failed (${response.status})`);
+        const replay = await response.json();
+        renderTradeReplay(replay);
+    } catch (error) {
+        content.innerHTML = `<div class="error-panel">${escapeHtml(error.message || 'Unable to load trade replay.')}</div>`;
+    }
+}
+
+function closeTradeReplay() {
+    const dialog = el('trade-replay-dialog');
+    if (dialog && dialog.open) dialog.close();
+}
+
+function renderTradeReplay(replay) {
+    const p = replay.position || {};
+    el('trade-replay-title').textContent = `${p.symbol || 'Trade'} #${p.id || ''}`;
+    const pnl = Number(p.realizedPnl || 0);
+    const pnlClass = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '';
+    const after = replay.afterExit;
+    const signals = replay.timeline || [];
+    const advice = replay.positionAdvice || [];
+    const candles = replay.candles || [];
+
+    const lifecycle = signals.map(s => `<tr>
+        <td>${dateTime(s.generatedAt)}</td>
+        <td>${escapeHtml(s.interval || '—')}</td>
+        <td>${money(s.price)}</td>
+        <td>${escapeHtml(String(s.originalDecision || '—').replaceAll('_',' '))}</td>
+        <td><span class="badge ${String(s.decision || 'neutral').toLowerCase()}">${escapeHtml(String(s.decision || '—').replaceAll('_',' '))}</span></td>
+        <td>${s.totalScore ?? '—'}/100</td>
+        <td>${s.trendScore ?? '—'}/${s.volumeScore ?? '—'}/${s.momentumScore ?? '—'}</td>
+        <td>${escapeHtml(String(s.confluenceStatus || '—').replaceAll('_',' '))}</td>
+    </tr>`).join('');
+
+    const adviceRows = advice.length ? advice.map(a => `<tr>
+        <td>${dateTime(a.analyzedAt)}</td><td>${escapeHtml(a.interval || '—')}</td><td>${money(a.currentPrice)}</td>
+        <td>${signedPercent(a.unrealizedPnlPercent)}</td><td>${a.exitScore}/25</td>
+        <td><span class="badge ${String(a.recommendation || '').toLowerCase()}">${escapeHtml(a.recommendation || '—')}</span></td>
+        <td>${escapeHtml(a.explanation || '')}</td>
+    </tr>`).join('') : '<tr><td colspan="7" class="empty">No position-manager advice existed during this trade.</td></tr>';
+
+    const candleHigh = candles.length ? Math.max(...candles.map(c => Number(c.high))) : null;
+    const candleLow = candles.length ? Math.min(...candles.map(c => Number(c.low))) : null;
+
+    el('trade-replay-content').innerHTML = `
+        <div class="replay-summary-grid">
+            <div><span>Entry</span><strong>${money(p.entryPrice)}</strong><small>${dateTime(p.openedAt)}</small></div>
+            <div><span>Exit</span><strong>${money(p.exitPrice)}</strong><small>${dateTime(p.closedAt)}</small></div>
+            <div><span>Result</span><strong class="${pnlClass}">${signedMoney(p.realizedPnl)}</strong><small class="${pnlClass}">${signedPercent(p.pnlPercent)}</small></div>
+            <div><span>Closed by</span><strong>${escapeHtml(String(p.closeReason || p.status || '—').replaceAll('_',' '))}</strong><small>${escapeHtml(p.exitReason || '')}</small></div>
+            <div><span>Stop loss</span><strong>${money(p.stopLoss)}</strong><small>${Number(p.stopLoss) >= Number(p.entryPrice) ? 'Above entry' : 'Below entry'}</small></div>
+            <div><span>Take profit</span><strong>${money(p.takeProfit)}</strong><small>Configured target</small></div>
+        </div>
+        <section class="replay-verdict-panel">
+            <strong>Why this trade lost</strong>
+            <p>${escapeHtml(p.closeReason === 'STOP_LOSS'
+                ? `The market price reached the stored stop-loss level before reaching the target or producing an executable SELL. Entry was ${money(p.entryPrice)} and exit was ${money(p.exitPrice)}.`
+                : (p.exitReason || 'The trade closed below its entry price.'))}</p>
+            <div class="replay-range"><span>Observed replay high <b>${candleHigh == null ? '—' : money(candleHigh)}</b></span><span>Observed replay low <b>${candleLow == null ? '—' : money(candleLow)}</b></span></div>
+            ${after ? `<p><strong>After exit (${after.minutesObserved} min):</strong> high ${money(after.highestPrice)} (${signedPercent(after.highestMovePercent)}), low ${money(after.lowestPrice)} (${signedPercent(after.lowestMovePercent)}). ${escapeHtml(after.verdict || '')}</p>` : '<p>Post-exit candle evidence is not available yet.</p>'}
+        </section>
+        <details open><summary>Entry thesis</summary><p>${escapeHtml(p.entryReason || replay.entrySignal?.explanation || 'No stored entry explanation.')}</p></details>
+        <details open><summary>Signal timeline (${signals.length})</summary>
+            <div class="table-wrap"><table><thead><tr><th>Time</th><th>Interval</th><th>Price</th><th>Original</th><th>Final</th><th>Score</th><th>T/V/M</th><th>Confluence</th></tr></thead><tbody>${lifecycle || '<tr><td colspan="8" class="empty">No signals found.</td></tr>'}</tbody></table></div>
+        </details>
+        <details><summary>Position Manager timeline (${advice.length})</summary>
+            <div class="table-wrap"><table><thead><tr><th>Time</th><th>Interval</th><th>Price</th><th>P/L</th><th>Exit score</th><th>Advice</th><th>Reason</th></tr></thead><tbody>${adviceRows}</tbody></table></div>
+        </details>`;
+}

@@ -1322,3 +1322,65 @@ html, body { max-width: 100%; overflow-x: hidden; }
         margin: 0 0 22px !important;
     }
 }
+
+.replay-button {
+    border: 1px solid var(--border, #d9e1ea);
+    background: #fff;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-weight: 700;
+    cursor: pointer;
+}
+.trade-replay-dialog {
+    width: min(1180px, 96vw);
+    max-height: 92vh;
+    border: 0;
+    border-radius: 18px;
+    padding: 0;
+    box-shadow: 0 24px 70px rgba(15, 23, 42, .28);
+}
+.trade-replay-dialog::backdrop { background: rgba(15, 23, 42, .58); }
+.trade-replay-header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 18px 22px;
+    background: #fff;
+    border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.trade-replay-header h2 { margin: 0; }
+.trade-replay-content { padding: 20px; overflow: auto; }
+.replay-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.replay-summary-grid > div {
+    padding: 14px;
+    border: 1px solid var(--border, #e2e8f0);
+    border-radius: 12px;
+    background: #fff;
+}
+.replay-summary-grid span, .replay-summary-grid small { display: block; }
+.replay-summary-grid strong { display: block; margin: 4px 0; font-size: 1.08rem; }
+.replay-verdict-panel {
+    padding: 16px;
+    border-radius: 14px;
+    background: #f8fafc;
+    border: 1px solid var(--border, #e2e8f0);
+    margin-bottom: 16px;
+}
+.replay-verdict-panel p { margin: 8px 0 0; }
+.replay-range { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 10px; }
+.trade-replay-content details { margin-top: 12px; border: 1px solid var(--border, #e2e8f0); border-radius: 12px; padding: 12px; }
+.trade-replay-content summary { cursor: pointer; font-weight: 800; }
+.error-panel { padding: 16px; border-radius: 12px; background: #fff1f2; color: #9f1239; }
+@media (max-width: 760px) {
+    .replay-summary-grid { grid-template-columns: 1fr; }
+    .trade-replay-dialog { width: 100vw; max-height: 100vh; border-radius: 0; }
+}

@@ -150,6 +150,10 @@ public interface CandleRepository extends JpaRepository<Candle, Long> {
             String intervalCode
     );
 
+    List<Candle> findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(
+            String symbol, String intervalCode, Instant from, Instant to
+    );
+
     long countBySymbolAndIntervalCodeAndClosedTrue(
             String symbol,
             String intervalCode

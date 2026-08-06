@@ -2,6 +2,8 @@ package com.crypto.controller;
 
 import com.crypto.domain.PaperPosition;
 import com.crypto.service.PaperTradingService;
+import com.crypto.service.TradeReplayService;
+import com.crypto.dto.TradeReplayResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -14,6 +16,7 @@ import java.util.List;
 public class PaperTradingController {
 
     private final PaperTradingService service;
+    private final TradeReplayService tradeReplayService;
 
     @PostMapping("/{symbol}")
     public PaperPosition open(@PathVariable String symbol) {
@@ -25,6 +28,11 @@ public class PaperTradingController {
             @PathVariable Long id,
             @RequestParam BigDecimal exitPrice) {
         return service.close(id, exitPrice);
+    }
+
+    @GetMapping("/{id}/replay")
+    public TradeReplayResponse replay(@PathVariable Long id) {
+        return tradeReplayService.replay(id);
     }
 
     @GetMapping
