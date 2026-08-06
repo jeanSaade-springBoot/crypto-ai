@@ -1,5 +1,6 @@
 package com.crypto.service;
 
+import com.crypto.administration.service.CoinConfigurationService;
 import com.crypto.config.TradingProperties;
 import com.crypto.domain.TechnicalIndicator;
 import com.crypto.domain.TradeSignal;
@@ -16,6 +17,7 @@ import org.springframework.stereotype.Service;
 public class ScheduledAnalysisService {
 
     private final TradingProperties properties;
+    private final CoinConfigurationService coinConfigurationService;
     private final TechnicalIndicatorService technicalIndicatorService;
     private final AnalysisService analysisService;
     private final PaperTradingService paperTradingService;
@@ -31,7 +33,7 @@ public class ScheduledAnalysisService {
             return;
         }
 
-        for (String symbol : properties.symbols()) {
+        for (String symbol : coinConfigurationService.enabledSymbols()) {
             for (String interval : properties.intervals()) {
                 analyze(symbol, interval);
             }

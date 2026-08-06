@@ -20,7 +20,7 @@
             <a href="#indicators">Indicators</a>
             <a href="#sentiment">Sentiment</a>
             <a href="#signals">Trade signals</a>
-            <a href="/wallet.html">Wallet</a>
+            <a href="/administration">Administration</a>
             <a href="#positions">Open trades</a>
             <a href="#trade-history">Trade history</a>
             <a href="#pipeline">Event pipeline</a>
@@ -34,7 +34,7 @@
             <div><p class="eyebrow">AUTOMATIC TRADING MONITOR</p><h1>Trading dashboard</h1></div>
             <div class="filters">
                 <a class="header-link" href="#portfolio-performance">Portfolio</a>
-                <a class="header-link" href="/wallet.html">Wallet</a>
+                <a class="header-link" href="/administration">Administration</a>
                 <label>Symbol<select id="symbol-select"><option>BTCUSDT</option></select></label>
                 <label>Interval<select id="interval-select"><option>1m</option><option>5m</option><option>15m</option><option>1h</option><option>4h</option><option>1d</option></select></label>
                 <button id="refresh-button" type="button">Refresh</button>
@@ -54,13 +54,13 @@
         </section>
 
         <section id="portfolio-performance" class="panel portfolio-panel">
-            <div class="section-heading"><div><p class="eyebrow">PAPER PORTFOLIO</p><h2>Portfolio performance</h2></div><a class="wallet-link" href="/wallet.html">Open wallet</a></div>
+            <div class="section-heading"><div><p class="eyebrow">PAPER PORTFOLIO</p><h2>Portfolio performance</h2></div><a class="wallet-link" href="/administration">Open administration</a></div>
             <div class="portfolio-summary-grid">
                 <article><span>Status</span><strong id="portfolio-status">NOT STARTED</strong><small id="portfolio-return">Add USDT to begin</small></article>
                 <article><span>Portfolio value</span><strong id="portfolio-value">—</strong><small id="portfolio-invested">Net invested —</small></article>
                 <article><span>Total P&amp;L</span><strong id="portfolio-pnl">—</strong><small id="portfolio-change24h">24h —</small></article>
-                <article><span>Available USDT</span><strong id="portfolio-usdt">—</strong><small id="portfolio-auto-status">Automatic trading disabled</small></article>
-                <article><span>Today's BUY budget</span><strong id="portfolio-daily-budget">—</strong><small id="portfolio-daily-buys">0 / 6 new positions</small></article>
+                <article><span>Available USDT</span><strong id="portfolio-usdt">—</strong><small>Available for new positions</small></article>
+                <article><span>Today's BUY budget</span><strong id="portfolio-daily-budget">—</strong><small id="portfolio-daily-buys">0 / Unlimited new positions</small></article>
             </div>
             <div class="portfolio-holdings" id="portfolio-holdings"><span class="empty">No wallet assets yet.</span></div>
         </section>

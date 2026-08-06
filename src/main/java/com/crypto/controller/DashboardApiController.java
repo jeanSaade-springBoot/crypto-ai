@@ -1,5 +1,6 @@
 package com.crypto.controller;
 
+import com.crypto.administration.service.CoinConfigurationService;
 import com.crypto.domain.Candle;
 import com.crypto.domain.PaperPosition;
 import com.crypto.domain.PositionStatus;
@@ -43,6 +44,7 @@ public class DashboardApiController {
     private final ScheduleConfigurationService scheduleConfigurationService;
     private final ObjectMapper objectMapper;
     private final ScoreDiagnosticsService scoreDiagnosticsService;
+    private final CoinConfigurationService coinConfigurationService;
 
     public DashboardApiController(
             CandleRepository candleRepository,
@@ -52,7 +54,8 @@ public class DashboardApiController {
             SentimentService sentimentService,
             ScheduleConfigurationService scheduleConfigurationService,
             ObjectMapper objectMapper,
-            ScoreDiagnosticsService scoreDiagnosticsService
+            ScoreDiagnosticsService scoreDiagnosticsService,
+            CoinConfigurationService coinConfigurationService
     ) {
         this.candleRepository = candleRepository;
         this.technicalIndicatorRepository = technicalIndicatorRepository;
@@ -62,11 +65,12 @@ public class DashboardApiController {
         this.scheduleConfigurationService = scheduleConfigurationService;
         this.objectMapper = objectMapper;
         this.scoreDiagnosticsService = scoreDiagnosticsService;
+        this.coinConfigurationService = coinConfigurationService;
     }
 
     @GetMapping("/symbols")
     public List<String> symbols() {
-        List<String> symbols = candleRepository.findDistinctSymbols();
+        List<String> symbols = coinConfigurationService.enabledSymbols();
         return symbols.isEmpty() ? List.of("BTCUSDT") : symbols;
     }
 

@@ -1,6 +1,6 @@
 package com.crypto.whale.scheduler;
 
-import com.crypto.config.TradingProperties;
+import com.crypto.administration.service.CoinConfigurationService;
 import com.crypto.whale.config.WhaleProperties;
 import com.crypto.whale.service.WhaleAggregationService;
 import lombok.RequiredArgsConstructor;
@@ -11,12 +11,12 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class WhaleAggregationScheduler {
     private final WhaleProperties properties;
-    private final TradingProperties tradingProperties;
+    private final CoinConfigurationService coinConfigurationService;
     private final WhaleAggregationService service;
 
     @Scheduled(fixedDelayString = "${whale.aggregation.fixed-delay-ms:300000}")
     public void aggregate() {
         if (!properties.enabled()) return;
-        for (String symbol : tradingProperties.symbols()) service.calculateAndSave(symbol);
+        for (String symbol : coinConfigurationService.enabledSymbols()) service.calculateAndSave(symbol);
     }
 }

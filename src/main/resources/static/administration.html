@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Administration</title>
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <link rel="stylesheet" href="/css/wallet.css">
+    <link rel="stylesheet" href="/css/administration.css">
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1"></script>
+</head>
+<body>
+<div class="app-shell">
+    <aside class="sidebar">
+        <div class="brand">
+            <span class="brand-mark">CT</span>
+            <div><strong>Crypto Trader</strong><small>Trading administration</small></div>
+        </div>
+        <nav>
+            <a href="/dashboard">Dashboard</a>
+            <a href="/dashboard#analytics">Analytics</a>
+            <a class="active" href="/administration">Administration</a>
+        </nav>
+    </aside>
+
+    <main>
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">SYSTEM ADMINISTRATION</p>
+                <h1>Wallet &amp; coin configuration</h1>
+            </div>
+            <div class="topbar-actions">
+                <a class="dashboard-button" href="/dashboard">← Dashboard</a>
+                <button id="refresh" type="button">Refresh</button>
+            </div>
+        </header>
+
+        <section id="message" class="error-banner hidden" role="status" aria-live="polite"></section>
+
+        <section class="metrics-grid wallet-metrics">
+            <article class="metric-card"><span>Portfolio status</span><strong id="status">—</strong><small id="total-return">—</small></article>
+            <article class="metric-card"><span>Portfolio value</span><strong id="portfolio">—</strong><small id="invested">—</small></article>
+            <article class="metric-card"><span>Total P&amp;L</span><strong id="total-pnl">—</strong><small id="change24h">—</small></article>
+            <article class="metric-card"><span>Available USDT</span><strong id="available">—</strong><small>Buying balance</small></article>
+            <article class="metric-card"><span>Today's BUY budget</span><strong id="daily-budget">—</strong><small id="budget-state">Calculated at first BUY</small></article>
+            <article class="metric-card"><span>Today's new positions</span><strong id="daily-buys">—</strong><small id="remaining-buys">— remaining</small></article>
+            <article class="metric-card"><span>Realized P&amp;L</span><strong id="realized">—</strong><small>Closed system trades</small></article>
+            <article class="metric-card"><span>Unrealized P&amp;L</span><strong id="unrealized">—</strong><small>Current holdings</small></article>
+        </section>
+
+        <section class="panel">
+            <div class="section-heading"><div><p class="eyebrow">SINCE START</p><h2>Portfolio vs invested capital</h2></div></div>
+            <div id="wallet-chart"></div>
+        </section>
+
+        <section class="wallet-form-grid">
+            <article id="settings" class="panel">
+                <h2>Trading configuration</h2>
+                <form id="settings-form">
+                    <label class="toggle-row"><input id="daily-limit-enabled" type="checkbox"> Limit new positions per day</label>
+                    <label id="daily-limit-field">Maximum new positions per day<input id="maximum-daily-positions" type="number" min="1" max="1000" step="1" value="6"></label>
+                    <label>Trade amount per BUY when unlimited<input id="base-trade-amount" type="number" min="0.01" step="0.01" required></label>
+                    <label>Minimum USDT reserve<input id="minimum-reserve" type="number" min="0" step="0.01" required></label>
+                    <p class="form-note">When the daily limit is enabled, the BUY budget is calculated from available USDT divided by the configured maximum. When Unlimited is selected, every BUY uses the configured trade amount until available USDT reaches the reserve. SELLs never count as new positions.</p>
+                    <button type="submit">Save configuration</button>
+                </form>
+            </article>
+
+            <article class="panel">
+                <h2>Deposit / withdraw USDT</h2>
+                <form id="cash-form">
+                    <label>Action<select id="flow-type"><option value="DEPOSIT">Deposit</option><option value="WITHDRAWAL">Withdrawal</option></select></label>
+                    <label>Amount USDT<input id="flow-amount" type="number" min="0.01" step="0.01" required></label>
+                    <label>Notes<input id="flow-notes"></label>
+                    <button type="submit">Save cash flow</button>
+                </form>
+            </article>
+
+            <article class="panel">
+                <h2>Initial holding / correction</h2>
+                <form id="asset-form">
+                    <label>Coin
+                        <select id="asset-symbol" required>
+                            <option value="">Choose a coin</option>
+                            <option value="BTC">BTC</option>
+                            <option value="ETH">ETH</option>
+                            <option value="BNB">BNB</option>
+                            <option value="XRP">XRP</option>
+                            <option value="PEPE">PEPE</option>
+                        </select>
+                    </label>
+                    <label>Quantity<input id="asset-quantity" type="number" min="0" step="0.00000001" required></label>
+                    <label>Average entry USDT<input id="asset-average" type="number" min="0" step="0.00000001" required></label>
+                    <p class="form-note">This is for initial balances and corrections only. Normal BUY/SELL executions are created automatically from signals.</p>
+                    <button type="submit">Save coin holding</button>
+                </form>
+            </article>
+        </section>
+
+
+        <section id="coin-configuration" class="panel administration-coins">
+            <div class="section-heading">
+                <div><p class="eyebrow">MARKET DATA</p><h2>Coin configuration</h2></div>
+                <button id="reload-streams" type="button">Reload Binance Streams</button>
+            </div>
+            <p class="form-note">Enabled coins are monitored by Binance streams and used by scheduled analysis. Default coins can be disabled but not removed.</p>
+            <form id="add-coin-form" class="add-coin-form">
+                <label>USDT trading pair<input id="new-coin-symbol" type="text" maxlength="20" placeholder="ADA or ADAUSDT" autocomplete="off" required></label>
+                <button type="submit">Add Coin</button>
+            </form>
+            <div class="table-wrap"><table>
+                <thead><tr><th>Symbol</th><th>Type</th><th>Status</th><th>Actions</th></tr></thead>
+                <tbody id="coin-body"><tr><td colspan="4">Loading coins…</td></tr></tbody>
+            </table></div>
+        </section>
+
+        <section id="assets" class="panel">
+            <div class="section-heading"><div><p class="eyebrow">CURRENT HOLDINGS</p><h2>Assets</h2></div></div>
+            <div class="table-wrap"><table><thead><tr><th>Asset</th><th>Quantity</th><th>Avg entry</th><th>Current price</th><th>Cost basis</th><th>Value</th><th>Unrealized P&amp;L</th></tr></thead><tbody id="asset-body"></tbody></table></div>
+        </section>
+
+        <section id="history" class="panel">
+            <div class="section-heading"><div><p class="eyebrow">AUTOMATIC EXECUTIONS</p><h2>Wallet trades</h2></div></div>
+            <div class="table-wrap"><table><thead><tr><th>Time</th><th>Signal</th><th>Pair</th><th>Side</th><th>Quantity</th><th>Price</th><th>Net</th><th>Realized P&amp;L</th></tr></thead><tbody id="trade-body"></tbody></table></div>
+        </section>
+    </main>
+</div>
+<script src="/js/wallet.js"></script>
+<script src="/js/administration.js"></script>
+</body>
+</html>

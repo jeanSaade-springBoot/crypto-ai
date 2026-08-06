@@ -102,20 +102,39 @@ public class WalletService {
     public void updateSettings(WalletSettingsRequest request) {
         if (request.minimumUsdtReserve() == null || request.minimumUsdtReserve().signum() < 0)
             throw new IllegalArgumentException("Minimum reserve cannot be negative");
+        if (request.baseTradeAmountUsdt() == null || request.baseTradeAmountUsdt().signum() <= 0)
+            throw new IllegalArgumentException("Trade amount per BUY must be greater than zero");
         if (request.maximumDailyNewPositions() == null
-                || request.maximumDailyNewPositions() < 1
-                || request.maximumDailyNewPositions() > 100)
-            throw new IllegalArgumentException("Maximum daily new positions must be between 1 and 100");
+                || request.maximumDailyNewPositions() < 0
+                || request.maximumDailyNewPositions() > 1000)
+            throw new IllegalArgumentException("Maximum daily new positions must be 0 (unlimited) or between 1 and 1000");
 
         WalletSettings settings = settingsRepository.findById(1L).orElseGet(() -> WalletSettings.builder()
                 .id(1L)
                 .baseTradeAmountUsdt(BigDecimal.valueOf(100))
                 .build());
         settings.setMinimumUsdtReserve(request.minimumUsdtReserve());
+        settings.setBaseTradeAmountUsdt(request.baseTradeAmountUsdt());
         settings.setMaximumDailyNewPositions(request.maximumDailyNewPositions());
-        settings.setAutomaticExecutionEnabled(request.automaticExecutionEnabled());
         settings.setUpdatedAt(Instant.now());
         settingsRepository.save(settings);
+
+        LocalDate today = LocalDate.now(ZoneId.systemDefault());
+        dailyStatisticsRepository.findForUpdateByTradeDate(today).ifPresent(statistics -> {
+            BigDecimal available = assetRepository.findBySymbol("USDT")
+                    .map(WalletAsset::getQuantity)
+                    .orElse(ZERO);
+            BigDecimal tradable = available.subtract(settings.getMinimumUsdtReserve()).max(ZERO);
+            int maximum = settings.getMaximumDailyNewPositions();
+            BigDecimal budget = maximum == 0
+                    ? settings.getBaseTradeAmountUsdt().min(tradable)
+                    : (tradable.signum() <= 0 ? ZERO
+                    : tradable.divide(BigDecimal.valueOf(maximum), SCALE, RoundingMode.DOWN));
+            statistics.setMaximumNewPositions(maximum);
+            statistics.setDailyTradeBudgetUsdt(budget);
+            statistics.setUpdatedAt(Instant.now());
+            dailyStatisticsRepository.save(statistics);
+        });
     }
 
 
@@ -133,8 +152,10 @@ public class WalletService {
             BigDecimal availableUsdt,
             BigDecimal portfolioValue) {
 
-        int configuredMaximum = settings == null || settings.getMaximumDailyNewPositions() <= 0
-                ? 6 : settings.getMaximumDailyNewPositions();
+        int configuredMaximum = settings == null ? 0 : settings.getMaximumDailyNewPositions();
+        BigDecimal configuredTradeAmount = settings == null
+                ? BigDecimal.valueOf(100)
+                : nvl(settings.getBaseTradeAmountUsdt());
         BigDecimal reserve = settings == null ? ZERO : nvl(settings.getMinimumUsdtReserve());
         BigDecimal tradable = availableUsdt.subtract(reserve).max(ZERO);
         LocalDate today = LocalDate.now(ZoneId.systemDefault());
@@ -146,8 +167,10 @@ public class WalletService {
                     result.put("dailyTradeBudgetUsdt", statistics.getDailyTradeBudgetUsdt());
                     result.put("executedBuys", statistics.getExecutedBuys());
                     result.put("maximumNewPositions", statistics.getMaximumNewPositions());
-                    result.put("remainingBuys", Math.max(0,
-                            statistics.getMaximumNewPositions() - statistics.getExecutedBuys()));
+                    result.put("remainingBuys", statistics.getMaximumNewPositions() == 0
+                            ? null
+                            : Math.max(0, statistics.getMaximumNewPositions() - statistics.getExecutedBuys()));
+                    result.put("unlimited", statistics.getMaximumNewPositions() == 0);
                     result.put("startingUsdt", statistics.getStartingUsdt());
                     result.put("currentUsdt", availableUsdt);
                     result.put("startingPortfolioUsdt", statistics.getStartingPortfolioUsdt());
@@ -159,12 +182,15 @@ public class WalletService {
                     Map<String, Object> result = new LinkedHashMap<>();
                     BigDecimal previewBudget = tradable.signum() <= 0
                             ? ZERO
+                            : configuredMaximum == 0
+                            ? configuredTradeAmount.min(tradable)
                             : tradable.divide(BigDecimal.valueOf(configuredMaximum), SCALE, RoundingMode.DOWN);
                     result.put("tradeDate", today);
                     result.put("dailyTradeBudgetUsdt", previewBudget);
                     result.put("executedBuys", 0);
                     result.put("maximumNewPositions", configuredMaximum);
-                    result.put("remainingBuys", configuredMaximum);
+                    result.put("remainingBuys", configuredMaximum == 0 ? null : configuredMaximum);
+                    result.put("unlimited", configuredMaximum == 0);
                     result.put("startingUsdt", availableUsdt);
                     result.put("currentUsdt", availableUsdt);
                     result.put("startingPortfolioUsdt", portfolioValue);

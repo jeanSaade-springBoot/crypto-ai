@@ -37,14 +37,22 @@ async function load() {
         setPnl('unrealized', data.unrealizedPnlUsdt);
 
         const settings = data.settings || {};
-        byId('maximum-daily-positions').value = settings.maximumDailyNewPositions || 6;
+        const configuredMaximum = Number(settings.maximumDailyNewPositions ?? 0);
+        byId('daily-limit-enabled').checked = configuredMaximum > 0;
+        byId('maximum-daily-positions').value = configuredMaximum > 0 ? configuredMaximum : 6;
+        byId('base-trade-amount').value = settings.baseTradeAmountUsdt || 100;
+        updateDailyLimitField();
         byId('minimum-reserve').value = settings.minimumUsdtReserve || 0;
-        byId('auto-enabled').checked = Boolean(settings.automaticExecutionEnabled);
 
         const daily = data.dailyTrading || {};
         byId('daily-budget').textContent = money(daily.dailyTradeBudgetUsdt);
-        byId('daily-buys').textContent = `${n(daily.executedBuys)} / ${n(daily.maximumNewPositions)}`;
-        byId('remaining-buys').textContent = `${n(daily.remainingBuys)} remaining`;
+        const unlimited = Boolean(daily.unlimited) || Number(daily.maximumNewPositions) === 0;
+        byId('daily-buys').textContent = unlimited
+            ? `${n(daily.executedBuys)} / Unlimited`
+            : `${n(daily.executedBuys)} / ${n(daily.maximumNewPositions)}`;
+        byId('remaining-buys').textContent = unlimited
+            ? 'No daily transaction limit'
+            : `${n(daily.remainingBuys)} remaining`;
         byId('budget-state').textContent = daily.budgetLocked
             ? 'Locked for today; SELL proceeds do not resize it'
             : 'Preview; locks when the first BUY executes';
@@ -126,13 +134,24 @@ async function save(url, method, body, successMessage) {
     }
 }
 
+
+function updateDailyLimitField() {
+    const enabled = byId('daily-limit-enabled').checked;
+    byId('maximum-daily-positions').disabled = !enabled;
+    byId('daily-limit-field').classList.toggle('disabled-field', !enabled);
+}
+
+byId('daily-limit-enabled').addEventListener('change', updateDailyLimitField);
+
 byId('settings-form').addEventListener('submit', async event => {
     event.preventDefault();
     await save('/api/wallet/settings', 'PUT', {
-        maximumDailyNewPositions: byId('maximum-daily-positions').value,
-        minimumUsdtReserve: byId('minimum-reserve').value,
-        automaticExecutionEnabled: byId('auto-enabled').checked
-    }, 'Automatic trading settings saved successfully.');
+        maximumDailyNewPositions: byId('daily-limit-enabled').checked
+            ? byId('maximum-daily-positions').value
+            : 0,
+        baseTradeAmountUsdt: byId('base-trade-amount').value,
+        minimumUsdtReserve: byId('minimum-reserve').value
+    }, 'Trading configuration saved successfully.');
 });
 
 byId('cash-form').addEventListener('submit', async event => {

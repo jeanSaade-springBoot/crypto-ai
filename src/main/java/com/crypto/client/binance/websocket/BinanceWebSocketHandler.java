@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
@@ -23,6 +24,7 @@ public class BinanceWebSocketHandler
     private final BinanceKlineService klineService;
     private final AtomicBoolean connected =
         new AtomicBoolean(false);
+    private volatile WebSocketSession session;
 
     public BinanceWebSocketHandler(
             ObjectMapper objectMapper,
@@ -36,6 +38,7 @@ public class BinanceWebSocketHandler
     public void afterConnectionEstablished(
             WebSocketSession session
     ) {
+        this.session = session;
         connected.set(true);
 
         log.info(
@@ -115,5 +118,17 @@ public class BinanceWebSocketHandler
 
     public boolean isConnected() {
         return connected.get();
+    }
+
+    public void close() {
+        WebSocketSession current = session;
+        connected.set(false);
+        if (current != null && current.isOpen()) {
+            try {
+                current.close(CloseStatus.NORMAL);
+            } catch (Exception exception) {
+                log.warn("Unable to close Binance WebSocket session cleanly: {}", exception.getMessage());
+            }
+        }
     }
 }

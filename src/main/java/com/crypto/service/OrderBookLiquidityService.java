@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import com.crypto.administration.service.CoinConfigurationService;
 import com.crypto.client.binance.BinanceMarketDataClient;
 import com.crypto.client.binance.dto.BinanceOrderBook;
 import com.crypto.client.config.binance.BinanceMarketDataProperties;
@@ -39,16 +40,19 @@ public class OrderBookLiquidityService {
     private final BinanceMarketDataClient marketDataClient;
     private final BinanceMarketDataProperties marketDataProperties;
     private final OrderBookProperties properties;
+    private final CoinConfigurationService coinConfigurationService;
     private final Map<String, Deque<OrderBookSnapshot>> historyBySymbol = new ConcurrentHashMap<>();
 
     public OrderBookLiquidityService(
             BinanceMarketDataClient marketDataClient,
             BinanceMarketDataProperties marketDataProperties,
-            OrderBookProperties properties
+            OrderBookProperties properties,
+            CoinConfigurationService coinConfigurationService
     ) {
         this.marketDataClient = marketDataClient;
         this.marketDataProperties = marketDataProperties;
         this.properties = properties;
+        this.coinConfigurationService = coinConfigurationService;
     }
 
     @Scheduled(fixedDelayString = "${analysis.order-book.snapshot-interval-ms:5000}")
@@ -56,7 +60,7 @@ public class OrderBookLiquidityService {
         if (!properties.enabled() || !marketDataProperties.isEnabled()) {
             return;
         }
-        marketDataProperties.getSymbols().stream()
+        coinConfigurationService.enabledSymbols().stream()
                 .filter(symbol -> symbol != null && !symbol.isBlank())
                 .map(String::toUpperCase)
                 .distinct()

@@ -1,5 +1,6 @@
 package com.crypto.service;
 
+import com.crypto.administration.service.CoinConfigurationService;
 import com.crypto.client.config.binance.BinanceMarketDataProperties;
 import com.crypto.config.TradingProperties;
 import com.crypto.domain.TechnicalIndicator;
@@ -31,6 +32,7 @@ public class MarketDataBootstrapService implements ApplicationRunner {
 
     private final BinanceMarketDataProperties marketDataProperties;
     private final TradingProperties tradingProperties;
+    private final CoinConfigurationService coinConfigurationService;
     private final MarketDataService marketDataService;
     private final TechnicalIndicatorService technicalIndicatorService;
     private final AnalysisService analysisService;
@@ -104,8 +106,7 @@ public class MarketDataBootstrapService implements ApplicationRunner {
 
     private List<String> selectSymbols() {
         Set<String> values = new LinkedHashSet<>();
-        values.addAll(marketDataProperties.getSymbols());
-        values.addAll(tradingProperties.symbols());
+        values.addAll(coinConfigurationService.enabledSymbols());
         return List.copyOf(values);
     }
 

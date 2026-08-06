@@ -1,7 +1,8 @@
 package com.crypto.service;
 
+import com.crypto.administration.service.CoinConfigurationService;
+
 import com.crypto.config.SentimentProperties;
-import com.crypto.config.TradingProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -29,7 +30,7 @@ import java.util.Map;
 public class SentimentCollectionService {
 
     private final SentimentProperties properties;
-    private final TradingProperties tradingProperties;
+    private final CoinConfigurationService coinConfigurationService;
     private final SentimentService sentimentService;
     private final SentimentProviderConfigService providerConfigService;
     private final ObjectMapper objectMapper;
@@ -208,9 +209,8 @@ public class SentimentCollectionService {
     }
 
     private List<String> symbols() {
-        return tradingProperties.symbols() == null || tradingProperties.symbols().isEmpty()
-                ? List.of("BTCUSDT")
-                : tradingProperties.symbols();
+        List<String> enabled = coinConfigurationService.enabledSymbols();
+        return enabled.isEmpty() ? List.of("BTCUSDT") : enabled;
     }
 
     private String baseAsset(String symbol) {

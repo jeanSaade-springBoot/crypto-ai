@@ -4,6 +4,6 @@ import java.math.BigDecimal;
 
 public record WalletSettingsRequest(
         BigDecimal minimumUsdtReserve,
-        Integer maximumDailyNewPositions,
-        boolean automaticExecutionEnabled
+        BigDecimal baseTradeAmountUsdt,
+        Integer maximumDailyNewPositions
 ) {}

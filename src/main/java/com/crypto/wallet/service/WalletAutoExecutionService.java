@@ -35,7 +35,6 @@ public class WalletAutoExecutionService {
     public synchronized void executeBuy(TradeSignal signal) {
         if (signal == null || signal.getId() == null) return;
         WalletSettings settings = settings();
-        if (!settings.isAutomaticExecutionEnabled()) return;
 
         String key = signal.getId() + ":BUY";
         if (tradeRepository.existsByExecutionKey(key)) return;
@@ -46,7 +45,8 @@ public class WalletAutoExecutionService {
         WalletAsset usdt = getOrCreate("USDT");
         WalletDailyStatistics daily = dailyStatistics(settings, usdt);
 
-        if (daily.getExecutedBuys() >= daily.getMaximumNewPositions()) return;
+        if (daily.getMaximumNewPositions() > 0
+                && daily.getExecutedBuys() >= daily.getMaximumNewPositions()) return;
 
         BigDecimal availableAboveReserve = usdt.getQuantity()
                 .subtract(settings.getMinimumUsdtReserve())
@@ -107,9 +107,6 @@ public class WalletAutoExecutionService {
     @Transactional
     public void executeSell(TradeSignal signal) {
         if (signal == null || signal.getId() == null) return;
-        WalletSettings settings = settings();
-        if (!settings.isAutomaticExecutionEnabled()) return;
-
         String key = signal.getId() + ":SELL";
         if (tradeRepository.existsByExecutionKey(key)) return;
 
@@ -175,9 +172,6 @@ public class WalletAutoExecutionService {
                 || analysis.getRecommendation() != PositionRecommendation.STOP_LOSS) {
             return false;
         }
-
-        WalletSettings settings = settings();
-        if (!settings.isAutomaticExecutionEnabled()) return false;
 
         String key = "POSITION_ANALYSIS:" + analysis.getId() + ":STOP_LOSS";
         if (tradeRepository.existsByExecutionKey(key)) return true;
@@ -261,13 +255,14 @@ public class WalletAutoExecutionService {
                 .orElse(null);
         if (existing != null) return existing;
 
-        int maximum = settings.getMaximumDailyNewPositions() <= 0
-                ? 6 : settings.getMaximumDailyNewPositions();
+        int maximum = settings.getMaximumDailyNewPositions();
         BigDecimal tradable = usdt.getQuantity()
                 .subtract(settings.getMinimumUsdtReserve())
                 .max(ZERO);
         BigDecimal budget = tradable.signum() <= 0
                 ? ZERO
+                : maximum == 0
+                ? settings.getBaseTradeAmountUsdt().min(tradable)
                 : tradable.divide(BigDecimal.valueOf(maximum), SCALE, RoundingMode.DOWN);
         BigDecimal portfolio = walletService.currentPortfolioValue();
         Instant now = Instant.now();
@@ -289,7 +284,7 @@ public class WalletAutoExecutionService {
     private WalletSettings settings() {
         return settingsRepository.findById(1L).orElseGet(() -> settingsRepository.save(
                 WalletSettings.builder().id(1L).baseTradeAmountUsdt(BigDecimal.valueOf(100))
-                        .minimumUsdtReserve(ZERO).maximumDailyNewPositions(6).automaticExecutionEnabled(false)
+                        .minimumUsdtReserve(ZERO).maximumDailyNewPositions(0)
                         .updatedAt(Instant.now()).build()));
     }
 

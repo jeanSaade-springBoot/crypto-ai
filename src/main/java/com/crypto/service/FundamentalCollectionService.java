@@ -1,8 +1,8 @@
 package com.crypto.service;
 
+import com.crypto.administration.service.CoinConfigurationService;
 import com.crypto.client.fundamental.CoinGeckoFundamentalClient;
 import com.crypto.config.FundamentalCollectionProperties;
-import com.crypto.config.TradingProperties;
 import com.crypto.dto.FundamentalRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,7 +22,7 @@ public class FundamentalCollectionService {
 
     private final CoinGeckoFundamentalClient client;
     private final FundamentalCollectionProperties properties;
-    private final TradingProperties tradingProperties;
+    private final CoinConfigurationService coinConfigurationService;
     private final FundamentalService fundamentalService;
 
     @Scheduled(fixedDelayString = "${fundamentals.collection.fixed-delay:1h}")
@@ -89,7 +89,7 @@ public class FundamentalCollectionService {
     private Map<String, String> configuredCoinIds() {
         Map<String, String> idToSymbol = new LinkedHashMap<>();
 
-        for (String configured : tradingProperties.symbols()) {
+        for (String configured : coinConfigurationService.enabledSymbols()) {
             String symbol = configured
                     .trim()
                     .toUpperCase(Locale.ROOT);
