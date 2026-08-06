@@ -1384,3 +1384,50 @@ html, body { max-width: 100%; overflow-x: hidden; }
     .replay-summary-grid { grid-template-columns: 1fr; }
     .trade-replay-dialog { width: 100vw; max-height: 100vh; border-radius: 0; }
 }
+
+
+/* Multi-timeframe trade inspector */
+.trade-inspector-main {
+    margin-top: 16px;
+    padding: 18px;
+    border: 1px solid var(--border, #e2e8f0);
+    border-radius: 16px;
+    background: var(--surface, #fff);
+}
+.trade-inspector-main h3 { margin: 2px 0 14px; }
+.timeframe-card-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+.timeframe-card {
+    padding: 14px;
+    border: 1px solid var(--border, #e2e8f0);
+    border-radius: 14px;
+    background: var(--surface-soft, rgba(148, 163, 184, .07));
+}
+.timeframe-card-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.timeframe-card-heading strong { font-size: 1.05rem; }
+.timeframe-metrics { display: grid; gap: 7px; }
+.timeframe-metrics span {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    color: var(--muted);
+    font-size: .82rem;
+}
+.timeframe-metrics b { color: var(--text); text-align: right; }
+.inspector-note {
+    margin: 12px 0 0;
+    color: var(--muted);
+    font-size: .84rem;
+}
+@media (max-width: 900px) {
+    .timeframe-card-grid { grid-template-columns: 1fr; }
+}

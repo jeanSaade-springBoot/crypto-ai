@@ -209,7 +209,7 @@
         </section>
 
         <section id="signals" class="panel">
-            <div class="section-heading"><div><p class="eyebrow">ANALYSIS OUTPUT</p><h2>Recent trade signals</h2></div></div>
+            <div class="section-heading"><div><p class="eyebrow">ACTIONABLE ANALYSIS</p><h2>BUY and SELL signals</h2></div></div>
             <div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Interval</th><th>Time</th><th>Decision</th><th>Score</th><th>Price</th><th>Stop loss</th><th>Take profit</th><th>Analysis</th></tr></thead><tbody id="signals-body"></tbody></table></div>
         </section>
 
@@ -228,7 +228,7 @@
             </div>
             <div class="table-wrap">
                 <table>
-                    <thead><tr><th>Symbol</th><th>Opened</th><th>Closed</th><th>Entry</th><th>Exit</th><th>Quantity</th><th>P&amp;L</th><th>Closed by</th><th>Prediction</th><th>Replay</th></tr></thead>
+                    <thead><tr><th>Symbol</th><th>Opened</th><th>Closed</th><th>Entry</th><th>Exit</th><th>Quantity</th><th>P&amp;L</th><th>Closed by</th><th>Prediction</th><th>Inspector</th></tr></thead>
                     <tbody id="trade-history-body"></tbody>
                 </table>
             </div>
@@ -236,7 +236,7 @@
 
         <dialog id="trade-replay-dialog" class="trade-replay-dialog">
             <div class="trade-replay-header">
-                <div><p class="eyebrow">TRADE REVIEW</p><h2 id="trade-replay-title">Trade replay</h2></div>
+                <div><p class="eyebrow">TRADE INSPECTOR</p><h2 id="trade-replay-title">Multi-timeframe trade inspector</h2></div>
                 <button type="button" class="secondary-button" onclick="closeTradeReplay()">Close</button>
             </div>
             <div id="trade-replay-content" class="trade-replay-content">Loading…</div>

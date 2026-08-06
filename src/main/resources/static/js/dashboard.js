@@ -241,11 +241,17 @@ function renderCharts(candles) {
 
 function renderSignals(signals) {
     const body = el('signals-body');
-    if (!signals.length) {
-        body.innerHTML = '<tr><td colspan="10" class="empty">No trade signals yet. The row appears after AnalysisService saves a signal.</td></tr>';
+    const actionableSignals = (signals || []).filter(signal => {
+        const decision = String(signal.decision || '').toUpperCase();
+        return decision === 'BUY' || decision === 'SELL' || decision === 'STRONG_SELL';
+    });
+
+    if (!actionableSignals.length) {
+        body.innerHTML = '<tr><td colspan="10" class="empty">No actionable BUY or SELL signals for the selected symbol and interval. NEUTRAL and WATCH signals are hidden from this dashboard.</td></tr>';
         return;
     }
 
+    signals = actionableSignals;
     const availableIds = new Set(signals.map(s => String(s.id)));
     if (pinnedSignalId && !availableIds.has(String(pinnedSignalId))) {
         pinnedSignalId = null;
@@ -900,7 +906,7 @@ function renderTradeHistory(positions) {
             <td class="${pnlClass}"><strong>${signedMoney(p.realizedPnl)}</strong><small>${signedPercent(p.pnlPercentage)}</small></td>
             <td title="${escapeHtml(p.exitReason || '')}">${escapeHtml(String(p.closeReason || p.status || '—').replaceAll('_',' '))}</td>
             <td><span class="badge ${predictionClass}">${escapeHtml(p.predictionResult || 'PENDING')}</span></td>
-            <td><button type="button" class="replay-button" onclick="openTradeReplay(${p.id})">Replay</button></td>
+            <td><button type="button" class="replay-button" onclick="openTradeReplay(${p.id})">Inspect</button></td>
         </tr>`;
     }).join('') : '<tr><td colspan="10" class="empty">No completed paper trades yet. Closed trades will appear here with their final P&amp;L and result.</td></tr>';
 }
@@ -1118,17 +1124,42 @@ function closeTradeReplay() {
 
 function renderTradeReplay(replay) {
     const p = replay.position || {};
-    el('trade-replay-title').textContent = `${p.symbol || 'Trade'} #${p.id || ''}`;
+    el('trade-replay-title').textContent = `${p.symbol || 'Trade'} #${p.id || ''} · Multi-timeframe inspector`;
+
     const pnl = Number(p.realizedPnl || 0);
     const pnlClass = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '';
     const after = replay.afterExit;
-    const signals = replay.timeline || [];
+    const allSignals = replay.timeline || [];
     const advice = replay.positionAdvice || [];
     const candles = replay.candles || [];
 
-    const lifecycle = signals.map(s => `<tr>
+    const actionable = signal => {
+        const decision = String(signal.decision || '').toUpperCase();
+        return decision === 'BUY' || decision === 'SELL' || decision === 'STRONG_SELL';
+    };
+    const actionableSignals = allSignals.filter(actionable);
+    const hiddenSignals = allSignals.length - actionableSignals.length;
+    const intervals = ['1m', '5m', '1h'];
+
+    const intervalSummary = intervals.map(interval => {
+        const rows = allSignals.filter(signal => String(signal.interval || '').toLowerCase() === interval);
+        const latest = rows.length ? rows[rows.length - 1] : null;
+        const firstBuy = rows.find(signal => String(signal.decision || '').toUpperCase() === 'BUY');
+        const firstSell = rows.find(signal => ['SELL', 'STRONG_SELL'].includes(String(signal.decision || '').toUpperCase()));
+        return `<article class="timeframe-card">
+            <div class="timeframe-card-heading"><strong>${interval}</strong>${latest ? `<span class="badge ${String(latest.decision || 'neutral').toLowerCase()}">${escapeHtml(String(latest.decision || '—').replaceAll('_',' '))}</span>` : '<span class="badge neutral">NO DATA</span>'}</div>
+            <div class="timeframe-metrics">
+                <span>Latest score <b>${latest?.totalScore ?? '—'}/100</b></span>
+                <span>Latest price <b>${latest ? money(latest.price) : '—'}</b></span>
+                <span>First BUY <b>${firstBuy ? dateTime(firstBuy.generatedAt) : '—'}</b></span>
+                <span>First SELL <b>${firstSell ? dateTime(firstSell.generatedAt) : '—'}</b></span>
+            </div>
+        </article>`;
+    }).join('');
+
+    const lifecycle = actionableSignals.map(s => `<tr>
         <td>${dateTime(s.generatedAt)}</td>
-        <td>${escapeHtml(s.interval || '—')}</td>
+        <td><strong>${escapeHtml(s.interval || '—')}</strong></td>
         <td>${money(s.price)}</td>
         <td>${escapeHtml(String(s.originalDecision || '—').replaceAll('_',' '))}</td>
         <td><span class="badge ${String(s.decision || 'neutral').toLowerCase()}">${escapeHtml(String(s.decision || '—').replaceAll('_',' '))}</span></td>
@@ -1147,26 +1178,40 @@ function renderTradeReplay(replay) {
     const candleHigh = candles.length ? Math.max(...candles.map(c => Number(c.high))) : null;
     const candleLow = candles.length ? Math.min(...candles.map(c => Number(c.low))) : null;
 
+    const closeReason = String(p.closeReason || p.status || '—').replaceAll('_',' ');
+    const lossExplanation = p.closeReason === 'STOP_LOSS'
+        ? `Price reached the stored stop-loss before the take-profit target or an executable SELL. The wallet entered at ${money(p.entryPrice)} and closed at ${money(p.exitPrice)}.`
+        : (p.exitReason || 'The position closed below its entry price.');
+
     el('trade-replay-content').innerHTML = `
         <div class="replay-summary-grid">
             <div><span>Entry</span><strong>${money(p.entryPrice)}</strong><small>${dateTime(p.openedAt)}</small></div>
             <div><span>Exit</span><strong>${money(p.exitPrice)}</strong><small>${dateTime(p.closedAt)}</small></div>
             <div><span>Result</span><strong class="${pnlClass}">${signedMoney(p.realizedPnl)}</strong><small class="${pnlClass}">${signedPercent(p.pnlPercent)}</small></div>
-            <div><span>Closed by</span><strong>${escapeHtml(String(p.closeReason || p.status || '—').replaceAll('_',' '))}</strong><small>${escapeHtml(p.exitReason || '')}</small></div>
-            <div><span>Stop loss</span><strong>${money(p.stopLoss)}</strong><small>${Number(p.stopLoss) >= Number(p.entryPrice) ? 'Above entry' : 'Below entry'}</small></div>
+            <div><span>Closed by</span><strong>${escapeHtml(closeReason)}</strong><small>${escapeHtml(p.exitReason || '')}</small></div>
+            <div><span>Stop loss</span><strong>${money(p.stopLoss)}</strong><small>Mechanical protection</small></div>
             <div><span>Take profit</span><strong>${money(p.takeProfit)}</strong><small>Configured target</small></div>
         </div>
+
+        <section class="trade-inspector-main">
+            <div>
+                <p class="eyebrow">MULTI-TIMEFRAME VIEW</p>
+                <h3>What 1m, 5m and 1h were saying</h3>
+            </div>
+            <div class="timeframe-card-grid">${intervalSummary}</div>
+            <p class="inspector-note">The dashboard and the main timeline show actionable BUY/SELL signals only. ${hiddenSignals} NEUTRAL/WATCH signal${hiddenSignals === 1 ? '' : 's'} were hidden to keep the review clear.</p>
+        </section>
+
         <section class="replay-verdict-panel">
-            <strong>Why this trade lost</strong>
-            <p>${escapeHtml(p.closeReason === 'STOP_LOSS'
-                ? `The market price reached the stored stop-loss level before reaching the target or producing an executable SELL. Entry was ${money(p.entryPrice)} and exit was ${money(p.exitPrice)}.`
-                : (p.exitReason || 'The trade closed below its entry price.'))}</p>
-            <div class="replay-range"><span>Observed replay high <b>${candleHigh == null ? '—' : money(candleHigh)}</b></span><span>Observed replay low <b>${candleLow == null ? '—' : money(candleLow)}</b></span></div>
+            <strong>Why this trade closed</strong>
+            <p>${escapeHtml(lossExplanation)}</p>
+            <div class="replay-range"><span>Observed high <b>${candleHigh == null ? '—' : money(candleHigh)}</b></span><span>Observed low <b>${candleLow == null ? '—' : money(candleLow)}</b></span></div>
             ${after ? `<p><strong>After exit (${after.minutesObserved} min):</strong> high ${money(after.highestPrice)} (${signedPercent(after.highestMovePercent)}), low ${money(after.lowestPrice)} (${signedPercent(after.lowestMovePercent)}). ${escapeHtml(after.verdict || '')}</p>` : '<p>Post-exit candle evidence is not available yet.</p>'}
         </section>
+
         <details open><summary>Entry thesis</summary><p>${escapeHtml(p.entryReason || replay.entrySignal?.explanation || 'No stored entry explanation.')}</p></details>
-        <details open><summary>Signal timeline (${signals.length})</summary>
-            <div class="table-wrap"><table><thead><tr><th>Time</th><th>Interval</th><th>Price</th><th>Original</th><th>Final</th><th>Score</th><th>T/V/M</th><th>Confluence</th></tr></thead><tbody>${lifecycle || '<tr><td colspan="8" class="empty">No signals found.</td></tr>'}</tbody></table></div>
+        <details open><summary>Actionable decision timeline (${actionableSignals.length})</summary>
+            <div class="table-wrap"><table><thead><tr><th>Time</th><th>Interval</th><th>Price</th><th>Original</th><th>Final</th><th>Score</th><th>T/V/M</th><th>Confluence</th></tr></thead><tbody>${lifecycle || '<tr><td colspan="8" class="empty">No actionable BUY or SELL signals were generated during this trade.</td></tr>'}</tbody></table></div>
         </details>
         <details><summary>Position Manager timeline (${advice.length})</summary>
             <div class="table-wrap"><table><thead><tr><th>Time</th><th>Interval</th><th>Price</th><th>P/L</th><th>Exit score</th><th>Advice</th><th>Reason</th></tr></thead><tbody>${adviceRows}</tbody></table></div>
