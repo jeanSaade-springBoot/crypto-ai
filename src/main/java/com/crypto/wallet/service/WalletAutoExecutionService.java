@@ -3,6 +3,8 @@ package com.crypto.wallet.service;
 import com.crypto.domain.TradeSignal;
 import com.crypto.wallet.domain.*;
 import com.crypto.wallet.repository.*;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,6 +27,7 @@ public class WalletAutoExecutionService {
     private final WalletSettingsRepository settingsRepository;
     private final WalletDailyStatisticsRepository dailyStatisticsRepository;
     private final WalletService walletService;
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public synchronized void executeBuy(TradeSignal signal) {
@@ -64,14 +67,7 @@ public class WalletAutoExecutionService {
 
         WalletManagedPosition position = managedPositionRepository
                 .findTopBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
-                .orElseGet(() -> WalletManagedPosition.builder()
-                        .symbol(pair)
-                        .quantity(ZERO)
-                        .averageEntryPriceUsdt(ZERO)
-                        .totalCostUsdt(ZERO)
-                        .status("OPEN")
-                        .openedAt(Instant.now())
-                        .build());
+                .orElseGet(() -> newManagedPosition(pair, signal));
         position.setQuantity(position.getQuantity().add(quantity));
         position.setTotalCostUsdt(position.getTotalCostUsdt().add(spend));
         position.setAverageEntryPriceUsdt(position.getTotalCostUsdt()
@@ -214,6 +210,62 @@ public class WalletAutoExecutionService {
     private BigDecimal positive(BigDecimal value) {
         if (value == null || value.signum() <= 0) throw new IllegalArgumentException("Price must be positive");
         return value;
+    }
+
+    private WalletManagedPosition newManagedPosition(String pair, TradeSignal signal) {
+        Instant now = Instant.now();
+        return WalletManagedPosition.builder()
+                .symbol(pair)
+                .quantity(ZERO)
+                .averageEntryPriceUsdt(ZERO)
+                .totalCostUsdt(ZERO)
+                .status("OPEN")
+                .openedAt(now)
+                .updatedAt(now)
+                .entrySignalId(signal.getId())
+                .entryConfidence(signal.getConfidenceScore())
+                .entryTotalScore(signal.getTotalScore())
+                .entryTrendScore(signal.getTrendScore())
+                .entryStructureScore(signal.getTrendStructureScore())
+                .entryMomentumScore(signal.getMomentumScore())
+                .entryVolumeScore(signal.getVolumeScore())
+                .entrySentimentScore(signal.getSentimentScore())
+                .entryFundamentalScore(signal.getFundamentalScore())
+                .entryDecision(signal.getDecision() == null ? null : signal.getDecision().name())
+                .entryDecisionPathJson(signal.getDecisionPath())
+                .entryAnalysisSnapshotJson(entrySnapshotJson(signal))
+                .stopLossUsdt(signal.getStopLoss())
+                .takeProfitUsdt(signal.getTakeProfit())
+                .build();
+    }
+
+    private String entrySnapshotJson(TradeSignal signal) {
+        java.util.Map<String, Object> snapshot = new java.util.LinkedHashMap<>();
+        snapshot.put("signalId", signal.getId());
+        snapshot.put("symbol", signal.getSymbol());
+        snapshot.put("interval", signal.getInterval());
+        snapshot.put("generatedAt", signal.getGeneratedAt());
+        snapshot.put("entryPriceUsdt", signal.getLatestPrice());
+        snapshot.put("decision", signal.getDecision());
+        snapshot.put("originalDecision", signal.getOriginalDecision());
+        snapshot.put("confidence", signal.getConfidenceScore());
+        snapshot.put("totalScore", signal.getTotalScore());
+        snapshot.put("trendScore", signal.getTrendScore());
+        snapshot.put("structureScore", signal.getTrendStructureScore());
+        snapshot.put("momentumScore", signal.getMomentumScore());
+        snapshot.put("volumeScore", signal.getVolumeScore());
+        snapshot.put("sentimentScore", signal.getSentimentScore());
+        snapshot.put("fundamentalScore", signal.getFundamentalScore());
+        snapshot.put("stopLossUsdt", signal.getStopLoss());
+        snapshot.put("takeProfitUsdt", signal.getTakeProfit());
+        snapshot.put("selectedStrategy", signal.getSelectedStrategy());
+        snapshot.put("marketRegime", signal.getMarketRegime());
+        snapshot.put("analysisBreakdown", signal.getAnalysisBreakdown());
+        try {
+            return objectMapper.writeValueAsString(snapshot);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Could not serialize immutable BUY thesis", ex);
+        }
     }
     private BigDecimal nvl(BigDecimal value) { return value == null ? ZERO : value; }
 }
