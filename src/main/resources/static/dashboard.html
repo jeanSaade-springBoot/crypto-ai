@@ -24,7 +24,7 @@
             <a href="/administration">Administration</a>
             <a href="#positions">Open trades</a>
             <a href="#trade-history">Trade history</a>
-            <a href="#pipeline">Event pipeline</a>
+            <a href="#pipeline">Platform pipeline</a>
             <a href="#schedules">Schedules</a>
         </nav>
         <div class="connection"><span id="connection-dot"></span><div><strong id="connection-label">Connecting</strong><small>Auto refresh every 10s</small></div></div>
@@ -78,7 +78,7 @@
             <article class="metric-card"><span>Latest price</span><strong id="latest-price">—</strong><small id="price-change">Waiting for candles</small></article>
             <article class="metric-card"><span>Closed candles</span><strong id="candle-count">0</strong><small id="history-progress">0 / 210 required</small><div class="progress"><div id="history-bar"></div></div></article>
             <article class="metric-card"><span>Latest decision</span><strong id="latest-decision">NO SIGNAL</strong><small id="latest-score">Analysis not ready</small></article>
-            <article class="metric-card"><span>Open positions</span><strong id="open-positions">0</strong><small>Paper trading account</small></article>
+            <article class="metric-card"><span>Open positions</span><strong id="open-positions">0</strong><small>Wallet-managed positions</small></article>
         </section>
 
         <section id="portfolio-performance" class="panel portfolio-panel">
@@ -94,7 +94,7 @@
         </section>
 
         <section id="pipeline" class="panel">
-            <div class="section-heading"><div><p class="eyebrow">FLOW HEALTH</p><h2>Event pipeline</h2></div><span id="last-updated">—</span></div>
+            <div class="section-heading"><div><p class="eyebrow">FLOW HEALTH</p><h2>Trading platform pipeline</h2></div><span id="last-updated">—</span></div>
             <div class="pipeline-grid pipeline-grid-compact">
                 <div class="pipeline-step" data-step="candle"><span class="step-icon">1</span><div><strong>Closed candle</strong><small>Kline</small><p></p></div></div>
                 <div class="pipeline-step" data-step="indicator"><span class="step-icon">2</span><div><strong>Indicators</strong><small>Technical</small><p></p></div></div>
@@ -103,7 +103,11 @@
                 <div class="pipeline-step" data-step="derivatives"><span class="step-icon">5</span><div><strong>Funding & OI</strong><small>Futures</small><p></p></div></div>
                 <div class="pipeline-step" data-step="orderBook"><span class="step-icon">6</span><div><strong>Order book</strong><small>Liquidity</small><p></p></div></div>
                 <div class="pipeline-step" data-step="analysis"><span class="step-icon">7</span><div><strong>Final decision</strong><small>Analysis</small><p></p></div></div>
-                <div class="pipeline-step" data-step="paperTrading"><span class="step-icon">8</span><div><strong>Paper trade</strong><small>Execution</small><p></p></div></div>
+                <div class="pipeline-step" data-step="executionValidation"><span class="step-icon">8</span><div><strong>Execution validation</strong><small>1m · 5m · 1h</small><p></p></div></div>
+                <div class="pipeline-step" data-step="walletExecution"><span class="step-icon">9</span><div><strong>Wallet execution</strong><small>BUY / SELL</small><p></p></div></div>
+                <div class="pipeline-step" data-step="positionManager"><span class="step-icon">10</span><div><strong>Position Manager</strong><small>SL · TP · Profit Lock</small><p></p></div></div>
+                <div class="pipeline-step" data-step="walletTrade"><span class="step-icon">11</span><div><strong>Wallet Trade</strong><small>Trade History</small><p></p></div></div>
+                <div class="pipeline-step" data-step="tradeInspector"><span class="step-icon">12</span><div><strong>Trade Inspector</strong><small>Post-trade analysis</small><p></p></div></div>
             </div>
         </section>
 

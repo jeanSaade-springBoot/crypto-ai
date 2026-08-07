@@ -131,7 +131,7 @@ public class DashboardApiController {
         response.put("summary", summary(candles, latestIndicator, latestSignal, positions, closedCandleCount, displayOnlyInterval));
         response.put("pipeline", displayOnlyInterval
                 ? displayOnlyPipeline(closedCandleCount)
-                : pipeline(closedCandleCount, latestIndicator, latestSignal, positions));
+                : pipeline(normalizedSymbol, closedCandleCount, latestIndicator, latestSignal, positions));
         response.put("candles", candles.stream().map(this::candleDto).toList());
         response.put("indicator", indicatorDto(latestIndicator));
         response.put("sentiment", sentiment);
@@ -246,7 +246,11 @@ public class DashboardApiController {
         result.put("derivatives", status(false, "Trading context remains on engine timeframes"));
         result.put("orderBook", status(false, "Trading context remains on engine timeframes"));
         result.put("analysis", status(false, "No BUY/SELL decision generated for display-only timeframe"));
-        result.put("paperTrading", status(false, "Wallet execution remains driven by 1m signals"));
+        result.put("executionValidation", status(false, "Display-only timeframe; execution validation remains on 1m / 5m / 1h"));
+        result.put("walletExecution", status(false, "Wallet execution remains driven by validated 1m signals"));
+        result.put("positionManager", status(false, "Position Manager monitors executed wallet positions"));
+        result.put("walletTrade", status(false, "No display-only timeframe wallet execution"));
+        result.put("tradeInspector", status(false, "Trade Inspector analyzes completed wallet trades, not display-only candles"));
         return result;
     }
 
@@ -285,11 +289,33 @@ public class DashboardApiController {
     }
 
     private Map<String, Object> pipeline(
+            String symbol,
             long closedCandleCount,
             TechnicalIndicator indicator,
             TradeSignal signal,
             List<PaperPosition> positions
     ) {
+        WalletTrade latestWalletTrade = walletTradeRepository
+                .findTopBySymbolAndStatusOrderByExecutedAtDesc(symbol, "EXECUTED")
+                .orElse(null);
+        WalletManagedPosition managedPosition = walletManagedPositionRepository
+                .findTopBySymbolAndStatusOrderByOpenedAtDesc(symbol, "OPEN")
+                .orElse(null);
+
+        boolean signalReady = signal != null;
+        boolean actionableDecision = signalReady && (
+                "BUY".equals(signal.getDecision().name())
+                || "STRONG_BUY".equals(signal.getDecision().name())
+                || "SELL".equals(signal.getDecision().name())
+                || "STRONG_SELL".equals(signal.getDecision().name())
+        );
+        boolean executionEligible = actionableDecision
+                && "1m".equalsIgnoreCase(signal.getInterval())
+                && signal.isFinalEntryAllowed();
+        boolean hasWalletExecution = latestWalletTrade != null;
+        boolean hasCompletedTrade = latestWalletTrade != null
+                && "SELL".equalsIgnoreCase(latestWalletTrade.getSide());
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("candle", status(closedCandleCount > 0,
                 closedCandleCount + " closed candles"));
@@ -297,18 +323,40 @@ public class DashboardApiController {
                 indicator == null
                         ? "Waiting for 210 closed candles or next close event"
                         : "Saved at " + indicator.getCandleOpenTime()));
-        result.put("marketContext", status(signal != null,
+        result.put("marketContext", status(signalReady,
                 signal == null ? "Waiting for analysis" : signal.getMarketRegime().name()));
-        result.put("strategy", status(signal != null,
+        result.put("strategy", status(signalReady,
                 signal == null ? "Waiting for market context" : signal.getSelectedStrategy().name()));
-        result.put("derivatives", status(signal != null,
+        result.put("derivatives", status(signalReady,
                 signal == null ? "Waiting for signal" : signal.getDerivativesStatus().name()));
-        result.put("orderBook", status(signal != null,
+        result.put("orderBook", status(signalReady,
                 signal == null ? "Collecting depth" : signal.getLiquidityStatus().name()));
-        result.put("analysis", status(signal != null,
+        result.put("analysis", status(signalReady,
                 signal == null ? "No persisted trade signal yet" : signal.getDecision().name()));
-        result.put("paperTrading", status(!positions.isEmpty(),
-                positions.isEmpty() ? "No paper position created yet" : positions.get(0).getStatus().name()));
+        result.put("executionValidation", status(executionEligible,
+                signal == null
+                        ? "Waiting for final decision"
+                        : executionEligible
+                            ? "1m execution signal passed final entry validation"
+                            : "Only validated 1m execution signals can reach the wallet"));
+        result.put("walletExecution", status(hasWalletExecution,
+                latestWalletTrade == null
+                        ? "No executed wallet trade for " + symbol + " yet"
+                        : latestWalletTrade.getSide() + " executed at " + latestWalletTrade.getPriceUsdt()));
+        result.put("positionManager", status(managedPosition != null || hasCompletedTrade,
+                managedPosition != null
+                        ? "OPEN · SL / TP / Dynamic Profit Lock monitoring"
+                        : hasCompletedTrade
+                            ? "Latest wallet position completed"
+                            : "Waiting for an executed BUY position"));
+        result.put("walletTrade", status(hasWalletExecution,
+                latestWalletTrade == null
+                        ? "Trade History starts after wallet execution"
+                        : "Wallet trade #" + latestWalletTrade.getId() + " · " + latestWalletTrade.getExecutionReason()));
+        result.put("tradeInspector", status(hasCompletedTrade,
+                hasCompletedTrade
+                        ? "Completed wallet trade available for inspection"
+                        : "Trade Inspector activates after a wallet position closes"));
         return result;
     }
 

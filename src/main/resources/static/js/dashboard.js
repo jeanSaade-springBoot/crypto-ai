@@ -573,7 +573,7 @@ function scoreBreakdownHtml(signal) {
     const isolatedDecision = String(signal.originalDecision || signal.decision || 'NEUTRAL').replaceAll('_', ' ');
     const finalDecision = String(signal.decision || 'NEUTRAL').replaceAll('_', ' ');
     const entryAllowed = signal.finalEntryAllowed !== false;
-    const paperAction = !entryAllowed
+    const walletAction = !entryAllowed
         ? 'NO ENTRY'
         : ['BUY', 'STRONG_BUY'].includes(String(signal.decision || ''))
             ? 'OPEN / HOLD'
@@ -600,7 +600,7 @@ function scoreBreakdownHtml(signal) {
         <div class="strategy-flow-heading">
             <div>
                 <span>How this signal was produced</span>
-                <h3>Analysis Pipeline</h3>
+                <h3>Analysis & Execution Pipeline</h3>
             </div>
             <span class="confirmation-badge ${strategyTone}">${strategyName}</span>
         </div>
@@ -633,7 +633,19 @@ function scoreBreakdownHtml(signal) {
                 <span class="pipeline-number">9</span><div><strong>Final Decision</strong><small>${escapeHtml(finalDecision)}</small><p>${confidenceScore}/100 confidence · Entry ${entryAllowed ? 'allowed' : 'blocked'}</p></div>
             </article>
             <article class="signal-pipeline-step ${entryAllowed ? 'complete' : 'blocked'}">
-                <span class="pipeline-number">10</span><div><strong>Paper Trade</strong><small>${paperAction}</small><p>${entryAllowed ? 'PaperTradingService receives the final recommendation.' : 'No new position is permitted.'}</p></div>
+                <span class="pipeline-number">10</span><div><strong>Execution Validation</strong><small>1m execution · 5m confirmation · 1h filter</small><p>${entryAllowed ? 'Final decision is eligible for wallet validation.' : 'Execution is blocked before the wallet.'}</p></div>
+            </article>
+            <article class="signal-pipeline-step ${entryAllowed ? 'complete' : 'blocked'}">
+                <span class="pipeline-number">11</span><div><strong>Wallet Execution</strong><small>${walletAction}</small><p>${entryAllowed ? 'Wallet rules decide whether the recommendation becomes an executed BUY or SELL.' : 'No wallet execution is permitted.'}</p></div>
+            </article>
+            <article class="signal-pipeline-step complete">
+                <span class="pipeline-number">12</span><div><strong>Position Manager</strong><small>Open-position lifecycle</small><p>Stop loss, take profit and Dynamic Profit Lock protect executed positions.</p></div>
+            </article>
+            <article class="signal-pipeline-step complete">
+                <span class="pipeline-number">13</span><div><strong>Wallet Trade</strong><small>Executed ledger</small><p>Executed BUY/SELL activity becomes the financial source of truth and Trade History.</p></div>
+            </article>
+            <article class="signal-pipeline-step complete">
+                <span class="pipeline-number">14</span><div><strong>Trade Inspector</strong><small>Quality analysis</small><p>Closed wallet trades are evaluated for entry, exit, MFE/MAE and post-exit behavior.</p></div>
             </article>
         </div>
         <div class="decision-transformation">
@@ -1001,7 +1013,7 @@ function renderOpenTrades(positions) {
         const currentDecision = String(p.currentDecision || 'NO_SIGNAL');
         return `<article class="trade-card">
             <div class="trade-card-heading">
-                <div><strong>${escapeHtml(p.symbol || '—')}</strong><small>Paper trade #${p.id}</small></div>
+                <div><strong>${escapeHtml(p.symbol || '—')}</strong><small>Position #${p.id}</small></div>
                 <span class="badge open">OPEN</span>
             </div>
             <div class="trade-metrics">
@@ -1036,7 +1048,7 @@ function renderOpenTrades(positions) {
             <details><summary>Why the position was opened</summary><p>${escapeHtml(p.entryReason || 'No entry explanation stored.')}</p></details>
         </article>`;
     }).join('') : `<div class="empty trade-empty">
-        No open paper trade for this symbol. A BUY or STRONG BUY signal will open one simulated trade; repeated BUY signals will not create duplicates.
+        No open wallet position for this symbol. A validated BUY signal can open one wallet position; repeated BUY signals will not create duplicates.
     </div>`;
 }
 
@@ -1061,7 +1073,7 @@ function renderTradeHistory(positions) {
             <td><span class="badge ${predictionClass}">${escapeHtml(p.predictionResult || 'PENDING')}</span></td>
             <td><button type="button" class="replay-button" onclick="openTradeReplay(${p.id})">Inspect</button></td>
         </tr>`;
-    }).join('') : '<tr><td colspan="14" class="empty">No completed paper trades yet. Closed trades will appear here with their final P&amp;L and result.</td></tr>';
+    }).join('') : '<tr><td colspan="14" class="empty">No completed wallet trades yet. Closed wallet trades will appear here with their final P&amp;L and result.</td></tr>';
 }
 
 
