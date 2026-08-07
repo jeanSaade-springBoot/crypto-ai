@@ -967,6 +967,7 @@ function renderTradeHistory(positions) {
         const predictionClass = p.predictionResult === 'SUCCESS' ? 'buy' : p.predictionResult === 'FAILED' ? 'reject' : 'neutral';
         return `<tr>
             <td><strong>${escapeHtml(p.symbol || '—')}</strong></td>
+            <td class="trade-action-cell"><span class="badge buy">BUY ↑</span><span class="trade-action-arrow">→</span><span class="badge sell">SELL ↓</span></td>
             <td>${dateTime(p.openedAt)}</td>
             <td>${dateTime(p.closedAt)}</td>
             <td>${money(p.entryPrice)}<small>${escapeHtml(String(p.entryDecision || '—'))} ${p.entryScore ?? '—'}/100</small></td>
@@ -977,7 +978,7 @@ function renderTradeHistory(positions) {
             <td><span class="badge ${predictionClass}">${escapeHtml(p.predictionResult || 'PENDING')}</span></td>
             <td><button type="button" class="replay-button" onclick="openTradeReplay(${p.id})">Inspect</button></td>
         </tr>`;
-    }).join('') : '<tr><td colspan="10" class="empty">No completed paper trades yet. Closed trades will appear here with their final P&amp;L and result.</td></tr>';
+    }).join('') : '<tr><td colspan="11" class="empty">No completed paper trades yet. Closed trades will appear here with their final P&amp;L and result.</td></tr>';
 }
 
 

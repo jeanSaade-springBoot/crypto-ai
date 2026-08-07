@@ -1558,3 +1558,6 @@ html, body { max-width: 100%; overflow-x: hidden; }
 @media (max-width: 460px) {
     .topbar .trade-performance-strip { grid-template-columns: 1fr; }
 }
+
+/* Trade history action clarity */
+.trade-action-cell{display:flex;align-items:center;gap:7px;min-width:150px}.trade-action-arrow{color:var(--muted);font-weight:800}.trade-action-cell .badge{white-space:nowrap}
