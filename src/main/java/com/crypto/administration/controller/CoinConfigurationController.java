@@ -4,6 +4,7 @@ import com.crypto.administration.dto.AddCoinRequest;
 import com.crypto.administration.dto.CoinConfigurationView;
 import com.crypto.administration.dto.CoinEnabledRequest;
 import com.crypto.administration.service.CoinConfigurationService;
+import com.crypto.administration.service.DynamicCoinActivationService;
 import com.crypto.client.binance.websocket.BinanceWebSocketManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -18,6 +19,7 @@ import java.util.Map;
 public class CoinConfigurationController {
 
     private final CoinConfigurationService coinConfigurationService;
+    private final DynamicCoinActivationService dynamicCoinActivationService;
     private final BinanceWebSocketManager webSocketManager;
 
     @GetMapping
@@ -27,17 +29,26 @@ public class CoinConfigurationController {
 
     @PostMapping
     public CoinConfigurationView add(@RequestBody AddCoinRequest request) {
-        return coinConfigurationService.add(request.symbol());
+        CoinConfigurationView coin = coinConfigurationService.add(request.symbol());
+        dynamicCoinActivationService.activate(coin.symbol());
+        return coin;
     }
 
     @PutMapping("/{id}/enabled")
     public CoinConfigurationView setEnabled(@PathVariable Long id, @RequestBody CoinEnabledRequest request) {
-        return coinConfigurationService.setEnabled(id, request.enabled());
+        CoinConfigurationView coin = coinConfigurationService.setEnabled(id, request.enabled());
+        if (coin.enabled()) {
+            dynamicCoinActivationService.activate(coin.symbol());
+        } else {
+            dynamicCoinActivationService.reloadStreams();
+        }
+        return coin;
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> remove(@PathVariable Long id) {
         coinConfigurationService.remove(id);
+        dynamicCoinActivationService.reloadStreams();
         return ResponseEntity.noContent().build();
     }
 

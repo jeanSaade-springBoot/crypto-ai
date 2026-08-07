@@ -14,9 +14,11 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.EnableAsync;
 
 @SpringBootApplication
 @EnableScheduling
+@EnableAsync
 @EnableConfigurationProperties({TradingProperties.class, AtrRiskProperties.class, SentimentProperties.class, WhaleProperties.class, AnalysisScoringProperties.class, BtcContextProperties.class, OrderBookProperties.class, DynamicStrategyProperties.class, DerivativesPositioningProperties.class, FundamentalCollectionProperties.class})
 public class CryptoAiTraderApplication {
 

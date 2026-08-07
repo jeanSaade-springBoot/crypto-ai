@@ -104,7 +104,10 @@ function renderChart(snapshots) {
         stroke: {curve: 'smooth', width: 3},
         noData: {text: 'Add a USDT deposit to start'}
     };
-    if (chart) chart.destroy();
+    if (chart) {
+        chart.updateSeries(options.series, false);
+        return;
+    }
     chart = new ApexCharts(byId('wallet-chart'), options);
     chart.render();
 }

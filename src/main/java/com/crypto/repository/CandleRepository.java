@@ -27,7 +27,7 @@ public interface CandleRepository extends JpaRepository<Candle, Long> {
     @Modifying
     @Query(
         value = """
-            INSERT INTO candle (
+            INSERT INTO crypto_ai.candle (
                 symbol,
                 interval_code,
                 open_time,

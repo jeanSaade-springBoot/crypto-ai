@@ -42,7 +42,7 @@ document.getElementById('add-coin-form').addEventListener('submit', async event 
         });
         input.value = '';
         await loadCoins();
-        showAdminMessage('Coin added. Reload Binance streams to apply it immediately.');
+        showAdminMessage('Coin added. Live stream reload and historical bootstrap started automatically.');
     } catch (error) {
         showAdminMessage(error.message, true);
     }
@@ -58,11 +58,11 @@ coinBody.addEventListener('click', async event => {
                 method: 'PUT', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({enabled: button.dataset.enabled === 'true'})
             });
-            showAdminMessage('Coin status updated. Reload Binance streams to apply it immediately.');
+            showAdminMessage(button.dataset.enabled === 'true' ? 'Coin enabled. Live stream reload and historical bootstrap started automatically.' : 'Coin disabled. Binance streams are updating automatically.');
         } else if (button.dataset.action === 'remove') {
             if (!window.confirm(`Remove ${button.dataset.symbol} from monitoring?`)) return;
             await api(`/api/administration/coins/${button.dataset.id}`, {method: 'DELETE'});
-            showAdminMessage('Coin removed. Reload Binance streams to apply it immediately.');
+            showAdminMessage('Coin removed. Binance streams are updating automatically.');
         }
         await loadCoins();
     } catch (error) {

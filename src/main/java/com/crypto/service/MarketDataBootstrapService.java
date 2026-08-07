@@ -60,6 +60,28 @@ public class MarketDataBootstrapService implements ApplicationRunner {
         }
     }
 
+
+    public void bootstrapSymbol(String rawSymbol) {
+        if (!marketDataProperties.isEnabled()
+                || !marketDataProperties.getHistorical().isEnabled()) {
+            log.info("Historical candle bootstrap skipped for {} because historical loading is disabled", rawSymbol);
+            return;
+        }
+
+        String symbol = rawSymbol == null ? "" : rawSymbol.trim().toUpperCase();
+        if (symbol.isBlank()) {
+            throw new IllegalArgumentException("Symbol is required");
+        }
+
+        int limit = Math.max(
+                REQUIRED_CANDLES,
+                Math.min(1000, marketDataProperties.getHistorical().getLimit())
+        );
+        for (String interval : selectIntervals()) {
+            bootstrap(symbol, interval, limit);
+        }
+    }
+
     private void bootstrap(String symbol, String interval, int limit) {
         try {
             int inserted = marketDataService.importCandles(symbol, interval, limit);

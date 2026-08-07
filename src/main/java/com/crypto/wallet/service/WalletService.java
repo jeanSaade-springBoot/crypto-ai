@@ -63,8 +63,9 @@ public class WalletService {
         result.put("settings", settings);
         result.put("dailyTrading", dailyTradingSummary(settings, available, portfolio));
         result.put("portfolioStatus", totalPnl.signum() >= 0 ? "WINNING" : "LOSING");
+        List<WalletSnapshot> snapshots = snapshotRepository.findTop200ByOrderByCapturedAtDesc();
         BigDecimal finalPortfolioValue = portfolio;
-        BigDecimal change24h = snapshotRepository.findTop200ByOrderByCapturedAtDesc().stream()
+        BigDecimal change24h = snapshots.stream()
                 .filter(x -> x.getCapturedAt().isAfter(Instant.now().minusSeconds(86400)))
                 .min(Comparator.comparing(WalletSnapshot::getCapturedAt))
                 .map(x -> finalPortfolioValue.subtract(x.getPortfolioValueUsdt()))
@@ -72,8 +73,7 @@ public class WalletService {
         result.put("change24hUsdt", change24h);
         result.put("assets", rows);
         result.put("trades", tradeRepository.findTop100ByOrderByExecutedAtDesc().stream().map(this::tradeDto).toList());
-        result.put("cashFlows", cashFlowRepository.findTop100ByOrderByOccurredAtDesc());
-        result.put("snapshots", snapshotRepository.findTop200ByOrderByCapturedAtDesc().stream().sorted(Comparator.comparing(WalletSnapshot::getCapturedAt)).toList());
+        result.put("snapshots", snapshots.stream().sorted(Comparator.comparing(WalletSnapshot::getCapturedAt)).toList());
         return result;
     }
 
@@ -256,7 +256,7 @@ public class WalletService {
         BigDecimal invested=netInvested(), realized=nvl(tradeRepository.totalRealizedPnl()), total=portfolio.subtract(invested), available=assetRepository.findBySymbol("USDT").map(WalletAsset::getQuantity).orElse(ZERO);
         return Map.of("portfolioValueUsdt",portfolio,"netInvestedUsdt",invested,"totalPnlUsdt",total,"totalReturnPercent",percent(total,invested),"realizedPnlUsdt",realized,"unrealizedPnlUsdt",unrealized,"availableUsdt",available);
     }
-    private BigDecimal netInvested() { return cashFlowRepository.findAll().stream().map(f -> "DEPOSIT".equals(f.getFlowType()) ? f.getAmountUsdt() : f.getAmountUsdt().negate()).reduce(ZERO, BigDecimal::add); }
+    private BigDecimal netInvested() { return nvl(cashFlowRepository.netInvestedUsdt()); }
     private BigDecimal currentPrice(String asset) { if ("USDT".equals(asset)) return BigDecimal.ONE; return candleRepository.findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByCloseTimeDesc(asset+"USDT","1m").map(Candle::getClosePrice).orElse(ZERO); }
     private WalletAsset getOrCreate(String symbol) { return assetRepository.findBySymbol(symbol).orElseGet(() -> assetRepository.save(WalletAsset.builder().symbol(symbol).quantity(ZERO).averageBuyPriceUsdt("USDT".equals(symbol)?BigDecimal.ONE:null).enabled(true).build())); }
     private Map<String,Object> tradeDto(WalletTrade t) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id",t.getId()); m.put("signalId",t.getSignal()==null?null:t.getSignal().getId()); m.put("positionAnalysisId",t.getPositionAnalysis()==null?null:t.getPositionAnalysis().getId()); m.put("symbol",t.getSymbol()); m.put("side",t.getSide()); m.put("quantity",t.getQuantity()); m.put("priceUsdt",t.getPriceUsdt()); m.put("grossAmountUsdt",t.getGrossAmountUsdt()); m.put("feeUsdt",t.getFeeUsdt()); m.put("netAmountUsdt",t.getNetAmountUsdt()); m.put("realizedPnlUsdt",t.getRealizedPnlUsdt()); m.put("realizedPnlPercent",t.getRealizedPnlPercent()); m.put("executionReason",t.getExecutionReason()); m.put("executionMessage",t.getExecutionMessage()); m.put("executedAt",t.getExecutedAt()); return m; }

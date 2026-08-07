@@ -25,20 +25,27 @@ public class MarketDataService {
     public int importCandles(String symbol, String interval, int limit) {
         String normalizedSymbol = symbol.trim().toUpperCase(Locale.ROOT);
         List<BinanceKline> klines = client.getKlines(normalizedSymbol, interval, limit);
-        int inserted = 0;
+        int upserted = 0;
 
         for (BinanceKline kline : klines) {
-            boolean exists = candleRepository
-                    .findBySymbolAndIntervalCodeAndOpenTime(
-                            normalizedSymbol, interval, kline.openTime())
-                    .isPresent();
-
-            if (!exists) {
-                candleRepository.save(toEntity(normalizedSymbol, interval, kline));
-                inserted++;
-            }
+            upserted += candleRepository.upsert(
+                    normalizedSymbol,
+                    interval,
+                    kline.openTime(),
+                    kline.closeTime(),
+                    kline.openPrice(),
+                    kline.highPrice(),
+                    kline.lowPrice(),
+                    kline.closePrice(),
+                    kline.volume(),
+                    kline.quoteAssetVolume(),
+                    kline.numberOfTrades(),
+                    kline.takerBuyBaseVolume(),
+                    kline.takerBuyQuoteVolume(),
+                    true
+            );
         }
-        return inserted;
+        return upserted;
     }
 
     @Transactional(readOnly = true)
