@@ -1561,3 +1561,17 @@ html, body { max-width: 100%; overflow-x: hidden; }
 
 /* Trade history action clarity */
 .trade-action-cell{display:flex;align-items:center;gap:7px;min-width:150px}.trade-action-arrow{color:var(--muted);font-weight:800}.trade-action-cell .badge{white-space:nowrap}
+
+/* v2.1 sticky header clearance: keep the frozen header visually separate from content */
+@media (min-width: 761px) {
+    main > .topbar {
+        margin-bottom: 26px !important;
+        padding: 14px 0 16px !important;
+        background: rgba(7,16,24,.985) !important;
+        border-bottom: 1px solid rgba(32,51,66,.78);
+        box-shadow: 0 10px 20px rgba(0,0,0,.16);
+    }
+    main > .topbar .trade-performance-strip {
+        margin-bottom: 0 !important;
+    }
+}

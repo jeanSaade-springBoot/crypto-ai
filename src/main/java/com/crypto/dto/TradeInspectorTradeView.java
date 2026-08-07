@@ -1,0 +1,39 @@
+package com.crypto.dto;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+
+public record TradeInspectorTradeView(
+        Long walletBuyTradeId,
+        Long walletSellTradeId,
+        String symbol,
+        Instant openedAt,
+        Instant closedAt,
+        long holdingMinutes,
+        BigDecimal quantity,
+        BigDecimal entryPrice,
+        BigDecimal exitPrice,
+        BigDecimal realizedPnl,
+        BigDecimal realizedPnlPercent,
+        Long entrySignalId,
+        String entryDecision,
+        int entryScore,
+        int entryConfidence,
+        String entryInterval,
+        String entryStrategy,
+        String entryRegime,
+        Long exitSignalId,
+        String exitDecision,
+        Integer exitScore,
+        Integer exitConfidence,
+        String closeReason,
+        BigDecimal maximumFavorablePrice,
+        BigDecimal maximumFavorablePercent,
+        BigDecimal maximumAdversePrice,
+        BigDecimal maximumAdversePercent,
+        BigDecimal priceAfter15m,
+        BigDecimal priceAfter30m,
+        BigDecimal priceAfter60m,
+        String exitQuality,
+        String exitQualityExplanation
+) {}

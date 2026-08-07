@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Trade Inspector</title>
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <link rel="stylesheet" href="/css/trade-inspector.css">
+</head>
+<body>
+<div class="app-shell">
+    <aside class="sidebar">
+        <div class="brand"><span class="brand-mark">CT</span><div><strong>Crypto Trader</strong><small>Trade quality analysis</small></div></div>
+        <nav>
+            <a href="/dashboard">Dashboard</a>
+            <a href="/dashboard#analytics">Analytics</a>
+            <a class="active" href="/trade-inspector">Trade Inspector</a>
+            <a href="/administration">Administration</a>
+        </nav>
+        <div class="connection"><span class="online"></span><div><strong>Historical analysis</strong><small>Executed closed positions only</small></div></div>
+    </aside>
+
+    <main>
+        <header class="topbar inspector-topbar">
+            <div>
+                <p class="eyebrow">TRADE QUALITY</p>
+                <h1>Trade Inspector</h1>
+                <p class="inspector-subtitle">Measure entry quality, exit quality and what happened after every executed trade.</p>
+            </div>
+            <div class="filters inspector-filters">
+                <label>Symbol<select id="symbol-filter"><option value="ALL">All coins</option></select></label>
+                <label>Trades<select id="limit-filter"><option>10</option><option selected>20</option><option>50</option><option>100</option></select></label>
+                <button id="refresh-inspector" type="button">Refresh</button>
+            </div>
+        </header>
+
+        <section id="inspector-error" class="error-banner hidden"></section>
+
+        <section class="metrics-grid inspector-metrics">
+            <article class="metric-card"><span>Net realized P&amp;L</span><strong id="summary-net">—</strong><small id="summary-count">0 closed trades</small></article>
+            <article class="metric-card"><span>Win rate</span><strong id="summary-win-rate">—</strong><small id="summary-record">0W / 0L</small></article>
+            <article class="metric-card"><span>Average trade</span><strong id="summary-average">—</strong><small id="summary-averages">Avg win — · Avg loss —</small></article>
+            <article class="metric-card"><span>Profit factor</span><strong id="summary-profit-factor">—</strong><small>Gross profit ÷ gross loss</small></article>
+        </section>
+
+        <section class="panel inspector-guide">
+            <div class="section-heading"><div><p class="eyebrow">HOW TO READ IT</p><h2>Exit evidence</h2></div></div>
+            <div class="quality-legend">
+                <span><b class="quality good">GOOD EXIT</b> Price continued lower after exit.</span>
+                <span><b class="quality early">EARLY EXIT</b> Price rebounded ≥0.50% within 60 minutes.</span>
+                <span><b class="quality neutral">NEUTRAL</b> Post-exit movement stayed within ±0.50%.</span>
+                <span><b class="quality pending">PENDING</b> Not enough post-exit candles yet.</span>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="section-heading">
+                <div><p class="eyebrow">COMPLETED POSITIONS</p><h2>Recent inspected trades</h2></div>
+                <span id="inspector-updated">—</span>
+            </div>
+            <div id="trade-cards" class="trade-inspector-list">
+                <div class="empty">Loading completed trades…</div>
+            </div>
+        </section>
+    </main>
+</div>
+<script src="/js/trade-inspector.js"></script>
+</body>
+</html>
