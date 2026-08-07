@@ -16,6 +16,8 @@ import com.crypto.repository.CandleRepository;
 import com.crypto.repository.PaperPositionRepository;
 import com.crypto.repository.TechnicalIndicatorRepository;
 import com.crypto.repository.TradeSignalRepository;
+import com.crypto.wallet.domain.WalletTrade;
+import com.crypto.wallet.repository.WalletTradeRepository;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -47,6 +49,7 @@ public class DashboardApiController {
     private final ObjectMapper objectMapper;
     private final ScoreDiagnosticsService scoreDiagnosticsService;
     private final CoinConfigurationService coinConfigurationService;
+    private final WalletTradeRepository walletTradeRepository;
     private final Map<String, AggregatedCandleCacheEntry> aggregatedCandleCache = new ConcurrentHashMap<>();
 
     public DashboardApiController(
@@ -58,7 +61,8 @@ public class DashboardApiController {
             ScheduleConfigurationService scheduleConfigurationService,
             ObjectMapper objectMapper,
             ScoreDiagnosticsService scoreDiagnosticsService,
-            CoinConfigurationService coinConfigurationService
+            CoinConfigurationService coinConfigurationService,
+            WalletTradeRepository walletTradeRepository
     ) {
         this.candleRepository = candleRepository;
         this.technicalIndicatorRepository = technicalIndicatorRepository;
@@ -69,6 +73,7 @@ public class DashboardApiController {
         this.objectMapper = objectMapper;
         this.scoreDiagnosticsService = scoreDiagnosticsService;
         this.coinConfigurationService = coinConfigurationService;
+        this.walletTradeRepository = walletTradeRepository;
     }
 
     @GetMapping("/symbols")
@@ -128,6 +133,15 @@ public class DashboardApiController {
         response.put("schedule", scheduleConfigurationService.dashboardSchedule());
         response.put("scoreDiagnostics", scoreDiagnosticsService.last24Hours());
         response.put("signals", signals.stream().map(this::signalDto).toList());
+        response.put("livePrice", candleRepository
+                .findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByCloseTimeDesc(normalizedSymbol, "1m")
+                .map(Candle::getClosePrice)
+                .orElse(currentLatestPrice(candles)));
+        response.put("executions", walletTradeRepository
+                .findTop100BySymbolAndStatusOrderByExecutedAtDesc(normalizedSymbol, "EXECUTED")
+                .stream()
+                .map(this::walletExecutionDto)
+                .toList());
 
         BigDecimal currentPrice = candles.isEmpty()
                 ? null
@@ -295,6 +309,32 @@ public class DashboardApiController {
 
     private Map<String, Object> status(boolean complete, String detail) {
         return Map.of("complete", complete, "detail", detail);
+    }
+
+    private BigDecimal currentLatestPrice(List<Candle> candles) {
+        return candles.isEmpty() ? null : candles.get(candles.size() - 1).getClosePrice();
+    }
+
+    private Map<String, Object> walletExecutionDto(WalletTrade trade) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        TradeSignal signal = trade.getSignal();
+        result.put("id", trade.getId());
+        result.put("symbol", trade.getSymbol());
+        result.put("side", trade.getSide());
+        result.put("executedAt", trade.getExecutedAt());
+        result.put("price", trade.getPriceUsdt());
+        result.put("quantity", trade.getQuantity());
+        result.put("amountUsdt", trade.getNetAmountUsdt());
+        result.put("realizedPnlUsdt", trade.getRealizedPnlUsdt());
+        result.put("realizedPnlPercent", trade.getRealizedPnlPercent());
+        result.put("executionReason", trade.getExecutionReason());
+        result.put("executionType", trade.getExecutionType());
+        result.put("signalId", signal == null ? null : signal.getId());
+        result.put("timeframe", signal == null ? null : signal.getInterval());
+        result.put("decision", signal == null ? null : signal.getDecision().name());
+        result.put("score", signal == null ? null : signal.getTotalScore());
+        result.put("confidence", signal == null ? null : signal.getConfidenceScore());
+        return result;
     }
 
     private Map<String, Object> candleDto(Candle candle) {
@@ -525,6 +565,7 @@ public class DashboardApiController {
         result.put("entrySignalId", entrySignal == null ? null : entrySignal.getId());
         result.put("entryDecision", entrySignal == null ? null : entrySignal.getDecision().name());
         result.put("entryScore", entrySignal == null ? null : entrySignal.getTotalScore());
+        result.put("entryInterval", entrySignal == null ? null : entrySignal.getInterval());
         result.put("entryAtr14", entrySignal == null ? null : entrySignal.getAtrAtSignal());
         result.put("entryAtrPercent", entrySignal == null ? null : entrySignal.getAtrPercent());
         result.put("entryRiskRewardRatio", entrySignal == null ? null : entrySignal.getRiskRewardRatio());
@@ -550,6 +591,7 @@ public class DashboardApiController {
         result.put("exitSignalId", exitSignal == null ? null : exitSignal.getId());
         result.put("exitDecision", exitSignal == null ? null : exitSignal.getDecision().name());
         result.put("exitScore", exitSignal == null ? null : exitSignal.getTotalScore());
+        result.put("exitInterval", exitSignal == null ? null : exitSignal.getInterval());
         result.put("exitReason", position.getExitReason());
         result.put("closeReason", position.getCloseReason());
         result.put("currentDecision", open ? currentDecision : null);

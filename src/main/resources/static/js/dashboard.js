@@ -11,6 +11,7 @@ window.fetch = async (...args) => {
 let candleChart;
 let volumeChart;
 let dashboardRefreshTimer;
+let latestWalletExecutions = new Map();
 const numberFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 });
 const moneyFormatter = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 });
 
@@ -18,6 +19,7 @@ const el = id => document.getElementById(id);
 const value = v => v === null || v === undefined || v === '' ? '—' : numberFormatter.format(Number(v));
 const money = v => v === null || v === undefined ? '—' : '$' + moneyFormatter.format(Number(v));
 const dateTime = v => v ? new Date(v).toLocaleString() : '—';
+const preciseDateTime = v => v ? new Date(v).toLocaleString(undefined, {year:'numeric', month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit'}) : '—';
 const openSignalAnalysisIds = new Set();
 let pinnedSignalId = localStorage.getItem('cryptoPinnedSignalId');
 
@@ -106,7 +108,8 @@ function render(data) {
         el('latest-score').textContent = s.latestScore === null ? 'Analysis not ready' : `Score ${s.latestScore}`;
     }
     el('open-positions').textContent = s.openPositions;
-    el('last-updated').textContent = `Updated ${dateTime(data.updatedAt)}`;
+    el('last-updated').textContent = `Updated ${preciseDateTime(data.updatedAt)}`;
+    renderHeaderLivePrice(data);
     el('market-subtitle').textContent = `${data.symbol} · ${displayInterval(data.interval)}${data.displayOnlyInterval ? ' · display only' : ''}`;
     renderPortfolio(data.wallet || {});
     renderTradePerformance((data.wallet || {}).tradePerformance || {});
@@ -116,12 +119,30 @@ function render(data) {
     renderSentiment(data.sentiment || {}, data.sentimentProviderStatuses || [], data.sentimentSystemStatus || {});
     renderSchedules(data.schedule || {});
     applyDashboardRefreshSchedule(data.schedule || {});
-    renderCharts(data.candles || []);
+    renderCharts(data.candles || [], data.executions || []);
     renderSignals(data.signals || [], data.displayOnlyInterval);
     renderOpenTrades(data.openPositions || []);
     renderTradeHistory(data.closedPositions || []);
+    window.requestAnimationFrame(syncDashboardHeaderOffset);
 }
 
+
+function renderHeaderLivePrice(data) {
+    const livePrice = data.livePrice ?? data.summary?.latestPrice;
+    el('header-live-symbol').textContent = data.symbol || '—';
+    el('header-live-price').textContent = money(livePrice);
+    el('header-live-timeframe').textContent = `1m market feed · view ${displayInterval(data.interval)}`;
+}
+
+function syncDashboardHeaderOffset() {
+    const header = document.querySelector('main > .topbar');
+    if (!header || window.innerWidth <= 760) {
+        document.documentElement.style.removeProperty('--dashboard-fixed-header-height');
+        return;
+    }
+    const height = Math.ceil(header.getBoundingClientRect().height);
+    document.documentElement.style.setProperty('--dashboard-fixed-header-height', `${height}px`);
+}
 
 function renderTradePerformance(performance) {
     const pnl = Number(performance.netPnlUsdt || 0);
@@ -291,20 +312,77 @@ function renderIndicators(i) {
     Object.entries(mapping).forEach(([id, v]) => el(id).textContent = v === null || v === undefined ? '—' : (typeof v === 'string' ? v : value(v)));
 }
 
-function renderCharts(candles) {
+function renderCharts(candles, executions = []) {
     const candleSeries = candles.map(c => ({ x: new Date(c.time), y: [Number(c.open), Number(c.high), Number(c.low), Number(c.close)] }));
     const volumeSeries = candles.map(c => ({ x: new Date(c.time), y: Number(c.volume) }));
+    latestWalletExecutions = new Map((executions || []).map(execution => [String(execution.id), execution]));
+    const annotations = (executions || []).map(execution => {
+        const isBuy = String(execution.side || '').toUpperCase() === 'BUY';
+        return {
+            x: new Date(execution.executedAt).getTime(),
+            y: Number(execution.price),
+            marker: { size: 5, fillColor: isBuy ? '#39d98a' : '#ff6b72', strokeColor: '#071018', strokeWidth: 2, radius: 2 },
+            label: {
+                text: isBuy ? 'B' : 'S',
+                borderColor: isBuy ? '#39d98a' : '#ff6b72',
+                offsetY: isBuy ? 18 : -10,
+                style: { background: isBuy ? '#39d98a' : '#ff6b72', color: '#071018', fontSize: '11px', fontWeight: 800 },
+                cssClass: `wallet-execution-marker execution-marker-${execution.id} ${isBuy ? 'buy-marker' : 'sell-marker'}`
+            }
+        };
+    });
     const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime' }, noData: { text: 'Waiting for closed candles' } };
     if (!candleChart) {
-        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390 }, series: [{ name: 'Price', data: candleSeries }], yaxis: { tooltip: { enabled: true }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
-        candleChart.render();
+        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390 }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations }, yaxis: { tooltip: { enabled: true }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
+        candleChart.render().then(bindExecutionMarkerClicks);
         volumeChart = new ApexCharts(el('volume-chart'), { ...common, chart: { ...common.chart, type: 'bar', height: 150 }, series: [{ name: 'Volume', data: volumeSeries }], dataLabels: { enabled: false }, yaxis: { labels: { formatter: v => Number(v).toLocaleString(undefined, { notation: 'compact' }) } } });
         volumeChart.render();
     } else {
-        candleChart.updateSeries([{ name: 'Price', data: candleSeries }]);
-        volumeChart.updateSeries([{ name: 'Volume', data: volumeSeries }]);
+        candleChart.updateSeries([{ name: 'Price', data: candleSeries }], false);
+        candleChart.updateOptions({ annotations: { points: annotations } }, false, true, false).then(bindExecutionMarkerClicks);
+        volumeChart.updateSeries([{ name: 'Volume', data: volumeSeries }], false);
     }
 }
+
+function bindExecutionMarkerClicks() {
+    document.querySelectorAll('.wallet-execution-marker').forEach(marker => {
+        marker.style.cursor = 'pointer';
+        marker.setAttribute('role', 'button');
+        marker.setAttribute('tabindex', '0');
+        const className = marker.getAttribute('class') || '';
+        const match = className.match(/execution-marker-(\d+)/);
+        if (!match) return;
+        const id = match[1];
+        const open = () => openExecutionMarker(id);
+        marker.onclick = open;
+        marker.onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } };
+    });
+}
+
+function openExecutionMarker(id) {
+    const execution = latestWalletExecutions.get(String(id));
+    if (!execution) return;
+    const side = String(execution.side || '').toUpperCase();
+    const isSell = side === 'SELL';
+    const pnl = execution.realizedPnlUsdt == null ? null : Number(execution.realizedPnlUsdt);
+    el('execution-marker-title').textContent = `${execution.symbol || ''} ${side} execution`;
+    el('execution-marker-content').innerHTML = `
+        <div class="execution-detail-grid">
+            <div><span>Action</span><strong class="${isSell ? 'negative' : 'positive'}">${escapeHtml(side)} ${isSell ? '↓' : '↑'}</strong></div>
+            <div><span>Exact time</span><strong>${preciseDateTime(execution.executedAt)}</strong></div>
+            <div><span>Signal timeframe</span><strong>${escapeHtml(execution.timeframe || '—')}</strong></div>
+            <div><span>Executed price</span><strong>${money(execution.price)}</strong></div>
+            <div><span>Quantity</span><strong>${value(execution.quantity)}</strong></div>
+            <div><span>Wallet amount</span><strong>${money(execution.amountUsdt)}</strong></div>
+            <div><span>Signal decision</span><strong>${escapeHtml(String(execution.decision || '—').replaceAll('_',' '))}</strong></div>
+            <div><span>Score / confidence</span><strong>${execution.score ?? '—'}/100 · ${execution.confidence ?? '—'}/100</strong></div>
+            ${isSell ? `<div><span>Realized P&L</span><strong class="${pnl != null && pnl >= 0 ? 'positive' : 'negative'}">${pnl == null ? '—' : signedMoney(pnl)}</strong></div>` : ''}
+            ${isSell ? `<div><span>P&L %</span><strong>${execution.realizedPnlPercent == null ? '—' : signedPercent(execution.realizedPnlPercent)}</strong></div>` : ''}
+            <div><span>Execution reason</span><strong>${escapeHtml(String(execution.executionReason || execution.executionType || '—').replaceAll('_',' '))}</strong></div>
+        </div>`;
+    el('execution-marker-dialog').showModal();
+}
+
 
 function renderSignals(signals, displayOnlyInterval = false) {
     const body = el('signals-body');
@@ -968,8 +1046,9 @@ function renderTradeHistory(positions) {
         return `<tr>
             <td><strong>${escapeHtml(p.symbol || '—')}</strong></td>
             <td class="trade-action-cell"><span class="badge buy">BUY ↑</span><span class="trade-action-arrow">→</span><span class="badge sell">SELL ↓</span></td>
-            <td>${dateTime(p.openedAt)}</td>
-            <td>${dateTime(p.closedAt)}</td>
+            <td><span class="interval-chip">${escapeHtml(p.entryInterval || '—')}</span><span class="trade-action-arrow">→</span><span class="interval-chip">${escapeHtml(p.exitInterval || p.entryInterval || '—')}</span></td>
+            <td>${preciseDateTime(p.openedAt)}</td>
+            <td>${preciseDateTime(p.closedAt)}</td>
             <td>${money(p.entryPrice)}<small>${escapeHtml(String(p.entryDecision || '—'))} ${p.entryScore ?? '—'}/100</small></td>
             <td>${money(p.exitPrice)}<small>${escapeHtml(String(p.exitDecision || p.closeReason || '—'))} ${p.exitScore ?? '—'}/100</small></td>
             <td>${value(p.quantity)}</td>
@@ -978,7 +1057,7 @@ function renderTradeHistory(positions) {
             <td><span class="badge ${predictionClass}">${escapeHtml(p.predictionResult || 'PENDING')}</span></td>
             <td><button type="button" class="replay-button" onclick="openTradeReplay(${p.id})">Inspect</button></td>
         </tr>`;
-    }).join('') : '<tr><td colspan="11" class="empty">No completed paper trades yet. Closed trades will appear here with their final P&amp;L and result.</td></tr>';
+    }).join('') : '<tr><td colspan="12" class="empty">No completed paper trades yet. Closed trades will appear here with their final P&amp;L and result.</td></tr>';
 }
 
 
@@ -1287,3 +1366,11 @@ function renderTradeReplay(replay) {
             <div class="table-wrap"><table><thead><tr><th>Time</th><th>Interval</th><th>Price</th><th>P/L</th><th>Exit score</th><th>Advice</th><th>Reason</th></tr></thead><tbody>${adviceRows}</tbody></table></div>
         </details>`;
 }
+
+
+window.addEventListener('resize', syncDashboardHeaderOffset);
+window.addEventListener('load', () => {
+    syncDashboardHeaderOffset();
+    const closeButton = el('execution-marker-close');
+    if (closeButton) closeButton.addEventListener('click', () => el('execution-marker-dialog').close());
+});

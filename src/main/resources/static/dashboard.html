@@ -47,6 +47,12 @@
                 </div>
             </div>
             <section id="trade-performance-strip" class="trade-performance-strip" aria-label="Recent executed trade performance">
+                <div class="live-price-tile" aria-label="Selected coin live price">
+                    <small>Live Price</small>
+                    <strong id="header-live-symbol">BTCUSDT</strong>
+                    <span id="header-live-price">—</span>
+                    <small id="header-live-timeframe">1m market feed</small>
+                </div>
                 <div class="trade-performance-summary">
                     <span id="trade-performance-label">Last 20 trades</span>
                     <strong id="trade-performance-pnl">—</strong>
@@ -250,11 +256,19 @@
             </div>
             <div class="table-wrap">
                 <table>
-                    <thead><tr><th>Symbol</th><th>Action</th><th>Opened</th><th>Closed</th><th>Entry</th><th>Exit</th><th>Quantity</th><th>P&amp;L</th><th>Closed by</th><th>Prediction</th><th>Inspector</th></tr></thead>
+                    <thead><tr><th>Symbol</th><th>Action</th><th>Timeframe</th><th>Opened</th><th>Closed</th><th>Entry</th><th>Exit</th><th>Quantity</th><th>P&amp;L</th><th>Closed by</th><th>Prediction</th><th>Inspector</th></tr></thead>
                     <tbody id="trade-history-body"></tbody>
                 </table>
             </div>
         </section>
+
+        <dialog id="execution-marker-dialog" class="execution-marker-dialog">
+            <div class="execution-marker-header">
+                <div><p class="eyebrow">WALLET EXECUTION</p><h2 id="execution-marker-title">Trade execution</h2></div>
+                <button id="execution-marker-close" type="button" class="secondary-button">Close</button>
+            </div>
+            <div id="execution-marker-content" class="execution-marker-content"></div>
+        </dialog>
 
         <dialog id="trade-replay-dialog" class="trade-replay-dialog">
             <div class="trade-replay-header">
