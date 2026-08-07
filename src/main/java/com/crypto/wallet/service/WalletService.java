@@ -8,6 +8,7 @@ import com.crypto.wallet.domain.*;
 import com.crypto.wallet.dto.*;
 import com.crypto.wallet.repository.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,6 +16,7 @@ import java.math.*;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.*;
 
 @Service
@@ -62,6 +64,7 @@ public class WalletService {
         WalletSettings settings = settingsRepository.findById(1L).orElse(null);
         result.put("settings", settings);
         result.put("dailyTrading", dailyTradingSummary(settings, available, portfolio));
+        result.put("tradePerformance", tradePerformanceSummary(settings));
         result.put("portfolioStatus", totalPnl.signum() >= 0 ? "WINNING" : "LOSING");
         List<WalletSnapshot> snapshots = snapshotRepository.findTop200ByOrderByCapturedAtDesc();
         BigDecimal finalPortfolioValue = portfolio;
@@ -109,13 +112,35 @@ public class WalletService {
                 || request.maximumDailyNewPositions() > 1000)
             throw new IllegalArgumentException("Maximum daily new positions must be 0 (unlimited) or between 1 and 1000");
 
+        String performanceWindowType = normalizePerformanceWindowType(request.performanceWindowType());
+        int performanceTradeCount = Optional.ofNullable(request.performanceTradeCount()).orElse(20);
+        int performancePeriodDays = Optional.ofNullable(request.performancePeriodDays()).orElse(1);
+        if (performanceTradeCount < 1 || performanceTradeCount > 500)
+            throw new IllegalArgumentException("Performance trade count must be between 1 and 500");
+        if (performancePeriodDays < 1 || performancePeriodDays > 3650)
+            throw new IllegalArgumentException("Performance period must be between 1 and 3650 days");
+        if ("DATE_RANGE".equals(performanceWindowType)) {
+            if (request.performanceStartDate() == null || request.performanceEndDate() == null)
+                throw new IllegalArgumentException("Performance start and end dates are required for a date range");
+            if (request.performanceEndDate().isBefore(request.performanceStartDate()))
+                throw new IllegalArgumentException("Performance end date cannot be before the start date");
+        }
+
         WalletSettings settings = settingsRepository.findById(1L).orElseGet(() -> WalletSettings.builder()
                 .id(1L)
                 .baseTradeAmountUsdt(BigDecimal.valueOf(100))
+                .performanceWindowType("LAST_TRADES")
+                .performanceTradeCount(20)
+                .performancePeriodDays(1)
                 .build());
         settings.setMinimumUsdtReserve(request.minimumUsdtReserve());
         settings.setBaseTradeAmountUsdt(request.baseTradeAmountUsdt());
         settings.setMaximumDailyNewPositions(request.maximumDailyNewPositions());
+        settings.setPerformanceWindowType(performanceWindowType);
+        settings.setPerformanceTradeCount(performanceTradeCount);
+        settings.setPerformancePeriodDays(performancePeriodDays);
+        settings.setPerformanceStartDate(request.performanceStartDate());
+        settings.setPerformanceEndDate(request.performanceEndDate());
         settings.setUpdatedAt(Instant.now());
         settingsRepository.save(settings);
 
@@ -137,6 +162,124 @@ public class WalletService {
         });
     }
 
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> tradePerformanceSummary(WalletSettings settings) {
+        WalletSettings effective = settings != null ? settings : settingsRepository.findById(1L).orElse(null);
+        String type = effective == null ? "LAST_TRADES" : normalizePerformanceWindowType(effective.getPerformanceWindowType());
+        int tradeCount = effective == null || effective.getPerformanceTradeCount() <= 0 ? 20 : effective.getPerformanceTradeCount();
+        int periodDays = effective == null || effective.getPerformancePeriodDays() <= 0 ? 1 : effective.getPerformancePeriodDays();
+        ZoneId zone = ZoneId.systemDefault();
+        Instant now = Instant.now();
+
+        if ("TODAY".equals(type)) {
+            LocalDate today = LocalDate.now(zone);
+            return performanceFromAggregate(type, "Today",
+                    tradeRepository.summarizeClosedTradesBetween(
+                            today.atStartOfDay(zone).toInstant(),
+                            today.plusDays(1).atStartOfDay(zone).toInstant()));
+        }
+
+        if ("LAST_DAYS".equals(type)) {
+            Instant from = ZonedDateTime.now(zone).minusDays(periodDays).toInstant();
+            return performanceFromAggregate(type, "Last " + periodDays + (periodDays == 1 ? " day" : " days"),
+                    tradeRepository.summarizeClosedTradesBetween(from, now.plusNanos(1)));
+        }
+
+        if ("DATE_RANGE".equals(type)) {
+            LocalDate start = effective == null ? null : effective.getPerformanceStartDate();
+            LocalDate end = effective == null ? null : effective.getPerformanceEndDate();
+            if (start != null && end != null && !end.isBefore(start)) {
+                return performanceFromAggregate(type, start + " to " + end,
+                        tradeRepository.summarizeClosedTradesBetween(
+                                start.atStartOfDay(zone).toInstant(),
+                                end.plusDays(1).atStartOfDay(zone).toInstant()));
+            }
+        }
+
+        List<WalletTrade> trades = tradeRepository.findRecentClosedTrades(PageRequest.of(0, tradeCount));
+        return performanceFromTrades("LAST_TRADES", "Last " + tradeCount + " trades", trades);
+    }
+
+    private Map<String, Object> performanceFromTrades(String type, String label, List<WalletTrade> trades) {
+        long wins = 0;
+        long losses = 0;
+        long breakeven = 0;
+        BigDecimal netPnl = ZERO;
+        BigDecimal grossProfit = ZERO;
+        BigDecimal grossLoss = ZERO;
+        for (WalletTrade trade : trades) {
+            BigDecimal pnl = nvl(trade.getRealizedPnlUsdt());
+            netPnl = netPnl.add(pnl);
+            if (pnl.signum() > 0) {
+                wins++;
+                grossProfit = grossProfit.add(pnl);
+            } else if (pnl.signum() < 0) {
+                losses++;
+                grossLoss = grossLoss.add(pnl.abs());
+            } else {
+                breakeven++;
+            }
+        }
+        return buildPerformanceSummary(type, label, trades.size(), wins, losses, breakeven, netPnl, grossProfit, grossLoss);
+    }
+
+    private Map<String, Object> performanceFromAggregate(String type, String label, Object[] aggregate) {
+        long count = numberAsLong(aggregate, 0);
+        long wins = numberAsLong(aggregate, 1);
+        long losses = numberAsLong(aggregate, 2);
+        long breakeven = numberAsLong(aggregate, 3);
+        BigDecimal netPnl = numberAsBigDecimal(aggregate, 4);
+        BigDecimal grossProfit = numberAsBigDecimal(aggregate, 5);
+        BigDecimal grossLoss = numberAsBigDecimal(aggregate, 6);
+        return buildPerformanceSummary(type, label, count, wins, losses, breakeven, netPnl, grossProfit, grossLoss);
+    }
+
+    private Map<String, Object> buildPerformanceSummary(
+            String type,
+            String label,
+            long count,
+            long wins,
+            long losses,
+            long breakeven,
+            BigDecimal netPnl,
+            BigDecimal grossProfit,
+            BigDecimal grossLoss) {
+        long decided = wins + losses;
+        BigDecimal winRate = decided == 0 ? ZERO
+                : BigDecimal.valueOf(wins).multiply(BigDecimal.valueOf(100))
+                .divide(BigDecimal.valueOf(decided), 2, RoundingMode.HALF_UP);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("windowType", type);
+        result.put("label", label);
+        result.put("closedTrades", count);
+        result.put("wins", wins);
+        result.put("losses", losses);
+        result.put("breakeven", breakeven);
+        result.put("winRatePercent", winRate);
+        result.put("netPnlUsdt", netPnl);
+        result.put("grossProfitUsdt", grossProfit);
+        result.put("grossLossUsdt", grossLoss);
+        return result;
+    }
+
+    private long numberAsLong(Object[] values, int index) {
+        if (values == null || index >= values.length || values[index] == null) return 0L;
+        return ((Number) values[index]).longValue();
+    }
+
+    private BigDecimal numberAsBigDecimal(Object[] values, int index) {
+        if (values == null || index >= values.length || values[index] == null) return ZERO;
+        Object value = values[index];
+        return value instanceof BigDecimal decimal ? decimal : new BigDecimal(value.toString());
+    }
+
+    private String normalizePerformanceWindowType(String value) {
+        String normalized = value == null || value.isBlank() ? "LAST_TRADES" : value.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("LAST_TRADES", "TODAY", "LAST_DAYS", "DATE_RANGE").contains(normalized))
+            throw new IllegalArgumentException("Invalid trade performance window type");
+        return normalized;
+    }
 
     @Transactional(readOnly = true)
     public BigDecimal currentPortfolioValue() {

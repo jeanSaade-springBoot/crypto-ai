@@ -43,6 +43,12 @@ async function load() {
         byId('base-trade-amount').value = settings.baseTradeAmountUsdt || 100;
         updateDailyLimitField();
         byId('minimum-reserve').value = settings.minimumUsdtReserve || 0;
+        byId('performance-window-type').value = settings.performanceWindowType || 'LAST_TRADES';
+        byId('performance-trade-count').value = settings.performanceTradeCount || 20;
+        byId('performance-period-days').value = settings.performancePeriodDays || 7;
+        byId('performance-start-date').value = settings.performanceStartDate || '';
+        byId('performance-end-date').value = settings.performanceEndDate || '';
+        updatePerformanceWindowFields();
 
         const daily = data.dailyTrading || {};
         byId('daily-budget').textContent = money(daily.dailyTradeBudgetUsdt);
@@ -146,6 +152,15 @@ function updateDailyLimitField() {
 
 byId('daily-limit-enabled').addEventListener('change', updateDailyLimitField);
 
+function updatePerformanceWindowFields() {
+    const type = byId('performance-window-type').value;
+    byId('performance-trade-count-field').classList.toggle('hidden', type !== 'LAST_TRADES');
+    byId('performance-period-days-field').classList.toggle('hidden', type !== 'LAST_DAYS');
+    byId('performance-date-range-fields').classList.toggle('hidden', type !== 'DATE_RANGE');
+}
+
+byId('performance-window-type').addEventListener('change', updatePerformanceWindowFields);
+
 byId('settings-form').addEventListener('submit', async event => {
     event.preventDefault();
     await save('/api/wallet/settings', 'PUT', {
@@ -153,7 +168,12 @@ byId('settings-form').addEventListener('submit', async event => {
             ? byId('maximum-daily-positions').value
             : 0,
         baseTradeAmountUsdt: byId('base-trade-amount').value,
-        minimumUsdtReserve: byId('minimum-reserve').value
+        minimumUsdtReserve: byId('minimum-reserve').value,
+        performanceWindowType: byId('performance-window-type').value,
+        performanceTradeCount: byId('performance-trade-count').value,
+        performancePeriodDays: byId('performance-period-days').value,
+        performanceStartDate: byId('performance-start-date').value || null,
+        performanceEndDate: byId('performance-end-date').value || null
     }, 'Trading configuration saved successfully.');
 });
 

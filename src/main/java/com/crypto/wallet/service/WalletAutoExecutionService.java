@@ -285,6 +285,7 @@ public class WalletAutoExecutionService {
         return settingsRepository.findById(1L).orElseGet(() -> settingsRepository.save(
                 WalletSettings.builder().id(1L).baseTradeAmountUsdt(BigDecimal.valueOf(100))
                         .minimumUsdtReserve(ZERO).maximumDailyNewPositions(0)
+                        .performanceWindowType("LAST_TRADES").performanceTradeCount(20).performancePeriodDays(1)
                         .updatedAt(Instant.now()).build()));
     }
 

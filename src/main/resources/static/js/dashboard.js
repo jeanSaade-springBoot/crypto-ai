@@ -77,6 +77,7 @@ function render(data) {
     el('last-updated').textContent = `Updated ${dateTime(data.updatedAt)}`;
     el('market-subtitle').textContent = `${data.symbol} · ${data.interval}`;
     renderPortfolio(data.wallet || {});
+    renderTradePerformance((data.wallet || {}).tradePerformance || {});
     renderPipeline(data.pipeline);
     renderScoreDiagnostics(data.scoreDiagnostics || {});
     renderIndicators(data.indicator || {});
@@ -89,6 +90,23 @@ function render(data) {
     renderTradeHistory(data.closedPositions || []);
 }
 
+
+function renderTradePerformance(performance) {
+    const pnl = Number(performance.netPnlUsdt || 0);
+    const wins = Number(performance.wins || 0);
+    const losses = Number(performance.losses || 0);
+    const breakeven = Number(performance.breakeven || 0);
+    const count = Number(performance.closedTrades || 0);
+    const rate = Number(performance.winRatePercent || 0);
+    el('trade-performance-label').textContent = performance.label || 'Recent trades';
+    el('trade-performance-pnl').textContent = `${pnl >= 0 ? '+' : ''}${money(pnl)}`;
+    el('trade-performance-pnl').className = pnl >= 0 ? 'positive' : 'negative';
+    el('trade-performance-record').textContent = `${wins}W / ${losses}L${breakeven ? ` / ${breakeven}B` : ''}`;
+    el('trade-performance-win-rate').textContent = `${rate.toFixed(1)}% win rate`;
+    el('trade-performance-count').textContent = count === 0
+        ? 'No closed wallet trades in this window'
+        : `${count} executed closed trade${count === 1 ? '' : 's'} · realized P&L`;
+}
 
 function renderPortfolio(wallet) {
     const pnl = Number(wallet.totalPnlUsdt || 0);

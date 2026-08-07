@@ -61,6 +61,24 @@
                     <label id="daily-limit-field">Maximum new positions per day<input id="maximum-daily-positions" type="number" min="1" max="1000" step="1" value="6"></label>
                     <label>Trade amount per BUY when unlimited<input id="base-trade-amount" type="number" min="0.01" step="0.01" required></label>
                     <label>Minimum USDT reserve<input id="minimum-reserve" type="number" min="0" step="0.01" required></label>
+                    <div class="performance-config">
+                        <h3>Pinned trade performance</h3>
+                        <label>Performance window
+                            <select id="performance-window-type">
+                                <option value="LAST_TRADES">Last N closed trades</option>
+                                <option value="TODAY">Today</option>
+                                <option value="LAST_DAYS">Last N days</option>
+                                <option value="DATE_RANGE">Specific date range</option>
+                            </select>
+                        </label>
+                        <label id="performance-trade-count-field">Number of closed trades<input id="performance-trade-count" type="number" min="1" max="500" step="1" value="20"></label>
+                        <label id="performance-period-days-field" class="hidden">Number of days<input id="performance-period-days" type="number" min="1" max="3650" step="1" value="7"></label>
+                        <div id="performance-date-range-fields" class="performance-date-range hidden">
+                            <label>Start date<input id="performance-start-date" type="date"></label>
+                            <label>End date<input id="performance-end-date" type="date"></label>
+                        </div>
+                        <p class="form-note">This controls the pinned Dashboard result. Only executed closed wallet trades and realized P&amp;L are included.</p>
+                    </div>
                     <p class="form-note">When the daily limit is enabled, the BUY budget is calculated from available USDT divided by the configured maximum. When Unlimited is selected, every BUY uses the configured trade amount until available USDT reaches the reserve. SELLs never count as new positions.</p>
                     <button type="submit">Save configuration</button>
                 </form>

@@ -17,6 +17,16 @@ public class WalletSettings {
     private BigDecimal minimumUsdtReserve;
     @Column(name = "maximum_daily_new_positions", nullable = false)
     private int maximumDailyNewPositions;
+    @Column(name = "performance_window_type", nullable = false, length = 20)
+    private String performanceWindowType;
+    @Column(name = "performance_trade_count", nullable = false)
+    private int performanceTradeCount;
+    @Column(name = "performance_period_days", nullable = false)
+    private int performancePeriodDays;
+    @Column(name = "performance_start_date")
+    private java.time.LocalDate performanceStartDate;
+    @Column(name = "performance_end_date")
+    private java.time.LocalDate performanceEndDate;
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 }
