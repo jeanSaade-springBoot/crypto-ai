@@ -52,5 +52,19 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
             """)
     Object[] summarizeClosedTradesBetween(@Param("from") Instant from, @Param("to") Instant to);
 
+    @Query("""
+            select t.symbol,
+                   coalesce(sum(t.realizedPnlUsdt), 0),
+                   count(t)
+            from WalletTrade t
+            where t.status = 'EXECUTED'
+              and t.side = 'SELL'
+              and t.realizedPnlUsdt is not null
+              and t.executedAt >= :from
+              and t.executedAt < :to
+            group by t.symbol
+            """)
+    List<Object[]> summarizeClosedTradePnlBySymbolBetween(@Param("from") Instant from, @Param("to") Instant to);
+
     boolean existsByExecutionKey(String executionKey);
 }

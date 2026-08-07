@@ -138,6 +138,23 @@ function renderTradePerformance(performance) {
     el('trade-performance-count').textContent = count === 0
         ? 'No closed wallet trades in this window'
         : `${count} executed closed trade${count === 1 ? '' : 's'} · realized P&L`;
+
+    renderCoinLeader('top-winner', performance.topWinner, true);
+    renderCoinLeader('top-loser', performance.topLoser, false);
+}
+
+function renderCoinLeader(elementSuffix, leader, winner) {
+    const symbolElement = el(`trade-performance-${elementSuffix}`);
+    const pnlElement = el(`trade-performance-${elementSuffix}-pnl`);
+    if (!leader || !leader.symbol) {
+        symbolElement.textContent = '—';
+        pnlElement.textContent = winner ? 'No profit yet' : 'No loss yet';
+        return;
+    }
+    const pnl = Number(leader.netPnlUsdt || 0);
+    const tradeCount = Number(leader.closedTrades || 0);
+    symbolElement.textContent = leader.symbol;
+    pnlElement.textContent = `${pnl >= 0 ? '+' : ''}${money(pnl)} · ${tradeCount} trade${tradeCount === 1 ? '' : 's'}`;
 }
 
 function renderPortfolio(wallet) {

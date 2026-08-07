@@ -1500,3 +1500,61 @@ html, body { max-width: 100%; overflow-x: hidden; }
 }
 
 .topbar{position:sticky;top:0;z-index:1000}.trade-performance-strip{position:relative;z-index:1}
+
+/* Frozen header performance leaders */
+.topbar .trade-performance-strip {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 14px;
+    align-items: stretch;
+}
+.trade-performance-summary {
+    display: grid;
+    grid-template-columns: auto auto auto auto 1fr;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+.trade-performance-summary > span:first-child { color: var(--muted); font-weight: 700; }
+.trade-performance-summary strong { font-size: 1.05rem; }
+.trade-performance-summary small { color: var(--muted); text-align: right; }
+.coin-leader {
+    min-width: 172px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: rgba(255,255,255,.025);
+}
+.coin-leader .leader-icon {
+    font-size: 1.25rem;
+    font-weight: 900;
+    line-height: 1;
+}
+.coin-leader div { display: grid; gap: 1px; }
+.coin-leader small { color: var(--muted); text-align: left; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; }
+.coin-leader strong { font-size: .9rem; }
+.coin-leader span:last-child { font-size: .74rem; white-space: nowrap; }
+.coin-leader.winner .leader-icon,
+.coin-leader.winner strong,
+.coin-leader.winner span:last-child { color: var(--accent); }
+.coin-leader.loser .leader-icon,
+.coin-leader.loser strong,
+.coin-leader.loser span:last-child { color: var(--danger); }
+@media (max-width: 1180px) {
+    .topbar .trade-performance-strip { grid-template-columns: 1fr 1fr; }
+    .trade-performance-summary { grid-column: 1 / -1; }
+}
+@media (max-width: 760px) {
+    .topbar .trade-performance-strip { grid-template-columns: 1fr 1fr; }
+    .trade-performance-summary { grid-template-columns: 1fr auto; grid-column: 1 / -1; }
+    .trade-performance-summary #trade-performance-record,
+    .trade-performance-summary #trade-performance-win-rate { display: none; }
+    .trade-performance-summary small { grid-column: 1 / -1; text-align: left; }
+    .coin-leader { min-width: 0; }
+}
+@media (max-width: 460px) {
+    .topbar .trade-performance-strip { grid-template-columns: 1fr; }
+}

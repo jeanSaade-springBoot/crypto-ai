@@ -62,8 +62,8 @@
                     <label>Trade amount per BUY when unlimited<input id="base-trade-amount" type="number" min="0.01" step="0.01" required></label>
                     <label>Minimum USDT reserve<input id="minimum-reserve" type="number" min="0" step="0.01" required></label>
                     <div class="performance-config">
-                        <h3>Pinned trade performance</h3>
-                        <label>Performance window
+                        <h3>Dashboard header performance</h3>
+                        <label>Header trade period
                             <select id="performance-window-type">
                                 <option value="LAST_TRADES">Last N closed trades</option>
                                 <option value="TODAY">Today</option>
@@ -77,7 +77,7 @@
                             <label>Start date<input id="performance-start-date" type="date"></label>
                             <label>End date<input id="performance-end-date" type="date"></label>
                         </div>
-                        <p class="form-note">This controls the pinned Dashboard result. Only executed closed wallet trades and realized P&amp;L are included.</p>
+                        <p class="form-note">This controls the frozen Dashboard header: net realized P&amp;L, wins/losses, win rate, Top Winner and Top Loser. Only executed closed wallet trades are included.</p>
                     </div>
                     <div class="performance-config dashboard-interval-config">
                         <h3>Dashboard intervals</h3>

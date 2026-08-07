@@ -191,26 +191,30 @@ public class WalletService {
 
         if ("TODAY".equals(type)) {
             LocalDate today = LocalDate.now(zone);
+            Instant from = today.atStartOfDay(zone).toInstant();
+            Instant to = today.plusDays(1).atStartOfDay(zone).toInstant();
             return performanceFromAggregate(type, "Today",
-                    tradeRepository.summarizeClosedTradesBetween(
-                            today.atStartOfDay(zone).toInstant(),
-                            today.plusDays(1).atStartOfDay(zone).toInstant()));
+                    tradeRepository.summarizeClosedTradesBetween(from, to),
+                    tradeRepository.summarizeClosedTradePnlBySymbolBetween(from, to));
         }
 
         if ("LAST_DAYS".equals(type)) {
             Instant from = ZonedDateTime.now(zone).minusDays(periodDays).toInstant();
+            Instant to = now.plusNanos(1);
             return performanceFromAggregate(type, "Last " + periodDays + (periodDays == 1 ? " day" : " days"),
-                    tradeRepository.summarizeClosedTradesBetween(from, now.plusNanos(1)));
+                    tradeRepository.summarizeClosedTradesBetween(from, to),
+                    tradeRepository.summarizeClosedTradePnlBySymbolBetween(from, to));
         }
 
         if ("DATE_RANGE".equals(type)) {
             LocalDate start = effective == null ? null : effective.getPerformanceStartDate();
             LocalDate end = effective == null ? null : effective.getPerformanceEndDate();
             if (start != null && end != null && !end.isBefore(start)) {
+                Instant from = start.atStartOfDay(zone).toInstant();
+                Instant to = end.plusDays(1).atStartOfDay(zone).toInstant();
                 return performanceFromAggregate(type, start + " to " + end,
-                        tradeRepository.summarizeClosedTradesBetween(
-                                start.atStartOfDay(zone).toInstant(),
-                                end.plusDays(1).atStartOfDay(zone).toInstant()));
+                        tradeRepository.summarizeClosedTradesBetween(from, to),
+                        tradeRepository.summarizeClosedTradePnlBySymbolBetween(from, to));
             }
         }
 
@@ -225,6 +229,7 @@ public class WalletService {
         BigDecimal netPnl = ZERO;
         BigDecimal grossProfit = ZERO;
         BigDecimal grossLoss = ZERO;
+        Map<String, CoinPerformanceAccumulator> bySymbol = new LinkedHashMap<>();
         for (WalletTrade trade : trades) {
             BigDecimal pnl = nvl(trade.getRealizedPnlUsdt());
             netPnl = netPnl.add(pnl);
@@ -237,11 +242,21 @@ public class WalletService {
             } else {
                 breakeven++;
             }
+            bySymbol.computeIfAbsent(trade.getSymbol(), ignored -> new CoinPerformanceAccumulator())
+                    .add(pnl);
         }
-        return buildPerformanceSummary(type, label, trades.size(), wins, losses, breakeven, netPnl, grossProfit, grossLoss);
+        Map<String, Object> result = buildPerformanceSummary(type, label, trades.size(), wins, losses, breakeven, netPnl, grossProfit, grossLoss);
+        attachCoinLeaders(result, bySymbol.entrySet().stream()
+                .map(entry -> new CoinPerformance(entry.getKey(), entry.getValue().netPnl(), entry.getValue().tradeCount()))
+                .toList());
+        return result;
     }
 
-    private Map<String, Object> performanceFromAggregate(String type, String label, Object[] aggregate) {
+    private Map<String, Object> performanceFromAggregate(
+            String type,
+            String label,
+            Object[] aggregate,
+            List<Object[]> bySymbolRows) {
         long count = numberAsLong(aggregate, 0);
         long wins = numberAsLong(aggregate, 1);
         long losses = numberAsLong(aggregate, 2);
@@ -249,7 +264,15 @@ public class WalletService {
         BigDecimal netPnl = numberAsBigDecimal(aggregate, 4);
         BigDecimal grossProfit = numberAsBigDecimal(aggregate, 5);
         BigDecimal grossLoss = numberAsBigDecimal(aggregate, 6);
-        return buildPerformanceSummary(type, label, count, wins, losses, breakeven, netPnl, grossProfit, grossLoss);
+        Map<String, Object> result = buildPerformanceSummary(type, label, count, wins, losses, breakeven, netPnl, grossProfit, grossLoss);
+        List<CoinPerformance> coinPerformance = bySymbolRows == null ? List.of() : bySymbolRows.stream()
+                .map(row -> new CoinPerformance(
+                        row[0] == null ? "" : row[0].toString(),
+                        numberAsBigDecimal(row, 1),
+                        numberAsLong(row, 2)))
+                .toList();
+        attachCoinLeaders(result, coinPerformance);
+        return result;
     }
 
     private Map<String, Object> buildPerformanceSummary(
@@ -278,6 +301,43 @@ public class WalletService {
         result.put("grossProfitUsdt", grossProfit);
         result.put("grossLossUsdt", grossLoss);
         return result;
+    }
+
+    private void attachCoinLeaders(Map<String, Object> result, List<CoinPerformance> coinPerformance) {
+        CoinPerformance topWinner = coinPerformance.stream()
+                .filter(item -> item.netPnl().signum() > 0)
+                .max(Comparator.comparing(CoinPerformance::netPnl))
+                .orElse(null);
+        CoinPerformance topLoser = coinPerformance.stream()
+                .filter(item -> item.netPnl().signum() < 0)
+                .min(Comparator.comparing(CoinPerformance::netPnl))
+                .orElse(null);
+        result.put("topWinner", coinPerformanceDto(topWinner));
+        result.put("topLoser", coinPerformanceDto(topLoser));
+    }
+
+    private Map<String, Object> coinPerformanceDto(CoinPerformance performance) {
+        if (performance == null) return null;
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("symbol", performance.symbol());
+        result.put("netPnlUsdt", performance.netPnl());
+        result.put("closedTrades", performance.tradeCount());
+        return result;
+    }
+
+    private record CoinPerformance(String symbol, BigDecimal netPnl, long tradeCount) {}
+
+    private static final class CoinPerformanceAccumulator {
+        private BigDecimal netPnl = BigDecimal.ZERO;
+        private long tradeCount;
+
+        void add(BigDecimal pnl) {
+            netPnl = netPnl.add(pnl);
+            tradeCount++;
+        }
+
+        BigDecimal netPnl() { return netPnl; }
+        long tradeCount() { return tradeCount; }
     }
 
     private long numberAsLong(Object[] values, int index) {

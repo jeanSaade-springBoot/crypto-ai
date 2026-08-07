@@ -45,11 +45,21 @@
                 </div>
             </div>
             <section id="trade-performance-strip" class="trade-performance-strip" aria-label="Recent executed trade performance">
-                <span id="trade-performance-label">Last 20 trades</span>
-                <strong id="trade-performance-pnl">—</strong>
-                <span id="trade-performance-record">0W / 0L</span>
-                <span id="trade-performance-win-rate">0% win rate</span>
-                <small id="trade-performance-count">No closed wallet trades yet</small>
+                <div class="trade-performance-summary">
+                    <span id="trade-performance-label">Last 20 trades</span>
+                    <strong id="trade-performance-pnl">—</strong>
+                    <span id="trade-performance-record">0W / 0L</span>
+                    <span id="trade-performance-win-rate">0% win rate</span>
+                    <small id="trade-performance-count">No closed wallet trades yet</small>
+                </div>
+                <div class="coin-leader winner" aria-label="Top profitable coin">
+                    <span class="leader-icon" aria-hidden="true">↗</span>
+                    <div><small>Top Winner</small><strong id="trade-performance-top-winner">—</strong><span id="trade-performance-top-winner-pnl">No profit yet</span></div>
+                </div>
+                <div class="coin-leader loser" aria-label="Top losing coin">
+                    <span class="leader-icon" aria-hidden="true">↘</span>
+                    <div><small>Top Loser</small><strong id="trade-performance-top-loser">—</strong><span id="trade-performance-top-loser-pnl">No loss yet</span></div>
+                </div>
             </section>
         </header>
 
