@@ -29,6 +29,8 @@ public class WalletSettings {
     private java.time.LocalDate performanceEndDate;
     @Column(name = "dashboard_intervals", nullable = false, length = 100)
     private String dashboardIntervals;
+    @Column(name = "require_new_buy_transition", nullable = false)
+    private boolean requireNewBuyTransition;
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 }

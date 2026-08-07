@@ -43,6 +43,7 @@ async function load() {
         byId('base-trade-amount').value = settings.baseTradeAmountUsdt || 100;
         updateDailyLimitField();
         byId('minimum-reserve').value = settings.minimumUsdtReserve || 0;
+        byId('require-new-buy-transition').checked = settings.requireNewBuyTransition !== false;
         byId('performance-window-type').value = settings.performanceWindowType || 'LAST_TRADES';
         byId('performance-trade-count').value = settings.performanceTradeCount || 20;
         byId('performance-period-days').value = settings.performancePeriodDays || 7;
@@ -176,7 +177,8 @@ byId('settings-form').addEventListener('submit', async event => {
         performancePeriodDays: byId('performance-period-days').value,
         performanceStartDate: byId('performance-start-date').value || null,
         performanceEndDate: byId('performance-end-date').value || null,
-        dashboardIntervals: Array.from(document.querySelectorAll('.dashboard-interval:checked')).map(input => input.value).join(',')
+        dashboardIntervals: Array.from(document.querySelectorAll('.dashboard-interval:checked')).map(input => input.value).join(','),
+        requireNewBuyTransition: byId('require-new-buy-transition').checked
     }, 'Trading configuration saved successfully.');
 });
 

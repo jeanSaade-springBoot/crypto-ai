@@ -31,6 +31,7 @@ public class PaperTradingService {
     private final TradeSignalRepository signalRepository;
     private final PaperPositionRepository positionRepository;
     private final WalletAutoExecutionService walletAutoExecutionService;
+    private final TradeExecutionValidationService executionValidationService;
 
     /** Advisory-only; optional injection preserves existing constructor-based tests. */
     @Autowired(required = false)
@@ -91,15 +92,31 @@ public class PaperTradingService {
 
             if (signal.getDecision() == SignalDecision.SELL
                     || signal.getDecision() == SignalDecision.STRONG_SELL) {
-                return Optional.of(closeFromSignal(position, signal, PositionStatus.CLOSED,
-                        signal.getDecision().name(), signal.getExplanation()));
+                TradeExecutionValidationService.ValidationResult validation =
+                        executionValidationService.validateSell(signal);
+                if (validation.allowed()) {
+                    return Optional.of(closeFromSignal(position, signal, PositionStatus.CLOSED,
+                            signal.getDecision().name(), signal.getExplanation()));
+                }
+                log.info("Normal wallet SELL rejected: signalId={}, symbol={}, interval={}, reason={}, detail={}",
+                        signal.getId(), signal.getSymbol(), signal.getInterval(),
+                        validation.code(), validation.explanation());
             }
 
-            // BUY, STRONG_BUY, WATCH and NEUTRAL do not create another trade.
+            // Non-execution timeframes and non-executable decisions only update context/advisory state.
             return Optional.of(position);
         }
 
         if (!isBuyEligible(signal)) {
+            return Optional.empty();
+        }
+
+        TradeExecutionValidationService.ValidationResult executionValidation =
+                executionValidationService.validateBuy(signal);
+        if (!executionValidation.allowed()) {
+            log.info("Normal wallet BUY rejected: signalId={}, symbol={}, interval={}, reason={}, detail={}",
+                    signal.getId(), signal.getSymbol(), signal.getInterval(),
+                    executionValidation.code(), executionValidation.explanation());
             return Optional.empty();
         }
 

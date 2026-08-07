@@ -12,5 +12,6 @@ public record WalletSettingsRequest(
         Integer performancePeriodDays,
         LocalDate performanceStartDate,
         LocalDate performanceEndDate,
-        String dashboardIntervals
+        String dashboardIntervals,
+        Boolean requireNewBuyTransition
 ) {}

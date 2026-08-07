@@ -134,6 +134,7 @@ public class WalletService {
                 .performanceTradeCount(20)
                 .performancePeriodDays(1)
                 .dashboardIntervals("1m,5m,1h,4h,1d")
+                .requireNewBuyTransition(true)
                 .build());
         settings.setMinimumUsdtReserve(request.minimumUsdtReserve());
         settings.setBaseTradeAmountUsdt(request.baseTradeAmountUsdt());
@@ -144,6 +145,7 @@ public class WalletService {
         settings.setPerformanceStartDate(request.performanceStartDate());
         settings.setPerformanceEndDate(request.performanceEndDate());
         settings.setDashboardIntervals(dashboardIntervals);
+        settings.setRequireNewBuyTransition(request.requireNewBuyTransition() == null || request.requireNewBuyTransition());
         settings.setUpdatedAt(Instant.now());
         settingsRepository.save(settings);
 
