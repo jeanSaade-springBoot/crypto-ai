@@ -113,6 +113,7 @@ public class WalletService {
             throw new IllegalArgumentException("Maximum daily new positions must be 0 (unlimited) or between 1 and 1000");
 
         String performanceWindowType = normalizePerformanceWindowType(request.performanceWindowType());
+        String dashboardIntervals = normalizeDashboardIntervals(request.dashboardIntervals());
         int performanceTradeCount = Optional.ofNullable(request.performanceTradeCount()).orElse(20);
         int performancePeriodDays = Optional.ofNullable(request.performancePeriodDays()).orElse(1);
         if (performanceTradeCount < 1 || performanceTradeCount > 500)
@@ -132,6 +133,7 @@ public class WalletService {
                 .performanceWindowType("LAST_TRADES")
                 .performanceTradeCount(20)
                 .performancePeriodDays(1)
+                .dashboardIntervals("1m,5m,1h,4h,1d")
                 .build());
         settings.setMinimumUsdtReserve(request.minimumUsdtReserve());
         settings.setBaseTradeAmountUsdt(request.baseTradeAmountUsdt());
@@ -141,6 +143,7 @@ public class WalletService {
         settings.setPerformancePeriodDays(performancePeriodDays);
         settings.setPerformanceStartDate(request.performanceStartDate());
         settings.setPerformanceEndDate(request.performanceEndDate());
+        settings.setDashboardIntervals(dashboardIntervals);
         settings.setUpdatedAt(Instant.now());
         settingsRepository.save(settings);
 
@@ -160,6 +163,20 @@ public class WalletService {
             statistics.setUpdatedAt(Instant.now());
             dailyStatisticsRepository.save(statistics);
         });
+    }
+
+
+    private String normalizeDashboardIntervals(String value) {
+        List<String> allowed = List.of("1m", "5m", "1h", "4h", "1d");
+        if (value == null || value.isBlank()) return String.join(",", allowed);
+        LinkedHashSet<String> selected = new LinkedHashSet<>();
+        for (String item : value.split(",")) {
+            String normalized = item.trim().toLowerCase(Locale.ROOT);
+            if (allowed.contains(normalized)) selected.add(normalized);
+        }
+        // Core trading intervals remain visible by default if an invalid/empty value is submitted.
+        if (selected.isEmpty()) selected.addAll(List.of("1m", "5m", "1h"));
+        return String.join(",", selected);
     }
 
 

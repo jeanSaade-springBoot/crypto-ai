@@ -79,6 +79,17 @@
                         </div>
                         <p class="form-note">This controls the pinned Dashboard result. Only executed closed wallet trades and realized P&amp;L are included.</p>
                     </div>
+                    <div class="performance-config dashboard-interval-config">
+                        <h3>Dashboard intervals</h3>
+                        <div class="interval-checkbox-grid">
+                            <label class="toggle-row"><input type="checkbox" class="dashboard-interval" value="1m" checked> 1 minute</label>
+                            <label class="toggle-row"><input type="checkbox" class="dashboard-interval" value="5m" checked> 5 minutes</label>
+                            <label class="toggle-row"><input type="checkbox" class="dashboard-interval" value="1h" checked> 1 hour</label>
+                            <label class="toggle-row"><input type="checkbox" class="dashboard-interval" value="4h" checked> 4 hours</label>
+                            <label class="toggle-row"><input type="checkbox" class="dashboard-interval" value="1d" checked> 1 day</label>
+                        </div>
+                        <p class="form-note">4h and 1 day are display-only views derived from stored 1h candles. The trading engine remains fixed at 1m / 5m / 1h.</p>
+                    </div>
                     <p class="form-note">When the daily limit is enabled, the BUY budget is calculated from available USDT divided by the configured maximum. When Unlimited is selected, every BUY uses the configured trade amount until available USDT reaches the reserve. SELLs never count as new positions.</p>
                     <button type="submit">Save configuration</button>
                 </form>

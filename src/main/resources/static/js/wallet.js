@@ -48,6 +48,8 @@ async function load() {
         byId('performance-period-days').value = settings.performancePeriodDays || 7;
         byId('performance-start-date').value = settings.performanceStartDate || '';
         byId('performance-end-date').value = settings.performanceEndDate || '';
+        const configuredIntervals = String(settings.dashboardIntervals || '1m,5m,1h,4h,1d').split(',').map(v => v.trim().toLowerCase());
+        document.querySelectorAll('.dashboard-interval').forEach(input => { input.checked = configuredIntervals.includes(input.value); });
         updatePerformanceWindowFields();
 
         const daily = data.dailyTrading || {};
@@ -173,7 +175,8 @@ byId('settings-form').addEventListener('submit', async event => {
         performanceTradeCount: byId('performance-trade-count').value,
         performancePeriodDays: byId('performance-period-days').value,
         performanceStartDate: byId('performance-start-date').value || null,
-        performanceEndDate: byId('performance-end-date').value || null
+        performanceEndDate: byId('performance-end-date').value || null,
+        dashboardIntervals: Array.from(document.querySelectorAll('.dashboard-interval:checked')).map(input => input.value).join(',')
     }, 'Trading configuration saved successfully.');
 });
 

@@ -27,6 +27,8 @@ public class WalletSettings {
     private java.time.LocalDate performanceStartDate;
     @Column(name = "performance_end_date")
     private java.time.LocalDate performanceEndDate;
+    @Column(name = "dashboard_intervals", nullable = false, length = 100)
+    private String dashboardIntervals;
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 }

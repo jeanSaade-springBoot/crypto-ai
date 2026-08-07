@@ -32,6 +32,26 @@ async function loadSymbols() {
     }
 }
 
+const DASHBOARD_INTERVAL_LABELS = { '1m': '1m', '5m': '5m', '1h': '1h', '4h': '4h', '1d': '1D' };
+
+function applyConfiguredDashboardIntervals(settings) {
+    const select = el('interval-select');
+    const allowed = ['1m', '5m', '1h', '4h', '1d'];
+    const configured = String(settings?.dashboardIntervals || allowed.join(','))
+        .split(',')
+        .map(value => value.trim().toLowerCase())
+        .filter(value => allowed.includes(value));
+    const intervals = configured.length ? configured : ['1m', '5m', '1h'];
+    const previous = select.value;
+    select.innerHTML = intervals.map(value => `<option value="${value}">${DASHBOARD_INTERVAL_LABELS[value]}</option>`).join('');
+    if (intervals.includes(previous)) {
+        select.value = previous;
+        return false;
+    }
+    select.value = intervals[0];
+    return previous !== select.value;
+}
+
 async function refreshDashboard() {
     const symbol = el('symbol-select').value;
     const interval = el('interval-select').value;
@@ -50,6 +70,11 @@ async function refreshDashboard() {
             ? await sentimentStatusResponse.json()
             : { enabled: false, message: 'Could not read sentiment master status' };
         data.wallet = walletResponse.ok ? await walletResponse.json() : {};
+        const intervalChanged = applyConfiguredDashboardIntervals(data.wallet.settings || {});
+        if (intervalChanged) {
+            window.setTimeout(refreshDashboard, 0);
+            return;
+        }
         updateConnection(true);
         el('error-banner').classList.add('hidden');
         render(data);
@@ -69,13 +94,20 @@ function render(data) {
     el('price-change').textContent = `${change >= 0 ? '+' : ''}${change.toFixed(3)}% from previous candle`;
     el('price-change').className = change >= 0 ? 'positive' : 'negative';
     el('candle-count').textContent = s.closedCandleCount;
-    el('history-progress').textContent = `${Math.min(s.closedCandleCount, s.minimumCandles)} / ${s.minimumCandles} required`;
-    el('history-bar').style.width = `${Math.min(100, (s.closedCandleCount / s.minimumCandles) * 100)}%`;
-    el('latest-decision').textContent = String(s.latestDecision).replace('_', ' ');
-    el('latest-score').textContent = s.latestScore === null ? 'Analysis not ready' : `Score ${s.latestScore}`;
+    if (data.displayOnlyInterval) {
+        el('history-progress').textContent = 'Derived from closed 1h candles';
+        el('history-bar').style.width = s.closedCandleCount > 0 ? '100%' : '0%';
+        el('latest-decision').textContent = 'DISPLAY ONLY';
+        el('latest-score').textContent = 'Does not participate in BUY / SELL decisions';
+    } else {
+        el('history-progress').textContent = `${Math.min(s.closedCandleCount, s.minimumCandles)} / ${s.minimumCandles} required`;
+        el('history-bar').style.width = `${Math.min(100, (s.closedCandleCount / s.minimumCandles) * 100)}%`;
+        el('latest-decision').textContent = String(s.latestDecision).replace('_', ' ');
+        el('latest-score').textContent = s.latestScore === null ? 'Analysis not ready' : `Score ${s.latestScore}`;
+    }
     el('open-positions').textContent = s.openPositions;
     el('last-updated').textContent = `Updated ${dateTime(data.updatedAt)}`;
-    el('market-subtitle').textContent = `${data.symbol} · ${data.interval}`;
+    el('market-subtitle').textContent = `${data.symbol} · ${displayInterval(data.interval)}${data.displayOnlyInterval ? ' · display only' : ''}`;
     renderPortfolio(data.wallet || {});
     renderTradePerformance((data.wallet || {}).tradePerformance || {});
     renderPipeline(data.pipeline);
@@ -85,7 +117,7 @@ function render(data) {
     renderSchedules(data.schedule || {});
     applyDashboardRefreshSchedule(data.schedule || {});
     renderCharts(data.candles || []);
-    renderSignals(data.signals || []);
+    renderSignals(data.signals || [], data.displayOnlyInterval);
     renderOpenTrades(data.openPositions || []);
     renderTradeHistory(data.closedPositions || []);
 }
@@ -257,7 +289,7 @@ function renderCharts(candles) {
     }
 }
 
-function renderSignals(signals) {
+function renderSignals(signals, displayOnlyInterval = false) {
     const body = el('signals-body');
     const actionableSignals = (signals || []).filter(signal => {
         const decision = String(signal.decision || '').toUpperCase();
@@ -265,7 +297,9 @@ function renderSignals(signals) {
     });
 
     if (!actionableSignals.length) {
-        body.innerHTML = '<tr><td colspan="10" class="empty">No actionable BUY or SELL signals for the selected symbol and interval. NEUTRAL and WATCH signals are hidden from this dashboard.</td></tr>';
+        body.innerHTML = displayOnlyInterval
+            ? '<tr><td colspan="10" class="empty">4h and 1D are display-only market views. Trading signals remain generated only on 1m / 5m / 1h.</td></tr>'
+            : '<tr><td colspan="10" class="empty">No actionable BUY or SELL signals for the selected symbol and interval. NEUTRAL and WATCH signals are hidden from this dashboard.</td></tr>';
         return;
     }
 
@@ -1079,7 +1113,7 @@ function updateConnection(online) {
 
 function displayInterval(value, fallback = 'Unavailable at creation') {
     const text = value == null ? '' : String(value).trim();
-    return text || fallback;
+    return DASHBOARD_INTERVAL_LABELS[text.toLowerCase()] || text || fallback;
 }
 
 function escapeHtml(text) {

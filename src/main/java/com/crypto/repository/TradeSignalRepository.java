@@ -19,6 +19,7 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
     );
     List<TradeSignal> findTop100ByOrderByGeneratedAtDesc();
     List<TradeSignal> findTop20BySymbolOrderByGeneratedAtDesc(String symbol);
+    List<TradeSignal> findTop20BySymbolAndIntervalOrderByGeneratedAtDesc(String symbol, String interval);
     List<TradeSignal> findByGeneratedAtGreaterThanEqualOrderByGeneratedAtDesc(Instant generatedAt);
     List<TradeSignal> findBySymbolAndGeneratedAtBetweenOrderByGeneratedAtAsc(
             String symbol, Instant from, Instant to

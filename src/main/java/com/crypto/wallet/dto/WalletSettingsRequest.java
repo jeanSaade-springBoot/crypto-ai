@@ -11,5 +11,6 @@ public record WalletSettingsRequest(
         Integer performanceTradeCount,
         Integer performancePeriodDays,
         LocalDate performanceStartDate,
-        LocalDate performanceEndDate
+        LocalDate performanceEndDate,
+        String dashboardIntervals
 ) {}

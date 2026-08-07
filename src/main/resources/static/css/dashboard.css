@@ -1467,3 +1467,36 @@ html, body { max-width: 100%; overflow-x: hidden; }
 @media (max-width: 760px) {
     .trade-performance-strip { position: static; }
 }
+
+
+/* Pinned portfolio performance: part of the sticky dashboard header */
+@media (min-width: 761px) {
+    .topbar {
+        display: block;
+        align-items: initial;
+    }
+    .topbar-main {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 20px;
+    }
+    .topbar .trade-performance-strip {
+        position: static;
+        top: auto;
+        z-index: auto;
+        margin: 12px 0 0;
+        border-radius: 10px;
+        box-shadow: none;
+        background: rgba(13,24,34,.88);
+    }
+}
+@media (max-width: 760px) {
+    .topbar-main { display: grid; gap: 14px; }
+    .topbar .trade-performance-strip {
+        position: static;
+        margin: 12px 0 0;
+    }
+}
+
+.topbar{position:sticky;top:0;z-index:1000}.trade-performance-strip{position:relative;z-index:1}

@@ -286,6 +286,7 @@ public class WalletAutoExecutionService {
                 WalletSettings.builder().id(1L).baseTradeAmountUsdt(BigDecimal.valueOf(100))
                         .minimumUsdtReserve(ZERO).maximumDailyNewPositions(0)
                         .performanceWindowType("LAST_TRADES").performanceTradeCount(20).performancePeriodDays(1)
+                        .dashboardIntervals("1m,5m,1h,4h,1d")
                         .updatedAt(Instant.now()).build()));
     }
 

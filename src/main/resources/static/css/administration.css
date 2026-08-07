@@ -19,3 +19,5 @@
 .performance-date-range { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .performance-config .hidden, .performance-date-range.hidden { display: none; }
 @media (max-width: 720px) { .performance-date-range { grid-template-columns: 1fr; } }
+
+.interval-checkbox-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:10px}.dashboard-interval-config{margin-top:20px}

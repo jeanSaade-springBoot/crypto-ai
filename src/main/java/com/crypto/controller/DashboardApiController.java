@@ -27,10 +27,12 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.Duration;
 import java.math.RoundingMode;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @RestController
 @RequestMapping("/api/dashboard")
@@ -45,6 +47,7 @@ public class DashboardApiController {
     private final ObjectMapper objectMapper;
     private final ScoreDiagnosticsService scoreDiagnosticsService;
     private final CoinConfigurationService coinConfigurationService;
+    private final Map<String, AggregatedCandleCacheEntry> aggregatedCandleCache = new ConcurrentHashMap<>();
 
     public DashboardApiController(
             CandleRepository candleRepository,
@@ -81,50 +84,53 @@ public class DashboardApiController {
             @RequestParam(defaultValue = "1m") String interval
     ) {
         String normalizedSymbol = symbol.trim().toUpperCase();
-        String normalizedInterval = interval.trim();
+        String normalizedInterval = interval.trim().toLowerCase();
+        boolean displayOnlyInterval = isDisplayOnlyInterval(normalizedInterval);
 
-        List<Candle> candles = candleRepository.findClosedCandles(
-                normalizedSymbol,
-                normalizedInterval,
-                PageRequest.of(0, 120)
-        );
-        Collections.reverse(candles);
+        List<Candle> candles = displayOnlyInterval
+                ? loadAggregatedCandles(normalizedSymbol, normalizedInterval, 120)
+                : loadClosedCandles(normalizedSymbol, normalizedInterval, 120);
 
-        TechnicalIndicator latestIndicator = technicalIndicatorRepository
+        TechnicalIndicator latestIndicator = displayOnlyInterval ? null : technicalIndicatorRepository
                 .findTopBySymbolAndIntervalCodeOrderByCandleOpenTimeDesc(normalizedSymbol, normalizedInterval)
                 .orElse(null);
 
-        TradeSignal latestSignal = tradeSignalRepository
-                .findTopBySymbolOrderByGeneratedAtDesc(normalizedSymbol)
+        TradeSignal latestSignal = displayOnlyInterval ? null : tradeSignalRepository
+                .findTopBySymbolAndIntervalOrderByGeneratedAtDesc(normalizedSymbol, normalizedInterval)
                 .orElse(null);
 
-        List<TradeSignal> signals = tradeSignalRepository
-                .findTop20BySymbolOrderByGeneratedAtDesc(normalizedSymbol);
+        List<TradeSignal> signals = displayOnlyInterval ? List.of() : tradeSignalRepository
+                .findTop20BySymbolAndIntervalOrderByGeneratedAtDesc(normalizedSymbol, normalizedInterval);
 
         List<PaperPosition> positions = paperPositionRepository
                 .findTop20BySymbolOrderByOpenedAtDesc(normalizedSymbol);
 
         SentimentOverview sentiment = sentimentService.overview(normalizedSymbol);
-
-        long closedCandleCount = candleRepository.countBySymbolAndIntervalCodeAndClosedTrue(
-                normalizedSymbol,
-                normalizedInterval
-        );
+        long closedCandleCount = displayOnlyInterval
+                ? candles.size()
+                : candleRepository.countBySymbolAndIntervalCodeAndClosedTrue(normalizedSymbol, normalizedInterval);
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("symbol", normalizedSymbol);
         response.put("interval", normalizedInterval);
+        response.put("displayOnlyInterval", displayOnlyInterval);
+        response.put("displayOnlyMessage", displayOnlyInterval
+                ? normalizedInterval.toUpperCase() + " candles are derived from closed 1h candles and never influence trading decisions."
+                : null);
         response.put("updatedAt", Instant.now());
-        response.put("summary", summary(candles, latestIndicator, latestSignal, positions, closedCandleCount));
-        response.put("pipeline", pipeline(closedCandleCount, latestIndicator, latestSignal, positions));
+        response.put("summary", summary(candles, latestIndicator, latestSignal, positions, closedCandleCount, displayOnlyInterval));
+        response.put("pipeline", displayOnlyInterval
+                ? displayOnlyPipeline(closedCandleCount)
+                : pipeline(closedCandleCount, latestIndicator, latestSignal, positions));
         response.put("candles", candles.stream().map(this::candleDto).toList());
         response.put("indicator", indicatorDto(latestIndicator));
         response.put("sentiment", sentiment);
         response.put("schedule", scheduleConfigurationService.dashboardSchedule());
         response.put("scoreDiagnostics", scoreDiagnosticsService.last24Hours());
         response.put("signals", signals.stream().map(this::signalDto).toList());
+
         BigDecimal currentPrice = candles.isEmpty()
-                ? (latestSignal == null ? null : latestSignal.getLatestPrice())
+                ? null
                 : candles.get(candles.size() - 1).getClosePrice();
 
         List<Map<String, Object>> positionDtos = positions.stream()
@@ -140,12 +146,98 @@ public class DashboardApiController {
         return response;
     }
 
+    private boolean isDisplayOnlyInterval(String interval) {
+        return "4h".equals(interval) || "1d".equals(interval);
+    }
+
+    private List<Candle> loadClosedCandles(String symbol, String interval, int limit) {
+        List<Candle> candles = candleRepository.findClosedCandles(symbol, interval, PageRequest.of(0, limit));
+        Collections.reverse(candles);
+        return candles;
+    }
+
+    private List<Candle> loadAggregatedCandles(String symbol, String interval, int targetBuckets) {
+        String cacheKey = symbol + ":" + interval + ":" + targetBuckets;
+        AggregatedCandleCacheEntry cached = aggregatedCandleCache.get(cacheKey);
+        Instant now = Instant.now();
+        if (cached != null && cached.expiresAt().isAfter(now)) return cached.candles();
+
+        int bucketHours = "4h".equals(interval) ? 4 : 24;
+        int sourceLimit = targetBuckets * bucketHours + bucketHours;
+        List<Candle> oneHourCandles = loadClosedCandles(symbol, "1h", sourceLimit);
+        if (oneHourCandles.isEmpty()) {
+            aggregatedCandleCache.put(cacheKey, new AggregatedCandleCacheEntry(now.plusSeconds(20), List.of()));
+            return List.of();
+        }
+
+        long bucketMillis = Duration.ofHours(bucketHours).toMillis();
+        Map<Long, List<Candle>> grouped = new LinkedHashMap<>();
+        for (Candle candle : oneHourCandles) {
+            long bucketStart = Math.floorDiv(candle.getOpenTime().toEpochMilli(), bucketMillis) * bucketMillis;
+            grouped.computeIfAbsent(bucketStart, ignored -> new ArrayList<>()).add(candle);
+        }
+
+        List<Candle> result = new ArrayList<>();
+        for (Map.Entry<Long, List<Candle>> entry : grouped.entrySet()) {
+            List<Candle> bucket = entry.getValue();
+            if (bucket.size() != bucketHours) continue;
+            bucket.sort(java.util.Comparator.comparing(Candle::getOpenTime));
+            Candle first = bucket.get(0);
+            Candle last = bucket.get(bucket.size() - 1);
+            BigDecimal high = bucket.stream().map(Candle::getHighPrice).max(BigDecimal::compareTo).orElse(first.getHighPrice());
+            BigDecimal low = bucket.stream().map(Candle::getLowPrice).min(BigDecimal::compareTo).orElse(first.getLowPrice());
+            BigDecimal volume = bucket.stream().map(Candle::getVolume).filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal quoteVolume = bucket.stream().map(Candle::getQuoteAssetVolume).filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+            long trades = bucket.stream().map(Candle::getNumberOfTrades).filter(java.util.Objects::nonNull).mapToLong(Long::longValue).sum();
+            BigDecimal takerBase = bucket.stream().map(Candle::getTakerBuyBaseVolume).filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal takerQuote = bucket.stream().map(Candle::getTakerBuyQuoteVolume).filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            result.add(Candle.builder()
+                    .symbol(symbol)
+                    .intervalCode(interval)
+                    .openTime(Instant.ofEpochMilli(entry.getKey()))
+                    .closeTime(last.getCloseTime())
+                    .openPrice(first.getOpenPrice())
+                    .highPrice(high)
+                    .lowPrice(low)
+                    .closePrice(last.getClosePrice())
+                    .volume(volume)
+                    .quoteAssetVolume(quoteVolume)
+                    .numberOfTrades(trades)
+                    .takerBuyBaseVolume(takerBase)
+                    .takerBuyQuoteVolume(takerQuote)
+                    .closed(true)
+                    .build());
+        }
+        List<Candle> limited = result.size() <= targetBuckets
+                ? List.copyOf(result)
+                : List.copyOf(result.subList(result.size() - targetBuckets, result.size()));
+        aggregatedCandleCache.put(cacheKey, new AggregatedCandleCacheEntry(now.plusSeconds(60), limited));
+        return limited;
+    }
+
+    private record AggregatedCandleCacheEntry(Instant expiresAt, List<Candle> candles) {}
+
+    private Map<String, Object> displayOnlyPipeline(long closedCandleCount) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("candle", status(closedCandleCount > 0, closedCandleCount + " aggregated candles"));
+        result.put("indicator", status(false, "Display-only timeframe; indicators remain on 1m / 5m / 1h"));
+        result.put("marketContext", status(false, "Display-only timeframe"));
+        result.put("strategy", status(false, "Trading strategy not evaluated on this timeframe"));
+        result.put("derivatives", status(false, "Trading context remains on engine timeframes"));
+        result.put("orderBook", status(false, "Trading context remains on engine timeframes"));
+        result.put("analysis", status(false, "No BUY/SELL decision generated for display-only timeframe"));
+        result.put("paperTrading", status(false, "Wallet execution remains driven by 1m signals"));
+        return result;
+    }
+
     private Map<String, Object> summary(
             List<Candle> candles,
             TechnicalIndicator indicator,
             TradeSignal signal,
             List<PaperPosition> positions,
-            long closedCandleCount
+            long closedCandleCount,
+            boolean displayOnlyInterval
     ) {
         Candle latest = candles.isEmpty() ? null : candles.get(candles.size() - 1);
         Candle previous = candles.size() < 2 ? null : candles.get(candles.size() - 2);
@@ -165,9 +257,9 @@ public class DashboardApiController {
         result.put("latestPrice", latest == null ? null : latest.getClosePrice());
         result.put("priceChangePercent", changePercent);
         result.put("closedCandleCount", closedCandleCount);
-        result.put("minimumCandles", 210);
+        result.put("minimumCandles", displayOnlyInterval ? 0 : 210);
         result.put("indicatorReady", indicator != null);
-        result.put("latestDecision", signal == null ? "NO_SIGNAL" : signal.getDecision().name());
+        result.put("latestDecision", displayOnlyInterval ? "DISPLAY_ONLY" : (signal == null ? "NO_SIGNAL" : signal.getDecision().name()));
         result.put("latestScore", signal == null ? null : signal.getTotalScore());
         result.put("openPositions", openPositions);
         return result;
