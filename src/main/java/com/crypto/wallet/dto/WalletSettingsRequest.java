@@ -13,5 +13,9 @@ public record WalletSettingsRequest(
         LocalDate performanceStartDate,
         LocalDate performanceEndDate,
         String dashboardIntervals,
-        Boolean requireNewBuyTransition
+        Boolean requireNewBuyTransition,
+        Boolean dynamicProfitLockEnabled,
+        BigDecimal profitLockActivationPercent,
+        BigDecimal profitLockInitialPercent,
+        BigDecimal profitLockTrailStepPercent
 ) {}

@@ -1682,3 +1682,12 @@ html, body { max-width: 100%; overflow-x: hidden; }
     .topbar .trade-performance-strip { grid-template-columns: 1fr; }
     .live-price-tile, .trade-performance-summary { grid-column: auto; }
 }
+
+/* Trade audit references */
+.trade-id,
+.signal-id-pair {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    white-space: nowrap;
+}
+.trade-id { color: var(--text); }
+.signal-id-pair { color: var(--muted); }

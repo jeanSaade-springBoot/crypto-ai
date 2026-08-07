@@ -68,6 +68,14 @@
                         <p class="form-note">Normal wallet execution is fixed at 1m. A fresh 5m signal must confirm the direction and the fresh 1h strategic trend must not oppose it. Stop-loss and take-profit remain immediate risk exits.</p>
                     </div>
                     <div class="performance-config">
+                        <h3>Dynamic Profit Lock</h3>
+                        <label class="toggle-row"><input id="dynamic-profit-lock-enabled" type="checkbox" checked> Protect profitable positions after they approach take profit</label>
+                        <label>Activate after % of take-profit distance<input id="profit-lock-activation-percent" type="number" min="1" max="99" step="1" value="70"></label>
+                        <label>Initial protected profit % of take-profit distance<input id="profit-lock-initial-percent" type="number" min="0" max="98" step="1" value="40"></label>
+                        <label>Trail step % of take-profit distance<input id="profit-lock-trail-step-percent" type="number" min="1" max="50" step="1" value="10"></label>
+                        <p class="form-note">Default: activate at 70% of the target, protect 40%, then raise the protected level by one trail step as the best price advances. Once active, normal SELL signals are suppressed above the protected level; stop-loss, take-profit and the profit-lock trigger remain immediate.</p>
+                    </div>
+                    <div class="performance-config">
                         <h3>Dashboard header performance</h3>
                         <label>Header trade period
                             <select id="performance-window-type">

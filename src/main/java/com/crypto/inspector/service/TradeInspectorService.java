@@ -6,6 +6,7 @@ import com.crypto.dto.TradeInspectorResponse;
 import com.crypto.dto.TradeInspectorSummary;
 import com.crypto.dto.TradeInspectorTradeView;
 import com.crypto.repository.CandleRepository;
+import com.crypto.repository.PaperPositionRepository;
 import com.crypto.wallet.domain.WalletTrade;
 import com.crypto.wallet.repository.WalletTradeRepository;
 import org.springframework.data.domain.PageRequest;
@@ -26,10 +27,14 @@ public class TradeInspectorService {
 
     private final WalletTradeRepository walletTradeRepository;
     private final CandleRepository candleRepository;
+    private final PaperPositionRepository paperPositionRepository;
 
-    public TradeInspectorService(WalletTradeRepository walletTradeRepository, CandleRepository candleRepository) {
+    public TradeInspectorService(WalletTradeRepository walletTradeRepository,
+                                 CandleRepository candleRepository,
+                                 PaperPositionRepository paperPositionRepository) {
         this.walletTradeRepository = walletTradeRepository;
         this.candleRepository = candleRepository;
+        this.paperPositionRepository = paperPositionRepository;
     }
 
     @Transactional(readOnly = true)
@@ -114,9 +119,14 @@ public class TradeInspectorService {
 
         TradeSignal entry = buy.getSignal();
         TradeSignal exit = sell.getSignal();
+        Long tradeHistoryId = null;
+        if (entry != null && exit != null) {
+            tradeHistoryId = paperPositionRepository.findBySignalPair(entry.getId(), exit.getId()).stream()
+                    .findFirst().map(p -> p.getId()).orElse(null);
+        }
 
         return new TradeInspectorTradeView(
-                buy.getId(), sell.getId(), sell.getSymbol(), openedAt, closedAt,
+                buy.getId(), sell.getId(), tradeHistoryId, sell.getSymbol(), openedAt, closedAt,
                 Math.max(0, Duration.between(openedAt, closedAt).toMinutes()),
                 sell.getQuantity(), entryPrice, exitPrice, sell.getRealizedPnlUsdt(), realizedPercent,
                 entry == null ? null : entry.getId(),
@@ -143,6 +153,7 @@ public class TradeInspectorService {
         return switch (reason.toUpperCase(Locale.ROOT)) {
             case "POSITION_STOP_LOSS" -> "STOP LOSS";
             case "POSITION_TAKE_PROFIT" -> "TAKE PROFIT";
+            case "POSITION_PROFIT_LOCK" -> "PROFIT LOCK";
             case "SIGNAL_SELL" -> "SELL SIGNAL";
             default -> reason.replace('_', ' ');
         };

@@ -6,6 +6,7 @@ import java.time.Instant;
 public record TradeInspectorTradeView(
         Long walletBuyTradeId,
         Long walletSellTradeId,
+        Long tradeHistoryId,
         String symbol,
         Instant openedAt,
         Instant closedAt,

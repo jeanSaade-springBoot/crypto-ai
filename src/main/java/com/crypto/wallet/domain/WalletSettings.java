@@ -31,6 +31,14 @@ public class WalletSettings {
     private String dashboardIntervals;
     @Column(name = "require_new_buy_transition", nullable = false)
     private boolean requireNewBuyTransition;
+    @Column(name = "dynamic_profit_lock_enabled", nullable = false)
+    private boolean dynamicProfitLockEnabled;
+    @Column(name = "profit_lock_activation_percent", nullable = false, precision = 8, scale = 4)
+    private BigDecimal profitLockActivationPercent;
+    @Column(name = "profit_lock_initial_percent", nullable = false, precision = 8, scale = 4)
+    private BigDecimal profitLockInitialPercent;
+    @Column(name = "profit_lock_trail_step_percent", nullable = false, precision = 8, scale = 4)
+    private BigDecimal profitLockTrailStepPercent;
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 }

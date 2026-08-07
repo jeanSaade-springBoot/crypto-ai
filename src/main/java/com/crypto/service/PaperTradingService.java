@@ -10,6 +10,7 @@ import com.crypto.wallet.service.WalletAutoExecutionService;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.crypto.position.service.PositionManagementService;
+import com.crypto.position.service.DynamicProfitLockService;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -32,6 +33,7 @@ public class PaperTradingService {
     private final PaperPositionRepository positionRepository;
     private final WalletAutoExecutionService walletAutoExecutionService;
     private final TradeExecutionValidationService executionValidationService;
+    private final DynamicProfitLockService dynamicProfitLockService;
 
     /** Advisory-only; optional injection preserves existing constructor-based tests. */
     @Autowired(required = false)
@@ -80,18 +82,28 @@ public class PaperTradingService {
             PaperPosition position = openPosition.get();
             BigDecimal price = signal.getLatestPrice();
 
-            if (price.compareTo(position.getStopLoss()) <= 0) {
-                return Optional.of(closeFromSignal(position, signal, PositionStatus.STOPPED,
-                        "STOP_LOSS", "Price reached the configured stop loss."));
-            }
-
             if (price.compareTo(position.getTakeProfit()) >= 0) {
                 return Optional.of(closeFromSignal(position, signal, PositionStatus.CLOSED,
                         "TAKE_PROFIT", "Price reached the configured take-profit target."));
             }
 
+            DynamicProfitLockService.Evaluation profitLock = dynamicProfitLockService.evaluate(signal);
+            if (profitLock.triggered()) {
+                return Optional.of(closeFromProfitLock(position, signal, profitLock));
+            }
+
+            if (price.compareTo(position.getStopLoss()) <= 0) {
+                return Optional.of(closeFromSignal(position, signal, PositionStatus.STOPPED,
+                        "STOP_LOSS", "Price reached the configured stop loss."));
+            }
+
             if (signal.getDecision() == SignalDecision.SELL
                     || signal.getDecision() == SignalDecision.STRONG_SELL) {
+                if (profitLock.active()) {
+                    log.info("Normal wallet SELL suppressed because Dynamic Profit Lock is active: signalId={}, symbol={}, protectedPrice={}, currentPrice={}",
+                            signal.getId(), signal.getSymbol(), profitLock.lockPrice(), signal.getLatestPrice());
+                    return Optional.of(position);
+                }
                 TradeExecutionValidationService.ValidationResult validation =
                         executionValidationService.validateSell(signal);
                 if (validation.allowed()) {
@@ -196,6 +208,32 @@ public class PaperTradingService {
             String explanation
     ) {
         return completeClose(position, signal.getLatestPrice(), status, closeReason, explanation, signal);
+    }
+
+    private PaperPosition closeFromProfitLock(
+            PaperPosition position,
+            TradeSignal signal,
+            DynamicProfitLockService.Evaluation profitLock
+    ) {
+        BigDecimal exitPrice = signal.getLatestPrice();
+        BigDecimal pnl = exitPrice.subtract(position.getEntryPrice(), MC)
+                .multiply(position.getQuantity(), MC);
+
+        position.setExitPrice(exitPrice);
+        position.setRealizedPnl(pnl);
+        position.setStatus(PositionStatus.CLOSED);
+        position.setCloseReason("PROFIT_LOCK");
+        position.setExitReason(profitLock.explanation());
+        position.setExitSignal(signal);
+        position.setClosedAt(Instant.now());
+        PaperPosition saved = positionRepository.save(position);
+
+        try {
+            walletAutoExecutionService.executeProfitLock(signal, exitPrice, profitLock.lockPrice());
+        } catch (RuntimeException ex) {
+            log.error("Dynamic Profit Lock wallet exit failed for signal {}: {}", signal.getId(), ex.getMessage(), ex);
+        }
+        return saved;
     }
 
     private PaperPosition completeClose(

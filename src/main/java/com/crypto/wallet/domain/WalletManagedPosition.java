@@ -47,6 +47,16 @@ public class WalletManagedPosition {
     private BigDecimal stopLossUsdt;
     @Column(name = "take_profit_usdt", precision = 30, scale = 12)
     private BigDecimal takeProfitUsdt;
+    @Column(name = "highest_price_usdt", precision = 30, scale = 12)
+    private BigDecimal highestPriceUsdt;
+    @Column(name = "profit_lock_active", nullable = false)
+    private boolean profitLockActive;
+    @Column(name = "profit_lock_price_usdt", precision = 30, scale = 12)
+    private BigDecimal profitLockPriceUsdt;
+    @Column(name = "profit_lock_progress_percent", precision = 12, scale = 6)
+    private BigDecimal profitLockProgressPercent;
+    @Column(name = "profit_lock_activated_at")
+    private Instant profitLockActivatedAt;
     @Column(nullable = false, length = 20)
     private String status;
     @Column(name = "opened_at", nullable = false)

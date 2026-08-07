@@ -4,6 +4,7 @@ import com.crypto.domain.PaperPosition;
 import com.crypto.domain.PositionStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -16,6 +17,9 @@ public interface PaperPositionRepository extends JpaRepository<PaperPosition, Lo
     Optional<PaperPosition> findBySymbolAndStatus(String symbol, PositionStatus status);
     List<PaperPosition> findTop100ByOrderByOpenedAtDesc();
     List<PaperPosition> findTop20BySymbolOrderByOpenedAtDesc(String symbol);
+
+    @Query("select p from PaperPosition p where p.signal.id = :entrySignalId and p.exitSignal.id = :exitSignalId order by p.openedAt desc")
+    List<PaperPosition> findBySignalPair(@Param("entrySignalId") Long entrySignalId, @Param("exitSignalId") Long exitSignalId);
 
     @Query("select coalesce(sum(p.realizedPnl), 0) from PaperPosition p where p.closedAt >= :since")
     BigDecimal sumRealizedPnlSince(Instant since);

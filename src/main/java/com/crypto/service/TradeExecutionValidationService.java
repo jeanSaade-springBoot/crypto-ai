@@ -131,6 +131,10 @@ public class TradeExecutionValidationService {
                 .orElseGet(() -> WalletSettings.builder()
                         .id(1L)
                         .requireNewBuyTransition(true)
+                        .dynamicProfitLockEnabled(true)
+                        .profitLockActivationPercent(java.math.BigDecimal.valueOf(70))
+                        .profitLockInitialPercent(java.math.BigDecimal.valueOf(40))
+                        .profitLockTrailStepPercent(java.math.BigDecimal.valueOf(10))
                         .build());
     }
 

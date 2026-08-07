@@ -18,6 +18,8 @@ import com.crypto.repository.TechnicalIndicatorRepository;
 import com.crypto.repository.TradeSignalRepository;
 import com.crypto.wallet.domain.WalletTrade;
 import com.crypto.wallet.repository.WalletTradeRepository;
+import com.crypto.wallet.repository.WalletManagedPositionRepository;
+import com.crypto.wallet.domain.WalletManagedPosition;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -50,6 +52,7 @@ public class DashboardApiController {
     private final ScoreDiagnosticsService scoreDiagnosticsService;
     private final CoinConfigurationService coinConfigurationService;
     private final WalletTradeRepository walletTradeRepository;
+    private final WalletManagedPositionRepository walletManagedPositionRepository;
     private final Map<String, AggregatedCandleCacheEntry> aggregatedCandleCache = new ConcurrentHashMap<>();
 
     public DashboardApiController(
@@ -62,7 +65,8 @@ public class DashboardApiController {
             ObjectMapper objectMapper,
             ScoreDiagnosticsService scoreDiagnosticsService,
             CoinConfigurationService coinConfigurationService,
-            WalletTradeRepository walletTradeRepository
+            WalletTradeRepository walletTradeRepository,
+            WalletManagedPositionRepository walletManagedPositionRepository
     ) {
         this.candleRepository = candleRepository;
         this.technicalIndicatorRepository = technicalIndicatorRepository;
@@ -74,6 +78,7 @@ public class DashboardApiController {
         this.scoreDiagnosticsService = scoreDiagnosticsService;
         this.coinConfigurationService = coinConfigurationService;
         this.walletTradeRepository = walletTradeRepository;
+        this.walletManagedPositionRepository = walletManagedPositionRepository;
     }
 
     @GetMapping("/symbols")
@@ -582,6 +587,13 @@ public class DashboardApiController {
                 && displayPrice.compareTo(position.getStopLoss()) <= 0);
         result.put("takeProfitTriggered", open && displayPrice != null
                 && displayPrice.compareTo(position.getTakeProfit()) >= 0);
+        WalletManagedPosition managedPosition = open
+                ? walletManagedPositionRepository.findTopBySymbolAndStatusOrderByOpenedAtDesc(position.getSymbol(), "OPEN").orElse(null)
+                : null;
+        result.put("profitLockActive", managedPosition != null && managedPosition.isProfitLockActive());
+        result.put("profitLockPrice", managedPosition == null ? null : managedPosition.getProfitLockPriceUsdt());
+        result.put("profitLockProgressPercent", managedPosition == null ? null : managedPosition.getProfitLockProgressPercent());
+        result.put("highestPriceSinceEntry", managedPosition == null ? null : managedPosition.getHighestPriceUsdt());
         result.put("riskLogic", entrySignal == null
                 ? "Stored stop-loss and take-profit levels"
                 : atrRiskLogic(entrySignal));

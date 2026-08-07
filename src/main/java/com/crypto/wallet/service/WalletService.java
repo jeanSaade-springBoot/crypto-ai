@@ -112,6 +112,22 @@ public class WalletService {
                 || request.maximumDailyNewPositions() > 1000)
             throw new IllegalArgumentException("Maximum daily new positions must be 0 (unlimited) or between 1 and 1000");
 
+        BigDecimal profitLockActivationPercent = request.profitLockActivationPercent() == null
+                ? BigDecimal.valueOf(70) : request.profitLockActivationPercent();
+        BigDecimal profitLockInitialPercent = request.profitLockInitialPercent() == null
+                ? BigDecimal.valueOf(40) : request.profitLockInitialPercent();
+        BigDecimal profitLockTrailStepPercent = request.profitLockTrailStepPercent() == null
+                ? BigDecimal.valueOf(10) : request.profitLockTrailStepPercent();
+        if (profitLockActivationPercent.compareTo(BigDecimal.valueOf(1)) < 0
+                || profitLockActivationPercent.compareTo(BigDecimal.valueOf(99)) > 0)
+            throw new IllegalArgumentException("Profit lock activation must be between 1% and 99% of the take-profit distance");
+        if (profitLockInitialPercent.signum() < 0
+                || profitLockInitialPercent.compareTo(profitLockActivationPercent) >= 0)
+            throw new IllegalArgumentException("Initial locked profit must be >= 0% and below the activation percentage");
+        if (profitLockTrailStepPercent.compareTo(BigDecimal.ONE) < 0
+                || profitLockTrailStepPercent.compareTo(BigDecimal.valueOf(50)) > 0)
+            throw new IllegalArgumentException("Profit lock trail step must be between 1% and 50%");
+
         String performanceWindowType = normalizePerformanceWindowType(request.performanceWindowType());
         String dashboardIntervals = normalizeDashboardIntervals(request.dashboardIntervals());
         int performanceTradeCount = Optional.ofNullable(request.performanceTradeCount()).orElse(20);
@@ -135,6 +151,10 @@ public class WalletService {
                 .performancePeriodDays(1)
                 .dashboardIntervals("1m,5m,1h,4h,1d")
                 .requireNewBuyTransition(true)
+                .dynamicProfitLockEnabled(true)
+                .profitLockActivationPercent(BigDecimal.valueOf(70))
+                .profitLockInitialPercent(BigDecimal.valueOf(40))
+                .profitLockTrailStepPercent(BigDecimal.valueOf(10))
                 .build());
         settings.setMinimumUsdtReserve(request.minimumUsdtReserve());
         settings.setBaseTradeAmountUsdt(request.baseTradeAmountUsdt());
@@ -146,6 +166,10 @@ public class WalletService {
         settings.setPerformanceEndDate(request.performanceEndDate());
         settings.setDashboardIntervals(dashboardIntervals);
         settings.setRequireNewBuyTransition(request.requireNewBuyTransition() == null || request.requireNewBuyTransition());
+        settings.setDynamicProfitLockEnabled(request.dynamicProfitLockEnabled() == null || request.dynamicProfitLockEnabled());
+        settings.setProfitLockActivationPercent(profitLockActivationPercent);
+        settings.setProfitLockInitialPercent(profitLockInitialPercent);
+        settings.setProfitLockTrailStepPercent(profitLockTrailStepPercent);
         settings.setUpdatedAt(Instant.now());
         settingsRepository.save(settings);
 

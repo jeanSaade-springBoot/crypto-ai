@@ -1026,7 +1026,9 @@ function renderOpenTrades(positions) {
                     <div><span>Risk / Reward</span><strong>${p.entryRiskRewardRatio == null ? '—' : `1 : ${Number(p.entryRiskRewardRatio).toFixed(2)}`}</strong></div>
                     <div><span>Room to stop</span><strong>${p.currentToStopDistance == null ? '—' : money(p.currentToStopDistance)}</strong></div>
                     <div><span>Room to target</span><strong>${p.currentToTargetDistance == null ? '—' : money(p.currentToTargetDistance)}</strong></div>
-                    <div><span>Trigger state</span><strong>${p.stopLossTriggered ? 'STOP HIT' : p.takeProfitTriggered ? 'TARGET HIT' : 'ACTIVE'}</strong></div>
+                    <div><span>Trigger state</span><strong>${p.stopLossTriggered ? 'STOP HIT' : p.takeProfitTriggered ? 'TARGET HIT' : p.profitLockActive ? 'PROFIT LOCK ACTIVE' : 'ACTIVE'}</strong></div>
+                    <div><span>Profit lock</span><strong>${p.profitLockPrice == null ? '—' : money(p.profitLockPrice)}</strong></div>
+                    <div><span>Best TP progress</span><strong>${p.profitLockProgressPercent == null ? '—' : `${Number(p.profitLockProgressPercent).toFixed(1)}%`}</strong></div>
                 </div>
                 <small>${escapeHtml(p.riskLogic || 'ATR risk logic unavailable for this older position.')}</small>
             </section>
@@ -1044,6 +1046,8 @@ function renderTradeHistory(positions) {
         const pnlClass = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '';
         const predictionClass = p.predictionResult === 'SUCCESS' ? 'buy' : p.predictionResult === 'FAILED' ? 'reject' : 'neutral';
         return `<tr>
+            <td><strong class="trade-id">#${escapeHtml(p.id ?? '—')}</strong></td>
+            <td><small class="signal-id-pair">#${escapeHtml(p.entrySignalId ?? '—')} → #${escapeHtml(p.exitSignalId ?? '—')}</small></td>
             <td><strong>${escapeHtml(p.symbol || '—')}</strong></td>
             <td class="trade-action-cell"><span class="badge buy">BUY ↑</span><span class="trade-action-arrow">→</span><span class="badge sell">SELL ↓</span></td>
             <td><span class="interval-chip">${escapeHtml(p.entryInterval || '—')}</span><span class="trade-action-arrow">→</span><span class="interval-chip">${escapeHtml(p.exitInterval || p.entryInterval || '—')}</span></td>
@@ -1057,7 +1061,7 @@ function renderTradeHistory(positions) {
             <td><span class="badge ${predictionClass}">${escapeHtml(p.predictionResult || 'PENDING')}</span></td>
             <td><button type="button" class="replay-button" onclick="openTradeReplay(${p.id})">Inspect</button></td>
         </tr>`;
-    }).join('') : '<tr><td colspan="12" class="empty">No completed paper trades yet. Closed trades will appear here with their final P&amp;L and result.</td></tr>';
+    }).join('') : '<tr><td colspan="14" class="empty">No completed paper trades yet. Closed trades will appear here with their final P&amp;L and result.</td></tr>';
 }
 
 
