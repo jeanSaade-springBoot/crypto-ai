@@ -8,7 +8,9 @@ import com.crypto.dto.TradeInspectorTradeView;
 import com.crypto.repository.CandleRepository;
 import com.crypto.repository.PaperPositionRepository;
 import com.crypto.wallet.domain.WalletTrade;
+import com.crypto.wallet.domain.WalletManagedPosition;
 import com.crypto.wallet.repository.WalletTradeRepository;
+import com.crypto.wallet.repository.WalletManagedPositionRepository;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,13 +30,16 @@ public class TradeInspectorService {
     private final WalletTradeRepository walletTradeRepository;
     private final CandleRepository candleRepository;
     private final PaperPositionRepository paperPositionRepository;
+    private final WalletManagedPositionRepository walletManagedPositionRepository;
 
     public TradeInspectorService(WalletTradeRepository walletTradeRepository,
                                  CandleRepository candleRepository,
-                                 PaperPositionRepository paperPositionRepository) {
+                                 PaperPositionRepository paperPositionRepository,
+                                 WalletManagedPositionRepository walletManagedPositionRepository) {
         this.walletTradeRepository = walletTradeRepository;
         this.candleRepository = candleRepository;
         this.paperPositionRepository = paperPositionRepository;
+        this.walletManagedPositionRepository = walletManagedPositionRepository;
     }
 
     @Transactional(readOnly = true)
@@ -125,6 +130,9 @@ public class TradeInspectorService {
                     .findFirst().map(p -> p.getId()).orElse(null);
         }
 
+        WalletManagedPosition managed = entry == null ? null : walletManagedPositionRepository
+                .findTopByEntrySignalIdOrderByOpenedAtDesc(entry.getId()).orElse(null);
+
         return new TradeInspectorTradeView(
                 buy.getId(), sell.getId(), tradeHistoryId, sell.getSymbol(), openedAt, closedAt,
                 Math.max(0, Duration.between(openedAt, closedAt).toMinutes()),
@@ -136,6 +144,13 @@ public class TradeInspectorService {
                 entry == null ? null : entry.getInterval(),
                 entry == null || entry.getSelectedStrategy() == null ? null : entry.getSelectedStrategy().name(),
                 entry == null || entry.getMarketRegime() == null ? null : entry.getMarketRegime().name(),
+                managed != null && managed.getStopLossUsdt() != null ? managed.getStopLossUsdt() : entry == null ? null : entry.getStopLoss(),
+                managed != null && managed.getTakeProfitUsdt() != null ? managed.getTakeProfitUsdt() : entry == null ? null : entry.getTakeProfit(),
+                managed != null && managed.getProfitLockActivatedAt() != null,
+                managed == null ? null : managed.getProfitLockPriceUsdt(),
+                managed == null ? null : managed.getProfitLockProgressPercent(),
+                managed == null ? null : managed.getProfitLockActivatedAt(),
+                managed == null ? null : managed.getHighestPriceUsdt(),
                 exit == null ? null : exit.getId(),
                 exit == null || exit.getDecision() == null ? sell.getExecutionReason() : exit.getDecision().name(),
                 exit == null ? null : exit.getTotalScore(),

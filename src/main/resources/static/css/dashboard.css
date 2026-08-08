@@ -1701,3 +1701,59 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .signal-role.strategic-sell,.signal-role.confirmation-sell,.signal-role.blocked{border-color:rgba(231,76,60,.45);background:rgba(231,76,60,.08)}
 .signal-role.waiting{border-color:rgba(241,196,15,.42);background:rgba(241,196,15,.07)}
 @media(max-width:900px){.signal-role{min-width:190px;max-width:240px}}
+
+/* Decision-centric signal board */
+#signals .signal-board-wrap { overflow-x: auto; }
+#signals .signal-board-table { min-width: 1180px; table-layout: auto; }
+#signals .signal-board-table th:nth-child(1) { width: 15%; }
+#signals .signal-board-table th:nth-child(2) { width: 24%; }
+#signals .signal-board-table th:nth-child(3) { width: 27%; }
+#signals .signal-board-table th:nth-child(4) { width: 14%; }
+#signals .signal-board-table th:nth-child(5) { width: 15%; }
+#signals .signal-board-table th:nth-child(6) { width: 5%; }
+.decision-board-row > td { vertical-align: top; padding-top: 14px; padding-bottom: 14px; }
+.signal-identity { display: grid; gap: 6px; min-width: 130px; }
+.signal-identity > strong { font-size: 15px; }
+.signal-identity > small { color: var(--muted); line-height: 1.35; }
+.signal-identity > b { font-size: 13px; }
+.signal-identity > b em { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; font-style: normal; font-weight: 500; }
+.three-frame-strip { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 6px; align-items: center; min-width: 310px; }
+.frame-arrow { color: var(--muted); font-size: 13px; }
+.frame-decision-card { min-width: 0; border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: rgba(255,255,255,.025); display: grid; gap: 2px; text-align: center; }
+.frame-decision-card > span { color: var(--muted); font-size: 8px; letter-spacing: .07em; }
+.frame-decision-card > strong { font-size: 11px; }
+.frame-decision-card > b { font-size: 10px; overflow-wrap: anywhere; }
+.frame-decision-card > small { color: var(--muted); font-size: 9px; }
+.frame-decision-card.buy { border-color: rgba(57,217,138,.3); background: rgba(57,217,138,.06); }
+.frame-decision-card.reject { border-color: rgba(255,107,114,.3); background: rgba(255,107,114,.06); }
+.trade-plan-card { min-width: 335px; border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: rgba(8,21,30,.72); }
+.trade-plan-title { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
+.trade-plan-title span { font-size:9px; color:var(--muted); letter-spacing:.09em; }
+.trade-plan-title strong { font-size:10px; color:var(--blue); }
+.trade-plan-grid { display:grid; grid-template-columns:1fr 1fr; gap:7px 12px; }
+.trade-plan-grid div { display:flex; justify-content:space-between; align-items:center; gap:8px; border-bottom:1px solid rgba(255,255,255,.04); padding-bottom:4px; }
+.trade-plan-grid span { color:var(--muted); font-size:10px; }
+.trade-plan-grid strong { font-size:11px; text-align:right; }
+.execution-state { border:1px solid var(--border); border-radius:11px; padding:10px; display:grid; gap:4px; min-width:145px; }
+.execution-state strong { font-size:10px; letter-spacing:.04em; }
+.execution-state small,.execution-state span { color:var(--muted); font-size:9px; line-height:1.35; }
+.execution-state.executed { border-color:rgba(57,217,138,.35); background:rgba(57,217,138,.07); }
+.execution-state.waiting { border-color:rgba(247,201,72,.28); background:rgba(247,201,72,.055); }
+.signal-live-plan-summary { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:8px; margin:0 0 14px; }
+.signal-live-plan-summary div { border:1px solid var(--border); border-radius:10px; padding:9px; background:rgba(255,255,255,.02); display:grid; gap:4px; }
+.signal-live-plan-summary span { color:var(--muted); font-size:9px; }
+.signal-live-plan-summary strong { font-size:11px; }
+.profit-lock-banner { margin:12px 0; border:1px solid var(--border); border-radius:12px; padding:12px; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; align-items:center; }
+.profit-lock-banner > div { display:grid; gap:3px; }
+.profit-lock-banner span { color:var(--muted); font-size:9px; letter-spacing:.05em; }
+.profit-lock-banner strong { font-size:14px; }
+.profit-lock-banner > small { grid-column:1/-1; color:var(--muted); line-height:1.4; }
+.profit-lock-banner.active { border-color:rgba(57,217,138,.55); background:linear-gradient(90deg,rgba(57,217,138,.12),rgba(57,217,138,.035)); box-shadow:0 0 0 1px rgba(57,217,138,.04) inset; }
+.profit-lock-banner.active strong { color:var(--accent); }
+.profit-lock-banner.waiting { background:rgba(255,255,255,.02); }
+@media(max-width:760px){
+  #signals .signal-board-table { min-width: 1040px; }
+  .signal-live-plan-summary { grid-template-columns:1fr 1fr; }
+  .profit-lock-banner { grid-template-columns:1fr 1fr; }
+}
+.frame-chain-label{margin-bottom:6px;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em}

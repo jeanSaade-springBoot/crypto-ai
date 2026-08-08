@@ -9,6 +9,7 @@ import java.util.Optional;
 
 public interface WalletManagedPositionRepository extends JpaRepository<WalletManagedPosition, Long> {
     Optional<WalletManagedPosition> findTopBySymbolAndStatusOrderByOpenedAtDesc(String symbol, String status);
+    Optional<WalletManagedPosition> findTopByEntrySignalIdOrderByOpenedAtDesc(Long entrySignalId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<WalletManagedPosition> findFirstBySymbolAndStatusOrderByOpenedAtDesc(String symbol, String status);

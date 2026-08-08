@@ -136,6 +136,7 @@ public class DashboardApiController {
         response.put("indicator", indicatorDto(latestIndicator));
         response.put("schedule", scheduleConfigurationService.dashboardSchedule());
         response.put("signals", signals.stream().map(this::signalDto).toList());
+        response.put("timeframeSnapshot", timeframeSnapshot(normalizedSymbol));
         response.put("livePrice", candleRepository
                 .findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByCloseTimeDesc(normalizedSymbol, "1m")
                 .map(Candle::getClosePrice)
@@ -161,6 +162,32 @@ public class DashboardApiController {
                 .filter(position -> !"OPEN".equals(position.get("status")))
                 .toList());
         return response;
+    }
+
+
+    private Map<String, Object> timeframeSnapshot(String symbol) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("1h", timeframeDecision(symbol, "1h", "FIRST FRAME", "Strategic direction"));
+        result.put("5m", timeframeDecision(symbol, "5m", "SECOND FRAME", "Confirmation"));
+        result.put("1m", timeframeDecision(symbol, "1m", "THIRD FRAME", "Execution trigger"));
+        return result;
+    }
+
+    private Map<String, Object> timeframeDecision(String symbol, String interval, String frame, String role) {
+        TradeSignal signal = tradeSignalRepository
+                .findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, interval)
+                .orElse(null);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("frame", frame);
+        result.put("role", role);
+        result.put("interval", interval);
+        result.put("signalId", signal == null ? null : signal.getId());
+        result.put("decision", signal == null || signal.getDecision() == null ? "NO_SIGNAL" : signal.getDecision().name());
+        result.put("score", signal == null ? null : signal.getTotalScore());
+        result.put("confidence", signal == null ? null : signal.getConfidenceScore());
+        result.put("price", signal == null ? null : signal.getLatestPrice());
+        result.put("generatedAt", signal == null ? null : signal.getGeneratedAt());
+        return result;
     }
 
     private boolean isDisplayOnlyInterval(String interval) {

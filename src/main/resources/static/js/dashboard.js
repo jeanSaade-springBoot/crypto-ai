@@ -184,7 +184,14 @@ function render(data) {
     renderSchedules(data.schedule || {});
     applyDashboardRefreshSchedule(data.schedule || {});
     renderCharts(data.candles || [], data.executions || []);
-    renderSignals(data.signals || [], data.displayOnlyInterval);
+    renderSignals(
+        data.signals || [],
+        data.displayOnlyInterval,
+        data.timeframeSnapshot || {},
+        data.executions || [],
+        data.openPositions || [],
+        data.closedPositions || []
+    );
     renderOpenTrades(data.openPositions || []);
     renderTradeHistory(data.closedPositions || []);
     window.requestAnimationFrame(syncDashboardHeaderOffset);
@@ -482,12 +489,12 @@ function signalExecutionRoleHtml(signal) {
             const higherBullish = ['BUY', 'STRONG_BUY'].includes(higherDecision);
             const higherOpposed = ['SELL', 'STRONG_SELL'].includes(higherDecision);
             tone = higherBullish ? 'ready' : higherOpposed ? 'blocked' : 'waiting';
-            title = higherBullish ? 'BUY execution candidate' : higherOpposed ? 'BUY blocked by confirmation' : 'BUY waiting for confirmation';
+            title = higherBullish ? 'BUY execution candidate' : higherOpposed ? 'BUY blocked by confirmation' : 'BUY candidate · reduced confirmation';
             detail = higherBullish
                 ? `1m trigger is present and ${higherInterval || 'higher frame'} is bullish. Execution Validation decides whether the wallet may buy.`
                 : higherOpposed
                     ? `1m BUY exists, but ${higherInterval || 'the higher frame'} is ${higherDecision.replaceAll('_', ' ')}.`
-                    : `1m BUY exists, but ${higherInterval || '5m'} is ${higherDecision ? higherDecision.replaceAll('_', ' ') : 'not yet bullish'}. Waiting for bullish confirmation.`;
+                    : `1m BUY exists while ${higherInterval || '5m'} is ${higherDecision ? higherDecision.replaceAll('_', ' ') : 'not fully bullish'}. The active Execution Profile decides whether to enter at reduced size.`;
         } else if (bearish) {
             const higherBearish = ['SELL', 'STRONG_SELL'].includes(higherDecision);
             tone = higherBearish ? 'ready' : 'waiting';
@@ -501,7 +508,60 @@ function signalExecutionRoleHtml(signal) {
     return `<div class="signal-role ${tone}"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small></div>`;
 }
 
-function renderSignals(signals, displayOnlyInterval = false) {
+function frameDecisionCard(frame, fallbackInterval) {
+    const interval = String(frame?.interval || fallbackInterval || '—');
+    const decision = String(frame?.decision || 'NO_SIGNAL').toUpperCase();
+    const score = frame?.score == null ? '—' : `${frame.score}/100`;
+    const tone = decision.includes('BUY') ? 'buy' : decision.includes('SELL') ? 'reject' : 'neutral';
+    return `<div class="frame-decision-card ${tone}">
+        <span>${escapeHtml(frame?.frame || '')}</span>
+        <strong>${escapeHtml(interval.toUpperCase())}</strong>
+        <b>${escapeHtml(decision.replaceAll('_',' '))}</b>
+        <small>${score}${frame?.confidence == null ? '' : ` · C${frame.confidence}`}</small>
+    </div>`;
+}
+
+function threeFrameDecisionHtml(snapshot) {
+    return `<div class="frame-chain-label">Current confirmation chain</div><div class="three-frame-strip">
+        ${frameDecisionCard(snapshot['1h'], '1h')}
+        <span class="frame-arrow">→</span>
+        ${frameDecisionCard(snapshot['5m'], '5m')}
+        <span class="frame-arrow">→</span>
+        ${frameDecisionCard(snapshot['1m'], '1m')}
+    </div>`;
+}
+
+function signalTradePlanHtml(signal, execution, position) {
+    const entryType = String(signal.atrEntryType || 'MARKET').replaceAll('_', ' ');
+    const plannedPct = Number(signal.atrRecommendedPositionPercent ?? 100);
+    const executed = Boolean(execution);
+    const closed = position && String(position.status || '').toUpperCase() !== 'OPEN';
+    return `<div class="trade-plan-card">
+        <div class="trade-plan-title"><span>PLAN</span><strong>${escapeHtml(entryType)}</strong></div>
+        <div class="trade-plan-grid">
+            <div><span>Signal price</span><strong>${money(signal.latestPrice)}</strong></div>
+            <div><span>Stop loss</span><strong class="negative">${money(signal.stopLoss)}</strong></div>
+            <div><span>Take profit</span><strong class="positive">${money(signal.takeProfit)}</strong></div>
+            <div><span>R / R</span><strong>${signal.riskRewardRatio == null ? '—' : `1 : ${Number(signal.riskRewardRatio).toFixed(2)}`}</strong></div>
+            <div><span>ATR size</span><strong>${plannedPct}%</strong></div>
+            <div><span>Actual entry</span><strong>${executed ? money(execution.price) : 'Not executed'}</strong></div>
+            <div><span>Quantity</span><strong>${executed ? value(execution.quantity) : '—'}</strong></div>
+            <div><span>Exit price</span><strong>${closed ? money(position.exitPrice) : executed ? 'Position open' : '—'}</strong></div>
+        </div>
+    </div>`;
+}
+
+function signalExecutionStatusHtml(signal, execution, position) {
+    if (execution) {
+        const open = position && String(position.status || '').toUpperCase() === 'OPEN';
+        return `<div class="execution-state executed"><strong>WALLET EXECUTED</strong><small>Trade #${escapeHtml(execution.id ?? '—')} · ${money(execution.amountUsdt)}</small>${open ? '<span>Position Manager active</span>' : ''}</div>`;
+    }
+    const decision = String(signal.decision || '').toUpperCase();
+    const actionable = ['BUY','STRONG_BUY','SELL','STRONG_SELL'].includes(decision);
+    return `<div class="execution-state ${actionable ? 'waiting' : 'idle'}"><strong>${actionable ? 'NOT EXECUTED' : 'ANALYSIS ONLY'}</strong><small>${actionable ? 'Execution Validation / timeframe alignment decides next.' : 'No wallet action required.'}</small></div>`;
+}
+
+function renderSignals(signals, displayOnlyInterval = false, timeframeSnapshot = {}, executions = [], openPositions = [], closedPositions = []) {
     const body = el('signals-body');
     const actionableSignals = (signals || []).filter(signal => {
         const decision = String(signal.decision || '').toUpperCase();
@@ -510,12 +570,15 @@ function renderSignals(signals, displayOnlyInterval = false) {
 
     if (!actionableSignals.length) {
         body.innerHTML = displayOnlyInterval
-            ? '<tr><td colspan="10" class="empty">4h and 1D are display-only market views. Trading signals remain generated only on 1m / 5m / 1h.</td></tr>'
-            : '<tr><td colspan="10" class="empty">No actionable BUY or SELL signals for the selected symbol and interval. NEUTRAL and WATCH signals are hidden from this dashboard.</td></tr>';
+            ? '<tr><td colspan="6" class="empty">4h and 1D are display-only market views. Trading signals remain generated only on 1m / 5m / 1h.</td></tr>'
+            : '<tr><td colspan="6" class="empty">No actionable BUY or SELL signals for the selected symbol and interval. NEUTRAL and WATCH signals are hidden.</td></tr>';
         return;
     }
 
     signals = actionableSignals;
+    const executionBySignal = new Map((executions || []).filter(x => x.signalId != null).map(x => [String(x.signalId), x]));
+    const positionByEntrySignal = new Map([...(openPositions || []), ...(closedPositions || [])]
+        .filter(x => x.entrySignalId != null).map(x => [String(x.entrySignalId), x]));
     const availableIds = new Set(signals.map(s => String(s.id)));
     if (pinnedSignalId && !availableIds.has(String(pinnedSignalId))) {
         pinnedSignalId = null;
@@ -527,29 +590,42 @@ function renderSignals(signals, displayOnlyInterval = false) {
         const detailId = `signal-detail-${signalId}`;
         const isOpen = openSignalAnalysisIds.has(signalId) || pinnedSignalId === signalId;
         const isPinned = pinnedSignalId === signalId;
+        const execution = executionBySignal.get(signalId);
+        const position = positionByEntrySignal.get(signalId);
         return `
-            <tr class="signal-row" data-detail-id="${detailId}">
-                <td><strong class="signal-symbol">${escapeHtml(s.symbol || '—')}</strong></td>
-                <td><span class="interval-chip">${escapeHtml(s.interval || '—')}</span></td>
-                <td>${dateTime(s.generatedAt)}</td>
-                <td><span class="badge ${String(s.decision).toLowerCase()}">${escapeHtml(String(s.decision).replaceAll('_', ' '))}</span></td>
-                <td><strong>${s.totalScore}/100</strong><small class="raw-score">Raw ${s.rawScore}/${s.maximumAvailableScore}</small></td>
+            <tr class="signal-row decision-board-row" data-detail-id="${detailId}">
+                <td>
+                    <div class="signal-identity">
+                        <strong>${escapeHtml(s.symbol || '—')}</strong>
+                        <span class="badge ${String(s.decision).toLowerCase()}">${escapeHtml(String(s.decision).replaceAll('_',' '))}</span>
+                        <small>${escapeHtml(String(s.interval || '—').toUpperCase())} · ${dateTime(s.generatedAt)}</small>
+                        <b>${s.totalScore}/100 <em>Raw ${s.rawScore}/${s.maximumAvailableScore}</em></b>
+                    </div>
+                </td>
+                <td>${threeFrameDecisionHtml(timeframeSnapshot)}</td>
+                <td>${signalTradePlanHtml(s, execution, position)}</td>
+                <td>${signalExecutionStatusHtml(s, execution, position)}</td>
                 <td>${signalExecutionRoleHtml(s)}</td>
-                <td>${money(s.latestPrice)}</td>
-                <td>${money(s.stopLoss)}</td>
-                <td>${money(s.takeProfit)}</td>
                 <td><button type="button" class="signal-detail-button" data-signal-id="${signalId}" data-detail-id="${detailId}">${isOpen ? 'Hide analysis' : 'View analysis'}</button></td>
             </tr>
             <tr id="${detailId}" class="signal-detail-row ${isOpen ? '' : 'hidden'}">
-                <td colspan="10">
+                <td colspan="6">
                     <div class="analysis-view ${isPinned ? 'pinned' : ''}" data-signal-id="${signalId}">
                         <div class="analysis-toolbar">
-                            <div><strong>${escapeHtml(s.symbol || '—')} · ${escapeHtml(s.interval || '—')}</strong><small>Readable AI analysis</small></div>
+                            <div><strong>${escapeHtml(s.symbol || '—')} · Signal #${escapeHtml(signalId)}</strong><small>Planned trade + full AI analysis</small></div>
                             <div class="analysis-toolbar-actions">
                                 <button type="button" class="analysis-pin-button ${isPinned ? 'active' : ''}" data-signal-id="${signalId}">${isPinned ? 'Unpin analysis' : 'Pin analysis'}</button>
                                 <button type="button" class="analysis-close-button" data-signal-id="${signalId}" data-detail-id="${detailId}">Close</button>
                             </div>
                         </div>
+                        <section class="signal-live-plan-summary">
+                            <div><span>First frame</span><strong>1H · ${escapeHtml(String(timeframeSnapshot['1h']?.decision || 'NO SIGNAL').replaceAll('_',' '))}</strong></div>
+                            <div><span>Second frame</span><strong>5M · ${escapeHtml(String(timeframeSnapshot['5m']?.decision || 'NO SIGNAL').replaceAll('_',' '))}</strong></div>
+                            <div><span>Third frame</span><strong>1M · ${escapeHtml(String(timeframeSnapshot['1m']?.decision || 'NO SIGNAL').replaceAll('_',' '))}</strong></div>
+                            <div><span>Planned SL</span><strong>${money(s.stopLoss)}</strong></div>
+                            <div><span>Planned TP</span><strong>${money(s.takeProfit)}</strong></div>
+                            <div><span>Wallet entry</span><strong>${execution ? money(execution.price) : 'Not executed'}</strong></div>
+                        </section>
                         ${scoreBreakdownHtml(s)}
                     </div>
                 </td>
@@ -562,36 +638,26 @@ function renderSignals(signals, displayOnlyInterval = false) {
             const detail = document.getElementById(button.dataset.detailId);
             const opening = detail.classList.contains('hidden');
             detail.classList.toggle('hidden');
-            if (opening) openSignalAnalysisIds.add(signalId);
-            else openSignalAnalysisIds.delete(signalId);
+            if (opening) openSignalAnalysisIds.add(signalId); else openSignalAnalysisIds.delete(signalId);
             button.textContent = opening ? 'Hide analysis' : 'View analysis';
         });
     });
-
     body.querySelectorAll('.analysis-close-button').forEach(button => {
         button.addEventListener('click', () => {
             const signalId = button.dataset.signalId;
             openSignalAnalysisIds.delete(signalId);
-            if (pinnedSignalId === signalId) {
-                pinnedSignalId = null;
-                localStorage.removeItem('cryptoPinnedSignalId');
-            }
+            if (pinnedSignalId === signalId) { pinnedSignalId = null; localStorage.removeItem('cryptoPinnedSignalId'); }
             document.getElementById(button.dataset.detailId)?.classList.add('hidden');
             body.querySelector(`.signal-detail-button[data-signal-id="${CSS.escape(signalId)}"]`)?.replaceChildren(document.createTextNode('View analysis'));
         });
     });
-
     body.querySelectorAll('.analysis-pin-button').forEach(button => {
         button.addEventListener('click', () => {
             const signalId = button.dataset.signalId;
             pinnedSignalId = pinnedSignalId === signalId ? null : signalId;
-            if (pinnedSignalId) {
-                openSignalAnalysisIds.add(signalId);
-                localStorage.setItem('cryptoPinnedSignalId', pinnedSignalId);
-            } else {
-                localStorage.removeItem('cryptoPinnedSignalId');
-            }
-            renderSignals(signals);
+            if (pinnedSignalId) { openSignalAnalysisIds.add(signalId); localStorage.setItem('cryptoPinnedSignalId', pinnedSignalId); }
+            else localStorage.removeItem('cryptoPinnedSignalId');
+            renderSignals(signals, displayOnlyInterval, timeframeSnapshot, executions, openPositions, closedPositions);
         });
     });
 }
@@ -1144,6 +1210,7 @@ function renderOpenTrades(positions) {
                 <div><span>Entry signal</span><strong>${escapeHtml(String(p.entryDecision || '—').replaceAll('_',' '))} · ${p.entryScore ?? '—'}/100</strong></div>
                 <div><span>Current AI signal</span><strong><span class="badge ${currentDecision.toLowerCase()}">${escapeHtml(currentDecision.replaceAll('_',' '))}</span> ${p.currentScore ?? '—'}/100</strong></div>
             </div>
+            ${p.profitLockActive ? `<div class="profit-lock-banner active"><div><span>PROFIT LOCK ACTIVE</span><strong>${money(p.profitLockPrice)}</strong></div><div><span>Best TP progress</span><strong>${Number(p.profitLockProgressPercent || 0).toFixed(1)}%</strong></div><div><span>Highest price</span><strong>${money(p.highestPriceSinceEntry)}</strong></div><small>Protected profit is now managed by the trailing lock. The protected level can move up but never back down.</small></div>` : `<div class="profit-lock-banner waiting"><div><span>Profit Lock</span><strong>Waiting</strong></div><div><span>Best TP progress</span><strong>${p.profitLockProgressPercent == null ? '—' : `${Number(p.profitLockProgressPercent).toFixed(1)}%`}</strong></div><small>Activates after the configured TP-progress threshold is reached.</small></div>`}
             <div class="trade-levels">
                 <span>Stop loss <strong>${money(p.stopLoss)}</strong><small>-${Number(p.stopLossPercent || 0).toFixed(2)}% · ${money(p.stopLossDistance)} risk/unit</small></span>
                 <span>Take profit <strong>${money(p.takeProfit)}</strong><small>+${Number(p.takeProfitPercent || 0).toFixed(2)}% · ${money(p.takeProfitDistance)} reward/unit</small></span>
