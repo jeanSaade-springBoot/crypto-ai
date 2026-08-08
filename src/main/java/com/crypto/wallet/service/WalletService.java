@@ -80,6 +80,66 @@ public class WalletService {
         return result;
     }
 
+    @Transactional(readOnly = true)
+    public Map<String,Object> dashboardOverview() {
+        List<WalletAsset> assets = assetRepository.findAllByOrderBySymbolAsc();
+        BigDecimal portfolio = ZERO;
+        BigDecimal unrealized = ZERO;
+        List<Map<String,Object>> rows = new ArrayList<>();
+        for (WalletAsset asset : assets) {
+            BigDecimal price = currentPrice(asset.getSymbol());
+            BigDecimal value = asset.getQuantity().multiply(price);
+            BigDecimal cost = "USDT".equals(asset.getSymbol())
+                    ? value
+                    : asset.getQuantity().multiply(nvl(asset.getAverageBuyPriceUsdt()));
+            BigDecimal pnl = "USDT".equals(asset.getSymbol()) ? ZERO : value.subtract(cost);
+            portfolio = portfolio.add(value);
+            unrealized = unrealized.add(pnl);
+
+            Map<String,Object> row = new LinkedHashMap<>();
+            row.put("id", asset.getId());
+            row.put("symbol", asset.getSymbol());
+            row.put("quantity", asset.getQuantity());
+            row.put("averageBuyPriceUsdt", asset.getAverageBuyPriceUsdt());
+            row.put("currentPriceUsdt", price);
+            row.put("costBasisUsdt", cost);
+            row.put("currentValueUsdt", value);
+            row.put("unrealizedPnlUsdt", pnl);
+            row.put("unrealizedPnlPercent", percent(pnl, cost));
+            rows.add(row);
+        }
+
+        BigDecimal netInvested = netInvested();
+        BigDecimal realized = nvl(tradeRepository.totalRealizedPnl());
+        BigDecimal totalPnl = portfolio.subtract(netInvested);
+        BigDecimal available = assetRepository.findBySymbol("USDT")
+                .map(WalletAsset::getQuantity)
+                .orElse(ZERO);
+        WalletSettings settings = settingsRepository.findById(1L).orElse(null);
+
+        BigDecimal finalPortfolioValue = portfolio;
+        BigDecimal change24h = snapshotRepository
+                .findFirstByCapturedAtGreaterThanEqualOrderByCapturedAtAsc(Instant.now().minusSeconds(86400))
+                .map(snapshot -> finalPortfolioValue.subtract(snapshot.getPortfolioValueUsdt()))
+                .orElse(ZERO);
+
+        Map<String,Object> result = new LinkedHashMap<>();
+        result.put("portfolioValueUsdt", portfolio);
+        result.put("netInvestedUsdt", netInvested);
+        result.put("totalPnlUsdt", totalPnl);
+        result.put("totalReturnPercent", percent(totalPnl, netInvested));
+        result.put("realizedPnlUsdt", realized);
+        result.put("unrealizedPnlUsdt", unrealized);
+        result.put("availableUsdt", available);
+        result.put("settings", settings);
+        result.put("dailyTrading", dailyTradingSummary(settings, available, portfolio));
+        result.put("tradePerformance", tradePerformanceSummary(settings));
+        result.put("portfolioStatus", totalPnl.signum() >= 0 ? "WINNING" : "LOSING");
+        result.put("change24hUsdt", change24h);
+        result.put("assets", rows);
+        return result;
+    }
+
     @Transactional
     public void setAsset(WalletAssetRequest request) {
         String symbol = normalizeAsset(request.symbol());

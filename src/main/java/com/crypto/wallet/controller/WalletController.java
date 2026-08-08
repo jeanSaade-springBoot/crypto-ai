@@ -13,6 +13,7 @@ import java.util.Map;
 public class WalletController {
     private final WalletService walletService;
     @GetMapping public Map<String,Object> overview(){ return walletService.overview(); }
+    @GetMapping("/dashboard") public Map<String,Object> dashboardOverview(){ return walletService.dashboardOverview(); }
     @PostMapping("/assets") public ResponseEntity<Void> setAsset(@RequestBody WalletAssetRequest request){ walletService.setAsset(request); return ResponseEntity.noContent().build(); }
     @PostMapping("/cash-flows") public ResponseEntity<Void> cashFlow(@RequestBody WalletCashFlowRequest request){ walletService.addCashFlow(request); return ResponseEntity.noContent().build(); }
     @PutMapping("/settings") public ResponseEntity<Void> settings(@RequestBody WalletSettingsRequest request){ walletService.updateSettings(request); return ResponseEntity.noContent().build(); }

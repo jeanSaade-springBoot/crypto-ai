@@ -11,6 +11,15 @@ window.fetch = async (...args) => {
 let candleChart;
 let volumeChart;
 let dashboardRefreshTimer;
+let dashboardRefreshInFlight = false;
+let cachedDashboardWallet = {};
+let cachedSentimentOverview = {};
+let cachedSentimentProviders = [];
+let cachedSentimentSystemStatus = { enabled: false, message: 'Loading sentiment status' };
+let cachedScoreDiagnostics = {};
+let lastSentimentMetadataRefreshAt = 0;
+let lastScoreDiagnosticsRefreshAt = 0;
+let walletRefreshInFlight = false;
 let latestWalletExecutions = new Map();
 const numberFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 });
 const moneyFormatter = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 });
@@ -55,37 +64,92 @@ function applyConfiguredDashboardIntervals(settings) {
 }
 
 async function refreshDashboard() {
+    if (dashboardRefreshInFlight) return;
+    dashboardRefreshInFlight = true;
+
     const symbol = el('symbol-select').value;
     const interval = el('interval-select').value;
     el('refresh-button').disabled = true;
     try {
-        const [response, providerResponse, sentimentStatusResponse, walletResponse] = await Promise.all([
-            fetch(`/api/dashboard/overview?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`),
-            fetch(`/api/sentiment/providers/${encodeURIComponent(symbol)}`),
-            fetch('/api/sentiment/status'),
-            fetch('/api/wallet')
-        ]);
+        const response = await fetch(`/api/dashboard/overview?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`);
         if (!response.ok) throw new Error(`Dashboard API returned ${response.status}`);
+
         const data = await response.json();
-        data.sentimentProviderStatuses = providerResponse.ok ? await providerResponse.json() : [];
-        data.sentimentSystemStatus = sentimentStatusResponse.ok
-            ? await sentimentStatusResponse.json()
-            : { enabled: false, message: 'Could not read sentiment master status' };
-        data.wallet = walletResponse.ok ? await walletResponse.json() : {};
-        const intervalChanged = applyConfiguredDashboardIntervals(data.wallet.settings || {});
-        if (intervalChanged) {
-            window.setTimeout(refreshDashboard, 0);
-            return;
-        }
+        data.sentiment = cachedSentimentOverview;
+        data.sentimentProviderStatuses = cachedSentimentProviders;
+        data.sentimentSystemStatus = cachedSentimentSystemStatus;
+        data.scoreDiagnostics = cachedScoreDiagnostics;
+        data.wallet = cachedDashboardWallet;
+
         updateConnection(true);
         el('error-banner').classList.add('hidden');
         render(data);
+
+        // Secondary data must never delay the market dashboard. Wallet and provider
+        // metadata refresh independently after the main chart/signal payload renders.
+        void refreshDashboardWallet();
+        void refreshSentimentMetadata(symbol);
+        void refreshScoreDiagnostics();
     } catch (error) {
         updateConnection(false);
         el('error-banner').textContent = error.message;
         el('error-banner').classList.remove('hidden');
     } finally {
+        dashboardRefreshInFlight = false;
         el('refresh-button').disabled = false;
+    }
+}
+
+async function refreshDashboardWallet() {
+    if (walletRefreshInFlight) return;
+    walletRefreshInFlight = true;
+    try {
+        const response = await fetch('/api/wallet/dashboard');
+        if (!response.ok) return;
+        cachedDashboardWallet = await response.json();
+        const intervalChanged = applyConfiguredDashboardIntervals(cachedDashboardWallet.settings || {});
+        renderPortfolio(cachedDashboardWallet);
+        renderTradePerformance(cachedDashboardWallet.tradePerformance || {});
+        if (intervalChanged && !dashboardRefreshInFlight) {
+            window.setTimeout(refreshDashboard, 0);
+        }
+    } catch (_) {
+        // Keep the last successful wallet summary; market data remains usable.
+    } finally {
+        walletRefreshInFlight = false;
+    }
+}
+
+async function refreshSentimentMetadata(symbol) {
+    const now = Date.now();
+    if (now - lastSentimentMetadataRefreshAt < 60000) return;
+    lastSentimentMetadataRefreshAt = now;
+    try {
+        const [overviewResponse, providerResponse, statusResponse] = await Promise.all([
+            fetch(`/api/sentiment/${encodeURIComponent(symbol)}`),
+            fetch(`/api/sentiment/providers/${encodeURIComponent(symbol)}`),
+            fetch('/api/sentiment/status')
+        ]);
+        if (overviewResponse.ok) cachedSentimentOverview = await overviewResponse.json();
+        if (providerResponse.ok) cachedSentimentProviders = await providerResponse.json();
+        if (statusResponse.ok) cachedSentimentSystemStatus = await statusResponse.json();
+        renderSentiment(cachedSentimentOverview, cachedSentimentProviders, cachedSentimentSystemStatus);
+    } catch (_) {
+        // Sentiment metadata is supplemental and must not block Dashboard refresh.
+    }
+}
+
+async function refreshScoreDiagnostics() {
+    const now = Date.now();
+    if (now - lastScoreDiagnosticsRefreshAt < 60000) return;
+    lastScoreDiagnosticsRefreshAt = now;
+    try {
+        const response = await fetch('/api/dashboard/score-diagnostics');
+        if (!response.ok) return;
+        cachedScoreDiagnostics = await response.json();
+        renderScoreDiagnostics(cachedScoreDiagnostics);
+    } catch (_) {
+        // Diagnostics are supplemental and never block live market rendering.
     }
 }
 

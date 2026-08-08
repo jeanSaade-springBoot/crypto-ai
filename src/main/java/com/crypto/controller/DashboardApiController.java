@@ -6,8 +6,6 @@ import com.crypto.domain.PaperPosition;
 import com.crypto.domain.PositionStatus;
 import com.crypto.domain.TechnicalIndicator;
 import com.crypto.domain.TradeSignal;
-import com.crypto.dto.SentimentOverview;
-import com.crypto.service.SentimentService;
 import com.crypto.service.ScheduleConfigurationService;
 import com.crypto.service.ScoreDiagnosticsService;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -46,7 +44,6 @@ public class DashboardApiController {
     private final TechnicalIndicatorRepository technicalIndicatorRepository;
     private final TradeSignalRepository tradeSignalRepository;
     private final PaperPositionRepository paperPositionRepository;
-    private final SentimentService sentimentService;
     private final ScheduleConfigurationService scheduleConfigurationService;
     private final ObjectMapper objectMapper;
     private final ScoreDiagnosticsService scoreDiagnosticsService;
@@ -60,7 +57,6 @@ public class DashboardApiController {
             TechnicalIndicatorRepository technicalIndicatorRepository,
             TradeSignalRepository tradeSignalRepository,
             PaperPositionRepository paperPositionRepository,
-            SentimentService sentimentService,
             ScheduleConfigurationService scheduleConfigurationService,
             ObjectMapper objectMapper,
             ScoreDiagnosticsService scoreDiagnosticsService,
@@ -72,7 +68,6 @@ public class DashboardApiController {
         this.technicalIndicatorRepository = technicalIndicatorRepository;
         this.tradeSignalRepository = tradeSignalRepository;
         this.paperPositionRepository = paperPositionRepository;
-        this.sentimentService = sentimentService;
         this.scheduleConfigurationService = scheduleConfigurationService;
         this.objectMapper = objectMapper;
         this.scoreDiagnosticsService = scoreDiagnosticsService;
@@ -85,6 +80,12 @@ public class DashboardApiController {
     public List<String> symbols() {
         List<String> symbols = coinConfigurationService.enabledSymbols();
         return symbols.isEmpty() ? List.of("BTCUSDT") : symbols;
+    }
+
+    @GetMapping("/score-diagnostics")
+    @Transactional(readOnly = true)
+    public Map<String, Object> scoreDiagnostics() {
+        return scoreDiagnosticsService.last24Hours();
     }
 
     @GetMapping("/overview")
@@ -115,7 +116,6 @@ public class DashboardApiController {
         List<PaperPosition> positions = paperPositionRepository
                 .findTop20BySymbolOrderByOpenedAtDesc(normalizedSymbol);
 
-        SentimentOverview sentiment = sentimentService.overview(normalizedSymbol);
         long closedCandleCount = displayOnlyInterval
                 ? candles.size()
                 : candleRepository.countBySymbolAndIntervalCodeAndClosedTrue(normalizedSymbol, normalizedInterval);
@@ -134,9 +134,7 @@ public class DashboardApiController {
                 : pipeline(normalizedSymbol, closedCandleCount, latestIndicator, latestSignal, positions));
         response.put("candles", candles.stream().map(this::candleDto).toList());
         response.put("indicator", indicatorDto(latestIndicator));
-        response.put("sentiment", sentiment);
         response.put("schedule", scheduleConfigurationService.dashboardSchedule());
-        response.put("scoreDiagnostics", scoreDiagnosticsService.last24Hours());
         response.put("signals", signals.stream().map(this::signalDto).toList());
         response.put("livePrice", candleRepository
                 .findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByCloseTimeDesc(normalizedSymbol, "1m")

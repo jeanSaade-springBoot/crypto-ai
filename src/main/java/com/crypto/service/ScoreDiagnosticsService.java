@@ -27,10 +27,17 @@ public class ScoreDiagnosticsService {
     private static final int FUNDAMENTAL_MAXIMUM = 10;
 
     private final TradeSignalRepository tradeSignalRepository;
+    private volatile DiagnosticsCacheEntry diagnosticsCache;
 
     @Transactional(readOnly = true)
     public Map<String, Object> last24Hours() {
-        Instant from = Instant.now().minus(Duration.ofHours(24));
+        Instant now = Instant.now();
+        DiagnosticsCacheEntry cached = diagnosticsCache;
+        if (cached != null && cached.expiresAt().isAfter(now)) {
+            return cached.value();
+        }
+
+        Instant from = now.minus(Duration.ofHours(24));
         List<TradeSignal> signals = tradeSignalRepository
                 .findByGeneratedAtGreaterThanEqualOrderByGeneratedAtDesc(from);
 
@@ -46,7 +53,9 @@ public class ScoreDiagnosticsService {
             result.put("finalDecisions", Map.of());
             result.put("strategies", List.of());
             result.put("symbolIntervals", List.of());
-            return result;
+            Map<String, Object> immutable = Map.copyOf(result);
+            diagnosticsCache = new DiagnosticsCacheEntry(now.plusSeconds(60), immutable);
+            return immutable;
         }
 
         int minimum = signals.stream().mapToInt(TradeSignal::getTotalScore).min().orElse(0);
@@ -67,8 +76,12 @@ public class ScoreDiagnosticsService {
         result.put("strategies", strategyDiagnostics(signals));
         result.put("symbolIntervals", symbolIntervalDiagnostics(signals));
         result.put("warnings", warnings(signals, average, maximum, normalizationMismatches));
-        return result;
+        Map<String, Object> immutable = Map.copyOf(result);
+        diagnosticsCache = new DiagnosticsCacheEntry(now.plusSeconds(60), immutable);
+        return immutable;
     }
+
+    private record DiagnosticsCacheEntry(Instant expiresAt, Map<String, Object> value) {}
 
     private List<Map<String, Object>> categoryDiagnostics(List<TradeSignal> signals) {
         return List.of(
