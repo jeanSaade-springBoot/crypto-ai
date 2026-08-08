@@ -33,6 +33,7 @@ public class PaperTradingService {
     private final PaperPositionRepository positionRepository;
     private final WalletAutoExecutionService walletAutoExecutionService;
     private final TradeExecutionValidationService executionValidationService;
+    private final OpportunityConsolidationService opportunityConsolidationService;
     private final DynamicProfitLockService dynamicProfitLockService;
 
     /** Advisory-only; optional injection preserves existing constructor-based tests. */
@@ -125,11 +126,26 @@ public class PaperTradingService {
 
         TradeExecutionValidationService.ValidationResult executionValidation =
                 executionValidationService.validateBuy(signal);
+
         if (!executionValidation.allowed()) {
-            log.info("Normal wallet BUY rejected: signalId={}, symbol={}, interval={}, reason={}, detail={}",
-                    signal.getId(), signal.getSymbol(), signal.getInterval(),
-                    executionValidation.code(), executionValidation.explanation());
-            return Optional.empty();
+            OpportunityConsolidationService.Assessment consolidated =
+                    opportunityConsolidationService.evaluate(signal);
+            if (consolidated.allowed()) {
+                executionValidation = TradeExecutionValidationService.ValidationResult.allow(
+                        consolidated.positionPercent(),
+                        consolidated.code(),
+                        consolidated.explanation()
+                );
+                log.info("Consolidated wallet BUY approved: signalId={}, symbol={}, count={}, avgScore={}, avgConfidence={}, positionPercent={}, detail={}",
+                        signal.getId(), signal.getSymbol(), consolidated.consecutiveBuyCount(),
+                        consolidated.averageScore(), consolidated.averageConfidence(),
+                        consolidated.positionPercent(), consolidated.explanation());
+            } else {
+                log.info("Wallet BUY not executed: signalId={}, symbol={}, interval={}, normalReason={}, opportunityState={}, opportunityReason={}, detail={}",
+                        signal.getId(), signal.getSymbol(), signal.getInterval(),
+                        executionValidation.code(), consolidated.state(), consolidated.code(), consolidated.explanation());
+                return Optional.empty();
+            }
         }
 
         if (positionRepository.countByStatus(PositionStatus.OPEN) >= properties.maxOpenPositions()) {
