@@ -166,7 +166,6 @@ public class ExecutionIntelligenceService {
         if (isDirectBuyCandidate(signal)) {
             TradeExecutionValidationService.ValidationResult validation = validationService.validateBuy(signal);
             if (validation.allowed()) {
-                Evidence evidence = evidence(signal);
                 saveOpportunity(signal, evidence, "CONFIRMED", "IMMEDIATE_VALIDATION",
                         validation.positionPercent(), validation.code(), validation.explanation());
                 return ExecutionDecision.allow(
@@ -181,7 +180,6 @@ public class ExecutionIntelligenceService {
             // Preserve the existing BUY-only persistence model as the first consolidation route.
             OpportunityConsolidationService.Assessment consolidated = consolidationService.evaluate(signal);
             if (consolidated.allowed()) {
-                Evidence evidence = evidence(signal);
                 saveOpportunity(signal, evidence, "CONFIRMED", "CONSOLIDATED_BUY",
                         consolidated.positionPercent(), consolidated.code(), consolidated.explanation());
                 return ExecutionDecision.allow(
