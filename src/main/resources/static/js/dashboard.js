@@ -23,6 +23,7 @@ let walletRefreshInFlight = false;
 let executionIntelligenceRefreshInFlight = false;
 let cachedExecutionSummary = {};
 let cachedActiveOpportunities = [];
+let cachedActivePositions = [];
 let latestWalletExecutions = new Map();
 const numberFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 });
 const moneyFormatter = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 });
@@ -264,13 +265,16 @@ async function refreshExecutionIntelligence() {
     if (executionIntelligenceRefreshInFlight) return;
     executionIntelligenceRefreshInFlight = true;
     try {
-        const [summaryResponse, opportunitiesResponse] = await Promise.all([
+        const [summaryResponse, opportunitiesResponse, positionsResponse] = await Promise.all([
             fetch('/api/execution-intelligence/summary'),
-            fetch('/api/execution-intelligence/opportunities/active')
+            fetch('/api/execution-intelligence/opportunities/active'),
+            fetch('/api/dashboard/active-positions')
         ]);
         if (summaryResponse.ok) cachedExecutionSummary = await summaryResponse.json();
         if (opportunitiesResponse.ok) cachedActiveOpportunities = await opportunitiesResponse.json();
+        if (positionsResponse.ok) cachedActivePositions = await positionsResponse.json();
         renderExecutionIntelligence(cachedExecutionSummary, cachedActiveOpportunities);
+        renderActivePositionsKpi(cachedActivePositions);
         renderWalletHeader(cachedDashboardWallet || {});
     } catch (_) {
         // Execution intelligence is operational metadata and must not block live market rendering.
@@ -324,6 +328,76 @@ function renderExecutionIntelligence(summary = {}, opportunities = []) {
             </article>`;
         }).join('') : '<div class="empty">No active opportunities right now.</div>';
     }
+}
+
+
+function renderActivePositionsKpi(positions = []) {
+    const count = Array.isArray(positions) ? positions.length : 0;
+    const kpi = el('active-positions-kpi');
+    const countNode = el('header-active-positions');
+    const symbolsNode = el('header-active-symbols');
+    if (countNode) countNode.textContent = count;
+    if (symbolsNode) {
+        symbolsNode.textContent = count
+            ? positions.slice(0, 3).map(p => String(p.symbol || '').replace('USDT','')).join(' · ') + (count > 3 ? ` +${count - 3}` : '')
+            : 'None';
+    }
+    if (kpi) {
+        kpi.classList.toggle('has-active-position', count > 0);
+        kpi.setAttribute('aria-label', count ? `${count} active positions. Click to inspect.` : 'No active positions');
+    }
+    renderActivePositionsModal(positions);
+}
+
+function renderActivePositionsModal(positions = []) {
+    const list = el('active-positions-list');
+    const subtitle = el('active-positions-subtitle');
+    if (!list) return;
+    const rows = Array.isArray(positions) ? positions : [];
+    if (subtitle) subtitle.textContent = rows.length ? `${rows.length} wallet-managed position${rows.length === 1 ? '' : 's'} currently open` : 'No open positions';
+    if (!rows.length) {
+        list.innerHTML = '<div class="empty">No active positions right now.</div>';
+        return;
+    }
+    list.innerHTML = rows.map(p => {
+        const pnl = Number(p.unrealizedPnlUsdt || 0);
+        const pnlPct = Number(p.unrealizedPnlPercent || 0);
+        const entry = Number(p.entryPrice || 0);
+        const current = Number(p.currentPrice || 0);
+        const tp = Number(p.takeProfit || 0);
+        const sl = Number(p.stopLoss || 0);
+        const progress = tp > entry ? Math.max(0, Math.min(100, ((current - entry) / (tp - entry)) * 100)) : 0;
+        return `<article class="active-position-card ${pnl >= 0 ? 'winning' : 'losing'}">
+            <div class="active-position-head">
+                <div><strong>${escapeHtml(p.symbol || '—')}</strong><span>${escapeHtml(String(p.symbol || '').replace('USDT',''))} position</span></div>
+                <div class="active-position-pnl"><strong class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${money(pnl)}</strong><span class="${pnlPct >= 0 ? 'positive' : 'negative'}">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}%</span></div>
+            </div>
+            <div class="active-position-metrics">
+                <div><span>Entry</span><strong>${money(p.entryPrice)}</strong></div>
+                <div><span>Current</span><strong>${money(p.currentPrice)}</strong></div>
+                <div><span>Quantity</span><strong>${value(p.quantity)}</strong></div>
+                <div><span>Opened</span><strong>${dateTime(p.openedAt)}</strong></div>
+            </div>
+            <div class="active-position-progress"><div class="active-position-progress-label"><span>TP progress</span><strong>${progress.toFixed(1)}%</strong></div><div class="active-position-track"><i style="width:${progress}%"></i></div></div>
+            <div class="active-position-levels"><span>SL <b>${money(p.stopLoss)}</b></span><span>${p.profitLockActive ? '🔒 Profit Lock' : 'Profit Lock'} <b>${p.profitLockActive ? money(p.profitLockPrice) : 'Waiting'}</b></span><span>TP <b>${money(p.takeProfit)}</b></span></div>
+            ${p.profitLockActive ? `<div class="active-position-lock">Profit Lock active · protected at <strong>${money(p.profitLockPrice)}</strong> · best progress ${Number(p.profitLockProgressPercent || 0).toFixed(1)}%</div>` : ''}
+            <a class="active-position-inspect" href="/trade-inspector?signalId=${encodeURIComponent(p.entrySignalId || '')}">Inspect trade</a>
+        </article>`;
+    }).join('');
+}
+
+function openActivePositionsModal() {
+    const modal = el('active-positions-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    document.body.classList.add('position-modal-open');
+}
+
+function closeActivePositionsModal() {
+    const modal = el('active-positions-modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    document.body.classList.remove('position-modal-open');
 }
 
 function renderAiAnalysis(signals, indicator) {
@@ -1694,4 +1768,10 @@ window.addEventListener('load', () => {
     syncDashboardHeaderOffset();
     const closeButton = el('execution-marker-close');
     if (closeButton) closeButton.addEventListener('click', () => el('execution-marker-dialog').close());
+    const positionsKpi = el('active-positions-kpi');
+    if (positionsKpi) positionsKpi.addEventListener('click', openActivePositionsModal);
+    const positionsClose = el('active-positions-close');
+    if (positionsClose) positionsClose.addEventListener('click', closeActivePositionsModal);
+    document.querySelectorAll('[data-close-active-positions]').forEach(node => node.addEventListener('click', closeActivePositionsModal));
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') closeActivePositionsModal(); });
 });

@@ -58,7 +58,9 @@
                 <div class="wallet-kpi"><small>Wallet Value</small><strong id="header-wallet-value">—</strong></div>
                 <div class="wallet-kpi"><small>Available USDT</small><strong id="header-wallet-available">—</strong></div>
                 <div class="wallet-kpi"><small>Invested</small><strong id="header-wallet-invested">—</strong></div>
-                <a class="wallet-kpi clickable-kpi" href="#positions"><small>Active Positions</small><strong id="header-active-positions">0</strong></a>
+                <button id="active-positions-kpi" class="wallet-kpi clickable-kpi active-positions-kpi" type="button" aria-haspopup="dialog" aria-controls="active-positions-modal">
+                    <small>Active Positions</small><strong id="header-active-positions">0</strong><span id="header-active-symbols" class="active-symbols">None</span>
+                </button>
                 <div class="wallet-kpi"><small>Today's P/L</small><strong id="header-today-pnl">—</strong></div>
                 <div class="wallet-kpi"><small>Overall P/L</small><strong id="header-overall-pnl">—</strong></div>
             </section>
@@ -285,7 +287,19 @@
             </div>
             <div id="trade-replay-content" class="trade-replay-content">Loading…</div>
         </dialog>
-    </main>
+    
+
+        <div id="active-positions-modal" class="position-modal hidden" role="dialog" aria-modal="true" aria-labelledby="active-positions-title">
+            <div class="position-modal-backdrop" data-close-active-positions></div>
+            <section class="position-modal-card">
+                <header class="position-modal-header">
+                    <div><p class="eyebrow">LIVE WALLET</p><h2 id="active-positions-title">Active positions</h2><span id="active-positions-subtitle">No open positions</span></div>
+                    <button id="active-positions-close" class="position-modal-close" type="button" aria-label="Close active positions">×</button>
+                </header>
+                <div id="active-positions-list" class="active-positions-list"><div class="empty">No active positions right now.</div></div>
+            </section>
+        </div>
+</main>
 </div>
 <script src="/js/dashboard.js"></script>
 </body>

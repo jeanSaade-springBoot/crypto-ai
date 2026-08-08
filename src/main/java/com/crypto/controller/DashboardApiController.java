@@ -165,6 +165,48 @@ public class DashboardApiController {
     }
 
 
+    @GetMapping("/active-positions")
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> activePositions() {
+        return walletManagedPositionRepository.findAllByStatusOrderByOpenedAtDesc("OPEN")
+                .stream()
+                .map(position -> {
+                    BigDecimal currentPrice = candleRepository
+                            .findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByCloseTimeDesc(position.getSymbol(), "1m")
+                            .map(Candle::getClosePrice)
+                            .orElse(position.getAverageEntryPriceUsdt());
+
+                    BigDecimal quantity = position.getQuantity() == null ? BigDecimal.ZERO : position.getQuantity();
+                    BigDecimal entry = position.getAverageEntryPriceUsdt() == null ? BigDecimal.ZERO : position.getAverageEntryPriceUsdt();
+                    BigDecimal unrealizedPnl = currentPrice.subtract(entry).multiply(quantity);
+                    BigDecimal unrealizedPercent = entry.signum() == 0
+                            ? BigDecimal.ZERO
+                            : currentPrice.subtract(entry)
+                                    .divide(entry, 8, RoundingMode.HALF_UP)
+                                    .multiply(BigDecimal.valueOf(100));
+
+                    Map<String, Object> dto = new LinkedHashMap<>();
+                    dto.put("id", position.getId());
+                    dto.put("entrySignalId", position.getEntrySignalId());
+                    dto.put("symbol", position.getSymbol());
+                    dto.put("quantity", quantity);
+                    dto.put("entryPrice", entry);
+                    dto.put("currentPrice", currentPrice);
+                    dto.put("unrealizedPnlUsdt", unrealizedPnl);
+                    dto.put("unrealizedPnlPercent", unrealizedPercent);
+                    dto.put("stopLoss", position.getStopLossUsdt());
+                    dto.put("takeProfit", position.getTakeProfitUsdt());
+                    dto.put("highestPrice", position.getHighestPriceUsdt());
+                    dto.put("profitLockActive", position.isProfitLockActive());
+                    dto.put("profitLockPrice", position.getProfitLockPriceUsdt());
+                    dto.put("profitLockProgressPercent", position.getProfitLockProgressPercent());
+                    dto.put("openedAt", position.getOpenedAt());
+                    return dto;
+                })
+                .toList();
+    }
+
+
     private Map<String, Object> timeframeSnapshot(String symbol) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("1h", timeframeDecision(symbol, "1h", "FIRST FRAME", "Strategic direction"));
