@@ -14,6 +14,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -62,6 +64,19 @@ public class ExecutionIntelligenceService {
     private static final int DEFERRED_MIN_EVIDENCE_MOMENTUM = -10;
     private static final int DEFERRED_POSITION_PERCENT = 30;
 
+    // Progressive Position Building. These are portfolio-allocation stages, not
+    // confidence shortcuts: a scout requires excellent price quality, confirmation
+    // requires stronger evidence, and the final add requires trend continuation.
+    private static final int SCOUT_TARGET_PERCENT = 20;
+    private static final int CONFIRMATION_TARGET_PERCENT = 50;
+    private static final int TREND_TARGET_PERCENT = 100;
+    private static final int SCOUT_MIN_SIGNAL_SCORE = 60;
+    private static final int SCOUT_MIN_CONFIDENCE = 75;
+    private static final int SCOUT_MIN_ENTRY_QUALITY = 80;
+    private static final int CONFIRMATION_MIN_ENTRY_QUALITY = 65;
+    private static final int TREND_MIN_ENTRY_QUALITY = 60;
+    private static final int CHASE_ENTRY_CUTOFF = 50;
+
     // Symbol-agnostic opportunity health weights. Higher timeframes carry more
     // information and signal quality scales every contribution.
     private static final int HEALTH_1M_BUY = 15;
@@ -86,6 +101,11 @@ public class ExecutionIntelligenceService {
 
     @Transactional
     public ExecutionDecision evaluateBuy(TradeSignal signal) {
+        return evaluateBuy(signal, 0, "NONE");
+    }
+
+    @Transactional
+    public ExecutionDecision evaluateBuy(TradeSignal signal, int currentAllocationPercent, String currentStage) {
         if (signal == null || signal.getGeneratedAt() == null) {
             return ExecutionDecision.reject("INVALID_SIGNAL", "Signal is missing required execution data.");
         }
@@ -145,8 +165,31 @@ public class ExecutionIntelligenceService {
         // deferred by ATR waiting for a pullback. It still requires a current risk plan,
         // supportive 1m/5m/1h context, healthy opportunity state and >= 1:1 current R/R.
         Evidence evidence = evidence(signal);
+        EntryQuality entryQuality = assessEntryQuality(signal);
+
+        ExecutionDecision progressive = progressivePositionDecision(
+                signal, evidence, entryQuality, currentAllocationPercent, currentStage);
+        if (progressive != null) {
+            saveOpportunity(signal, evidence,
+                    progressive.allowed() ? "CONFIRMED" : progressive.state(),
+                    progressive.source(), progressive.positionPercent(),
+                    progressive.code(), progressive.explanation());
+            return progressive;
+        }
+
+        // When a wallet position is already open, only an explicit progressive add
+        // may increase exposure. Normal initial-entry routes are not re-run.
+        if (currentAllocationPercent > 0) {
+            return ExecutionDecision.observe(
+                    "POSITION_BUILDING_HOLD",
+                    "An open position already exists at " + currentAllocationPercent
+                            + "% allocation. No additional stage qualified on this signal.",
+                    evidence);
+        }
+
         ExecutionDecision deferred = deferredContinuationDecision(signal, evidence);
         if (deferred != null) {
+            deferred = applyInitialEntryQualityGuard(deferred, entryQuality);
             saveOpportunity(signal, evidence,
                     deferred.allowed() ? "CONFIRMED" : deferred.state(),
                     deferred.source(), deferred.positionPercent(),
@@ -166,34 +209,45 @@ public class ExecutionIntelligenceService {
         if (isDirectBuyCandidate(signal)) {
             TradeExecutionValidationService.ValidationResult validation = validationService.validateBuy(signal);
             if (validation.allowed()) {
-                saveOpportunity(signal, evidence, "CONFIRMED", "IMMEDIATE_VALIDATION",
-                        validation.positionPercent(), validation.code(), validation.explanation());
-                return ExecutionDecision.allow(
-                        "IMMEDIATE_VALIDATION",
-                        validation.code(),
-                        validation.positionPercent(),
-                        validation.explanation(),
-                        evidence
-                );
+                ExecutionDecision guarded = applyInitialEntryQualityGuard(
+                        ExecutionDecision.allow(
+                                "IMMEDIATE_VALIDATION",
+                                validation.code(),
+                                validation.positionPercent(),
+                                validation.explanation(),
+                                evidence
+                        ),
+                        entryQuality);
+                saveOpportunity(signal, evidence,
+                        guarded.allowed() ? "CONFIRMED" : guarded.state(),
+                        guarded.source(), guarded.positionPercent(),
+                        guarded.code(), guarded.explanation());
+                return guarded;
             }
 
             // Preserve the existing BUY-only persistence model as the first consolidation route.
             OpportunityConsolidationService.Assessment consolidated = consolidationService.evaluate(signal);
             if (consolidated.allowed()) {
-                saveOpportunity(signal, evidence, "CONFIRMED", "CONSOLIDATED_BUY",
-                        consolidated.positionPercent(), consolidated.code(), consolidated.explanation());
-                return ExecutionDecision.allow(
-                        "CONSOLIDATED_BUY",
-                        consolidated.code(),
-                        consolidated.positionPercent(),
-                        consolidated.explanation(),
-                        evidence
-                );
+                ExecutionDecision guarded = applyInitialEntryQualityGuard(
+                        ExecutionDecision.allow(
+                                "CONSOLIDATED_BUY",
+                                consolidated.code(),
+                                consolidated.positionPercent(),
+                                consolidated.explanation(),
+                                evidence
+                        ),
+                        entryQuality);
+                saveOpportunity(signal, evidence,
+                        guarded.allowed() ? "CONFIRMED" : guarded.state(),
+                        guarded.source(), guarded.positionPercent(),
+                        guarded.code(), guarded.explanation());
+                return guarded;
             }
         }
 
         // Intelligent evidence path: BUY and strong WATCH observations can build one opportunity.
-        ExecutionDecision accumulated = accumulatedDecision(signal, evidence);
+        ExecutionDecision accumulated = applyInitialEntryQualityGuard(
+                accumulatedDecision(signal, evidence), entryQuality);
         saveOpportunity(signal, evidence,
                 accumulated.allowed() ? "CONFIRMED" : accumulated.state(),
                 accumulated.source(), accumulated.positionPercent(),
@@ -207,19 +261,233 @@ public class ExecutionIntelligenceService {
         opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(
                         signal.getSymbol(), "BUY", List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
                 .ifPresent(opportunity -> {
-                    opportunity.setStatus("EXECUTED");
+                    boolean stillBuilding = "SCOUT_ENTRY".equals(decision.source())
+                            || "CONFIRMATION_ADD".equals(decision.source());
+                    opportunity.setStatus(stillBuilding ? "BUILDING" : "EXECUTED");
                     opportunity.setExecutionSource(decision.source());
                     opportunity.setRecommendedPositionPercent(decision.positionPercent());
                     opportunity.setDecisionCode(decision.code());
                     opportunity.setDecisionExplanation(decision.explanation());
                     opportunity.setLatestSignal(signal);
                     opportunity.setLastEvidenceAt(signal.getGeneratedAt());
-                    opportunity.setExecutedAt(Instant.now());
+                    if (!stillBuilding) {
+                        opportunity.setExecutedAt(Instant.now());
+                    }
                     opportunity.setUpdatedAt(Instant.now());
                     opportunityRepository.save(opportunity);
                 });
     }
 
+
+
+    /**
+     * Entry quality is deliberately independent from signal quality. A market can become
+     * more certain while simultaneously becoming a worse price to enter.
+     */
+    public EntryQuality assessEntryQuality(TradeSignal current) {
+        if (current == null || current.getGeneratedAt() == null || current.getLatestPrice() == null
+                || current.getLatestPrice().signum() <= 0) {
+            return new EntryQuality(0, "UNKNOWN", 0d, 0d, 0d, 0L);
+        }
+
+        Instant cutoff = current.getGeneratedAt().minus(EVIDENCE_WINDOW);
+        List<TradeSignal> recent = signalRepository
+                .findTop20BySymbolAndIntervalOrderByGeneratedAtDesc(current.getSymbol(), EXECUTION_INTERVAL);
+
+        BigDecimal reference = current.getLatestPrice();
+        for (TradeSignal s : recent) {
+            if (s.getGeneratedAt() == null || s.getGeneratedAt().isAfter(current.getGeneratedAt())) continue;
+            if (s.getGeneratedAt().isBefore(cutoff)) break;
+            if (s.getLatestPrice() != null && s.getLatestPrice().signum() > 0
+                    && s.getLatestPrice().compareTo(reference) < 0) {
+                reference = s.getLatestPrice();
+            }
+        }
+
+        double expansionPercent = current.getLatestPrice().subtract(reference)
+                .divide(reference, 8, RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(100)).doubleValue();
+
+        double atrExtension = 0d;
+        if (current.getAtrAtSignal() != null && current.getAtrAtSignal().signum() > 0) {
+            atrExtension = current.getLatestPrice().subtract(reference).max(BigDecimal.ZERO)
+                    .divide(current.getAtrAtSignal(), 8, RoundingMode.HALF_UP).doubleValue();
+        }
+
+        long ageMinutes = opportunityRepository
+                .findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(
+                        current.getSymbol(), "BUY", List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
+                .map(o -> o.getStartedAt() == null ? 0L
+                        : Math.max(0L, Duration.between(o.getStartedAt(), current.getGeneratedAt()).toMinutes()))
+                .orElse(0L);
+
+        double rr = currentRewardRisk(current);
+        int score = 100;
+
+        if (expansionPercent > 8d) score -= 50;
+        else if (expansionPercent > 5d) score -= 35;
+        else if (expansionPercent > 3d) score -= 22;
+        else if (expansionPercent > 1.5d) score -= 10;
+
+        if (atrExtension > 6d) score -= 30;
+        else if (atrExtension > 4d) score -= 20;
+        else if (atrExtension > 2.5d) score -= 10;
+
+        if (ageMinutes > 60) score -= 15;
+        else if (ageMinutes > 40) score -= 10;
+        else if (ageMinutes > 20) score -= 5;
+
+        if (rr <= 0d || rr < 1d) score -= 30;
+        else if (rr < 1.25d) score -= 15;
+        else if (rr >= 2d) score += 5;
+
+        if ("HIGH_VOLATILITY".equals(String.valueOf(current.getMarketRegime()))) score -= 10;
+        if ("BREAKOUT".equals(String.valueOf(current.getMarketRegime()))
+                && expansionPercent <= 3d && atrExtension <= 2.5d) score += 5;
+
+        score = Math.max(0, Math.min(100, score));
+        String classification = score >= 85 ? "EXCELLENT_ENTRY"
+                : score >= 70 ? "GOOD_ENTRY"
+                : score >= 55 ? "ACCEPTABLE_ENTRY"
+                : score >= CHASE_ENTRY_CUTOFF ? "LATE_ENTRY"
+                : "CHASE_ENTRY";
+
+        return new EntryQuality(score, classification, expansionPercent, atrExtension, rr, ageMinutes);
+    }
+
+    private ExecutionDecision progressivePositionDecision(
+            TradeSignal current,
+            Evidence e,
+            EntryQuality q,
+            int currentAllocationPercent,
+            String currentStage) {
+
+        TradeSignal five = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
+        TradeSignal oneHour = latestAtOrBefore(current, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
+        boolean fiveSupportive = five != null
+                && (five.getDecision() == SignalDecision.WATCH || isBullish(five.getDecision()))
+                && five.getTotalScore() >= 60 && five.getConfidenceScore() >= 65;
+        boolean oneHourSupportive = oneHour != null
+                && (oneHour.getDecision() == SignalDecision.WATCH || isBullish(oneHour.getDecision()));
+
+        if (currentAllocationPercent <= 0) {
+            boolean scout = isSupportiveCurrentSignal(current)
+                    && current.isAtrImmediateEntryAllowed()
+                    && current.getTotalScore() >= SCOUT_MIN_SIGNAL_SCORE
+                    && current.getConfidenceScore() >= SCOUT_MIN_CONFIDENCE
+                    && q.score() >= SCOUT_MIN_ENTRY_QUALITY
+                    && q.rewardRisk() >= 1.25d
+                    && e.opportunityHealth() >= 55
+                    && e.evidenceMomentum() >= -5
+                    && fiveSupportive
+                    && oneHourSupportive;
+            if (scout) {
+                return ExecutionDecision.allow(
+                        "SCOUT_ENTRY",
+                        "EXCELLENT_PRICE_SCOUT",
+                        SCOUT_TARGET_PERCENT,
+                        "Progressive Position Building opened a " + SCOUT_TARGET_PERCENT
+                                + "% scout because signal quality is supportive while entry quality is "
+                                + q.score() + "/100 (" + q.classification() + "). Price expansion="
+                                + format(q.expansionPercent()) + "%, ATR extension=" + format(q.atrExtension())
+                                + ", current R/R=" + format(q.rewardRisk())
+                                + ". Capital remains deliberately small until confirmation improves.",
+                        e);
+            }
+            return null;
+        }
+
+        if (!isSupportiveCurrentSignal(current) || !fiveSupportive || !oneHourSupportive
+                || q.classification().equals("CHASE_ENTRY")) {
+            return null;
+        }
+
+        if (currentAllocationPercent < CONFIRMATION_TARGET_PERCENT) {
+            boolean evidenceConfirmed = e.evidenceScore() >= MIN_EVIDENCE_SCORE
+                    && e.averageScore() >= 65
+                    && e.averageConfidence() >= 65;
+            boolean directConfirmed = isBullish(current.getDecision())
+                    && current.getTotalScore() >= properties.minimumBuyScore();
+            if ((evidenceConfirmed || directConfirmed)
+                    && current.isAtrImmediateEntryAllowed()
+                    && e.opportunityHealth() >= 60
+                    && q.score() >= CONFIRMATION_MIN_ENTRY_QUALITY
+                    && q.rewardRisk() >= 1.15d) {
+                int add = CONFIRMATION_TARGET_PERCENT - currentAllocationPercent;
+                return ExecutionDecision.allow(
+                        "CONFIRMATION_ADD",
+                        "PROGRESSIVE_CONFIRMATION_ADD",
+                        add,
+                        "Progressive Position Building added " + add
+                                + "% after the scout was confirmed. Entry quality=" + q.score()
+                                + "/100, evidence=" + e.evidenceScore()
+                                + ", health=" + e.opportunityHealth()
+                                + ", 5m=" + e.fiveMinute() + ", 1h=" + e.oneHour() + ".",
+                        e);
+            }
+        }
+
+        if (currentAllocationPercent >= CONFIRMATION_TARGET_PERCENT
+                && currentAllocationPercent < TREND_TARGET_PERCENT) {
+            boolean strongCurrent = isBullish(current.getDecision())
+                    || (current.getDecision() == SignalDecision.WATCH
+                    && current.getTotalScore() >= 72
+                    && current.getConfidenceScore() >= 75);
+            boolean strongFive = five != null
+                    && (isBullish(five.getDecision()) || five.getDecision() == SignalDecision.WATCH)
+                    && five.getTotalScore() >= 65
+                    && five.getConfidenceScore() >= 70;
+            if (strongCurrent && strongFive
+                    && current.isAtrImmediateEntryAllowed()
+                    && e.opportunityHealth() >= 70
+                    && e.evidenceMomentum() >= 0
+                    && q.score() >= TREND_MIN_ENTRY_QUALITY
+                    && q.rewardRisk() >= 1.20d) {
+                int add = TREND_TARGET_PERCENT - currentAllocationPercent;
+                return ExecutionDecision.allow(
+                        "TREND_ADD",
+                        "PROGRESSIVE_TREND_ADD",
+                        add,
+                        "Progressive Position Building completed the position with a " + add
+                                + "% trend add only after confirmation strengthened. Entry quality="
+                                + q.score() + "/100, health=" + e.opportunityHealth()
+                                + ", evidence momentum=" + e.evidenceMomentum()
+                                + ", current R/R=" + format(q.rewardRisk()) + ".",
+                        e);
+            }
+        }
+        return null;
+    }
+
+    private ExecutionDecision applyInitialEntryQualityGuard(ExecutionDecision decision, EntryQuality q) {
+        if (decision == null || !decision.allowed()) return decision;
+        if (q.score() < CHASE_ENTRY_CUTOFF) {
+            return ExecutionDecision.building(
+                    "CHASE_ENTRY_BLOCKED",
+                    "The market signal is valid, but Entry Quality is only " + q.score()
+                            + "/100 (" + q.classification() + "). Price has already expanded "
+                            + format(q.expansionPercent()) + "% from the recent opportunity base and "
+                            + format(q.atrExtension()) + " ATR. The engine will not buy a late-stage chase.",
+                    decision.evidence());
+        }
+
+        int cap = q.score() >= 85 ? 50 : q.score() >= 70 ? 40 : 25;
+        int reduced = Math.min(decision.positionPercent(), cap);
+        if (reduced == decision.positionPercent()) return decision;
+
+        return ExecutionDecision.allow(
+                decision.source(),
+                decision.code(),
+                reduced,
+                decision.explanation() + " Entry Quality " + q.score() + "/100 ("
+                        + q.classification() + ") capped the initial allocation at " + reduced
+                        + "% so confirmation can add later instead of committing full size at once.",
+                decision.evidence());
+    }
+
+    private String format(double value) {
+        return String.format(java.util.Locale.ROOT, "%.2f", value);
+    }
 
     private ExecutionDecision deferredContinuationDecision(TradeSignal current, Evidence e) {
         if (!isSupportiveCurrentSignal(current)) return null;
@@ -726,6 +994,15 @@ public class ExecutionIntelligenceService {
             return new Evidence(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null, List.of());
         }
     }
+
+    public record EntryQuality(
+            int score,
+            String classification,
+            double expansionPercent,
+            double atrExtension,
+            double rewardRisk,
+            long opportunityAgeMinutes
+    ) {}
 
     private record HardRiskBlock(boolean blocked, String code, String explanation) {
         static HardRiskBlock none() { return new HardRiskBlock(false, "NONE", ""); }

@@ -200,6 +200,10 @@ public class DashboardApiController {
                     dto.put("profitLockActive", position.isProfitLockActive());
                     dto.put("profitLockPrice", position.getProfitLockPriceUsdt());
                     dto.put("profitLockProgressPercent", position.getProfitLockProgressPercent());
+                    dto.put("entryStage", position.getEntryStage());
+                    dto.put("allocatedPositionPercent", position.getAllocatedPositionPercent());
+                    dto.put("entryQualityScore", position.getEntryQualityScore());
+                    dto.put("lastScaleInAt", position.getLastScaleInAt());
                     dto.put("openedAt", position.getOpenedAt());
                     return dto;
                 })

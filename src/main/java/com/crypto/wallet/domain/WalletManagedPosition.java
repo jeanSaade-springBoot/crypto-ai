@@ -57,6 +57,14 @@ public class WalletManagedPosition {
     private BigDecimal profitLockProgressPercent;
     @Column(name = "profit_lock_activated_at")
     private Instant profitLockActivatedAt;
+    @Column(name = "entry_stage", nullable = false, length = 30)
+    private String entryStage;
+    @Column(name = "allocated_position_percent", nullable = false)
+    private int allocatedPositionPercent;
+    @Column(name = "entry_quality_score", nullable = false)
+    private int entryQualityScore;
+    @Column(name = "last_scale_in_at")
+    private Instant lastScaleInAt;
     @Column(nullable = false, length = 20)
     private String status;
     @Column(name = "opened_at", nullable = false)

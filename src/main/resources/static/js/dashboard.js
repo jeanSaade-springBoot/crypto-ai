@@ -381,6 +381,7 @@ function renderActivePositionsModal(positions = []) {
             </div>
             <div class="active-position-progress"><div class="active-position-progress-label"><span>TP progress</span><strong>${progress.toFixed(1)}%</strong></div><div class="active-position-track"><i style="width:${progress}%"></i></div></div>
             <div class="active-position-levels"><span>SL <b>${money(p.stopLoss)}</b></span><span>${p.profitLockActive ? '🔒 Profit Lock' : 'Profit Lock'} <b>${p.profitLockActive ? money(p.profitLockPrice) : 'Waiting'}</b></span><span>TP <b>${money(p.takeProfit)}</b></span></div>
+            <div class="active-position-stage"><span>Position stage <b>${p.entryStage || 'ENTRY'}</b></span><span>Allocated <b>${Number(p.allocatedPositionPercent || 0).toFixed(0)}%</b></span><span>Entry quality <b>${Number(p.entryQualityScore || 0).toFixed(0)}/100</b></span></div>
             ${p.profitLockActive ? `<div class="active-position-lock">Profit Lock active · protected at <strong>${money(p.profitLockPrice)}</strong> · best progress ${Number(p.profitLockProgressPercent || 0).toFixed(1)}%</div>` : ''}
             <a class="active-position-inspect" href="/trade-inspector?signalId=${encodeURIComponent(p.entrySignalId || '')}">Inspect trade</a>
         </article>`;

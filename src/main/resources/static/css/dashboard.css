@@ -1886,3 +1886,5 @@ body.sidebar-collapsed .app-shell{grid-template-columns:76px minmax(0,1fr)}
 .active-position-inspect{display:inline-flex;margin-top:12px;font-size:12px;font-weight:700;text-decoration:none;padding:7px 10px;border-radius:9px;border:1px solid var(--border);color:var(--text);background:var(--surface)}
 body.position-modal-open{overflow:hidden}
 @media(max-width:760px){.position-modal{padding:78px 10px 10px}.position-modal-card{width:100%;max-height:calc(100vh - 90px);border-radius:14px}.active-position-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.active-position-levels{display:grid;grid-template-columns:1fr}}
+
+.active-position-stage{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:var(--muted)}.active-position-stage span{padding:6px 8px;border-radius:8px;background:var(--surface);border:1px solid var(--border)}.active-position-stage b{color:var(--text)}

@@ -38,20 +38,34 @@ public class WalletAutoExecutionService {
 
     @Transactional
     public synchronized boolean executeBuy(TradeSignal signal, int positionPercent, String executionExplanation) {
+        return executeBuy(signal, positionPercent, executionExplanation, "ENTRY_BUY", 0);
+    }
+
+    @Transactional
+    public synchronized boolean executeBuy(TradeSignal signal, int positionPercent, String executionExplanation,
+                                           String entryStage, int entryQualityScore) {
         if (signal == null || signal.getId() == null) return false;
         WalletSettings settings = settings();
-        int normalizedPositionPercent = Math.max(1, Math.min(100, positionPercent));
+        int requestedPositionPercent = Math.max(1, Math.min(100, positionPercent));
+
+        String pair = normalizePair(signal.getSymbol());
+        WalletManagedPosition existingPosition = managedPositionRepository
+                .findTopBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
+                .orElse(null);
+        int currentAllocatedPercent = existingPosition == null ? 0 : Math.max(0, existingPosition.getAllocatedPositionPercent());
+        int normalizedPositionPercent = Math.min(requestedPositionPercent, Math.max(0, 100 - currentAllocatedPercent));
+        if (normalizedPositionPercent <= 0) return false;
 
         String key = signal.getId() + ":BUY";
         if (tradeRepository.existsByExecutionKey(key)) return true;
 
-        String pair = normalizePair(signal.getSymbol());
         String assetSymbol = pair.substring(0, pair.length() - 4);
         BigDecimal price = positive(signal.getLatestPrice());
         WalletAsset usdt = getOrCreate("USDT");
         WalletDailyStatistics daily = dailyStatistics(settings, usdt);
 
-        if (daily.getMaximumNewPositions() > 0
+        boolean newPosition = existingPosition == null;
+        if (newPosition && daily.getMaximumNewPositions() > 0
                 && daily.getExecutedBuys() >= daily.getMaximumNewPositions()) return false;
 
         BigDecimal availableAboveReserve = usdt.getQuantity()
@@ -75,13 +89,28 @@ public class WalletAutoExecutionService {
         assetRepository.save(coin);
         assetRepository.save(usdt);
 
-        WalletManagedPosition position = managedPositionRepository
-                .findTopBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
-                .orElseGet(() -> newManagedPosition(pair, signal));
+        WalletManagedPosition position = existingPosition != null
+                ? existingPosition
+                : newManagedPosition(pair, signal);
         position.setQuantity(position.getQuantity().add(quantity));
         position.setTotalCostUsdt(position.getTotalCostUsdt().add(spend));
         position.setAverageEntryPriceUsdt(position.getTotalCostUsdt()
                 .divide(position.getQuantity(), SCALE, RoundingMode.HALF_UP));
+        position.setAllocatedPositionPercent(Math.min(100,
+                position.getAllocatedPositionPercent() + normalizedPositionPercent));
+        position.setEntryStage(entryStage == null || entryStage.isBlank() ? "ENTRY_BUY" : entryStage);
+        position.setEntryQualityScore(Math.max(0, entryQualityScore));
+        if (!newPosition) {
+            position.setLastScaleInAt(Instant.now());
+            if (signal.getStopLoss() != null && signal.getStopLoss().signum() > 0
+                    && (position.getStopLossUsdt() == null || signal.getStopLoss().compareTo(position.getStopLossUsdt()) > 0)) {
+                position.setStopLossUsdt(signal.getStopLoss());
+            }
+            if (signal.getTakeProfit() != null && signal.getTakeProfit().signum() > 0
+                    && (position.getTakeProfitUsdt() == null || signal.getTakeProfit().compareTo(position.getTakeProfitUsdt()) > 0)) {
+                position.setTakeProfitUsdt(signal.getTakeProfit());
+            }
+        }
         position.setUpdatedAt(Instant.now());
         managedPositionRepository.save(position);
 
@@ -96,7 +125,7 @@ public class WalletAutoExecutionService {
                 .feeUsdt(ZERO)
                 .netAmountUsdt(spend)
                 .executionType("PAPER_AUTO")
-                .executionReason("ENTRY_BUY")
+                .executionReason(entryStage == null || entryStage.isBlank() ? "ENTRY_BUY" : entryStage)
                 .status("EXECUTED")
                 .executedAt(Instant.now())
                 .notes("Automatic wallet BUY using " + normalizedPositionPercent + "% of the configured BUY budget")
@@ -105,7 +134,9 @@ public class WalletAutoExecutionService {
                         + "% size. " + (executionExplanation == null ? "" : executionExplanation))
                 .build());
 
-        daily.setExecutedBuys(daily.getExecutedBuys() + 1);
+        if (newPosition) {
+            daily.setExecutedBuys(daily.getExecutedBuys() + 1);
+        }
         daily.setEndingUsdt(usdt.getQuantity());
         daily.setEndingPortfolioUsdt(walletService.currentPortfolioValue());
         daily.setUpdatedAt(Instant.now());
@@ -521,6 +552,10 @@ public class WalletAutoExecutionService {
                 .profitLockPriceUsdt(null)
                 .profitLockProgressPercent(BigDecimal.ZERO)
                 .profitLockActivatedAt(null)
+                .entryStage("NONE")
+                .allocatedPositionPercent(0)
+                .entryQualityScore(0)
+                .lastScaleInAt(null)
                 .build();
     }
 

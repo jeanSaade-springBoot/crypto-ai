@@ -8,6 +8,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import com.crypto.wallet.service.WalletAutoExecutionService;
 import com.crypto.wallet.repository.WalletTradeRepository;
+import com.crypto.wallet.repository.WalletManagedPositionRepository;
+import com.crypto.wallet.domain.WalletManagedPosition;
 import com.crypto.execution.service.ExecutionIntelligenceService;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,6 +37,7 @@ public class PaperTradingService {
     private final PaperPositionRepository positionRepository;
     private final WalletAutoExecutionService walletAutoExecutionService;
     private final WalletTradeRepository walletTradeRepository;
+    private final WalletManagedPositionRepository walletManagedPositionRepository;
     private final TradeExecutionValidationService executionValidationService;
     private final ExecutionIntelligenceService executionIntelligenceService;
     private final DynamicProfitLockService dynamicProfitLockService;
@@ -119,6 +122,67 @@ public class PaperTradingService {
                         validation.code(), validation.explanation());
             }
 
+            // Progressive Position Building may add to an existing position only after
+            // TP / Profit Lock / SL / validated SELL logic had first priority.
+            if ("1m".equals(signal.getInterval()) && !profitLock.active()) {
+                WalletManagedPosition managed = walletManagedPositionRepository
+                        .findTopBySymbolAndStatusOrderByOpenedAtDesc(symbol, "OPEN")
+                        .orElse(null);
+                if (managed != null) {
+                    ExecutionIntelligenceService.ExecutionDecision addDecision =
+                            executionIntelligenceService.evaluateBuy(
+                                    signal,
+                                    managed.getAllocatedPositionPercent(),
+                                    managed.getEntryStage());
+                    if (addDecision.allowed()) {
+                        if (walletTradeRepository
+                                .findTopBySignalIdAndSideAndStatusOrderByExecutedAtDesc(
+                                        signal.getId(), "BUY", "EXECUTED")
+                                .isPresent()) {
+                            return Optional.of(position);
+                        }
+                        int addPercent = addDecision.positionPercent();
+                        ExecutionIntelligenceService.EntryQuality entryQuality =
+                                executionIntelligenceService.assessEntryQuality(signal);
+                        boolean walletAdded = walletAutoExecutionService.executeBuy(
+                                signal,
+                                addPercent,
+                                "Execution Intelligence [" + addDecision.source() + "] " + addDecision.explanation(),
+                                addDecision.source(),
+                                entryQuality.score());
+                        if (walletAdded) {
+                            BigDecimal addedQuantity = walletTradeRepository
+                                    .findTopBySignalIdAndSideAndStatusOrderByExecutedAtDesc(
+                                            signal.getId(), "BUY", "EXECUTED")
+                                    .map(com.crypto.wallet.domain.WalletTrade::getQuantity)
+                                    .filter(q -> q != null && q.signum() > 0)
+                                    .orElse(BigDecimal.ZERO);
+                            if (addedQuantity.signum() > 0) {
+                                BigDecimal oldCost = position.getEntryPrice().multiply(position.getQuantity(), MC);
+                                BigDecimal addCost = signal.getLatestPrice().multiply(addedQuantity, MC);
+                                BigDecimal newQuantity = position.getQuantity().add(addedQuantity);
+                                position.setQuantity(newQuantity);
+                                position.setEntryPrice(oldCost.add(addCost, MC).divide(newQuantity, MC));
+                                if (signal.getStopLoss() != null
+                                        && signal.getStopLoss().compareTo(position.getStopLoss()) > 0) {
+                                    position.setStopLoss(signal.getStopLoss());
+                                }
+                                if (signal.getTakeProfit() != null
+                                        && signal.getTakeProfit().compareTo(position.getTakeProfit()) > 0) {
+                                    position.setTakeProfit(signal.getTakeProfit());
+                                }
+                                position.setEntryReason(position.getEntryReason()
+                                        + " | Progressive add [" + addDecision.source() + "] "
+                                        + addPercent + "% at " + signal.getLatestPrice()
+                                        + "; Entry Quality=" + entryQuality.score() + "/100.");
+                                positionRepository.save(position);
+                            }
+                            executionIntelligenceService.markExecuted(signal, addDecision);
+                        }
+                    }
+                }
+            }
+
             // Non-execution timeframes and non-executable decisions only update context/advisory state.
             return Optional.of(position);
         }
@@ -162,8 +226,12 @@ public class PaperTradingService {
 
         final boolean walletExecuted;
         try {
+            ExecutionIntelligenceService.EntryQuality entryQuality =
+                    executionIntelligenceService.assessEntryQuality(signal);
             walletExecuted = walletAutoExecutionService.executeBuy(signal, effectivePositionPercent,
-                    "Execution Intelligence [" + executionDecision.source() + "] " + executionDecision.explanation());
+                    "Execution Intelligence [" + executionDecision.source() + "] " + executionDecision.explanation(),
+                    executionDecision.source(),
+                    entryQuality.score());
         } catch (RuntimeException ex) {
             log.error("Automatic wallet BUY failed for signal {}: {}", signal.getId(), ex.getMessage(), ex);
             return Optional.empty();
