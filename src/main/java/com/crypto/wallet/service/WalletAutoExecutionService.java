@@ -33,8 +33,14 @@ public class WalletAutoExecutionService {
 
     @Transactional
     public synchronized void executeBuy(TradeSignal signal) {
+        executeBuy(signal, 100, "Full-size execution");
+    }
+
+    @Transactional
+    public synchronized void executeBuy(TradeSignal signal, int positionPercent, String executionExplanation) {
         if (signal == null || signal.getId() == null) return;
         WalletSettings settings = settings();
+        int normalizedPositionPercent = Math.max(1, Math.min(100, positionPercent));
 
         String key = signal.getId() + ":BUY";
         if (tradeRepository.existsByExecutionKey(key)) return;
@@ -51,7 +57,9 @@ public class WalletAutoExecutionService {
         BigDecimal availableAboveReserve = usdt.getQuantity()
                 .subtract(settings.getMinimumUsdtReserve())
                 .max(ZERO);
-        BigDecimal spend = daily.getDailyTradeBudgetUsdt();
+        BigDecimal spend = daily.getDailyTradeBudgetUsdt()
+                .multiply(BigDecimal.valueOf(normalizedPositionPercent))
+                .divide(BigDecimal.valueOf(100), SCALE, RoundingMode.DOWN);
         if (spend.signum() <= 0 || availableAboveReserve.compareTo(spend) < 0) return;
 
         BigDecimal quantity = spend.divide(price, SCALE, RoundingMode.DOWN);
@@ -91,9 +99,10 @@ public class WalletAutoExecutionService {
                 .executionReason("ENTRY_BUY")
                 .status("EXECUTED")
                 .executedAt(Instant.now())
-                .notes("Automatic paper BUY using fixed daily budget")
+                .notes("Automatic wallet BUY using " + normalizedPositionPercent + "% of the configured BUY budget")
                 .executionMessage("BUY decision from trade signal #" + signal.getId()
-                        + " applied to wallet for " + pair)
+                        + " applied to wallet for " + pair + " at " + normalizedPositionPercent
+                        + "% size. " + (executionExplanation == null ? "" : executionExplanation))
                 .build());
 
         daily.setExecutedBuys(daily.getExecutedBuys() + 1);
@@ -372,6 +381,7 @@ public class WalletAutoExecutionService {
                         .performanceWindowType("LAST_TRADES").performanceTradeCount(20).performancePeriodDays(1)
                         .dashboardIntervals("1m,5m,1h,4h,1d")
                         .requireNewBuyTransition(true)
+                        .executionProfile("BALANCED")
                         .dynamicProfitLockEnabled(true)
                         .profitLockActivationPercent(BigDecimal.valueOf(70))
                         .profitLockInitialPercent(BigDecimal.valueOf(40))

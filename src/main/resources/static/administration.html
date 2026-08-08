@@ -64,8 +64,15 @@
                     <label>Minimum USDT reserve<input id="minimum-reserve" type="number" min="0" step="0.01" required></label>
                     <div class="performance-config">
                         <h3>Entry validation</h3>
+                        <label>Execution profile
+                            <select id="execution-profile">
+                                <option value="CONSERVATIVE">Conservative — require bullish 5m confirmation</option>
+                                <option value="BALANCED" selected>Balanced — allow WATCH confirmation with reduced size</option>
+                                <option value="AGGRESSIVE">Aggressive — allow qualified 25% probe entries</option>
+                            </select>
+                        </label>
                         <label class="toggle-row"><input id="require-new-buy-transition" type="checkbox" checked> Execute only on a new 1m BUY transition</label>
-                        <p class="form-note">Normal wallet execution is fixed at 1m. A fresh 5m signal must confirm the direction and the fresh 1h strategic trend must not oppose it. Stop-loss and take-profit remain immediate risk exits.</p>
+                        <p class="form-note">1m remains the only execution timeframe. The profile changes only confirmation strictness and BUY size. Bearish 5m/1h context and existing risk vetoes still block the entry.</p>
                     </div>
                     <div class="performance-config">
                         <h3>Dynamic Profit Lock</h3>

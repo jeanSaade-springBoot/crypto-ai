@@ -162,6 +162,7 @@ public class DynamicProfitLockService {
                         .performancePeriodDays(1)
                         .dashboardIntervals("1m,5m,1h,4h,1d")
                         .requireNewBuyTransition(true)
+                        .executionProfile("BALANCED")
                         .dynamicProfitLockEnabled(true)
                         .profitLockActivationPercent(BigDecimal.valueOf(70))
                         .profitLockInitialPercent(BigDecimal.valueOf(40))

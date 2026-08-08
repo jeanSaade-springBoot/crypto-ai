@@ -138,11 +138,14 @@ public class PaperTradingService {
 
         enforceDailyLossLimit();
 
-        BigDecimal positionScale = BigDecimal.valueOf(
-                signal.getAtrRecommendedPositionPercent() <= 0
-                        ? 100
-                        : signal.getAtrRecommendedPositionPercent()
-        ).divide(BigDecimal.valueOf(100), MC);
+        int atrPercent = signal.getAtrRecommendedPositionPercent() <= 0
+                ? 100
+                : signal.getAtrRecommendedPositionPercent();
+        int executionPercent = executionValidation.positionPercent();
+        int effectivePositionPercent = Math.max(1,
+                Math.min(100, (int) Math.round(atrPercent * executionPercent / 100.0)));
+        BigDecimal positionScale = BigDecimal.valueOf(effectivePositionPercent)
+                .divide(BigDecimal.valueOf(100), MC);
         BigDecimal riskAmount = properties.paperAccountBalance()
                 .multiply(properties.riskPerTradePercent(), MC)
                 .divide(BigDecimal.valueOf(100), MC)
@@ -163,12 +166,12 @@ public class PaperTradingService {
                 .stopLoss(signal.getStopLoss())
                 .takeProfit(signal.getTakeProfit())
                 .signal(signal)
-                .entryReason(signal.getExplanation())
+                .entryReason(signal.getExplanation() + " | Execution: " + executionValidation.explanation() + " Effective position " + effectivePositionPercent + "%.")
                 .openedAt(Instant.now())
                 .build());
 
         try {
-            walletAutoExecutionService.executeBuy(signal);
+            walletAutoExecutionService.executeBuy(signal, effectivePositionPercent, executionValidation.explanation());
         } catch (RuntimeException ex) {
             log.error("Automatic wallet BUY failed for signal {}: {}", signal.getId(), ex.getMessage(), ex);
         }

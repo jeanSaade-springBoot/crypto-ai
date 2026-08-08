@@ -44,6 +44,7 @@ async function load() {
         updateDailyLimitField();
         byId('minimum-reserve').value = settings.minimumUsdtReserve || 0;
         byId('require-new-buy-transition').checked = settings.requireNewBuyTransition !== false;
+        byId('execution-profile').value = settings.executionProfile || 'BALANCED';
         byId('dynamic-profit-lock-enabled').checked = settings.dynamicProfitLockEnabled !== false;
         byId('profit-lock-activation-percent').value = settings.profitLockActivationPercent ?? 70;
         byId('profit-lock-initial-percent').value = settings.profitLockInitialPercent ?? 40;
@@ -183,6 +184,7 @@ byId('settings-form').addEventListener('submit', async event => {
         performanceEndDate: byId('performance-end-date').value || null,
         dashboardIntervals: Array.from(document.querySelectorAll('.dashboard-interval:checked')).map(input => input.value).join(','),
         requireNewBuyTransition: byId('require-new-buy-transition').checked,
+        executionProfile: byId('execution-profile').value,
         dynamicProfitLockEnabled: byId('dynamic-profit-lock-enabled').checked,
         profitLockActivationPercent: byId('profit-lock-activation-percent').value,
         profitLockInitialPercent: byId('profit-lock-initial-percent').value,

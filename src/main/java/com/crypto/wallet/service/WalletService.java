@@ -190,6 +190,7 @@ public class WalletService {
 
         String performanceWindowType = normalizePerformanceWindowType(request.performanceWindowType());
         String dashboardIntervals = normalizeDashboardIntervals(request.dashboardIntervals());
+        String executionProfile = normalizeExecutionProfile(request.executionProfile());
         int performanceTradeCount = Optional.ofNullable(request.performanceTradeCount()).orElse(20);
         int performancePeriodDays = Optional.ofNullable(request.performancePeriodDays()).orElse(1);
         if (performanceTradeCount < 1 || performanceTradeCount > 500)
@@ -211,6 +212,7 @@ public class WalletService {
                 .performancePeriodDays(1)
                 .dashboardIntervals("1m,5m,1h,4h,1d")
                 .requireNewBuyTransition(true)
+                .executionProfile("BALANCED")
                 .dynamicProfitLockEnabled(true)
                 .profitLockActivationPercent(BigDecimal.valueOf(70))
                 .profitLockInitialPercent(BigDecimal.valueOf(40))
@@ -226,6 +228,7 @@ public class WalletService {
         settings.setPerformanceEndDate(request.performanceEndDate());
         settings.setDashboardIntervals(dashboardIntervals);
         settings.setRequireNewBuyTransition(request.requireNewBuyTransition() == null || request.requireNewBuyTransition());
+        settings.setExecutionProfile(executionProfile);
         settings.setDynamicProfitLockEnabled(request.dynamicProfitLockEnabled() == null || request.dynamicProfitLockEnabled());
         settings.setProfitLockActivationPercent(profitLockActivationPercent);
         settings.setProfitLockInitialPercent(profitLockInitialPercent);
@@ -251,6 +254,15 @@ public class WalletService {
         });
     }
 
+
+    private String normalizeExecutionProfile(String value) {
+        if (value == null || value.isBlank()) return "BALANCED";
+        String normalized = value.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("CONSERVATIVE", "BALANCED", "AGGRESSIVE").contains(normalized)) {
+            throw new IllegalArgumentException("Execution profile must be CONSERVATIVE, BALANCED, or AGGRESSIVE");
+        }
+        return normalized;
+    }
 
     private String normalizeDashboardIntervals(String value) {
         List<String> allowed = List.of("1m", "5m", "1h", "4h", "1d");
