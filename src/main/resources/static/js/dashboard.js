@@ -598,7 +598,10 @@ function renderSignals(signals, displayOnlyInterval = false, timeframeSnapshot =
                     <div class="signal-identity">
                         <strong>${escapeHtml(s.symbol || '—')}</strong>
                         <span class="badge ${String(s.decision).toLowerCase()}">${escapeHtml(String(s.decision).replaceAll('_',' '))}</span>
-                        <small>${escapeHtml(String(s.interval || '—').toUpperCase())} · ${dateTime(s.generatedAt)}</small>
+                        <div class="signal-generated-meta">
+                            <span class="signal-meta-pill"><small>TIMEFRAME</small><strong>${escapeHtml(String(s.interval || '—').toUpperCase())}</strong></span>
+                            <span class="signal-meta-pill generated-at"><small>GENERATED</small><strong>${dateTime(s.generatedAt)}</strong></span>
+                        </div>
                         <b>${s.totalScore}/100 <em>Raw ${s.rawScore}/${s.maximumAvailableScore}</em></b>
                     </div>
                 </td>
