@@ -38,6 +38,9 @@ public class PriceMoveEvent {
     @Column(name = "duration_seconds", nullable = false)
     private long durationSeconds;
 
+    @Column(name = "importance_level", nullable = false, length = 10)
+    private String importanceLevel;
+
     @Column(name = "review_status", nullable = false, length = 20)
     private String reviewStatus;
 

@@ -121,7 +121,7 @@ async function loadPriceMoveSettings() {
     const settings = await api('/api/administration/debug/price-moves/settings');
     document.getElementById('price-move-enabled').checked = Boolean(settings.enabled);
     document.getElementById('price-move-threshold').value = Number(settings.minimumMovePercent ?? 0.30);
-    document.getElementById('price-move-min-duration').value = Number(settings.minimumDurationMinutes ?? 1);
+    document.getElementById('price-move-min-duration').value = Math.max(6, Number(settings.minimumDurationMinutes ?? 6));
     document.getElementById('price-move-retracement').value = Number(settings.retracementClosePercent ?? 30);
     document.getElementById('price-move-cooldown').value = Number(settings.cooldownMinutes ?? 10);
     document.getElementById('price-move-retention').value = Number(settings.retentionDays ?? 7);
@@ -132,11 +132,11 @@ async function loadPriceMoves() {
     try {
         const moves = await api('/api/administration/debug/price-moves');
         const newCount = moves.filter(move => move.reviewStatus === 'NEW').length;
-        const upCount = moves.filter(move => move.direction === 'UP').length;
-        const downCount = moves.filter(move => move.direction === 'DOWN').length;
+        const mediumCount = moves.filter(move => move.importanceLevel === 'MEDIUM').length;
+        const highCount = moves.filter(move => move.importanceLevel === 'HIGH').length;
         document.getElementById('price-move-new-count').textContent = newCount;
-        document.getElementById('price-move-up-count').textContent = upCount;
-        document.getElementById('price-move-down-count').textContent = downCount;
+        document.getElementById('price-move-medium-count').textContent = mediumCount;
+        document.getElementById('price-move-high-count').textContent = highCount;
 
         priceMoveBody.innerHTML = moves.map(move => {
             const directionClass = move.direction === 'UP' ? 'up' : 'down';
@@ -154,15 +154,16 @@ async function loadPriceMoves() {
                     <td>${formatMovePrice(move.endPrice)}</td>
                     <td><span class="move-change ${directionClass}">${changeText}</span></td>
                     <td>${formatDuration(move.durationSeconds)}</td>
+                    <td><span class="status-pill ${String(move.importanceLevel || 'MEDIUM').toLowerCase()}">${escapeHtml(move.importanceLevel || 'MEDIUM')}</span></td>
                     <td><span class="status-pill ${status}">${escapeHtml(move.reviewStatus)}</span></td>
                     <td class="price-move-actions">
                         <button type="button" class="secondary-button" data-move-id="${move.id}" data-review-status="REVIEWED">Reviewed</button>
                         <button type="button" class="secondary-button" data-move-id="${move.id}" data-review-status="IGNORED">Ignore</button>
                     </td>
                 </tr>`;
-        }).join('') || '<tr><td colspan="10">No qualifying price moves detected yet.</td></tr>';
+        }).join('') || '<tr><td colspan="11">No MEDIUM/HIGH moves longer than 5 minutes detected yet.</td></tr>';
     } catch (error) {
-        priceMoveBody.innerHTML = `<tr><td colspan="10">${escapeHtml(error.message)}</td></tr>`;
+        priceMoveBody.innerHTML = `<tr><td colspan="11">${escapeHtml(error.message)}</td></tr>`;
         showAdminMessage(error.message, true);
     }
 }

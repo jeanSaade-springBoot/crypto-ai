@@ -33,6 +33,11 @@ public class PriceMoveMonitorService {
 
     private static final long SETTINGS_CACHE_MILLIS = 10_000L;
 
+    // Debug-review significance only. These values never affect trading logic.
+    private static final BigDecimal MEDIUM_MOVE_PERCENT = new BigDecimal("0.750000");
+    private static final BigDecimal HIGH_MOVE_PERCENT = new BigDecimal("1.500000");
+    private static final long MIN_SIGNIFICANT_DURATION_SECONDS = 6L * 60L;
+
     private final PriceMoveMonitorSettingsRepository settingsRepository;
     private final PriceMoveEventRepository eventRepository;
 
@@ -177,6 +182,20 @@ public class PriceMoveMonitorService {
     private void saveCompletedMove(String symbol, String direction, SymbolTracker tracker) {
         BigDecimal changePercent = percentChange(tracker.startPrice, tracker.extremePrice)
                 .setScale(8, RoundingMode.HALF_UP);
+        long durationSeconds = Math.max(0L, Duration.between(tracker.startTime, tracker.extremeTime).getSeconds());
+        BigDecimal absoluteMove = changePercent.abs();
+
+        // The standalone review queue intentionally ignores 1-5 minute moves and
+        // LOW moves. We still start observing early so a later meaningful swing
+        // retains its real start price, but only MEDIUM/HIGH completed moves persist.
+        if (durationSeconds < MIN_SIGNIFICANT_DURATION_SECONDS
+                || absoluteMove.compareTo(MEDIUM_MOVE_PERCENT) < 0) {
+            return;
+        }
+
+        String importanceLevel = absoluteMove.compareTo(HIGH_MOVE_PERCENT) >= 0
+                ? "HIGH"
+                : "MEDIUM";
 
         eventRepository.save(PriceMoveEvent.builder()
                 .symbol(symbol)
@@ -186,7 +205,8 @@ public class PriceMoveMonitorService {
                 .startPrice(tracker.startPrice)
                 .endPrice(tracker.extremePrice)
                 .changePercent(changePercent)
-                .durationSeconds(Math.max(0L, Duration.between(tracker.startTime, tracker.extremeTime).getSeconds()))
+                .durationSeconds(durationSeconds)
+                .importanceLevel(importanceLevel)
                 .reviewStatus("NEW")
                 .build());
     }
@@ -213,8 +233,8 @@ public class PriceMoveMonitorService {
         if (request.minimumMovePercent() == null || request.minimumMovePercent().signum() <= 0) {
             throw new IllegalArgumentException("Minimum market move must be greater than 0%");
         }
-        if (request.minimumDurationMinutes() < 0 || request.minimumDurationMinutes() > 1440) {
-            throw new IllegalArgumentException("Minimum duration must be between 0 and 1440 minutes");
+        if (request.minimumDurationMinutes() < 6 || request.minimumDurationMinutes() > 1440) {
+            throw new IllegalArgumentException("Minimum duration must be between 6 and 1440 minutes");
         }
         if (request.retracementClosePercent() == null
                 || request.retracementClosePercent().compareTo(BigDecimal.ONE) < 0
@@ -285,7 +305,7 @@ public class PriceMoveMonitorService {
                 .enabled(true)
                 .minimumMovePercent(new BigDecimal("0.300000"))
                 .windowMinutes(30) // legacy V47 column; intentionally unused
-                .minimumDurationMinutes(1)
+                .minimumDurationMinutes(6)
                 .retracementClosePercent(new BigDecimal("30.000000"))
                 .cooldownMinutes(10)
                 .retentionDays(7)
