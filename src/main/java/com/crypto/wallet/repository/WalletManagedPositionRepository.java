@@ -7,11 +7,13 @@ import org.springframework.data.jpa.repository.Lock;
 
 import java.util.List;
 import java.util.Optional;
+import java.time.Instant;
 
 public interface WalletManagedPositionRepository extends JpaRepository<WalletManagedPosition, Long> {
     Optional<WalletManagedPosition> findTopBySymbolAndStatusOrderByOpenedAtDesc(String symbol, String status);
     Optional<WalletManagedPosition> findTopByEntrySignalIdOrderByOpenedAtDesc(Long entrySignalId);
     long countByStatus(String status);
+    long countByOpenedAtGreaterThanEqual(Instant openedAt);
     List<WalletManagedPosition> findAllByStatusOrderByOpenedAtDesc(String status);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

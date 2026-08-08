@@ -35,6 +35,9 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
             """)
     long countDistinctSymbolsSince(@Param("from") Instant from);
 
+    @Query("select count(distinct s.symbol) from TradeSignal s")
+    long countDistinctSymbols();
+
     @Query("""
             select count(s) from TradeSignal s
             where s.generatedAt >= :from

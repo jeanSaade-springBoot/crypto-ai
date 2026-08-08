@@ -35,6 +35,7 @@ const dateTime = v => v ? new Date(v).toLocaleString() : '—';
 const preciseDateTime = v => v ? new Date(v).toLocaleString(undefined, {year:'numeric', month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit'}) : '—';
 const openSignalAnalysisIds = new Set();
 let pinnedSignalId = localStorage.getItem('cryptoPinnedSignalId');
+let aiPerformancePeriod = localStorage.getItem('cryptoAiPerformancePeriod') || 'ALL_TIME';
 
 async function loadSymbols() {
     try {
@@ -265,7 +266,7 @@ async function refreshExecutionIntelligence() {
     executionIntelligenceRefreshInFlight = true;
     try {
         const [summaryResponse, opportunitiesResponse, positionsResponse] = await Promise.all([
-            fetch('/api/execution-intelligence/summary'),
+            fetch(`/api/execution-intelligence/summary?period=${encodeURIComponent(aiPerformancePeriod)}`),
             fetch('/api/execution-intelligence/opportunities/active'),
             fetch('/api/dashboard/active-positions')
         ]);
@@ -299,8 +300,10 @@ function renderExecutionIntelligence(summary = {}, opportunities = []) {
         'pipeline-coins-scanned': summary.coinsScanned || 0,
         'pipeline-opportunities-found': summary.opportunitiesFound || 0,
         'pipeline-building': summary.buildingNow ?? building,
+        'pipeline-weakening': summary.weakeningNow ?? weakening,
         'pipeline-recovering': summary.recoveringNow ?? recovering,
         'pipeline-ready': summary.readyNow ?? confirmed,
+        'pipeline-blocked-rejected': summary.blockedRejected || 0,
         'pipeline-executed': summary.executed || 0,
         'pipeline-managed': summary.activePositions || 0,
         'pipeline-closed': summary.closedTrades || 0,
@@ -313,7 +316,10 @@ function renderExecutionIntelligence(summary = {}, opportunities = []) {
     if (el('ai-win-rate')) el('ai-win-rate').textContent = `${Number(summary.winRatePercent || 0).toFixed(1)}%`;
     if (el('ai-profit-factor')) el('ai-profit-factor').textContent = summary.profitFactor == null ? (Number(summary.wins || 0) > 0 ? '∞' : '—') : Number(summary.profitFactor).toFixed(2);
     const realized = Number(summary.realizedPnlUsdt || 0);
-    if (el('ai-today-pnl')) { el('ai-today-pnl').textContent = `${realized >= 0 ? '+' : ''}${money(realized)}`; el('ai-today-pnl').className = realized >= 0 ? 'positive' : 'negative'; }
+    if (el('ai-realized-pnl')) { el('ai-realized-pnl').textContent = `${realized >= 0 ? '+' : ''}${money(realized)}`; el('ai-realized-pnl').className = realized >= 0 ? 'positive' : 'negative'; }
+    const periodLabels = {ALL_TIME:'All Time', TODAY:'Today', LAST_24_HOURS:'Last 24 Hours', LAST_7_DAYS:'Last 7 Days', LAST_30_DAYS:'Last 30 Days'};
+    const activePeriod = String(summary.period || aiPerformancePeriod || 'ALL_TIME').toUpperCase();
+    if (el('ai-operations-period')) el('ai-operations-period').textContent = periodLabels[activePeriod] || 'All Time';
     if (el('execution-intelligence-updated')) el('execution-intelligence-updated').textContent = summary.updatedAt ? `Updated ${preciseDateTime(summary.updatedAt)}` : 'Waiting for evidence';
     if (el('nav-opportunity-count')) el('nav-opportunity-count').textContent = active;
     if (el('nav-position-count')) el('nav-position-count').textContent = Number(summary.activePositions || 0);
@@ -1760,6 +1766,18 @@ function setupSidebar() {
 el('refresh-button').addEventListener('click', refreshDashboard);
 el('analyze-sentiment-button').addEventListener('click', analyzeSentiment);
 el('collect-sentiment-button').addEventListener('click', collectSentimentProviders);
+const aiPeriodSelect = el('ai-period-select');
+if (aiPeriodSelect) {
+    const allowedPeriods = ['ALL_TIME','TODAY','LAST_24_HOURS','LAST_7_DAYS','LAST_30_DAYS'];
+    aiPeriodSelect.value = allowedPeriods.includes(aiPerformancePeriod) ? aiPerformancePeriod : 'ALL_TIME';
+    aiPerformancePeriod = aiPeriodSelect.value;
+    aiPeriodSelect.addEventListener('change', () => {
+        aiPerformancePeriod = aiPeriodSelect.value;
+        localStorage.setItem('cryptoAiPerformancePeriod', aiPerformancePeriod);
+        void refreshExecutionIntelligence();
+    });
+}
+
 el('symbol-select').addEventListener('change', refreshDashboard);
 el('interval-select').addEventListener('change', refreshDashboard);
 setupCollapsibleSections();

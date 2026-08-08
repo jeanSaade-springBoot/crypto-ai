@@ -9,6 +9,7 @@ import com.crypto.domain.SignalDecision;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
@@ -37,48 +38,52 @@ public class ExecutionIntelligenceController {
     }
 
     @GetMapping("/summary")
-    public Map<String, Object> summary() {
+    public Map<String, Object> summary(@RequestParam(defaultValue = "ALL_TIME") String period) {
         ZoneId zone = ZoneId.of("Asia/Riyadh");
-        Instant startOfDay = LocalDate.now(zone).atStartOfDay(zone).toInstant();
+        Instant now = Instant.now();
+        Instant from = periodStart(period, zone, now);
 
-        long signalsToday = tradeSignalRepository.countByGeneratedAtGreaterThanEqual(startOfDay);
-        long coinsScanned = tradeSignalRepository.countDistinctSymbolsSince(startOfDay);
-        long buyCandidates = tradeSignalRepository.countBuyCandidatesSince(
-                startOfDay, SignalDecision.BUY, SignalDecision.STRONG_BUY);
-        long consolidated = repository.countByExecutionSourceInAndUpdatedAtGreaterThanEqual(
-                List.of("CONSOLIDATED_BUY", "ACCUMULATED_EVIDENCE", "DEFERRED_CONTINUATION",
-                        "SCOUT_ENTRY", "CONFIRMATION_ADD", "TREND_ADD"), startOfDay);
-        long opportunitiesFound = repository.countByStartedAtGreaterThanEqual(startOfDay);
+        long coinsScanned = "ALL_TIME".equalsIgnoreCase(period)
+                ? tradeSignalRepository.countDistinctSymbols()
+                : tradeSignalRepository.countDistinctSymbolsSince(from);
+        long opportunitiesFound = "ALL_TIME".equalsIgnoreCase(period)
+                ? repository.count()
+                : repository.countByStartedAtGreaterThanEqual(from);
 
-        List<ExecutionOpportunity> activeOpportunities = repository.findTop50ByStatusInOrderByUpdatedAtDesc(
+        // Live state: these values intentionally describe what the execution engine is doing RIGHT NOW.
+        List<ExecutionOpportunity> liveOpportunities = repository.findTop50ByStatusInOrderByUpdatedAtDesc(
                 List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"));
-        long buildingNow = activeOpportunities.stream()
+        long buildingNow = liveOpportunities.stream()
                 .filter(o -> "BUILDING".equalsIgnoreCase(o.getStatus()))
                 .count();
-        long recoveringNow = activeOpportunities.stream()
+        long recoveringNow = liveOpportunities.stream()
                 .filter(o -> "WEAKENING".equalsIgnoreCase(o.getStatus()) && o.getHealthMomentum() > 0)
                 .count();
-        long weakeningNow = activeOpportunities.stream()
+        long weakeningNow = liveOpportunities.stream()
                 .filter(o -> "WEAKENING".equalsIgnoreCase(o.getStatus()) && o.getHealthMomentum() <= 0)
                 .count();
-        long blockedNow = activeOpportunities.stream()
+        long blockedNow = liveOpportunities.stream()
                 .filter(o -> "BLOCKED".equalsIgnoreCase(o.getStatus()))
                 .count();
-        long readyNow = activeOpportunities.stream()
+        long readyNow = liveOpportunities.stream()
                 .filter(o -> "CONFIRMED".equalsIgnoreCase(o.getStatus()))
                 .count();
 
-        // AI Performance is position-based, not BUY-ledger-row based.
-        // Progressive position building can create multiple BUY wallet rows for one position,
-        // so counting BUY rows would inflate Executed after scout/confirmation/trend additions.
-        long executed = walletManagedPositionRepository.findAll().stream()
-                .filter(position -> position.getOpenedAt() != null && !position.getOpenedAt().isBefore(startOfDay))
-                .count();
+        // Period activity: terminal opportunities that were blocked/rejected during the selected window.
+        // CANCELLED is included because BEARISH_REVERSAL and OPPORTUNITY_HEALTH_EXHAUSTED are
+        // legitimate rejected opportunities, even though they are no longer in live BLOCKED state.
+        List<String> rejectedStatuses = List.of("BLOCKED", "CANCELLED");
+        long blockedRejected = "ALL_TIME".equalsIgnoreCase(period)
+                ? repository.countByStatusIn(rejectedStatuses)
+                : repository.countByStatusInAndUpdatedAtGreaterThanEqual(rejectedStatuses, from);
+
+        long executed = "ALL_TIME".equalsIgnoreCase(period)
+                ? walletManagedPositionRepository.count()
+                : walletManagedPositionRepository.countByOpenedAtGreaterThanEqual(from);
         long activePositions = walletManagedPositionRepository.countByStatus("OPEN");
 
-        // Financial outcomes come directly from the executed wallet SELL ledger.
-        // Calculate in Java so the dashboard does not depend on database-specific aggregate typing.
-        var closedLedger = walletTradeRepository.findClosedTradesBetween(startOfDay, Instant.now());
+        // Financial truth is the executed SELL ledger.
+        var closedLedger = walletTradeRepository.findClosedTradesBetween(from, now.plusMillis(1));
         long closedTrades = closedLedger.size();
         long wins = closedLedger.stream()
                 .filter(trade -> trade.getRealizedPnlUsdt() != null && trade.getRealizedPnlUsdt().signum() > 0)
@@ -89,7 +94,6 @@ public class ExecutionIntelligenceController {
         long breakeven = closedLedger.stream()
                 .filter(trade -> trade.getRealizedPnlUsdt() != null && trade.getRealizedPnlUsdt().signum() == 0)
                 .count();
-        long profitableClosed = wins;
 
         BigDecimal realizedPnl = closedLedger.stream()
                 .map(trade -> trade.getRealizedPnlUsdt() == null ? BigDecimal.ZERO : trade.getRealizedPnlUsdt())
@@ -108,19 +112,19 @@ public class ExecutionIntelligenceController {
                 : grossProfit.divide(grossLoss, 4, java.math.RoundingMode.HALF_UP);
 
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("signalsToday", signalsToday);
+        result.put("period", normalizePeriod(period));
+        result.put("periodFrom", from);
         result.put("coinsScanned", coinsScanned);
-        result.put("buyCandidates", buyCandidates);
-        result.put("consolidated", consolidated);
         result.put("opportunitiesFound", opportunitiesFound);
+        result.put("liveOpportunities", liveOpportunities.size());
         result.put("buildingNow", buildingNow);
         result.put("recoveringNow", recoveringNow);
         result.put("weakeningNow", weakeningNow);
         result.put("blockedNow", blockedNow);
         result.put("readyNow", readyNow);
+        result.put("blockedRejected", blockedRejected);
         result.put("executed", executed);
         result.put("activePositions", activePositions);
-        result.put("closedProfitably", profitableClosed);
         result.put("closedTrades", closedTrades);
         result.put("wins", wins);
         result.put("losses", losses);
@@ -131,8 +135,29 @@ public class ExecutionIntelligenceController {
                 : BigDecimal.valueOf(wins).multiply(BigDecimal.valueOf(100))
                     .divide(BigDecimal.valueOf(decided), 2, java.math.RoundingMode.HALF_UP));
         result.put("profitFactor", profitFactor);
-        result.put("updatedAt", Instant.now());
+        result.put("updatedAt", now);
         return result;
+    }
+
+    private Instant periodStart(String period, ZoneId zone, Instant now) {
+        return switch (normalizePeriod(period)) {
+            case "TODAY" -> LocalDate.now(zone).atStartOfDay(zone).toInstant();
+            case "LAST_24_HOURS" -> now.minus(java.time.Duration.ofHours(24));
+            case "LAST_7_DAYS" -> now.minus(java.time.Duration.ofDays(7));
+            case "LAST_30_DAYS" -> now.minus(java.time.Duration.ofDays(30));
+            default -> Instant.EPOCH;
+        };
+    }
+
+    private String normalizePeriod(String period) {
+        if (period == null) return "ALL_TIME";
+        return switch (period.trim().toUpperCase()) {
+            case "TODAY" -> "TODAY";
+            case "LAST_24_HOURS", "24H" -> "LAST_24_HOURS";
+            case "LAST_7_DAYS", "7D" -> "LAST_7_DAYS";
+            case "LAST_30_DAYS", "30D" -> "LAST_30_DAYS";
+            default -> "ALL_TIME";
+        };
     }
 
     private Number number(Object[] values, int index) {

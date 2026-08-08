@@ -63,37 +63,50 @@
                 <div class="wallet-kpi"><small>Today's P/L</small><strong id="header-today-pnl">—</strong></div>
                 <div class="wallet-kpi"><small>Overall P/L</small><strong id="header-overall-pnl">—</strong></div>
             </section>
+            <section class="ai-performance-header-strip" aria-label="Global AI performance">
+                <div class="ai-performance-title">
+                    <span>AI PERFORMANCE</span>
+                    <small>All configured coins</small>
+                </div>
+                <label class="ai-period-control">Period
+                    <select id="ai-period-select">
+                        <option value="ALL_TIME" selected>All Time</option>
+                        <option value="TODAY">Today</option>
+                        <option value="LAST_24_HOURS">Last 24 Hours</option>
+                        <option value="LAST_7_DAYS">Last 7 Days</option>
+                        <option value="LAST_30_DAYS">Last 30 Days</option>
+                    </select>
+                </label>
+                <div class="ai-header-metric"><span>Executed</span><strong id="ai-executed">0</strong></div>
+                <div class="ai-header-metric positive-metric"><span>Wins</span><strong id="ai-wins">0</strong></div>
+                <div class="ai-header-metric negative-metric"><span>Losses</span><strong id="ai-losses">0</strong></div>
+                <div class="ai-header-metric"><span>Open now</span><strong id="ai-open">0</strong></div>
+                <div class="ai-header-metric"><span>Win rate</span><strong id="ai-win-rate">0%</strong></div>
+                <div class="ai-header-metric"><span>PF</span><strong id="ai-profit-factor">—</strong></div>
+                <div class="ai-header-metric pnl-metric"><span>Realized P/L</span><strong id="ai-realized-pnl">—</strong></div>
+            </section>
         </header>
 
 
         <section id="error-banner" class="error-banner hidden"></section>
+        <div id="overview" class="dashboard-anchor" aria-hidden="true"></div>
 
-        <section id="overview" class="command-center-grid compact-command-center">
-            <article class="panel ai-performance-panel">
-                <div class="section-heading"><div><p class="eyebrow">TODAY</p><h2>AI performance</h2></div><span>Execution outcomes</span></div>
-                <div class="ai-performance-grid">
-                    <div><span>Executed</span><strong id="ai-executed">0</strong></div>
-                    <div><span>Wins</span><strong id="ai-wins">0</strong></div>
-                    <div><span>Losses</span><strong id="ai-losses">0</strong></div>
-                    <div><span>Open</span><strong id="ai-open">0</strong></div>
-                    <div><span>Win rate</span><strong id="ai-win-rate">0%</strong></div>
-                    <div><span>Profit factor</span><strong id="ai-profit-factor">—</strong></div>
-                    <div class="wide"><span>Today's realized P/L</span><strong id="ai-today-pnl">—</strong></div>
-                </div>
-            </article>
-        </section>
-
-        <section id="pipeline" class="panel execution-pipeline-panel">
-            <div class="section-heading"><div><p class="eyebrow">AI OPPORTUNITY PIPELINE</p><h2>From market scan to completed trade</h2></div><span id="last-updated">—</span></div>
-            <div class="execution-funnel ai-opportunity-funnel">
-                <div class="funnel-step clickable-funnel" data-pipeline-filter="scanned"><span>Coins Scanned</span><strong id="pipeline-coins-scanned">0</strong><small>Analyzed today</small></div><b>→</b>
-                <div class="funnel-step clickable-funnel" data-pipeline-filter="found"><span>Opportunities Found</span><strong id="pipeline-opportunities-found">0</strong><small>Execution candidates</small></div><b>→</b>
-                <div class="funnel-step clickable-funnel" data-pipeline-filter="building"><span>Building</span><strong id="pipeline-building">0</strong><small>Evidence accumulating</small></div><b>→</b>
-                <div class="funnel-step clickable-funnel" data-pipeline-filter="recovering"><span>Recovering</span><strong id="pipeline-recovering">0</strong><small>Health improving</small></div><b>→</b>
-                <div class="funnel-step clickable-funnel" data-pipeline-filter="ready"><span>Ready</span><strong id="pipeline-ready">0</strong><small>Confirmed now</small></div><b>→</b>
-                <div class="funnel-step clickable-funnel" data-pipeline-filter="executed"><span>Executed</span><strong id="pipeline-executed">0</strong><small>Positions opened</small></div><b>→</b>
-                <div class="funnel-step clickable-funnel" data-pipeline-filter="managed"><span>Managed</span><strong id="pipeline-managed">0</strong><small>Open now</small></div><b>→</b>
-                <div class="funnel-step clickable-funnel" data-pipeline-filter="closed"><span>Closed Today</span><strong id="pipeline-closed">0</strong><small>Wins + losses</small></div>
+        <section id="pipeline" class="panel execution-pipeline-panel ai-operations-panel">
+            <div class="section-heading">
+                <div><p class="eyebrow">AI OPERATIONS</p><h2>Live state + selected-period activity</h2></div>
+                <div class="operations-heading-meta"><span id="ai-operations-period">All Time</span><span id="last-updated">—</span></div>
+            </div>
+            <div class="ai-operations-grid">
+                <div class="operations-stat period-stat"><span>Coins analyzed</span><strong id="pipeline-coins-scanned">0</strong><small>Selected period</small></div>
+                <div class="operations-stat period-stat"><span>Opportunities</span><strong id="pipeline-opportunities-found">0</strong><small>Started in period</small></div>
+                <div class="operations-stat live-stat"><span>Building now</span><strong id="pipeline-building">0</strong><small>Evidence accumulating</small></div>
+                <div class="operations-stat live-stat"><span>Weakening now</span><strong id="pipeline-weakening">0</strong><small>Health/evidence falling</small></div>
+                <div class="operations-stat live-stat"><span>Recovering now</span><strong id="pipeline-recovering">0</strong><small>Health improving</small></div>
+                <div class="operations-stat live-stat"><span>Ready now</span><strong id="pipeline-ready">0</strong><small>Confirmed for execution</small></div>
+                <div class="operations-stat rejected-stat"><span>Blocked / Rejected</span><strong id="pipeline-blocked-rejected">0</strong><small>Selected period</small></div>
+                <div class="operations-stat period-stat"><span>Executed</span><strong id="pipeline-executed">0</strong><small>Positions opened in period</small></div>
+                <div class="operations-stat live-stat"><span>Open positions</span><strong id="pipeline-managed">0</strong><small>Live wallet state</small></div>
+                <div class="operations-stat period-stat"><span>Closed</span><strong id="pipeline-closed">0</strong><small>Wins + losses in period</small></div>
             </div>
             <details class="pipeline-details">
                 <summary>System flow health</summary>
