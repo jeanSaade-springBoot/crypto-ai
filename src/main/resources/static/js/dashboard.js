@@ -20,6 +20,9 @@ let cachedScoreDiagnostics = {};
 let lastSentimentMetadataRefreshAt = 0;
 let lastScoreDiagnosticsRefreshAt = 0;
 let walletRefreshInFlight = false;
+let executionIntelligenceRefreshInFlight = false;
+let cachedExecutionSummary = {};
+let cachedActiveOpportunities = [];
 let latestWalletExecutions = new Map();
 const numberFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 });
 const moneyFormatter = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 });
@@ -90,6 +93,7 @@ async function refreshDashboard() {
         void refreshDashboardWallet();
         void refreshSentimentMetadata(symbol);
         void refreshScoreDiagnostics();
+        void refreshExecutionIntelligence();
     } catch (error) {
         updateConnection(false);
         el('error-banner').textContent = error.message;
@@ -108,8 +112,7 @@ async function refreshDashboardWallet() {
         if (!response.ok) return;
         cachedDashboardWallet = await response.json();
         const intervalChanged = applyConfiguredDashboardIntervals(cachedDashboardWallet.settings || {});
-        renderPortfolio(cachedDashboardWallet);
-        renderTradePerformance(cachedDashboardWallet.tradePerformance || {});
+        renderWalletHeader(cachedDashboardWallet);
         if (intervalChanged && !dashboardRefreshInFlight) {
             window.setTimeout(refreshDashboard, 0);
         }
@@ -155,31 +158,14 @@ async function refreshScoreDiagnostics() {
 
 function render(data) {
     const s = data.summary;
-    el('latest-price').textContent = money(s.latestPrice);
-    const change = Number(s.priceChangePercent || 0);
-    el('price-change').textContent = `${change >= 0 ? '+' : ''}${change.toFixed(3)}% from previous candle`;
-    el('price-change').className = change >= 0 ? 'positive' : 'negative';
-    el('candle-count').textContent = s.closedCandleCount;
-    if (data.displayOnlyInterval) {
-        el('history-progress').textContent = 'Derived from closed 1h candles';
-        el('history-bar').style.width = s.closedCandleCount > 0 ? '100%' : '0%';
-        el('latest-decision').textContent = 'DISPLAY ONLY';
-        el('latest-score').textContent = 'Does not participate in BUY / SELL decisions';
-    } else {
-        el('history-progress').textContent = `${Math.min(s.closedCandleCount, s.minimumCandles)} / ${s.minimumCandles} required`;
-        el('history-bar').style.width = `${Math.min(100, (s.closedCandleCount / s.minimumCandles) * 100)}%`;
-        el('latest-decision').textContent = String(s.latestDecision).replace('_', ' ');
-        el('latest-score').textContent = s.latestScore === null ? 'Analysis not ready' : `Score ${s.latestScore}`;
-    }
-    el('open-positions').textContent = s.openPositions;
     el('last-updated').textContent = `Updated ${preciseDateTime(data.updatedAt)}`;
     renderHeaderLivePrice(data);
     el('market-subtitle').textContent = `${data.symbol} · ${displayInterval(data.interval)}${data.displayOnlyInterval ? ' · display only' : ''}`;
-    renderPortfolio(data.wallet || {});
-    renderTradePerformance((data.wallet || {}).tradePerformance || {});
+    renderWalletHeader(data.wallet || {});
     renderPipeline(data.pipeline);
     renderScoreDiagnostics(data.scoreDiagnostics || {});
     renderIndicators(data.indicator || {});
+    renderAiAnalysis(data.signals || [], data.indicator || {});
     renderSentiment(data.sentiment || {}, data.sentimentProviderStatuses || [], data.sentimentSystemStatus || {});
     renderSchedules(data.schedule || {});
     applyDashboardRefreshSchedule(data.schedule || {});
@@ -249,31 +235,124 @@ function renderCoinLeader(elementSuffix, leader, winner) {
     pnlElement.textContent = `${pnl >= 0 ? '+' : ''}${money(pnl)} · ${tradeCount} trade${tradeCount === 1 ? '' : 's'}`;
 }
 
-function renderPortfolio(wallet) {
-    const pnl = Number(wallet.totalPnlUsdt || 0);
-    const status = wallet.portfolioStatus || 'NOT STARTED';
-    el('portfolio-status').textContent = status;
-    el('portfolio-status').className = status === 'WINNING' ? 'positive' : status === 'LOSING' ? 'negative' : '';
-    el('portfolio-return').textContent = `${Number(wallet.totalReturnPercent || 0).toFixed(2)}% since start`;
-    el('portfolio-value').textContent = money(wallet.portfolioValueUsdt);
-    el('portfolio-invested').textContent = `Net invested ${money(wallet.netInvestedUsdt)}`;
-    el('portfolio-pnl').textContent = `${pnl >= 0 ? '+' : ''}${money(pnl)}`;
-    el('portfolio-pnl').className = pnl >= 0 ? 'positive' : 'negative';
-    const day = Number(wallet.change24hUsdt || 0);
-    el('portfolio-change24h').textContent = `24h ${day >= 0 ? '+' : ''}${money(day)}`;
-    el('portfolio-usdt').textContent = money(wallet.availableUsdt);
-    const settings = wallet.settings || {};
+function renderWalletHeader(wallet) {
+    const portfolio = Number(wallet.portfolioValueUsdt || 0);
+    const available = Number(wallet.availableUsdt || 0);
+    const invested = Math.max(0, portfolio - available);
+    const totalPnl = Number(wallet.totalPnlUsdt || 0);
     const daily = wallet.dailyTrading || {};
-    el('portfolio-daily-budget').textContent = money(daily.dailyTradeBudgetUsdt);
-    const maximumPositions = Number(daily.maximumNewPositions ?? settings.maximumDailyNewPositions ?? 0);
-    el('portfolio-daily-buys').textContent = maximumPositions === 0
-        ? `${Number(daily.executedBuys || 0)} / Unlimited new positions`
-        : `${Number(daily.executedBuys || 0)} / ${maximumPositions} new positions`;
-    const holdings = (wallet.assets || []).filter(a => Number(a.quantity || 0) > 0);
-    el('portfolio-holdings').innerHTML = holdings.length ? holdings.map(a => {
-        const assetPnl = Number(a.unrealizedPnlUsdt || 0);
-        return `<div class="portfolio-asset"><strong>${escapeHtml(a.symbol)}</strong><span>${value(a.quantity)}</span><small class="${assetPnl >= 0 ? 'positive' : 'negative'}">${a.symbol === 'USDT' ? money(a.currentValueUsdt) : `${assetPnl >= 0 ? '+' : ''}${money(assetPnl)}`}</small></div>`;
-    }).join('') : '<span class="empty">No wallet assets yet.</span>';
+    const startingPortfolio = Number(daily.startingPortfolioUsdt ?? portfolio);
+    const todayPnl = portfolio - startingPortfolio;
+    const active = Number(cachedExecutionSummary.activePositions || 0);
+
+    const setMoney = (id, amount, signed = false) => {
+        const node = el(id);
+        if (!node) return;
+        node.textContent = signed ? `${amount >= 0 ? '+' : ''}${money(amount)}` : money(amount);
+        if (signed) node.className = amount >= 0 ? 'positive' : 'negative';
+    };
+    setMoney('header-wallet-value', portfolio);
+    setMoney('header-wallet-available', available);
+    setMoney('header-wallet-invested', invested);
+    setMoney('header-today-pnl', todayPnl, true);
+    setMoney('header-overall-pnl', totalPnl, true);
+    if (el('header-active-positions')) el('header-active-positions').textContent = active;
+    if (el('nav-position-count')) el('nav-position-count').textContent = active;
+}
+
+async function refreshExecutionIntelligence() {
+    if (executionIntelligenceRefreshInFlight) return;
+    executionIntelligenceRefreshInFlight = true;
+    try {
+        const [summaryResponse, opportunitiesResponse] = await Promise.all([
+            fetch('/api/execution-intelligence/summary'),
+            fetch('/api/execution-intelligence/opportunities/active')
+        ]);
+        if (summaryResponse.ok) cachedExecutionSummary = await summaryResponse.json();
+        if (opportunitiesResponse.ok) cachedActiveOpportunities = await opportunitiesResponse.json();
+        renderExecutionIntelligence(cachedExecutionSummary, cachedActiveOpportunities);
+        renderWalletHeader(cachedDashboardWallet || {});
+    } catch (_) {
+        // Execution intelligence is operational metadata and must not block live market rendering.
+    } finally {
+        executionIntelligenceRefreshInFlight = false;
+    }
+}
+
+function renderExecutionIntelligence(summary = {}, opportunities = []) {
+    const active = opportunities.length;
+    const building = opportunities.filter(o => ['BUILDING','WEAKENING'].includes(String(o.status || '').toUpperCase())).length;
+    const blocked = opportunities.filter(o => String(o.status || '').toUpperCase() === 'BLOCKED').length;
+    const confirmed = opportunities.filter(o => String(o.status || '').toUpperCase() === 'CONFIRMED').length;
+    const values = {
+        'intel-active': active, 'intel-building': building, 'intel-blocked': blocked, 'intel-confirmed': confirmed,
+        'pipeline-signals-today': summary.signalsToday || 0,
+        'pipeline-buy-candidates': summary.buyCandidates || 0,
+        'pipeline-consolidated': summary.consolidated || 0,
+        'pipeline-executed': summary.executed || 0,
+        'pipeline-open': summary.activePositions || 0,
+        'pipeline-profitable': summary.closedProfitably || 0,
+        'ai-executed': summary.executed || 0,
+        'ai-wins': summary.wins || 0,
+        'ai-losses': summary.losses || 0,
+        'ai-open': summary.activePositions || 0
+    };
+    Object.entries(values).forEach(([id, value]) => { const node = el(id); if (node) node.textContent = value; });
+    if (el('ai-win-rate')) el('ai-win-rate').textContent = `${Number(summary.winRatePercent || 0).toFixed(1)}%`;
+    if (el('ai-profit-factor')) el('ai-profit-factor').textContent = summary.profitFactor == null ? (Number(summary.wins || 0) > 0 ? '∞' : '—') : Number(summary.profitFactor).toFixed(2);
+    const realized = Number(summary.realizedPnlUsdt || 0);
+    if (el('ai-today-pnl')) { el('ai-today-pnl').textContent = `${realized >= 0 ? '+' : ''}${money(realized)}`; el('ai-today-pnl').className = realized >= 0 ? 'positive' : 'negative'; }
+    if (el('execution-intelligence-updated')) el('execution-intelligence-updated').textContent = summary.updatedAt ? `Updated ${preciseDateTime(summary.updatedAt)}` : 'Waiting for evidence';
+    if (el('nav-opportunity-count')) el('nav-opportunity-count').textContent = active;
+    if (el('nav-position-count')) el('nav-position-count').textContent = Number(summary.activePositions || 0);
+
+    const queue = [...opportunities].sort((a,b) => Number(b.evidenceScore || 0) - Number(a.evidenceScore || 0)).slice(0, 6);
+    if (el('opportunity-queue')) {
+        el('opportunity-queue').innerHTML = queue.length ? queue.map(o => {
+            const status = String(o.status || 'BUILDING').replaceAll('_',' ');
+            const tone = String(o.status || '').toUpperCase() === 'BLOCKED' ? 'reject' : String(o.status || '').toUpperCase() === 'CONFIRMED' ? 'buy' : 'watch';
+            return `<article class="opportunity-row">
+                <div class="opportunity-main"><strong>${escapeHtml(o.symbol || '—')}</strong><span class="badge ${tone}">${escapeHtml(status)}</span></div>
+                <div class="opportunity-score"><span>Evidence</span><strong>${Number(o.evidenceScore || 0)}/100</strong><div><i style="width:${Math.max(0, Math.min(100, Number(o.evidenceScore || 0)))}%"></i></div></div>
+                <div class="opportunity-context"><span>1H ${escapeHtml(o.oneHourDecision || '—')}</span><span>5M ${escapeHtml(o.fiveMinuteDecision || '—')}</span><span>${Number(o.buyCount || 0)} BUY · ${Number(o.watchCount || 0)} WATCH</span></div>
+                <small>${escapeHtml(o.decisionExplanation || o.decisionCode || 'Accumulating fresh execution evidence.')}</small>
+            </article>`;
+        }).join('') : '<div class="empty">No active opportunities right now.</div>';
+    }
+}
+
+function renderAiAnalysis(signals, indicator) {
+    const signal = Array.isArray(signals) && signals.length ? signals[0] : null;
+    if (!signal) {
+        ['trend','momentum','volatility'].forEach(prefix => {
+            if (el(`${prefix}-analysis-status`)) el(`${prefix}-analysis-status`).textContent = 'Waiting';
+            if (el(`${prefix}-analysis-score`)) el(`${prefix}-analysis-score`).textContent = '—';
+            if (el(`${prefix}-analysis-bar`)) el(`${prefix}-analysis-bar`).style.width = '0%';
+            if (el(`${prefix}-analysis-text`)) el(`${prefix}-analysis-text`).textContent = 'No fresh analyzed signal exists for this market view.';
+        });
+        return;
+    }
+    const trend = Number(signal.trendScore || 0);
+    const momentum = Number(signal.momentumScore || 0);
+    const volume = Number(signal.volumeScore || 0);
+    updateAnalysisCard('trend', trend, 25,
+        trend >= 21 ? 'Strong Bullish' : trend >= 17 ? 'Constructive' : trend >= 12 ? 'Mixed' : 'Weak',
+        trend >= 21 ? 'Moving-average structure and price location strongly support the current direction.' : trend >= 17 ? 'Trend structure is supportive, but confirmation is not yet complete.' : 'Trend evidence is mixed or weak; execution should rely on stronger confirmation.');
+    const rsi = Number(indicator.rsi14 || 0);
+    updateAnalysisCard('momentum', momentum, 15,
+        momentum >= 12 ? 'Healthy' : momentum >= 8 ? 'Moderate' : 'Weak',
+        `${rsi ? `RSI ${rsi.toFixed(1)}. ` : ''}${momentum >= 12 ? 'Momentum is supporting continuation.' : momentum >= 8 ? 'Momentum is usable but not decisive.' : 'Momentum is not currently supporting an aggressive entry.'}`);
+    const rvol = Number(indicator.relativeVolume || 0);
+    const volLabel = signal.volatilityLevel ? String(signal.volatilityLevel).replaceAll('_',' ') : (rvol >= 1.5 ? 'Expanding' : 'Normal');
+    updateAnalysisCard('volatility', volume, 20, volLabel,
+        `${rvol ? `Relative volume ${rvol.toFixed(2)}x. ` : ''}${volume >= 15 ? 'Volume participation is strong enough to support the move.' : volume >= 10 ? 'Participation is moderate; breakout quality still needs confirmation.' : 'Volume confirmation is currently weak.'}`);
+}
+
+function updateAnalysisCard(prefix, score, maximum, status, text) {
+    if (el(`${prefix}-analysis-status`)) el(`${prefix}-analysis-status`).textContent = status;
+    if (el(`${prefix}-analysis-score`)) el(`${prefix}-analysis-score`).textContent = `${score}/${maximum}`;
+    if (el(`${prefix}-analysis-bar`)) el(`${prefix}-analysis-bar`).style.width = `${Math.max(0, Math.min(100, score / maximum * 100))}%`;
+    if (el(`${prefix}-analysis-text`)) el(`${prefix}-analysis-text`).textContent = text;
 }
 
 
@@ -1446,12 +1525,45 @@ function setupCollapsibleSections() {
     });
 }
 
+function setupSidebar() {
+    const sidebar = el('dashboard-sidebar');
+    const toggle = el('sidebar-toggle');
+    if (!sidebar || !toggle) return;
+    const stored = localStorage.getItem('cryptoSidebarCollapsed') === 'true';
+    sidebar.classList.toggle('collapsed', stored);
+    document.body.classList.toggle('sidebar-collapsed', stored);
+    const sync = () => {
+        const collapsed = sidebar.classList.contains('collapsed');
+        toggle.textContent = collapsed ? '›' : '‹';
+        toggle.setAttribute('aria-label', collapsed ? 'Expand navigation' : 'Collapse navigation');
+        document.body.classList.toggle('sidebar-collapsed', collapsed);
+        localStorage.setItem('cryptoSidebarCollapsed', String(collapsed));
+    };
+    toggle.addEventListener('click', () => {
+        if (window.innerWidth <= 760) {
+            sidebar.classList.toggle('mobile-open');
+            toggle.textContent = sidebar.classList.contains('mobile-open') ? '×' : '☰';
+            return;
+        }
+        sidebar.classList.toggle('collapsed');
+        sync();
+    });
+    if (window.innerWidth <= 760) {
+        sidebar.classList.remove('collapsed');
+        document.body.classList.remove('sidebar-collapsed');
+        toggle.textContent = '☰';
+    } else {
+        sync();
+    }
+}
+
 el('refresh-button').addEventListener('click', refreshDashboard);
 el('analyze-sentiment-button').addEventListener('click', analyzeSentiment);
 el('collect-sentiment-button').addEventListener('click', collectSentimentProviders);
 el('symbol-select').addEventListener('change', refreshDashboard);
 el('interval-select').addEventListener('change', refreshDashboard);
 setupCollapsibleSections();
+setupSidebar();
 (async () => { await loadSymbols(); await refreshDashboard(); })();
 
 

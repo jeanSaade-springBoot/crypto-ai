@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.time.Instant;
 
 public interface ExecutionOpportunityRepository extends JpaRepository<ExecutionOpportunity, Long> {
     Optional<ExecutionOpportunity> findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(
@@ -15,5 +16,7 @@ public interface ExecutionOpportunityRepository extends JpaRepository<ExecutionO
     List<ExecutionOpportunity> findTop50ByOrderByUpdatedAtDesc();
 
     List<ExecutionOpportunity> findTop50ByStatusInOrderByUpdatedAtDesc(Collection<String> statuses);
+    long countByStartedAtGreaterThanEqual(Instant startedAt);
+    long countByExecutionSourceInAndUpdatedAtGreaterThanEqual(Collection<String> executionSources, Instant updatedAt);
 }
 

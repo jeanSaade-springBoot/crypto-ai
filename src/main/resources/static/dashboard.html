@@ -9,25 +9,33 @@
 </head>
 <body>
 <div class="app-shell">
-    <aside class="sidebar">
+    <aside class="sidebar" id="dashboard-sidebar">
         <div class="brand">
             <span class="brand-mark">CT</span>
-            <div><strong>Crypto Trader</strong><small>Event-driven monitor</small></div>
+            <div class="sidebar-label"><strong>Crypto Trader</strong><small>AI trading command center</small></div>
+            <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Collapse navigation" title="Collapse navigation">‹</button>
         </div>
-        <nav>
-            <a class="active" href="#overview">Overview</a>
-            <a href="#market">Live market</a>
-            <a href="#indicators">Indicators</a>
-            <a href="#sentiment">Sentiment</a>
-            <a href="#signals">Trade signals</a>
-            <a href="/trade-inspector">Trade Inspector</a>
-            <a href="/administration">Administration</a>
-            <a href="#positions">Open trades</a>
-            <a href="#trade-history">Trade history</a>
-            <a href="#pipeline">Platform pipeline</a>
-            <a href="#schedules">Schedules</a>
+        <nav class="sidebar-nav">
+            <div class="nav-group"><span class="nav-group-label">OVERVIEW</span>
+                <a class="active" href="#overview" title="Dashboard"><span class="nav-icon">⌂</span><span class="nav-text">Dashboard</span></a>
+            </div>
+            <div class="nav-group"><span class="nav-group-label">MARKET</span>
+                <a href="#market" title="Market Monitor"><span class="nav-icon">⌁</span><span class="nav-text">Market Monitor</span></a>
+            </div>
+            <div class="nav-group"><span class="nav-group-label">EXECUTION</span>
+                <a href="#execution-intelligence" title="Execution Intelligence"><span class="nav-icon">⚡</span><span class="nav-text">Execution Intelligence</span><span id="nav-opportunity-count" class="nav-badge">0</span></a>
+                <a href="#positions" title="Active Positions"><span class="nav-icon">◆</span><span class="nav-text">Active Positions</span><span id="nav-position-count" class="nav-badge">0</span></a>
+            </div>
+            <div class="nav-group"><span class="nav-group-label">ANALYSIS</span>
+                <a href="#trade-history" title="Trade History"><span class="nav-icon">≡</span><span class="nav-text">Trade History</span></a>
+                <a href="/trade-inspector" title="Trade Inspector"><span class="nav-icon">⌕</span><span class="nav-text">Trade Inspector</span></a>
+            </div>
+            <div class="nav-group"><span class="nav-group-label">SYSTEM</span>
+                <a href="/administration" title="Administration"><span class="nav-icon">⚙</span><span class="nav-text">Administration</span></a>
+                <a href="#pipeline" title="System Health"><span class="nav-icon">♥</span><span class="nav-text">System Health</span></a>
+            </div>
         </nav>
-        <div class="connection"><span id="connection-dot"></span><div><strong id="connection-label">Connecting</strong><small>Auto refresh every 10s</small></div></div>
+        <div class="connection"><span id="connection-dot"></span><div class="sidebar-label"><strong id="connection-label">Connecting</strong><small>Auto refresh every 10s</small></div></div>
     </aside>
 
     <main>
@@ -35,7 +43,6 @@
             <div class="topbar-main">
                 <div><p class="eyebrow">AUTOMATIC TRADING MONITOR</p><h1>Trading dashboard</h1></div>
                 <div class="filters">
-                <a class="header-link" href="#portfolio-performance">Portfolio</a>
                 <a class="header-link" href="/trade-inspector">Trade Inspector</a>
                 <a class="header-link" href="/administration">Administration</a>
                 <label>Symbol<select id="symbol-select"><option>BTCUSDT</option></select></label>
@@ -46,72 +53,74 @@
                 </form>
                 </div>
             </div>
-            <section id="trade-performance-strip" class="trade-performance-strip" aria-label="Recent executed trade performance">
-                <div class="live-price-tile" aria-label="Selected coin live price">
-                    <small>Live Price</small>
-                    <strong id="header-live-symbol">BTCUSDT</strong>
-                    <span id="header-live-price">—</span>
-                    <small id="header-live-timeframe">1m market feed</small>
-                </div>
-                <div class="trade-performance-summary">
-                    <span id="trade-performance-label">Last 20 trades</span>
-                    <strong id="trade-performance-pnl">—</strong>
-                    <span id="trade-performance-record">0W / 0L</span>
-                    <span id="trade-performance-win-rate">0% win rate</span>
-                    <small id="trade-performance-count">No closed wallet trades yet</small>
-                </div>
-                <div class="coin-leader winner" aria-label="Top profitable coin">
-                    <span class="leader-icon" aria-hidden="true">↗</span>
-                    <div><small>Top Winner</small><strong id="trade-performance-top-winner">—</strong><span id="trade-performance-top-winner-pnl">No profit yet</span></div>
-                </div>
-                <div class="coin-leader loser" aria-label="Top losing coin">
-                    <span class="leader-icon" aria-hidden="true">↘</span>
-                    <div><small>Top Loser</small><strong id="trade-performance-top-loser">—</strong><span id="trade-performance-top-loser-pnl">No loss yet</span></div>
-                </div>
+            <section id="wallet-status-strip" class="wallet-status-strip" aria-label="Live wallet status">
+                <div class="wallet-kpi live-price-kpi"><small>Live Price</small><strong id="header-live-price">—</strong><span id="header-live-symbol">BTCUSDT</span><em id="header-live-timeframe">1m market feed</em></div>
+                <div class="wallet-kpi"><small>Wallet Value</small><strong id="header-wallet-value">—</strong></div>
+                <div class="wallet-kpi"><small>Available USDT</small><strong id="header-wallet-available">—</strong></div>
+                <div class="wallet-kpi"><small>Invested</small><strong id="header-wallet-invested">—</strong></div>
+                <a class="wallet-kpi clickable-kpi" href="#positions"><small>Active Positions</small><strong id="header-active-positions">0</strong></a>
+                <div class="wallet-kpi"><small>Today's P/L</small><strong id="header-today-pnl">—</strong></div>
+                <div class="wallet-kpi"><small>Overall P/L</small><strong id="header-overall-pnl">—</strong></div>
             </section>
         </header>
 
 
         <section id="error-banner" class="error-banner hidden"></section>
 
-        <section id="overview" class="metrics-grid">
-            <article class="metric-card"><span>Latest price</span><strong id="latest-price">—</strong><small id="price-change">Waiting for candles</small></article>
-            <article class="metric-card"><span>Closed candles</span><strong id="candle-count">0</strong><small id="history-progress">0 / 210 required</small><div class="progress"><div id="history-bar"></div></div></article>
-            <article class="metric-card"><span>Latest decision</span><strong id="latest-decision">NO SIGNAL</strong><small id="latest-score">Analysis not ready</small></article>
-            <article class="metric-card"><span>Open positions</span><strong id="open-positions">0</strong><small>Wallet-managed positions</small></article>
+        <section id="overview" class="command-center-grid">
+            <article id="execution-intelligence" class="panel execution-intelligence-panel">
+                <div class="section-heading"><div><p class="eyebrow">EXECUTION INTELLIGENCE</p><h2>Live opportunity state</h2></div><span id="execution-intelligence-updated">Waiting for evidence</span></div>
+                <div class="intelligence-kpis">
+                    <div><span>Active opportunities</span><strong id="intel-active">0</strong></div>
+                    <div><span>Building / Waiting</span><strong id="intel-building">0</strong></div>
+                    <div><span>Blocked</span><strong id="intel-blocked">0</strong></div>
+                    <div><span>Confirmed</span><strong id="intel-confirmed">0</strong></div>
+                </div>
+                <div id="opportunity-queue" class="opportunity-queue"><div class="empty">No active opportunities yet.</div></div>
+            </article>
+
+            <article class="panel ai-performance-panel">
+                <div class="section-heading"><div><p class="eyebrow">TODAY</p><h2>AI performance</h2></div><span>Execution outcomes</span></div>
+                <div class="ai-performance-grid">
+                    <div><span>Executed</span><strong id="ai-executed">0</strong></div>
+                    <div><span>Wins</span><strong id="ai-wins">0</strong></div>
+                    <div><span>Losses</span><strong id="ai-losses">0</strong></div>
+                    <div><span>Open</span><strong id="ai-open">0</strong></div>
+                    <div><span>Win rate</span><strong id="ai-win-rate">0%</strong></div>
+                    <div><span>Profit factor</span><strong id="ai-profit-factor">—</strong></div>
+                    <div class="wide"><span>Today's realized P/L</span><strong id="ai-today-pnl">—</strong></div>
+                </div>
+            </article>
         </section>
 
-        <section id="portfolio-performance" class="panel portfolio-panel">
-            <div class="section-heading"><div><p class="eyebrow">PAPER PORTFOLIO</p><h2>Portfolio performance</h2></div><a class="wallet-link" href="/administration">Open administration</a></div>
-            <div class="portfolio-summary-grid">
-                <article><span>Status</span><strong id="portfolio-status">NOT STARTED</strong><small id="portfolio-return">Add USDT to begin</small></article>
-                <article><span>Portfolio value</span><strong id="portfolio-value">—</strong><small id="portfolio-invested">Net invested —</small></article>
-                <article><span>Total P&amp;L</span><strong id="portfolio-pnl">—</strong><small id="portfolio-change24h">24h —</small></article>
-                <article><span>Available USDT</span><strong id="portfolio-usdt">—</strong><small>Available for new positions</small></article>
-                <article><span>Today's BUY budget</span><strong id="portfolio-daily-budget">—</strong><small id="portfolio-daily-buys">0 / Unlimited new positions</small></article>
+        <section id="pipeline" class="panel execution-pipeline-panel">
+            <div class="section-heading"><div><p class="eyebrow">TODAY'S EXECUTION FUNNEL</p><h2>Execution pipeline</h2></div><span id="last-updated">—</span></div>
+            <div class="execution-funnel">
+                <div class="funnel-step"><span>Signals Today</span><strong id="pipeline-signals-today">0</strong></div><b>→</b>
+                <div class="funnel-step"><span>BUY Candidates</span><strong id="pipeline-buy-candidates">0</strong></div><b>→</b>
+                <div class="funnel-step"><span>Consolidated / Evidence</span><strong id="pipeline-consolidated">0</strong></div><b>→</b>
+                <div class="funnel-step"><span>Executed</span><strong id="pipeline-executed">0</strong></div><b>→</b>
+                <div class="funnel-step"><span>Active Positions</span><strong id="pipeline-open">0</strong></div><b>→</b>
+                <div class="funnel-step"><span>Closed Profitably</span><strong id="pipeline-profitable">0</strong></div>
             </div>
-            <div class="portfolio-holdings" id="portfolio-holdings"><span class="empty">No wallet assets yet.</span></div>
+            <details class="pipeline-details">
+                <summary>System flow health</summary>
+                <div class="pipeline-grid pipeline-grid-compact">
+                    <div class="pipeline-step" data-step="candle"><span class="step-icon">1</span><div><strong>Closed candle</strong><small>Market data</small><p></p></div></div>
+                    <div class="pipeline-step" data-step="indicator"><span class="step-icon">2</span><div><strong>Indicators</strong><small>Technical</small><p></p></div></div>
+                    <div class="pipeline-step" data-step="marketContext"><span class="step-icon">3</span><div><strong>Market context</strong><small>HTF · BTC · Sentiment</small><p></p></div></div>
+                    <div class="pipeline-step" data-step="strategy"><span class="step-icon">4</span><div><strong>Strategy</strong><small>Regime-aware</small><p></p></div></div>
+                    <div class="pipeline-step" data-step="derivatives"><span class="step-icon">5</span><div><strong>Funding & OI</strong><small>Positioning</small><p></p></div></div>
+                    <div class="pipeline-step" data-step="orderBook"><span class="step-icon">6</span><div><strong>Order book</strong><small>Wall lifecycle</small><p></p></div></div>
+                    <div class="pipeline-step" data-step="analysis"><span class="step-icon">7</span><div><strong>Final decision</strong><small>Signal source of truth</small><p></p></div></div>
+                    <div class="pipeline-step" data-step="executionValidation"><span class="step-icon">8</span><div><strong>Execution Intelligence</strong><small>Immediate · Consolidated · Evidence</small><p></p></div></div>
+                    <div class="pipeline-step" data-step="walletExecution"><span class="step-icon">9</span><div><strong>Wallet execution</strong><small>Actual BUY / SELL</small><p></p></div></div>
+                    <div class="pipeline-step" data-step="positionManager"><span class="step-icon">10</span><div><strong>Position Manager</strong><small>SL · TP · Profit Lock</small><p></p></div></div>
+                    <div class="pipeline-step" data-step="walletTrade"><span class="step-icon">11</span><div><strong>Trade History</strong><small>Financial ledger</small><p></p></div></div>
+                    <div class="pipeline-step" data-step="tradeInspector"><span class="step-icon">12</span><div><strong>Trade Inspector</strong><small>Post-trade audit</small><p></p></div></div>
+                </div>
+            </details>
         </section>
-
-        <section id="pipeline" class="panel">
-            <div class="section-heading"><div><p class="eyebrow">FLOW HEALTH</p><h2>Trading platform pipeline</h2></div><span id="last-updated">—</span></div>
-            <div class="pipeline-grid pipeline-grid-compact">
-                <div class="pipeline-step" data-step="candle"><span class="step-icon">1</span><div><strong>Closed candle</strong><small>Kline</small><p></p></div></div>
-                <div class="pipeline-step" data-step="indicator"><span class="step-icon">2</span><div><strong>Indicators</strong><small>Technical</small><p></p></div></div>
-                <div class="pipeline-step" data-step="marketContext"><span class="step-icon">3</span><div><strong>Market context</strong><small>Context</small><p></p></div></div>
-                <div class="pipeline-step" data-step="strategy"><span class="step-icon">4</span><div><strong>Strategy</strong><small>Dynamic</small><p></p></div></div>
-                <div class="pipeline-step" data-step="derivatives"><span class="step-icon">5</span><div><strong>Funding & OI</strong><small>Futures</small><p></p></div></div>
-                <div class="pipeline-step" data-step="orderBook"><span class="step-icon">6</span><div><strong>Order book</strong><small>Liquidity</small><p></p></div></div>
-                <div class="pipeline-step" data-step="analysis"><span class="step-icon">7</span><div><strong>Final decision</strong><small>Analysis</small><p></p></div></div>
-                <div class="pipeline-step" data-step="executionValidation"><span class="step-icon">8</span><div><strong>Execution Intelligence</strong><small>Immediate · Consolidated · Evidence</small><p></p></div></div>
-                <div class="pipeline-step" data-step="walletExecution"><span class="step-icon">9</span><div><strong>Wallet execution</strong><small>BUY / SELL</small><p></p></div></div>
-                <div class="pipeline-step" data-step="positionManager"><span class="step-icon">10</span><div><strong>Position Manager</strong><small>SL · TP · Profit Lock</small><p></p></div></div>
-                <div class="pipeline-step" data-step="walletTrade"><span class="step-icon">11</span><div><strong>Wallet Trade</strong><small>Trade History</small><p></p></div></div>
-                <div class="pipeline-step" data-step="tradeInspector"><span class="step-icon">12</span><div><strong>Trade Inspector</strong><small>Post-trade analysis</small><p></p></div></div>
-            </div>
-        </section>
-
-
 
         <section id="score-diagnostics" class="panel collapsible-panel is-collapsed" data-collapsible="score-diagnostics">
             <div class="section-heading collapsible-heading">
@@ -159,37 +168,32 @@
             <div id="volume-chart"></div>
         </section>
 
-        <section id="indicators" class="content-grid">
-            <article class="panel">
-                <div class="section-heading"><div><p class="eyebrow">TREND</p><h2>Moving averages</h2></div></div>
-                <div class="indicator-list">
-                    <div><span>SMA 20</span><strong id="sma20">—</strong></div>
-                    <div><span>EMA 20</span><strong id="ema20">—</strong></div>
-                    <div><span>EMA 50</span><strong id="ema50">—</strong></div>
-                    <div><span>EMA 200</span><strong id="ema200">—</strong></div>
-                </div>
+        <section id="indicators" class="content-grid ai-analysis-grid">
+            <article class="panel ai-analysis-card" id="trend-analysis-card">
+                <div class="analysis-card-head"><div><p class="eyebrow">TREND</p><h2 id="trend-analysis-status">Waiting</h2></div><strong id="trend-analysis-score">—/25</strong></div>
+                <div class="analysis-meter"><span id="trend-analysis-bar"></span></div>
+                <p id="trend-analysis-text" class="analysis-interpretation">Waiting for the latest analyzed signal.</p>
+                <details><summary>Raw indicators</summary><div class="indicator-list compact-indicators">
+                    <div><span>SMA 20</span><strong id="sma20">—</strong></div><div><span>EMA 20</span><strong id="ema20">—</strong></div><div><span>EMA 50</span><strong id="ema50">—</strong></div><div><span>EMA 200</span><strong id="ema200">—</strong></div>
+                </div></details>
             </article>
-            <article class="panel">
-                <div class="section-heading"><div><p class="eyebrow">MOMENTUM</p><h2>RSI and MACD</h2></div></div>
-                <div class="indicator-list">
-                    <div><span>RSI 14</span><strong id="rsi14">—</strong></div>
-                    <div><span>MACD</span><strong id="macd">—</strong></div>
-                    <div><span>Signal</span><strong id="macd-signal">—</strong></div>
-                    <div><span>Histogram</span><strong id="macd-histogram">—</strong></div>
-                </div>
+            <article class="panel ai-analysis-card" id="momentum-analysis-card">
+                <div class="analysis-card-head"><div><p class="eyebrow">MOMENTUM</p><h2 id="momentum-analysis-status">Waiting</h2></div><strong id="momentum-analysis-score">—/15</strong></div>
+                <div class="analysis-meter"><span id="momentum-analysis-bar"></span></div>
+                <p id="momentum-analysis-text" class="analysis-interpretation">Waiting for the latest analyzed signal.</p>
+                <details><summary>Raw indicators</summary><div class="indicator-list compact-indicators">
+                    <div><span>RSI 14</span><strong id="rsi14">—</strong></div><div><span>MACD</span><strong id="macd">—</strong></div><div><span>Signal</span><strong id="macd-signal">—</strong></div><div><span>Histogram</span><strong id="macd-histogram">—</strong></div>
+                </div></details>
             </article>
-            <article class="panel">
-                <div class="section-heading"><div><p class="eyebrow">VOLATILITY</p><h2>Bands and volume</h2></div></div>
-                <div class="indicator-list">
-                    <div><span>Bollinger upper</span><strong id="bb-upper">—</strong></div>
-                    <div><span>Bollinger middle</span><strong id="bb-middle">—</strong></div>
-                    <div><span>Bollinger lower</span><strong id="bb-lower">—</strong></div>
-                    <div><span>ATR 14</span><strong id="atr14">—</strong></div>
-                    <div><span>Relative volume</span><strong id="relative-volume">—</strong></div>
-                </div>
+            <article class="panel ai-analysis-card" id="volatility-analysis-card">
+                <div class="analysis-card-head"><div><p class="eyebrow">VOLATILITY & VOLUME</p><h2 id="volatility-analysis-status">Waiting</h2></div><strong id="volatility-analysis-score">—/20</strong></div>
+                <div class="analysis-meter"><span id="volatility-analysis-bar"></span></div>
+                <p id="volatility-analysis-text" class="analysis-interpretation">Waiting for the latest analyzed signal.</p>
+                <details><summary>Raw indicators</summary><div class="indicator-list compact-indicators">
+                    <div><span>Bollinger upper</span><strong id="bb-upper">—</strong></div><div><span>Bollinger middle</span><strong id="bb-middle">—</strong></div><div><span>Bollinger lower</span><strong id="bb-lower">—</strong></div><div><span>ATR 14</span><strong id="atr14">—</strong></div><div><span>Relative volume</span><strong id="relative-volume">—</strong></div>
+                </div></details>
             </article>
         </section>
-
 
         <section id="sentiment" class="sentiment-section collapsible-section is-collapsed" data-collapsible="sentiment">
             <div class="panel collapsible-section-header">
@@ -241,7 +245,7 @@
         </section>
 
         <section id="signals" class="panel">
-            <div class="section-heading"><div><p class="eyebrow">ACTIONABLE ANALYSIS</p><h2>BUY and SELL signals</h2></div></div>
+            <div class="section-heading"><div><p class="eyebrow">RECENT SIGNAL EVIDENCE</p><h2>BUY and SELL signals</h2></div><span>Historical evidence; live execution state is shown above</span></div>
             <div class="table-wrap signal-board-wrap"><table class="signal-board-table"><thead><tr><th>Signal</th><th>3-frame decision</th><th>Planned trade</th><th>Execution</th><th>Status</th><th>Details</th></tr></thead><tbody id="signals-body"></tbody></table></div>
         </section>
 

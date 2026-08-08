@@ -70,5 +70,17 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
             """)
     List<Object[]> summarizeClosedTradePnlBySymbolBetween(@Param("from") Instant from, @Param("to") Instant to);
 
+
+    long countByStatusAndSideAndExecutedAtGreaterThanEqual(String status, String side, Instant executedAt);
+
+    @Query("""
+            select count(t) from WalletTrade t
+            where t.status = 'EXECUTED'
+              and t.side = 'SELL'
+              and t.realizedPnlUsdt > 0
+              and t.executedAt >= :from
+            """)
+    long countProfitableClosedTradesSince(@Param("from") Instant from);
+
     boolean existsByExecutionKey(String executionKey);
 }
