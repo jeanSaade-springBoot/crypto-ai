@@ -1691,3 +1691,13 @@ html, body { max-width: 100%; overflow-x: hidden; }
 }
 .trade-id { color: var(--text); }
 .signal-id-pair { color: var(--muted); }
+
+
+/* Signal timeframe role: make strategic/confirmation/execution responsibilities explicit. */
+.signal-role{min-width:220px;max-width:300px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:var(--surface2);white-space:normal;line-height:1.35}
+.signal-role strong{display:block;font-size:12px;margin-bottom:3px}
+.signal-role small{display:block;color:var(--muted);font-size:11px}
+.signal-role.strategic-buy,.signal-role.confirmation-buy,.signal-role.ready{border-color:rgba(46,204,113,.45);background:rgba(46,204,113,.08)}
+.signal-role.strategic-sell,.signal-role.confirmation-sell,.signal-role.blocked{border-color:rgba(231,76,60,.45);background:rgba(231,76,60,.08)}
+.signal-role.waiting{border-color:rgba(241,196,15,.42);background:rgba(241,196,15,.07)}
+@media(max-width:900px){.signal-role{min-width:190px;max-width:240px}}

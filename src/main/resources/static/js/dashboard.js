@@ -448,11 +448,64 @@ function openExecutionMarker(id) {
 }
 
 
+
+function signalExecutionRoleHtml(signal) {
+    const interval = String(signal.interval || '').toLowerCase();
+    const decision = String(signal.decision || '').toUpperCase();
+    const higherInterval = String(signal.confluenceHigherInterval || '').toLowerCase();
+    const higherDecision = String(signal.confluenceHigherDecision || '').toUpperCase();
+    const bullish = decision === 'BUY' || decision === 'STRONG_BUY';
+    const bearish = decision === 'SELL' || decision === 'STRONG_SELL';
+
+    let tone = 'waiting';
+    let title = 'Context only';
+    let detail = 'This signal does not execute the wallet directly.';
+
+    if (interval === '1h') {
+        tone = bullish ? 'strategic-buy' : bearish ? 'strategic-sell' : 'waiting';
+        title = bullish ? 'Strategic BUY' : bearish ? 'Strategic SELL' : 'Strategic context';
+        detail = bullish
+            ? 'Higher-timeframe support. Waiting for 5m bullish confirmation and a 1m BUY trigger.'
+            : bearish
+                ? 'Higher-timeframe bearish filter. It can block BUYs but does not execute a wallet trade itself.'
+                : 'Higher-timeframe context only. Lower frames still decide whether an execution setup exists.';
+    } else if (interval === '5m') {
+        tone = bullish ? 'confirmation-buy' : bearish ? 'confirmation-sell' : 'waiting';
+        title = bullish ? 'BUY confirmation' : bearish ? 'SELL confirmation' : 'Confirmation frame';
+        detail = bullish
+            ? '5m confirms bullish direction. Waiting for a valid 1m BUY execution trigger.'
+            : bearish
+                ? '5m confirms bearish direction. A managed position still needs a valid 1m exit trigger unless a risk exit fires.'
+                : '5m is not an execution frame. It confirms or rejects the 1m trigger.';
+    } else if (interval === '1m') {
+        if (bullish) {
+            const higherBullish = ['BUY', 'STRONG_BUY'].includes(higherDecision);
+            const higherOpposed = ['SELL', 'STRONG_SELL'].includes(higherDecision);
+            tone = higherBullish ? 'ready' : higherOpposed ? 'blocked' : 'waiting';
+            title = higherBullish ? 'BUY execution candidate' : higherOpposed ? 'BUY blocked by confirmation' : 'BUY waiting for confirmation';
+            detail = higherBullish
+                ? `1m trigger is present and ${higherInterval || 'higher frame'} is bullish. Execution Validation decides whether the wallet may buy.`
+                : higherOpposed
+                    ? `1m BUY exists, but ${higherInterval || 'the higher frame'} is ${higherDecision.replaceAll('_', ' ')}.`
+                    : `1m BUY exists, but ${higherInterval || '5m'} is ${higherDecision ? higherDecision.replaceAll('_', ' ') : 'not yet bullish'}. Waiting for bullish confirmation.`;
+        } else if (bearish) {
+            const higherBearish = ['SELL', 'STRONG_SELL'].includes(higherDecision);
+            tone = higherBearish ? 'ready' : 'waiting';
+            title = higherBearish ? 'SELL execution candidate' : 'SELL waiting for confirmation';
+            detail = higherBearish
+                ? `1m exit trigger is present and ${higherInterval || 'higher frame'} confirms bearish direction. It can close only an active managed position.`
+                : `1m SELL exists, but ${higherInterval || '5m'} has not confirmed a bearish exit. Risk exits remain independent.`;
+        }
+    }
+
+    return `<div class="signal-role ${tone}"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small></div>`;
+}
+
 function renderSignals(signals, displayOnlyInterval = false) {
     const body = el('signals-body');
     const actionableSignals = (signals || []).filter(signal => {
         const decision = String(signal.decision || '').toUpperCase();
-        return decision === 'BUY' || decision === 'SELL' || decision === 'STRONG_SELL';
+        return decision === 'BUY' || decision === 'STRONG_BUY' || decision === 'SELL' || decision === 'STRONG_SELL';
     });
 
     if (!actionableSignals.length) {
@@ -481,6 +534,7 @@ function renderSignals(signals, displayOnlyInterval = false) {
                 <td>${dateTime(s.generatedAt)}</td>
                 <td><span class="badge ${String(s.decision).toLowerCase()}">${escapeHtml(String(s.decision).replaceAll('_', ' '))}</span></td>
                 <td><strong>${s.totalScore}/100</strong><small class="raw-score">Raw ${s.rawScore}/${s.maximumAvailableScore}</small></td>
+                <td>${signalExecutionRoleHtml(s)}</td>
                 <td>${money(s.latestPrice)}</td>
                 <td>${money(s.stopLoss)}</td>
                 <td>${money(s.takeProfit)}</td>
@@ -1364,7 +1418,7 @@ function renderTradeReplay(replay) {
 
     const actionable = signal => {
         const decision = String(signal.decision || '').toUpperCase();
-        return decision === 'BUY' || decision === 'SELL' || decision === 'STRONG_SELL';
+        return decision === 'BUY' || decision === 'STRONG_BUY' || decision === 'SELL' || decision === 'STRONG_SELL';
     };
     const actionableSignals = allSignals.filter(actionable);
     const hiddenSignals = allSignals.length - actionableSignals.length;
