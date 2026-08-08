@@ -120,12 +120,15 @@ public class ExecutionIntelligenceService {
                     "Bearish 1m evidence weakened the opportunity but did not invalidate supportive 5m/1h context.", evidence);
         }
 
-        HardRiskBlock hardBlock = hardRiskBlock(signal);
-        if (hardBlock.blocked()) {
+        // Non-ATR safety vetoes remain absolute. ATR is intentionally handled later so an
+        // ATR-deferred BUY can be reconsidered by the continuation engine when fresh
+        // multi-timeframe evidence confirms the move and the CURRENT risk/reward remains sound.
+        HardRiskBlock nonAtrHardBlock = nonAtrHardRiskBlock(signal);
+        if (nonAtrHardBlock.blocked()) {
             Evidence evidence = evidence(signal);
             saveOpportunity(signal, evidence, "BLOCKED", "HARD_RISK", 0,
-                    hardBlock.code(), hardBlock.explanation());
-            return ExecutionDecision.reject(hardBlock.code(), hardBlock.explanation(), evidence);
+                    nonAtrHardBlock.code(), nonAtrHardBlock.explanation());
+            return ExecutionDecision.reject(nonAtrHardBlock.code(), nonAtrHardBlock.explanation(), evidence);
         }
 
         if (signal.getLatestPrice() == null || signal.getStopLoss() == null || signal.getTakeProfit() == null
@@ -135,6 +138,28 @@ public class ExecutionIntelligenceService {
                     "MISSING_RISK_PLAN", "Execution requires a fresh entry price, stop loss, and take-profit plan.");
             return ExecutionDecision.reject("MISSING_RISK_PLAN",
                     "Execution requires a fresh entry price, stop loss, and take-profit plan.", evidence);
+        }
+
+        // Evaluate deferred continuation BEFORE the ordinary ATR immediate-entry veto.
+        // This route exists specifically for a previous analytically valid BUY that was
+        // deferred by ATR waiting for a pullback. It still requires a current risk plan,
+        // supportive 1m/5m/1h context, healthy opportunity state and >= 1:1 current R/R.
+        Evidence evidence = evidence(signal);
+        ExecutionDecision deferred = deferredContinuationDecision(signal, evidence);
+        if (deferred != null) {
+            saveOpportunity(signal, evidence,
+                    deferred.allowed() ? "CONFIRMED" : deferred.state(),
+                    deferred.source(), deferred.positionPercent(),
+                    deferred.code(), deferred.explanation());
+            return deferred;
+        }
+
+        // For every non-continuation path, ATR immediate-entry permission remains mandatory.
+        if (!signal.isAtrImmediateEntryAllowed()) {
+            saveOpportunity(signal, evidence, "BLOCKED", "HARD_RISK", 0,
+                    "ATR_ENTRY_BLOCKED", "ATR risk controls do not allow immediate entry.");
+            return ExecutionDecision.reject("ATR_ENTRY_BLOCKED",
+                    "ATR risk controls do not allow immediate entry.", evidence);
         }
 
         // Fast path: a normal fresh BUY can execute immediately using the configured profile.
@@ -170,21 +195,6 @@ public class ExecutionIntelligenceService {
         }
 
         // Intelligent evidence path: BUY and strong WATCH observations can build one opportunity.
-        Evidence evidence = evidence(signal);
-
-        // A prior BUY may have been valid analytically but deferred by ATR because the
-        // engine wanted a pullback. If the pullback never arrives and fresh 1m/5m/1h
-        // evidence confirms continuation, allow a small continuation entry using the
-        // CURRENT risk plan. This is not a bypass for hard risk or poor reward/risk.
-        ExecutionDecision deferred = deferredContinuationDecision(signal, evidence);
-        if (deferred != null) {
-            saveOpportunity(signal, evidence,
-                    deferred.allowed() ? "CONFIRMED" : deferred.state(),
-                    deferred.source(), deferred.positionPercent(),
-                    deferred.code(), deferred.explanation());
-            return deferred;
-        }
-
         ExecutionDecision accumulated = accumulatedDecision(signal, evidence);
         saveOpportunity(signal, evidence,
                 accumulated.allowed() ? "CONFIRMED" : accumulated.state(),
@@ -215,7 +225,10 @@ public class ExecutionIntelligenceService {
 
     private ExecutionDecision deferredContinuationDecision(TradeSignal current, Evidence e) {
         if (!isSupportiveCurrentSignal(current)) return null;
-        if (!current.isFinalEntryAllowed() || !current.isAtrImmediateEntryAllowed()) return null;
+        // Do not require finalEntryAllowed/atrImmediateEntryAllowed here. The aggregate final
+        // entry flag may be false solely because ATR requested a pullback; that is exactly
+        // the condition this continuation route is designed to reassess. All non-ATR hard
+        // vetoes were already enforced before this method is called.
         if (current.getTotalScore() < DEFERRED_MIN_CURRENT_SCORE
                 || current.getConfidenceScore() < DEFERRED_MIN_CURRENT_CONFIDENCE) return null;
         if (e.opportunityHealth() < DEFERRED_MIN_HEALTH
@@ -359,10 +372,7 @@ public class ExecutionIntelligenceService {
                 && signal.getConfidenceScore() >= WATCH_EVIDENCE_MIN_CONFIDENCE;
     }
 
-    private HardRiskBlock hardRiskBlock(TradeSignal signal) {
-        if (!signal.isAtrImmediateEntryAllowed()) {
-            return HardRiskBlock.block("ATR_ENTRY_BLOCKED", "ATR risk controls do not allow immediate entry.");
-        }
+    private HardRiskBlock nonAtrHardRiskBlock(TradeSignal signal) {
         if (!signal.isStrategyEntryAllowed()) {
             return HardRiskBlock.block("STRATEGY_ENTRY_BLOCKED", "Selected market strategy does not allow entry.");
         }

@@ -185,6 +185,9 @@ class ExecutionIntelligenceServiceTest {
         current.setStopLoss(BigDecimal.valueOf(99));
         current.setTakeProfit(BigDecimal.valueOf(101.5));
         current.setAtrRecommendedPositionPercent(60);
+        current.setAtrImmediateEntryAllowed(false);
+        current.setFinalEntryAllowed(false);
+        current.setAtrEntryType("PULLBACK_ENTRY");
 
         TradeSignal priorBuy = signal(69L, "TESTUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
                 now.minusSeconds(600), 78, 55);
@@ -222,6 +225,9 @@ class ExecutionIntelligenceServiceTest {
         current.setLatestPrice(BigDecimal.valueOf(100));
         current.setStopLoss(BigDecimal.valueOf(98));
         current.setTakeProfit(BigDecimal.valueOf(100.5));
+        current.setAtrImmediateEntryAllowed(false);
+        current.setFinalEntryAllowed(false);
+        current.setAtrEntryType("WAIT_FOR_RETRACEMENT");
 
         TradeSignal priorBuy = signal(79L, "TEST2USDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
                 now.minusSeconds(600), 78, 55);
