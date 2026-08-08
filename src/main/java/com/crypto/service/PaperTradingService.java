@@ -7,6 +7,7 @@ import com.crypto.repository.TradeSignalRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import com.crypto.wallet.service.WalletAutoExecutionService;
+import com.crypto.execution.service.ExecutionIntelligenceService;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.crypto.position.service.PositionManagementService;
@@ -33,7 +34,7 @@ public class PaperTradingService {
     private final PaperPositionRepository positionRepository;
     private final WalletAutoExecutionService walletAutoExecutionService;
     private final TradeExecutionValidationService executionValidationService;
-    private final OpportunityConsolidationService opportunityConsolidationService;
+    private final ExecutionIntelligenceService executionIntelligenceService;
     private final DynamicProfitLockService dynamicProfitLockService;
 
     /** Advisory-only; optional injection preserves existing constructor-based tests. */
@@ -120,32 +121,15 @@ public class PaperTradingService {
             return Optional.of(position);
         }
 
-        if (!isBuyEligible(signal)) {
+        ExecutionIntelligenceService.ExecutionDecision executionDecision =
+                executionIntelligenceService.evaluateBuy(signal);
+        if (!executionDecision.allowed()) {
+            log.info("Execution Intelligence did not open a BUY: signalId={}, symbol={}, interval={}, state={}, source={}, code={}, evidenceScore={}, buys={}, watches={}, detail={}",
+                    signal.getId(), signal.getSymbol(), signal.getInterval(), executionDecision.state(),
+                    executionDecision.source(), executionDecision.code(),
+                    executionDecision.evidence().evidenceScore(), executionDecision.evidence().buyCount(),
+                    executionDecision.evidence().watchCount(), executionDecision.explanation());
             return Optional.empty();
-        }
-
-        TradeExecutionValidationService.ValidationResult executionValidation =
-                executionValidationService.validateBuy(signal);
-
-        if (!executionValidation.allowed()) {
-            OpportunityConsolidationService.Assessment consolidated =
-                    opportunityConsolidationService.evaluate(signal);
-            if (consolidated.allowed()) {
-                executionValidation = TradeExecutionValidationService.ValidationResult.allow(
-                        consolidated.positionPercent(),
-                        consolidated.code(),
-                        consolidated.explanation()
-                );
-                log.info("Consolidated wallet BUY approved: signalId={}, symbol={}, count={}, avgScore={}, avgConfidence={}, positionPercent={}, detail={}",
-                        signal.getId(), signal.getSymbol(), consolidated.consecutiveBuyCount(),
-                        consolidated.averageScore(), consolidated.averageConfidence(),
-                        consolidated.positionPercent(), consolidated.explanation());
-            } else {
-                log.info("Wallet BUY not executed: signalId={}, symbol={}, interval={}, normalReason={}, opportunityState={}, opportunityReason={}, detail={}",
-                        signal.getId(), signal.getSymbol(), signal.getInterval(),
-                        executionValidation.code(), consolidated.state(), consolidated.code(), consolidated.explanation());
-                return Optional.empty();
-            }
         }
 
         if (positionRepository.countByStatus(PositionStatus.OPEN) >= properties.maxOpenPositions()) {
@@ -157,7 +141,7 @@ public class PaperTradingService {
         int atrPercent = signal.getAtrRecommendedPositionPercent() <= 0
                 ? 100
                 : signal.getAtrRecommendedPositionPercent();
-        int executionPercent = executionValidation.positionPercent();
+        int executionPercent = executionDecision.positionPercent();
         int effectivePositionPercent = Math.max(1,
                 Math.min(100, (int) Math.round(atrPercent * executionPercent / 100.0)));
         BigDecimal positionScale = BigDecimal.valueOf(effectivePositionPercent)
@@ -173,6 +157,21 @@ public class PaperTradingService {
         }
 
         BigDecimal quantity = riskAmount.divide(riskPerUnit, MC);
+
+        final boolean walletExecuted;
+        try {
+            walletExecuted = walletAutoExecutionService.executeBuy(signal, effectivePositionPercent,
+                    "Execution Intelligence [" + executionDecision.source() + "] " + executionDecision.explanation());
+        } catch (RuntimeException ex) {
+            log.error("Automatic wallet BUY failed for signal {}: {}", signal.getId(), ex.getMessage(), ex);
+            return Optional.empty();
+        }
+        if (!walletExecuted) {
+            log.info("Execution Intelligence approved signal {} but wallet controls declined execution; no paper position was created.", signal.getId());
+            return Optional.empty();
+        }
+
+        executionIntelligenceService.markExecuted(signal, executionDecision);
         PaperPosition position = positionRepository.save(PaperPosition.builder()
                 .symbol(symbol)
                 .side(PositionSide.BUY)
@@ -182,15 +181,9 @@ public class PaperTradingService {
                 .stopLoss(signal.getStopLoss())
                 .takeProfit(signal.getTakeProfit())
                 .signal(signal)
-                .entryReason(signal.getExplanation() + " | Execution: " + executionValidation.explanation() + " Effective position " + effectivePositionPercent + "%.")
+                .entryReason(signal.getExplanation() + " | Execution Intelligence [" + executionDecision.source() + "]: " + executionDecision.explanation() + " Effective position " + effectivePositionPercent + "%.")
                 .openedAt(Instant.now())
                 .build());
-
-        try {
-            walletAutoExecutionService.executeBuy(signal, effectivePositionPercent, executionValidation.explanation());
-        } catch (RuntimeException ex) {
-            log.error("Automatic wallet BUY failed for signal {}: {}", signal.getId(), ex.getMessage(), ex);
-        }
         return Optional.of(position);
     }
 
@@ -282,14 +275,6 @@ public class PaperTradingService {
             }
         }
         return saved;
-    }
-
-    private boolean isBuyEligible(TradeSignal signal) {
-        return signal.isFinalEntryAllowed()
-                && signal.isAtrImmediateEntryAllowed()
-                && signal.getTotalScore() >= properties.minimumBuyScore()
-                && (signal.getDecision() == SignalDecision.BUY
-                || signal.getDecision() == SignalDecision.STRONG_BUY);
     }
 
     private String normalizeSymbol(String symbol) {

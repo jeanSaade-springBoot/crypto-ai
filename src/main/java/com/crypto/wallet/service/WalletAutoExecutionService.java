@@ -32,18 +32,18 @@ public class WalletAutoExecutionService {
     private final ObjectMapper objectMapper;
 
     @Transactional
-    public synchronized void executeBuy(TradeSignal signal) {
-        executeBuy(signal, 100, "Full-size execution");
+    public synchronized boolean executeBuy(TradeSignal signal) {
+        return executeBuy(signal, 100, "Full-size execution");
     }
 
     @Transactional
-    public synchronized void executeBuy(TradeSignal signal, int positionPercent, String executionExplanation) {
-        if (signal == null || signal.getId() == null) return;
+    public synchronized boolean executeBuy(TradeSignal signal, int positionPercent, String executionExplanation) {
+        if (signal == null || signal.getId() == null) return false;
         WalletSettings settings = settings();
         int normalizedPositionPercent = Math.max(1, Math.min(100, positionPercent));
 
         String key = signal.getId() + ":BUY";
-        if (tradeRepository.existsByExecutionKey(key)) return;
+        if (tradeRepository.existsByExecutionKey(key)) return true;
 
         String pair = normalizePair(signal.getSymbol());
         String assetSymbol = pair.substring(0, pair.length() - 4);
@@ -52,7 +52,7 @@ public class WalletAutoExecutionService {
         WalletDailyStatistics daily = dailyStatistics(settings, usdt);
 
         if (daily.getMaximumNewPositions() > 0
-                && daily.getExecutedBuys() >= daily.getMaximumNewPositions()) return;
+                && daily.getExecutedBuys() >= daily.getMaximumNewPositions()) return false;
 
         BigDecimal availableAboveReserve = usdt.getQuantity()
                 .subtract(settings.getMinimumUsdtReserve())
@@ -60,10 +60,10 @@ public class WalletAutoExecutionService {
         BigDecimal spend = daily.getDailyTradeBudgetUsdt()
                 .multiply(BigDecimal.valueOf(normalizedPositionPercent))
                 .divide(BigDecimal.valueOf(100), SCALE, RoundingMode.DOWN);
-        if (spend.signum() <= 0 || availableAboveReserve.compareTo(spend) < 0) return;
+        if (spend.signum() <= 0 || availableAboveReserve.compareTo(spend) < 0) return false;
 
         BigDecimal quantity = spend.divide(price, SCALE, RoundingMode.DOWN);
-        if (quantity.signum() <= 0) return;
+        if (quantity.signum() <= 0) return false;
 
         WalletAsset coin = getOrCreate(assetSymbol);
         BigDecimal oldCost = coin.getQuantity().multiply(nvl(coin.getAverageBuyPriceUsdt()));
@@ -111,6 +111,7 @@ public class WalletAutoExecutionService {
         daily.setUpdatedAt(Instant.now());
         dailyStatisticsRepository.save(daily);
         walletService.captureSnapshot();
+        return true;
     }
 
     @Transactional

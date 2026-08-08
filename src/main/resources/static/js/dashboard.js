@@ -491,7 +491,7 @@ function signalExecutionRoleHtml(signal) {
             tone = higherBullish ? 'ready' : higherOpposed ? 'blocked' : 'waiting';
             title = higherBullish ? 'BUY execution candidate' : higherOpposed ? 'BUY blocked by confirmation' : 'BUY candidate · reduced confirmation';
             detail = higherBullish
-                ? `1m trigger is present and ${higherInterval || 'higher frame'} is bullish. Execution Validation decides whether the wallet may buy.`
+                ? `1m trigger is present and ${higherInterval || 'higher frame'} is bullish. Execution Intelligence decides whether to execute immediately, accumulate evidence, or wait.`
                 : higherOpposed
                     ? `1m BUY exists, but ${higherInterval || 'the higher frame'} is ${higherDecision.replaceAll('_', ' ')}.`
                     : `1m BUY exists while ${higherInterval || '5m'} is ${higherDecision ? higherDecision.replaceAll('_', ' ') : 'not fully bullish'}. The active Execution Profile decides whether to enter at reduced size.`;
@@ -558,7 +558,7 @@ function signalExecutionStatusHtml(signal, execution, position) {
     }
     const decision = String(signal.decision || '').toUpperCase();
     const actionable = ['BUY','STRONG_BUY','SELL','STRONG_SELL'].includes(decision);
-    return `<div class="execution-state ${actionable ? 'waiting' : 'idle'}"><strong>${actionable ? 'NOT EXECUTED' : 'ANALYSIS ONLY'}</strong><small>${actionable ? 'Execution Validation / timeframe alignment decides next.' : 'No wallet action required.'}</small></div>`;
+    return `<div class="execution-state ${actionable ? 'waiting' : 'idle'}"><strong>${actionable ? 'NOT EXECUTED' : 'ANALYSIS ONLY'}</strong><small>${actionable ? 'Execution Intelligence / opportunity evidence decides next.' : 'No wallet action required.'}</small></div>`;
 }
 
 function renderSignals(signals, displayOnlyInterval = false, timeframeSnapshot = {}, executions = [], openPositions = [], closedPositions = []) {
@@ -820,7 +820,7 @@ function scoreBreakdownHtml(signal) {
                 <span class="pipeline-number">9</span><div><strong>Final Decision</strong><small>${escapeHtml(finalDecision)}</small><p>${confidenceScore}/100 confidence · Entry ${entryAllowed ? 'allowed' : 'blocked'}</p></div>
             </article>
             <article class="signal-pipeline-step ${entryAllowed ? 'complete' : 'blocked'}">
-                <span class="pipeline-number">10</span><div><strong>Execution Validation</strong><small>1m execution · 5m confirmation · 1h filter</small><p>${entryAllowed ? 'Final decision is eligible for wallet validation.' : 'Execution is blocked before the wallet.'}</p></div>
+                <span class="pipeline-number">10</span><div><strong>Execution Intelligence</strong><small>Immediate · consolidated · accumulated evidence</small><p>${entryAllowed ? 'Fresh signal can proceed to intelligent execution evaluation.' : 'Signal may still be observed as opportunity evidence unless a hard veto applies.'}</p></div>
             </article>
             <article class="signal-pipeline-step ${entryAllowed ? 'complete' : 'blocked'}">
                 <span class="pipeline-number">11</span><div><strong>Wallet Execution</strong><small>${walletAction}</small><p>${entryAllowed ? 'Wallet rules decide whether the recommendation becomes an executed BUY or SELL.' : 'No wallet execution is permitted.'}</p></div>
