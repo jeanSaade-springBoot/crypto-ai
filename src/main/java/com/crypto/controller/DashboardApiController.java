@@ -640,19 +640,40 @@ public class DashboardApiController {
     ) {
         Map<String, Object> result = new LinkedHashMap<>();
         boolean open = position.getStatus() == PositionStatus.OPEN;
-        BigDecimal displayPrice = open ? currentMarketPrice : position.getExitPrice();
-        BigDecimal pnl = position.getRealizedPnl();
+        TradeSignal exitSignal = position.getExitSignal();
+        WalletTrade walletExitTrade = (!open && exitSignal != null && exitSignal.getId() != null)
+                ? walletTradeRepository
+                    .findTopBySignalIdAndSideAndStatusOrderByExecutedAtDesc(
+                            exitSignal.getId(), "SELL", "EXECUTED")
+                    .orElse(null)
+                : null;
+
+        BigDecimal displayPrice = open
+                ? currentMarketPrice
+                : walletExitTrade != null && walletExitTrade.getPriceUsdt() != null
+                    ? walletExitTrade.getPriceUsdt()
+                    : position.getExitPrice();
+
+        BigDecimal pnl = open
+                ? position.getRealizedPnl()
+                : walletExitTrade != null && walletExitTrade.getRealizedPnlUsdt() != null
+                    ? walletExitTrade.getRealizedPnlUsdt()
+                    : position.getRealizedPnl();
 
         if (open && displayPrice != null) {
             pnl = displayPrice.subtract(position.getEntryPrice())
                     .multiply(position.getQuantity());
         }
 
-        BigDecimal pnlPercentage = BigDecimal.ZERO;
-        if (displayPrice != null && position.getEntryPrice().signum() != 0) {
+        BigDecimal pnlPercentage;
+        if (!open && walletExitTrade != null && walletExitTrade.getRealizedPnlPercent() != null) {
+            pnlPercentage = walletExitTrade.getRealizedPnlPercent();
+        } else if (displayPrice != null && position.getEntryPrice().signum() != 0) {
             pnlPercentage = displayPrice.subtract(position.getEntryPrice())
                     .divide(position.getEntryPrice(), 8, RoundingMode.HALF_UP)
                     .multiply(BigDecimal.valueOf(100));
+        } else {
+            pnlPercentage = BigDecimal.ZERO;
         }
 
         Instant lifecycleEnd = open || position.getClosedAt() == null
@@ -662,7 +683,6 @@ public class DashboardApiController {
                 Duration.between(position.getOpenedAt(), lifecycleEnd).getSeconds());
 
         TradeSignal entrySignal = position.getSignal();
-        TradeSignal exitSignal = position.getExitSignal();
         String currentDecision = latestSignal == null ? "NO_SIGNAL" : latestSignal.getDecision().name();
         Integer currentScore = latestSignal == null ? null : latestSignal.getTotalScore();
 
@@ -678,19 +698,16 @@ public class DashboardApiController {
             if (liveManaged != null && liveManaged.getQuantity() != null && liveManaged.getQuantity().signum() > 0) {
                 displayQuantity = liveManaged.getQuantity();
             }
-        } else if (exitSignal != null && exitSignal.getId() != null) {
-            displayQuantity = walletTradeRepository
-                    .findTopBySignalIdAndSideAndStatusOrderByExecutedAtDesc(exitSignal.getId(), "SELL", "EXECUTED")
-                    .map(WalletTrade::getQuantity)
-                    .filter(q -> q != null && q.signum() > 0)
-                    .orElse(displayQuantity);
+        } else if (walletExitTrade != null && walletExitTrade.getQuantity() != null
+                && walletExitTrade.getQuantity().signum() > 0) {
+            displayQuantity = walletExitTrade.getQuantity();
         }
         result.put("quantity", displayQuantity);
         result.put("entryPrice", position.getEntryPrice());
         result.put("currentPrice", displayPrice);
         result.put("stopLoss", position.getStopLoss());
         result.put("takeProfit", position.getTakeProfit());
-        result.put("exitPrice", position.getExitPrice());
+        result.put("exitPrice", open ? position.getExitPrice() : displayPrice);
         result.put("unrealizedPnl", open ? pnl : null);
         result.put("realizedPnl", open ? null : pnl);
         result.put("pnlPercentage", pnlPercentage);
