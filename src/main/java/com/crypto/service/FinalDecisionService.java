@@ -223,6 +223,7 @@ public class FinalDecisionService {
             case UNAVAILABLE -> 40;
             case BEARISH_PRESSURE, STOP_EXPOSED -> 35;
             case TARGET_BLOCKED, THIN_LIQUIDITY -> 15;
+            case WALL_WEAKENING -> 65;
         };
         if (observations <= 0 && status != LiquidityContextStatus.DISABLED) {
             return Math.min(base, 40);

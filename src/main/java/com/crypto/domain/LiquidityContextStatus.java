@@ -5,6 +5,7 @@ public enum LiquidityContextStatus {
     BALANCED,
     BEARISH_PRESSURE,
     TARGET_BLOCKED,
+    WALL_WEAKENING,
     STOP_EXPOSED,
     THIN_LIQUIDITY,
     LEARNING,

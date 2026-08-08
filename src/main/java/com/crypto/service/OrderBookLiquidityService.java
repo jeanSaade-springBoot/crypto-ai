@@ -165,15 +165,20 @@ public class OrderBookLiquidityService {
                 && stopLoss != null
                 && (bidWall == null || bidWall.price().compareTo(stopLoss) < 0);
 
-        LiquidityContextStatus status = classify(latestMetrics.imbalance(), targetBlocked, stopExposed);
+        WallLifecycle askWallLifecycle = wallLifecycle(askWall, currentPrice, latestMetrics.imbalance(), policy);
+        LiquidityContextStatus status = classify(latestMetrics.imbalance(), targetBlocked, stopExposed, askWallLifecycle);
         boolean finalEntryAllowed = entryAllowed;
         SignalDecision finalDecision = currentDecision;
         String explanation = explanation(status, latestMetrics, bidWall, askWall,
-                targetBlocked, stopExposed, interval, policy, observedSeconds);
+                targetBlocked, stopExposed, interval, policy, observedSeconds, askWallLifecycle);
 
         boolean strongBearishImbalance = latestMetrics.imbalance() != null
                 && latestMetrics.imbalance().compareTo(properties.strongImbalance().negate()) <= 0;
-        boolean strongConflict = targetBlocked || strongBearishImbalance;
+        boolean hardTargetBlock = targetBlocked
+                && askWallLifecycle != null
+                && askWallLifecycle.strengthScore() >= 70
+                && askWallLifecycle.trend() != WallTrend.WEAKENING;
+        boolean strongConflict = hardTargetBlock || strongBearishImbalance;
         if (isBuy(currentDecision)
                 && properties.vetoStrongConflict()
                 && policy.allowVeto()
@@ -182,7 +187,11 @@ public class OrderBookLiquidityService {
             finalEntryAllowed = false;
             finalDecision = SignalDecision.WATCH;
             explanation += " The " + interval
-                    + " policy permits a veto, so the long entry was downgraded to WATCH.";
+                    + " policy permits a hard veto because liquidity pressure is strong enough to matter now; "
+                    + "the long entry was downgraded to WATCH.";
+        } else if (targetBlocked && !hardTargetBlock) {
+            explanation += " The wall is relevant to the target but is not strong/stable enough for a hard veto. "
+                    + "It remains execution evidence and may reduce confidence while fresh signals continue to be evaluated.";
         } else if (strongConflict && !policy.allowVeto()) {
             explanation += " This interval is informational only for liquidity; no entry veto was applied.";
         }
@@ -286,7 +295,50 @@ public class OrderBookLiquidityService {
         BigDecimal avgSize = matching.stream().map(WallObservation::size)
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .divide(BigDecimal.valueOf(matching.size()), MC);
-        return new PersistentWall(latest.price(), avgSize, matching.size(), persistenceSeconds);
+        BigDecimal firstSize = matching.get(0).size();
+        BigDecimal latestSize = matching.get(matching.size() - 1).size();
+        BigDecimal sizeChangePercent = firstSize == null || firstSize.signum() == 0
+                ? BigDecimal.ZERO
+                : latestSize.subtract(firstSize)
+                        .divide(firstSize, 8, RoundingMode.HALF_UP)
+                        .multiply(ONE_HUNDRED);
+        return new PersistentWall(latest.price(), avgSize, latestSize, firstSize, sizeChangePercent,
+                matching.size(), persistenceSeconds);
+    }
+
+
+    private WallLifecycle wallLifecycle(
+            PersistentWall wall,
+            BigDecimal currentPrice,
+            BigDecimal imbalance,
+            IntervalPolicy policy
+    ) {
+        if (wall == null || currentPrice == null || currentPrice.signum() <= 0) return null;
+
+        BigDecimal change = wall.sizeChangePercent() == null ? BigDecimal.ZERO : wall.sizeChangePercent();
+        WallTrend trend = change.compareTo(new BigDecimal("-20")) <= 0
+                ? WallTrend.WEAKENING
+                : change.compareTo(new BigDecimal("20")) >= 0 ? WallTrend.GROWING : WallTrend.STABLE;
+
+        BigDecimal distance = percentDistance(wall.price(), currentPrice);
+        int persistenceScore;
+        long minimumPersistence = Math.max(1L, policy.minimumWallPersistenceSeconds());
+        double persistenceRatio = Math.min(2.0, wall.persistenceSeconds() / (double) minimumPersistence);
+        persistenceScore = (int) Math.round(35.0 * (persistenceRatio / 2.0));
+
+        int trendScore = switch (trend) {
+            case GROWING -> 30;
+            case STABLE -> 20;
+            case WEAKENING -> 5;
+        };
+
+        int proximityScore = distance.compareTo(new BigDecimal("0.10")) <= 0 ? 25
+                : distance.compareTo(new BigDecimal("0.25")) <= 0 ? 20
+                : distance.compareTo(new BigDecimal("0.50")) <= 0 ? 10 : 5;
+        int imbalanceScore = imbalance != null && imbalance.compareTo(BigDecimal.ZERO) < 0 ? 10 : 0;
+        int strength = Math.max(0, Math.min(100, persistenceScore + trendScore + proximityScore + imbalanceScore));
+
+        return new WallLifecycle(trend, strength, change, distance);
     }
 
     private OrderBookLevel wall(List<OrderBookLevel> levels) {
@@ -297,8 +349,18 @@ public class OrderBookLiquidityService {
                 .max(Comparator.comparing(OrderBookLevel::notional)).orElse(null);
     }
 
-    private LiquidityContextStatus classify(BigDecimal imbalance, boolean targetBlocked, boolean stopExposed) {
-        if (targetBlocked) return LiquidityContextStatus.TARGET_BLOCKED;
+    private LiquidityContextStatus classify(
+            BigDecimal imbalance,
+            boolean targetBlocked,
+            boolean stopExposed,
+            WallLifecycle askWallLifecycle
+    ) {
+        if (targetBlocked) {
+            if (askWallLifecycle != null && askWallLifecycle.trend() == WallTrend.WEAKENING) {
+                return LiquidityContextStatus.WALL_WEAKENING;
+            }
+            return LiquidityContextStatus.TARGET_BLOCKED;
+        }
         if (imbalance.compareTo(properties.strongImbalance().negate()) <= 0) {
             return LiquidityContextStatus.BEARISH_PRESSURE;
         }
@@ -318,7 +380,8 @@ public class OrderBookLiquidityService {
             boolean stopExposed,
             String interval,
             IntervalPolicy policy,
-            long observedSeconds
+            long observedSeconds,
+            WallLifecycle askWallLifecycle
     ) {
         StringBuilder text = new StringBuilder("Order-book status ").append(status)
                 .append(" for ").append(interval).append(" using a ")
@@ -330,6 +393,12 @@ public class OrderBookLiquidityService {
         if (askWall != null) {
             text.append(" Persistent ask wall at ").append(askWall.price())
                     .append(" persisted ").append(askWall.persistenceSeconds()).append(" seconds.");
+            if (askWallLifecycle != null) {
+                text.append(" Wall lifecycle=").append(askWallLifecycle.trend())
+                        .append(", strength=").append(askWallLifecycle.strengthScore()).append("/100")
+                        .append(", size change=").append(askWallLifecycle.sizeChangePercent().setScale(1, RoundingMode.HALF_UP)).append("%")
+                        .append(", distance=").append(askWallLifecycle.distancePercent().setScale(3, RoundingMode.HALF_UP)).append("%.");
+            }
         }
         if (bidWall != null) {
             text.append(" Persistent bid wall at ").append(bidWall.price())
@@ -417,5 +486,15 @@ public class OrderBookLiquidityService {
     ) {}
 
     private record WallObservation(Instant capturedAt, BigDecimal price, BigDecimal size) {}
-    private record PersistentWall(BigDecimal price, BigDecimal size, int observations, long persistenceSeconds) {}
+    private enum WallTrend { GROWING, STABLE, WEAKENING }
+    private record WallLifecycle(WallTrend trend, int strengthScore, BigDecimal sizeChangePercent, BigDecimal distancePercent) {}
+    private record PersistentWall(
+            BigDecimal price,
+            BigDecimal size,
+            BigDecimal latestSize,
+            BigDecimal firstSize,
+            BigDecimal sizeChangePercent,
+            int observations,
+            long persistenceSeconds
+    ) {}
 }
