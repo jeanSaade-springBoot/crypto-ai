@@ -3,6 +3,7 @@ package com.crypto.service;
 import com.crypto.indicator.event.CandleClosedEvent;
 import com.crypto.repository.CandleRepository;
 import com.crypto.position.service.LivePositionProtectionService;
+import com.crypto.debug.monitor.service.PriceMoveMonitorService;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import org.slf4j.Logger;
@@ -22,15 +23,18 @@ public class BinanceKlineService {
     private final CandleRepository candleRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final LivePositionProtectionService livePositionProtectionService;
+    private final PriceMoveMonitorService priceMoveMonitorService;
 
     public BinanceKlineService(
             CandleRepository candleRepository,
             ApplicationEventPublisher eventPublisher,
-            LivePositionProtectionService livePositionProtectionService
+            LivePositionProtectionService livePositionProtectionService,
+            PriceMoveMonitorService priceMoveMonitorService
     ) {
         this.candleRepository = candleRepository;
         this.eventPublisher = eventPublisher;
         this.livePositionProtectionService = livePositionProtectionService;
+        this.priceMoveMonitorService = priceMoveMonitorService;
     }
 
     @Transactional
@@ -95,6 +99,13 @@ public class BinanceKlineService {
             } catch (RuntimeException ex) {
                 log.error("Live position protection failed: symbol={}, price={}, error={}",
                         symbol, livePrice, ex.getMessage(), ex);
+            }
+            try {
+                // DEBUG-ONLY one-way observer. It records price moves and cannot influence trading decisions.
+                priceMoveMonitorService.onPrice(symbol, livePrice, Instant.now());
+            } catch (RuntimeException ex) {
+                log.warn("Debug price move monitor failed: symbol={}, price={}, error={}",
+                        symbol, livePrice, ex.getMessage());
             }
         }
 

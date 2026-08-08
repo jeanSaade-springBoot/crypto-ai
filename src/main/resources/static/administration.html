@@ -164,6 +164,43 @@
             </table></div>
         </section>
 
+        <section id="price-move-monitor" class="panel debug-monitor-panel">
+            <div class="section-heading">
+                <div>
+                    <p class="eyebrow">DEBUG ONLY · STANDALONE MONITOR</p>
+                    <h2>Price Move Monitor</h2>
+                </div>
+                <button id="price-move-refresh" type="button" class="secondary-button">Refresh Moves</button>
+            </div>
+            <p class="debug-isolation-note"><strong>Monitoring only.</strong> This module records meaningful UP and DOWN price moves for manual review. It does not affect AI analysis, signals, Execution Intelligence, wallet execution, position management, Profit Lock, stop loss or take profit.</p>
+
+            <form id="price-move-settings-form" class="price-move-settings">
+                <label class="toggle-row"><input id="price-move-enabled" type="checkbox" checked> Enable debug price-move monitoring</label>
+                <label>Minimum absolute move %<input id="price-move-threshold" type="number" min="0.01" max="100" step="0.01" value="0.30" required></label>
+                <label>Monitoring window (minutes)<input id="price-move-window" type="number" min="1" max="1440" step="1" value="30" required></label>
+                <label>Keep history (days)<input id="price-move-retention" type="number" min="1" max="365" step="1" value="7" required></label>
+                <button type="submit">Save Monitor Settings</button>
+            </form>
+
+            <div class="price-move-summary">
+                <span><strong id="price-move-new-count">0</strong> new</span>
+                <span><strong id="price-move-up-count">0</strong> up</span>
+                <span><strong id="price-move-down-count">0</strong> down</span>
+            </div>
+
+            <div class="table-wrap">
+                <table class="price-move-table">
+                    <thead>
+                    <tr>
+                        <th>Symbol</th><th>Move</th><th>Start time</th><th>End time</th>
+                        <th>Start price</th><th>End price</th><th>Change</th><th>Duration</th><th>Status</th><th>Review</th>
+                    </tr>
+                    </thead>
+                    <tbody id="price-move-body"><tr><td colspan="10">Loading price moves…</td></tr></tbody>
+                </table>
+            </div>
+        </section>
+
         <section id="assets" class="panel">
             <div class="section-heading"><div><p class="eyebrow">CURRENT HOLDINGS</p><h2>Assets</h2></div></div>
             <div class="table-wrap"><table><thead><tr><th>Asset</th><th>Quantity</th><th>Avg entry</th><th>Current price</th><th>Cost basis</th><th>Value</th><th>Unrealized P&amp;L</th></tr></thead><tbody id="asset-body"></tbody></table></div>
