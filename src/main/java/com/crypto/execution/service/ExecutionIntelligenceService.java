@@ -49,6 +49,19 @@ public class ExecutionIntelligenceService {
     private static final int EVIDENCE_MOMENTUM_WINDOW = 6;
     private static final int EVIDENCE_MOMENTUM_CAP = 25;
 
+    // Deferred continuation: a prior quality BUY that was blocked only by ATR can
+    // remain actionable when the market confirms continuation instead of delivering
+    // the requested pullback. This route is intentionally reduced-size and must use
+    // the CURRENT signal risk plan; it never reuses the old BUY target/stop.
+    private static final Duration DEFERRED_BUY_LOOKBACK = Duration.ofMinutes(30);
+    private static final int DEFERRED_MIN_HEALTH = 65;
+    private static final int DEFERRED_MIN_CURRENT_SCORE = 60;
+    private static final int DEFERRED_MIN_CURRENT_CONFIDENCE = 65;
+    private static final int DEFERRED_MIN_5M_SCORE = 65;
+    private static final int DEFERRED_MIN_5M_CONFIDENCE = 70;
+    private static final int DEFERRED_MIN_EVIDENCE_MOMENTUM = -10;
+    private static final int DEFERRED_POSITION_PERCENT = 30;
+
     // Symbol-agnostic opportunity health weights. Higher timeframes carry more
     // information and signal quality scales every contribution.
     private static final int HEALTH_1M_BUY = 15;
@@ -158,6 +171,20 @@ public class ExecutionIntelligenceService {
 
         // Intelligent evidence path: BUY and strong WATCH observations can build one opportunity.
         Evidence evidence = evidence(signal);
+
+        // A prior BUY may have been valid analytically but deferred by ATR because the
+        // engine wanted a pullback. If the pullback never arrives and fresh 1m/5m/1h
+        // evidence confirms continuation, allow a small continuation entry using the
+        // CURRENT risk plan. This is not a bypass for hard risk or poor reward/risk.
+        ExecutionDecision deferred = deferredContinuationDecision(signal, evidence);
+        if (deferred != null) {
+            saveOpportunity(signal, evidence,
+                    deferred.allowed() ? "CONFIRMED" : deferred.state(),
+                    deferred.source(), deferred.positionPercent(),
+                    deferred.code(), deferred.explanation());
+            return deferred;
+        }
+
         ExecutionDecision accumulated = accumulatedDecision(signal, evidence);
         saveOpportunity(signal, evidence,
                 accumulated.allowed() ? "CONFIRMED" : accumulated.state(),
@@ -183,6 +210,85 @@ public class ExecutionIntelligenceService {
                     opportunity.setUpdatedAt(Instant.now());
                     opportunityRepository.save(opportunity);
                 });
+    }
+
+
+    private ExecutionDecision deferredContinuationDecision(TradeSignal current, Evidence e) {
+        if (!isSupportiveCurrentSignal(current)) return null;
+        if (!current.isFinalEntryAllowed() || !current.isAtrImmediateEntryAllowed()) return null;
+        if (current.getTotalScore() < DEFERRED_MIN_CURRENT_SCORE
+                || current.getConfidenceScore() < DEFERRED_MIN_CURRENT_CONFIDENCE) return null;
+        if (e.opportunityHealth() < DEFERRED_MIN_HEALTH
+                || e.evidenceMomentum() < DEFERRED_MIN_EVIDENCE_MOMENTUM) return null;
+        if (e.fiveMinute() == null || e.oneHour() == null
+                || isBearish(e.fiveMinute()) || isBearish(e.oneHour())) return null;
+
+        TradeSignal five = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
+        if (five == null || !(five.getDecision() == SignalDecision.WATCH || isBullish(five.getDecision()))
+                || five.getTotalScore() < DEFERRED_MIN_5M_SCORE
+                || five.getConfidenceScore() < DEFERRED_MIN_5M_CONFIDENCE) return null;
+        if (!(e.oneHour() == SignalDecision.WATCH || isBullish(e.oneHour()))) return null;
+
+        TradeSignal deferredBuy = priorAtrDeferredBuy(current);
+        if (deferredBuy == null) return null;
+
+        double rewardRisk = currentRewardRisk(current);
+        if (rewardRisk < 1.0d) {
+            return ExecutionDecision.building(
+                    "CONTINUATION_RISK_REWARD_LOW",
+                    "A prior ATR-deferred BUY exists and continuation is confirmed, but the current reward/risk is only "
+                            + String.format(java.util.Locale.ROOT, "%.2f", rewardRisk)
+                            + ". The engine will not chase a continuation with less than 1:1 current reward/risk.",
+                    e);
+        }
+
+        int percent = Math.min(DEFERRED_POSITION_PERCENT,
+                current.getAtrRecommendedPositionPercent() > 0
+                        ? current.getAtrRecommendedPositionPercent()
+                        : DEFERRED_POSITION_PERCENT);
+        percent = Math.max(20, percent);
+
+        return ExecutionDecision.allow(
+                "DEFERRED_CONTINUATION",
+                "BREAKOUT_CONTINUATION_ENTRY",
+                percent,
+                "A prior 1m BUY was deferred only by ATR pullback logic, but the pullback did not arrive. "
+                        + "Fresh continuation is now supported by current 1m evidence, 5m=" + e.fiveMinute()
+                        + " (score=" + five.getTotalScore() + ", confidence=" + five.getConfidenceScore() + ")"
+                        + ", 1h=" + e.oneHour() + ", opportunity health=" + e.opportunityHealth()
+                        + ", evidence momentum=" + e.evidenceMomentum() + ". "
+                        + "Execution uses the current stop/target and a reduced " + percent + "% position.",
+                e);
+    }
+
+    private TradeSignal priorAtrDeferredBuy(TradeSignal current) {
+        Instant cutoff = current.getGeneratedAt().minus(DEFERRED_BUY_LOOKBACK);
+        return signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc(
+                        current.getSymbol(), EXECUTION_INTERVAL).stream()
+                .filter(s -> s.getGeneratedAt() != null
+                        && s.getGeneratedAt().isBefore(current.getGeneratedAt())
+                        && !s.getGeneratedAt().isBefore(cutoff))
+                .filter(s -> isBullish(s.getDecision()) || isBullish(s.getOriginalDecision()))
+                .filter(s -> s.getTotalScore() >= properties.minimumBuyScore())
+                .filter(s -> !s.isAtrImmediateEntryAllowed())
+                .filter(s -> s.isStrategyEntryAllowed()
+                        && s.isBtcContextEntryAllowed()
+                        && s.isDerivativesEntryAllowed()
+                        && s.isLiquidityEntryAllowed())
+                .filter(s -> {
+                    String type = s.getAtrEntryType();
+                    return "PULLBACK_ENTRY".equals(type) || "WAIT_FOR_RETRACEMENT".equals(type);
+                })
+                .findFirst()
+                .orElse(null);
+    }
+
+    private double currentRewardRisk(TradeSignal signal) {
+        if (signal.getLatestPrice() == null || signal.getStopLoss() == null || signal.getTakeProfit() == null) return 0d;
+        java.math.BigDecimal risk = signal.getLatestPrice().subtract(signal.getStopLoss()).abs();
+        java.math.BigDecimal reward = signal.getTakeProfit().subtract(signal.getLatestPrice());
+        if (risk.signum() <= 0 || reward.signum() <= 0) return 0d;
+        return reward.divide(risk, 8, java.math.RoundingMode.HALF_UP).doubleValue();
     }
 
     private ExecutionDecision accumulatedDecision(TradeSignal current, Evidence e) {

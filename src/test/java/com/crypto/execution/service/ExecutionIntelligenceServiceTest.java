@@ -177,6 +177,78 @@ class ExecutionIntelligenceServiceTest {
         assertThat(decision.allowed()).isFalse();
     }
 
+    @Test
+    void atrDeferredBuyCanExecuteLaterAsReducedContinuationWhenFreshRiskPlanIsGood() {
+        TradeSignal current = signal(70L, "TESTUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 68, 72);
+        current.setLatestPrice(BigDecimal.valueOf(100));
+        current.setStopLoss(BigDecimal.valueOf(99));
+        current.setTakeProfit(BigDecimal.valueOf(101.5));
+        current.setAtrRecommendedPositionPercent(60);
+
+        TradeSignal priorBuy = signal(69L, "TESTUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now.minusSeconds(600), 78, 55);
+        priorBuy.setAtrImmediateEntryAllowed(false);
+        priorBuy.setFinalEntryAllowed(false);
+        priorBuy.setAtrEntryType("PULLBACK_ENTRY");
+
+        TradeSignal priorWatch = signal(68L, "TESTUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(900), 70, 72);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("TESTUSDT", "1m"))
+                .thenReturn(List.of(current, priorBuy, priorWatch));
+        when(properties.minimumBuyScore()).thenReturn(75);
+
+        TradeSignal five = signal(99L, "TESTUSDT", "5m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(60), 73, 75);
+        TradeSignal one = signal(100L, "TESTUSDT", "1h", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(1200), 68, 70);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "TESTUSDT", "5m", now)).thenReturn(Optional.of(five));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "TESTUSDT", "1h", now)).thenReturn(Optional.of(one));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.source()).isEqualTo("DEFERRED_CONTINUATION");
+        assertThat(decision.code()).isEqualTo("BREAKOUT_CONTINUATION_ENTRY");
+        assertThat(decision.positionPercent()).isEqualTo(30);
+    }
+
+    @Test
+    void deferredContinuationDoesNotChaseWhenCurrentRewardRiskIsPoor() {
+        TradeSignal current = signal(80L, "TEST2USDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 68, 72);
+        current.setLatestPrice(BigDecimal.valueOf(100));
+        current.setStopLoss(BigDecimal.valueOf(98));
+        current.setTakeProfit(BigDecimal.valueOf(100.5));
+
+        TradeSignal priorBuy = signal(79L, "TEST2USDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now.minusSeconds(600), 78, 55);
+        priorBuy.setAtrImmediateEntryAllowed(false);
+        priorBuy.setFinalEntryAllowed(false);
+        priorBuy.setAtrEntryType("WAIT_FOR_RETRACEMENT");
+        TradeSignal priorWatch = signal(78L, "TEST2USDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(900), 70, 72);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("TEST2USDT", "1m"))
+                .thenReturn(List.of(current, priorBuy, priorWatch));
+        when(properties.minimumBuyScore()).thenReturn(75);
+
+        TradeSignal five = signal(101L, "TEST2USDT", "5m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(60), 73, 75);
+        TradeSignal one = signal(102L, "TEST2USDT", "1h", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(1200), 68, 70);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "TEST2USDT", "5m", now)).thenReturn(Optional.of(five));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "TEST2USDT", "1h", now)).thenReturn(Optional.of(one));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.code()).isEqualTo("CONTINUATION_RISK_REWARD_LOW");
+    }
+
     private void context(String symbol, String interval, SignalDecision decision, Instant generatedAt) {
         when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
                 symbol, interval, now)).thenReturn(Optional.of(

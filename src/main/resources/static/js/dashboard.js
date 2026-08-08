@@ -244,7 +244,7 @@ function renderWalletHeader(wallet) {
     const daily = wallet.dailyTrading || {};
     const startingPortfolio = Number(daily.startingPortfolioUsdt ?? portfolio);
     const todayPnl = portfolio - startingPortfolio;
-    const active = Number(cachedExecutionSummary.activePositions || 0);
+    const active = Array.isArray(cachedActivePositions) ? cachedActivePositions.length : 0;
 
     const setMoney = (id, amount, signed = false) => {
         const node = el(id);
@@ -337,6 +337,7 @@ function renderActivePositionsKpi(positions = []) {
     const countNode = el('header-active-positions');
     const symbolsNode = el('header-active-symbols');
     if (countNode) countNode.textContent = count;
+    if (el('nav-position-count')) el('nav-position-count').textContent = count;
     if (symbolsNode) {
         symbolsNode.textContent = count
             ? positions.slice(0, 3).map(p => String(p.symbol || '').replace('USDT','')).join(' · ') + (count > 3 ? ` +${count - 3}` : '')

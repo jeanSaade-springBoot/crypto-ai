@@ -45,7 +45,7 @@ public class ExecutionIntelligenceController {
         long buyCandidates = tradeSignalRepository.countBuyCandidatesSince(
                 startOfDay, SignalDecision.BUY, SignalDecision.STRONG_BUY);
         long consolidated = repository.countByExecutionSourceInAndUpdatedAtGreaterThanEqual(
-                List.of("CONSOLIDATED_BUY", "ACCUMULATED_EVIDENCE"), startOfDay);
+                List.of("CONSOLIDATED_BUY", "ACCUMULATED_EVIDENCE", "DEFERRED_CONTINUATION"), startOfDay);
         long executed = walletTradeRepository.countByStatusAndSideAndExecutedAtGreaterThanEqual("EXECUTED", "BUY", startOfDay);
         long activePositions = walletManagedPositionRepository.countByStatus("OPEN");
         long profitableClosed = walletTradeRepository.countProfitableClosedTradesSince(startOfDay);
