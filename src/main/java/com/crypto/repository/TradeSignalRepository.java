@@ -30,6 +30,12 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
     long countByGeneratedAtGreaterThanEqual(Instant generatedAt);
 
     @Query("""
+            select count(distinct s.symbol) from TradeSignal s
+            where s.generatedAt >= :from
+            """)
+    long countDistinctSymbolsSince(@Param("from") Instant from);
+
+    @Query("""
             select count(s) from TradeSignal s
             where s.generatedAt >= :from
               and (s.originalDecision in (:buy, :strongBuy)

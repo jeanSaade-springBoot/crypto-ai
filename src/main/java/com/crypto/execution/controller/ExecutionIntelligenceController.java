@@ -42,30 +42,82 @@ public class ExecutionIntelligenceController {
         Instant startOfDay = LocalDate.now(zone).atStartOfDay(zone).toInstant();
 
         long signalsToday = tradeSignalRepository.countByGeneratedAtGreaterThanEqual(startOfDay);
+        long coinsScanned = tradeSignalRepository.countDistinctSymbolsSince(startOfDay);
         long buyCandidates = tradeSignalRepository.countBuyCandidatesSince(
                 startOfDay, SignalDecision.BUY, SignalDecision.STRONG_BUY);
         long consolidated = repository.countByExecutionSourceInAndUpdatedAtGreaterThanEqual(
-                List.of("CONSOLIDATED_BUY", "ACCUMULATED_EVIDENCE", "DEFERRED_CONTINUATION"), startOfDay);
-        long executed = walletTradeRepository.countByStatusAndSideAndExecutedAtGreaterThanEqual("EXECUTED", "BUY", startOfDay);
-        long activePositions = walletManagedPositionRepository.countByStatus("OPEN");
-        long profitableClosed = walletTradeRepository.countProfitableClosedTradesSince(startOfDay);
+                List.of("CONSOLIDATED_BUY", "ACCUMULATED_EVIDENCE", "DEFERRED_CONTINUATION",
+                        "SCOUT_ENTRY", "CONFIRMATION_ADD", "TREND_ADD"), startOfDay);
+        long opportunitiesFound = repository.countByStartedAtGreaterThanEqual(startOfDay);
 
-        Object[] closedSummary = walletTradeRepository.summarizeClosedTradesBetween(startOfDay, Instant.now());
-        long closedTrades = number(closedSummary, 0).longValue();
-        long wins = number(closedSummary, 1).longValue();
-        long losses = number(closedSummary, 2).longValue();
-        long breakeven = number(closedSummary, 3).longValue();
-        BigDecimal realizedPnl = decimal(closedSummary, 4);
-        BigDecimal grossProfit = decimal(closedSummary, 5);
-        BigDecimal grossLoss = decimal(closedSummary, 6);
+        List<ExecutionOpportunity> activeOpportunities = repository.findTop50ByStatusInOrderByUpdatedAtDesc(
+                List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"));
+        long buildingNow = activeOpportunities.stream()
+                .filter(o -> "BUILDING".equalsIgnoreCase(o.getStatus()))
+                .count();
+        long recoveringNow = activeOpportunities.stream()
+                .filter(o -> "WEAKENING".equalsIgnoreCase(o.getStatus()) && o.getHealthMomentum() > 0)
+                .count();
+        long weakeningNow = activeOpportunities.stream()
+                .filter(o -> "WEAKENING".equalsIgnoreCase(o.getStatus()) && o.getHealthMomentum() <= 0)
+                .count();
+        long blockedNow = activeOpportunities.stream()
+                .filter(o -> "BLOCKED".equalsIgnoreCase(o.getStatus()))
+                .count();
+        long readyNow = activeOpportunities.stream()
+                .filter(o -> "CONFIRMED".equalsIgnoreCase(o.getStatus()))
+                .count();
+
+        // AI Performance is position-based, not BUY-ledger-row based.
+        // Progressive position building can create multiple BUY wallet rows for one position,
+        // so counting BUY rows would inflate Executed after scout/confirmation/trend additions.
+        long executed = walletManagedPositionRepository.findAll().stream()
+                .filter(position -> position.getOpenedAt() != null && !position.getOpenedAt().isBefore(startOfDay))
+                .count();
+        long activePositions = walletManagedPositionRepository.countByStatus("OPEN");
+
+        // Financial outcomes come directly from the executed wallet SELL ledger.
+        // Calculate in Java so the dashboard does not depend on database-specific aggregate typing.
+        var closedLedger = walletTradeRepository.findClosedTradesBetween(startOfDay, Instant.now());
+        long closedTrades = closedLedger.size();
+        long wins = closedLedger.stream()
+                .filter(trade -> trade.getRealizedPnlUsdt() != null && trade.getRealizedPnlUsdt().signum() > 0)
+                .count();
+        long losses = closedLedger.stream()
+                .filter(trade -> trade.getRealizedPnlUsdt() != null && trade.getRealizedPnlUsdt().signum() < 0)
+                .count();
+        long breakeven = closedLedger.stream()
+                .filter(trade -> trade.getRealizedPnlUsdt() != null && trade.getRealizedPnlUsdt().signum() == 0)
+                .count();
+        long profitableClosed = wins;
+
+        BigDecimal realizedPnl = closedLedger.stream()
+                .map(trade -> trade.getRealizedPnlUsdt() == null ? BigDecimal.ZERO : trade.getRealizedPnlUsdt())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal grossProfit = closedLedger.stream()
+                .map(trade -> trade.getRealizedPnlUsdt() == null ? BigDecimal.ZERO : trade.getRealizedPnlUsdt())
+                .filter(value -> value.signum() > 0)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal grossLoss = closedLedger.stream()
+                .map(trade -> trade.getRealizedPnlUsdt() == null ? BigDecimal.ZERO : trade.getRealizedPnlUsdt())
+                .filter(value -> value.signum() < 0)
+                .map(BigDecimal::abs)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal profitFactor = grossLoss.signum() == 0
                 ? (grossProfit.signum() > 0 ? null : BigDecimal.ZERO)
                 : grossProfit.divide(grossLoss, 4, java.math.RoundingMode.HALF_UP);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("signalsToday", signalsToday);
+        result.put("coinsScanned", coinsScanned);
         result.put("buyCandidates", buyCandidates);
         result.put("consolidated", consolidated);
+        result.put("opportunitiesFound", opportunitiesFound);
+        result.put("buildingNow", buildingNow);
+        result.put("recoveringNow", recoveringNow);
+        result.put("weakeningNow", weakeningNow);
+        result.put("blockedNow", blockedNow);
+        result.put("readyNow", readyNow);
         result.put("executed", executed);
         result.put("activePositions", activePositions);
         result.put("closedProfitably", profitableClosed);

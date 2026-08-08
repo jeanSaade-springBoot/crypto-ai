@@ -179,7 +179,6 @@ function render(data) {
         data.openPositions || [],
         data.closedPositions || []
     );
-    renderOpenTrades(data.openPositions || []);
     renderTradeHistory(data.closedPositions || []);
     window.requestAnimationFrame(syncDashboardHeaderOffset);
 }
@@ -285,17 +284,26 @@ async function refreshExecutionIntelligence() {
 
 function renderExecutionIntelligence(summary = {}, opportunities = []) {
     const active = opportunities.length;
-    const building = opportunities.filter(o => ['BUILDING','WEAKENING'].includes(String(o.status || '').toUpperCase())).length;
+    const building = opportunities.filter(o => String(o.status || '').toUpperCase() === 'BUILDING').length;
+    const recovering = opportunities.filter(o => String(o.status || '').toUpperCase() === 'WEAKENING' && Number(o.healthMomentum || 0) > 0).length;
+    const weakening = opportunities.filter(o => String(o.status || '').toUpperCase() === 'WEAKENING' && Number(o.healthMomentum || 0) <= 0).length;
     const blocked = opportunities.filter(o => String(o.status || '').toUpperCase() === 'BLOCKED').length;
     const confirmed = opportunities.filter(o => String(o.status || '').toUpperCase() === 'CONFIRMED').length;
     const values = {
-        'intel-active': active, 'intel-building': building, 'intel-blocked': blocked, 'intel-confirmed': confirmed,
-        'pipeline-signals-today': summary.signalsToday || 0,
-        'pipeline-buy-candidates': summary.buyCandidates || 0,
-        'pipeline-consolidated': summary.consolidated || 0,
+        'intel-active': active,
+        'intel-building': building,
+        'intel-recovering': recovering,
+        'intel-weakening': weakening,
+        'intel-blocked': blocked,
+        'intel-confirmed': confirmed,
+        'pipeline-coins-scanned': summary.coinsScanned || 0,
+        'pipeline-opportunities-found': summary.opportunitiesFound || 0,
+        'pipeline-building': summary.buildingNow ?? building,
+        'pipeline-recovering': summary.recoveringNow ?? recovering,
+        'pipeline-ready': summary.readyNow ?? confirmed,
         'pipeline-executed': summary.executed || 0,
-        'pipeline-open': summary.activePositions || 0,
-        'pipeline-profitable': summary.closedProfitably || 0,
+        'pipeline-managed': summary.activePositions || 0,
+        'pipeline-closed': summary.closedTrades || 0,
         'ai-executed': summary.executed || 0,
         'ai-wins': summary.wins || 0,
         'ai-losses': summary.losses || 0,
@@ -311,23 +319,134 @@ function renderExecutionIntelligence(summary = {}, opportunities = []) {
     if (el('nav-position-count')) el('nav-position-count').textContent = Number(summary.activePositions || 0);
 
     const queue = [...opportunities].sort((a,b) => {
+        const statusRank = value => ({CONFIRMED:5, BUILDING:4, WEAKENING:3, BLOCKED:2}[String(value || '').toUpperCase()] || 1);
+        const statusDiff = statusRank(b.status) - statusRank(a.status);
+        if (statusDiff !== 0) return statusDiff;
         const healthDiff = Number(b.opportunityHealth || 0) - Number(a.opportunityHealth || 0);
         return healthDiff !== 0 ? healthDiff : Number(b.evidenceScore || 0) - Number(a.evidenceScore || 0);
-    }).slice(0, 6);
+    }).slice(0, 12);
+
     if (el('opportunity-queue')) {
-        el('opportunity-queue').innerHTML = queue.length ? queue.map(o => {
-            const status = String(o.status || 'BUILDING').replaceAll('_',' ');
-            const tone = String(o.status || '').toUpperCase() === 'BLOCKED' ? 'reject' : String(o.status || '').toUpperCase() === 'CONFIRMED' ? 'buy' : 'watch';
-            const health = Math.max(0, Math.min(100, Number(o.opportunityHealth || 0)));
-            return `<article class="opportunity-row">
-                <div class="opportunity-main"><strong>${escapeHtml(o.symbol || '—')}</strong><span class="badge ${tone}">${escapeHtml(status)}</span></div>
-                <div class="opportunity-score"><span>Opportunity health</span><strong>${health}/100</strong><div><i style="width:${health}%"></i></div></div>
-                <div class="opportunity-context"><span>Evidence ${Number(o.evidenceScore || 0)} pts</span><span>Health Δ ${Number(o.healthMomentum || 0) >= 0 ? '+' : ''}${Number(o.healthMomentum || 0)}</span><span>Evidence Momentum ${Number(o.evidenceMomentum || 0) >= 0 ? '+' : ''}${Number(o.evidenceMomentum || 0)}</span><span>1H ${escapeHtml(o.oneHourDecision || '—')}</span><span>5M ${escapeHtml(o.fiveMinuteDecision || '—')}</span></div>
-                <div class="opportunity-context"><span>${Number(o.buyCount || 0)} BUY</span><span>${Number(o.watchCount || 0)} WATCH</span><span>${Number(o.bearishCount || 0)} bearish interruptions</span></div>
-                <small>${escapeHtml(o.decisionExplanation || o.decisionCode || 'Accumulating fresh execution evidence.')}</small>
-            </article>`;
-        }).join('') : '<div class="empty">No active opportunities right now.</div>';
+        el('opportunity-queue').innerHTML = queue.length ? queue.map(o => renderOpportunityCenterCard(o)).join('') : '<div class="empty">No active opportunities right now.</div>';
     }
+}
+
+function renderOpportunityCenterCard(o) {
+    const rawStatus = String(o.status || 'BUILDING').toUpperCase();
+    const status = rawStatus.replaceAll('_',' ');
+    const recovering = rawStatus === 'WEAKENING' && Number(o.healthMomentum || 0) > 0;
+    const displayStatus = recovering ? 'RECOVERING' : status;
+    const tone = rawStatus === 'BLOCKED' ? 'reject' : rawStatus === 'CONFIRMED' ? 'buy' : recovering ? 'recovering' : rawStatus === 'WEAKENING' ? 'weakening' : 'watch';
+    const health = Math.max(0, Math.min(100, Number(o.opportunityHealth || 0)));
+    const evidence = Math.max(0, Number(o.evidenceScore || 0));
+    const evidenceTarget = 7;
+    const evidenceProgress = Math.max(0, Math.min(100, (evidence / evidenceTarget) * 100));
+    const healthMomentum = Number(o.healthMomentum || 0);
+    const evidenceMomentum = Number(o.evidenceMomentum || 0);
+    const ageMinutes = o.startedAt ? Math.max(0, Math.round((Date.now() - new Date(o.startedAt).getTime()) / 60000)) : null;
+    const freshness = ageMinutes == null ? 'Age unavailable' : ageMinutes < 10 ? `${ageMinutes}m · fresh` : ageMinutes < 30 ? `${ageMinutes}m · active` : `${ageMinutes}m · aging`;
+    const stage = opportunityStage(o, recovering);
+    const missing = opportunityMissingRequirements(o, recovering);
+    const nextAction = opportunityNextAction(o, recovering);
+    const timeline = opportunityEvidenceTimeline(o);
+
+    return `<article class="opportunity-card-center ${tone}">
+        <div class="opportunity-card-head">
+            <div><strong>${escapeHtml(o.symbol || '—')}</strong><span class="badge ${tone}">${escapeHtml(displayStatus)}</span></div>
+            <div class="opportunity-age"><span>Age</span><strong>${escapeHtml(freshness)}</strong></div>
+        </div>
+
+        <div class="opportunity-progress-grid">
+            <div class="progress-metric">
+                <div><span>Opportunity Health</span><strong>${health}/100</strong></div>
+                <div class="metric-bar"><i style="width:${health}%"></i></div>
+                <small>Health Δ ${healthMomentum >= 0 ? '+' : ''}${healthMomentum}</small>
+            </div>
+            <div class="progress-metric">
+                <div><span>Evidence Progress</span><strong>${evidence}/${evidenceTarget}</strong></div>
+                <div class="metric-bar evidence"><i style="width:${evidenceProgress}%"></i></div>
+                <small>Evidence momentum ${evidenceMomentum >= 0 ? '+' : ''}${evidenceMomentum}</small>
+            </div>
+        </div>
+
+        <div class="opportunity-stage-line"><span>Current stage</span><strong>${escapeHtml(stage)}</strong></div>
+        <div class="opportunity-context opportunity-context-primary">
+            <span>1H <b>${escapeHtml(o.oneHourDecision || '—')}</b></span>
+            <span>5M <b>${escapeHtml(o.fiveMinuteDecision || '—')}</b></span>
+            <span>Avg score <b>${Number(o.averageSignalScore || 0) || '—'}</b></span>
+            <span>Avg confidence <b>${Number(o.averageConfidence || 0) || '—'}</b></span>
+        </div>
+        <div class="opportunity-context">
+            <span>${Number(o.buyCount || 0)} BUY</span>
+            <span>${Number(o.watchCount || 0)} WATCH</span>
+            <span>${Number(o.neutralCount || 0)} NEUTRAL</span>
+            <span>${Number(o.bearishCount || 0)} bearish interruptions</span>
+        </div>
+        <div class="evidence-timeline" title="Recent evidence composition">${timeline}</div>
+
+        <div class="opportunity-needs">
+            <span>Progress / blockers</span>
+            <div>${missing.map(item => `<em class="${item.ok ? 'ok' : 'missing'}">${item.ok ? '✓' : '•'} ${escapeHtml(item.label)}</em>`).join('')}</div>
+        </div>
+        <div class="opportunity-next-action"><span>Next expected action</span><strong>${escapeHtml(nextAction)}</strong></div>
+        <small class="opportunity-explanation">${escapeHtml(o.decisionExplanation || o.decisionCode || 'Accumulating fresh execution evidence.')}</small>
+    </article>`;
+}
+
+function opportunityStage(o, recovering) {
+    const status = String(o.status || '').toUpperCase();
+    if (status === 'CONFIRMED') return 'READY TO EXECUTE';
+    if (status === 'BLOCKED') return `BLOCKED · ${String(o.decisionCode || 'RISK GATE').replaceAll('_',' ')}`;
+    if (recovering) return 'RECOVERING EVIDENCE';
+    if (status === 'WEAKENING') return 'THESIS WEAKENING';
+    const evidence = Number(o.evidenceScore || 0);
+    if (evidence >= 7) return 'CONFIRMATION CHECK';
+    if (evidence >= 4) return 'BUILDING CONFIRMATION';
+    return 'SCOUTING / BUILDING';
+}
+
+function opportunityMissingRequirements(o, recovering) {
+    const status = String(o.status || '').toUpperCase();
+    const five = String(o.fiveMinuteDecision || '').toUpperCase();
+    const one = String(o.oneHourDecision || '').toUpperCase();
+    const supportive = value => ['WATCH','BUY','STRONG_BUY'].includes(value);
+    if (status === 'BLOCKED') {
+        return [{ok:false, label:String(o.decisionCode || 'Hard risk block').replaceAll('_',' ')}];
+    }
+    if (status === 'CONFIRMED') {
+        return [{ok:true,label:'Execution conditions confirmed'}];
+    }
+    return [
+        {ok:Number(o.evidenceScore || 0) >= 7, label:`Evidence ${Number(o.evidenceScore || 0)}/7`},
+        {ok:Number(o.opportunityHealth || 0) >= 40, label:`Health ${Number(o.opportunityHealth || 0)}/40 minimum`},
+        {ok:supportive(five), label:`5m ${five || 'missing'}`},
+        {ok:supportive(one), label:`1h ${one || 'missing'}`},
+        {ok:recovering || Number(o.evidenceMomentum || 0) >= 0, label:`Momentum ${Number(o.evidenceMomentum || 0) >= 0 ? 'supportive' : 'needs recovery'}`}
+    ];
+}
+
+function opportunityNextAction(o, recovering) {
+    const status = String(o.status || '').toUpperCase();
+    if (status === 'CONFIRMED') return `Execute approved ${Number(o.recommendedPositionPercent || 0)}% position when wallet checks pass.`;
+    if (status === 'BLOCKED') return `Wait for ${String(o.decisionCode || 'the blocking risk').replaceAll('_',' ').toLowerCase()} to clear.`;
+    if (recovering) return 'Wait for a fresh supportive 1m signal to rebuild evidence and confirm recovery.';
+    if (status === 'WEAKENING') return 'Require new bullish evidence before this opportunity can return to building.';
+    if (Number(o.evidenceScore || 0) < 7) return `Need ${Math.max(0, 7 - Number(o.evidenceScore || 0))} more evidence point${Math.max(0, 7 - Number(o.evidenceScore || 0)) === 1 ? '' : 's'} plus supportive current context.`;
+    return 'Evaluate confirmation, entry quality, and hard-risk gates for execution.';
+}
+
+function opportunityEvidenceTimeline(o) {
+    const buy = Math.min(6, Number(o.buyCount || 0));
+    const watch = Math.min(6, Number(o.watchCount || 0));
+    const neutral = Math.min(6, Number(o.neutralCount || 0));
+    const bearish = Math.min(6, Number(o.bearishCount || 0));
+    const dots = [
+        ...Array(buy).fill('<i class="buy" title="BUY"></i>'),
+        ...Array(watch).fill('<i class="watch" title="WATCH"></i>'),
+        ...Array(neutral).fill('<i class="neutral" title="NEUTRAL"></i>'),
+        ...Array(bearish).fill('<i class="bearish" title="Bearish interruption"></i>')
+    ].slice(-12);
+    return dots.length ? dots.join('') : '<span>No qualifying evidence yet</span>';
 }
 
 
@@ -1776,4 +1895,8 @@ window.addEventListener('load', () => {
     if (positionsClose) positionsClose.addEventListener('click', closeActivePositionsModal);
     document.querySelectorAll('[data-close-active-positions]').forEach(node => node.addEventListener('click', closeActivePositionsModal));
     document.addEventListener('keydown', event => { if (event.key === 'Escape') closeActivePositionsModal(); });
+    document.querySelectorAll('[data-pipeline-filter]').forEach(node => node.addEventListener('click', () => {
+        const center = el('positions');
+        if (center) center.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }));
 });

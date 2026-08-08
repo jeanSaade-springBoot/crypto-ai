@@ -23,8 +23,7 @@
                 <a href="#market" title="Market Monitor"><span class="nav-icon">⌁</span><span class="nav-text">Market Monitor</span></a>
             </div>
             <div class="nav-group"><span class="nav-group-label">EXECUTION</span>
-                <a href="#execution-intelligence" title="Execution Intelligence"><span class="nav-icon">⚡</span><span class="nav-text">Execution Intelligence</span><span id="nav-opportunity-count" class="nav-badge">0</span></a>
-                <a href="#positions" title="Active Positions"><span class="nav-icon">◆</span><span class="nav-text">Active Positions</span><span id="nav-position-count" class="nav-badge">0</span></a>
+                <a href="#positions" title="AI Opportunity Center"><span class="nav-icon">⚡</span><span class="nav-text">Opportunity Center</span><span id="nav-opportunity-count" class="nav-badge">0</span></a>
             </div>
             <div class="nav-group"><span class="nav-group-label">ANALYSIS</span>
                 <a href="#trade-history" title="Trade History"><span class="nav-icon">≡</span><span class="nav-text">Trade History</span></a>
@@ -69,18 +68,7 @@
 
         <section id="error-banner" class="error-banner hidden"></section>
 
-        <section id="overview" class="command-center-grid">
-            <article id="execution-intelligence" class="panel execution-intelligence-panel">
-                <div class="section-heading"><div><p class="eyebrow">EXECUTION INTELLIGENCE</p><h2>Live opportunity state</h2></div><span id="execution-intelligence-updated">Waiting for evidence</span></div>
-                <div class="intelligence-kpis">
-                    <div><span>Active opportunities</span><strong id="intel-active">0</strong></div>
-                    <div><span>Building / Waiting</span><strong id="intel-building">0</strong></div>
-                    <div><span>Blocked</span><strong id="intel-blocked">0</strong></div>
-                    <div><span>Confirmed</span><strong id="intel-confirmed">0</strong></div>
-                </div>
-                <div id="opportunity-queue" class="opportunity-queue"><div class="empty">No active opportunities yet.</div></div>
-            </article>
-
+        <section id="overview" class="command-center-grid compact-command-center">
             <article class="panel ai-performance-panel">
                 <div class="section-heading"><div><p class="eyebrow">TODAY</p><h2>AI performance</h2></div><span>Execution outcomes</span></div>
                 <div class="ai-performance-grid">
@@ -96,14 +84,16 @@
         </section>
 
         <section id="pipeline" class="panel execution-pipeline-panel">
-            <div class="section-heading"><div><p class="eyebrow">TODAY'S EXECUTION FUNNEL</p><h2>Execution pipeline</h2></div><span id="last-updated">—</span></div>
-            <div class="execution-funnel">
-                <div class="funnel-step"><span>Signals Today</span><strong id="pipeline-signals-today">0</strong></div><b>→</b>
-                <div class="funnel-step"><span>BUY Candidates</span><strong id="pipeline-buy-candidates">0</strong></div><b>→</b>
-                <div class="funnel-step"><span>Consolidated / Evidence</span><strong id="pipeline-consolidated">0</strong></div><b>→</b>
-                <div class="funnel-step"><span>Executed</span><strong id="pipeline-executed">0</strong></div><b>→</b>
-                <div class="funnel-step"><span>Active Positions</span><strong id="pipeline-open">0</strong></div><b>→</b>
-                <div class="funnel-step"><span>Closed Profitably</span><strong id="pipeline-profitable">0</strong></div>
+            <div class="section-heading"><div><p class="eyebrow">AI OPPORTUNITY PIPELINE</p><h2>From market scan to completed trade</h2></div><span id="last-updated">—</span></div>
+            <div class="execution-funnel ai-opportunity-funnel">
+                <div class="funnel-step clickable-funnel" data-pipeline-filter="scanned"><span>Coins Scanned</span><strong id="pipeline-coins-scanned">0</strong><small>Analyzed today</small></div><b>→</b>
+                <div class="funnel-step clickable-funnel" data-pipeline-filter="found"><span>Opportunities Found</span><strong id="pipeline-opportunities-found">0</strong><small>Execution candidates</small></div><b>→</b>
+                <div class="funnel-step clickable-funnel" data-pipeline-filter="building"><span>Building</span><strong id="pipeline-building">0</strong><small>Evidence accumulating</small></div><b>→</b>
+                <div class="funnel-step clickable-funnel" data-pipeline-filter="recovering"><span>Recovering</span><strong id="pipeline-recovering">0</strong><small>Health improving</small></div><b>→</b>
+                <div class="funnel-step clickable-funnel" data-pipeline-filter="ready"><span>Ready</span><strong id="pipeline-ready">0</strong><small>Confirmed now</small></div><b>→</b>
+                <div class="funnel-step clickable-funnel" data-pipeline-filter="executed"><span>Executed</span><strong id="pipeline-executed">0</strong><small>Positions opened</small></div><b>→</b>
+                <div class="funnel-step clickable-funnel" data-pipeline-filter="managed"><span>Managed</span><strong id="pipeline-managed">0</strong><small>Open now</small></div><b>→</b>
+                <div class="funnel-step clickable-funnel" data-pipeline-filter="closed"><span>Closed Today</span><strong id="pipeline-closed">0</strong><small>Wins + losses</small></div>
             </div>
             <details class="pipeline-details">
                 <summary>System flow health</summary>
@@ -247,16 +237,24 @@
         </section>
 
         <section id="signals" class="panel">
-            <div class="section-heading"><div><p class="eyebrow">RECENT SIGNAL EVIDENCE</p><h2>BUY and SELL signals</h2></div><span>Historical evidence; live execution state is shown above</span></div>
+            <div class="section-heading"><div><p class="eyebrow">RECENT SIGNAL EVIDENCE</p><h2>BUY and SELL signals</h2></div><span>Historical evidence; live execution state is shown in the AI Opportunity Center</span></div>
             <div class="table-wrap signal-board-wrap"><table class="signal-board-table"><thead><tr><th>Signal</th><th>3-frame decision</th><th>Planned trade</th><th>Execution</th><th>Status</th><th>Details</th></tr></thead><tbody id="signals-body"></tbody></table></div>
         </section>
 
-        <section id="positions" class="panel">
+        <section id="positions" class="panel execution-intelligence-panel opportunity-center-panel">
             <div class="section-heading">
-                <div><p class="eyebrow">EXECUTION</p><h2>Open trades</h2></div>
-                <span>What the simulated trade looks like right now</span>
+                <div><p class="eyebrow">EXECUTION INTELLIGENCE</p><h2>AI Opportunity Center</h2></div>
+                <span id="execution-intelligence-updated">Waiting for evidence</span>
             </div>
-            <div id="open-trades" class="trade-card-grid"></div>
+            <div class="intelligence-kpis opportunity-center-kpis">
+                <div><span>Active opportunities</span><strong id="intel-active">0</strong><small>Currently alive</small></div>
+                <div><span>Building</span><strong id="intel-building">0</strong><small>Accumulating evidence</small></div>
+                <div><span>Recovering</span><strong id="intel-recovering">0</strong><small>Health improving</small></div>
+                <div><span>Weakening</span><strong id="intel-weakening">0</strong><small>Evidence deteriorating</small></div>
+                <div><span>Blocked</span><strong id="intel-blocked">0</strong><small>Hard risk / gate</small></div>
+                <div><span>Ready</span><strong id="intel-confirmed">0</strong><small>Confirmed for execution</small></div>
+            </div>
+            <div id="opportunity-queue" class="opportunity-queue opportunity-center-queue"><div class="empty">No active opportunities yet.</div></div>
         </section>
 
         <section id="trade-history" class="panel">
