@@ -71,6 +71,39 @@ class DynamicProfitLockServiceTest {
     }
 
     @Test
+    void balancedQualityActivatesAroundFortyPercentLikeEduCase() {
+        position.setEntryTotalScore(75);
+        position.setEntryConfidence(77);
+        position.setAverageEntryPriceUsdt(new BigDecimal("0.036200"));
+        position.setTakeProfitUsdt(new BigDecimal("0.036449366297"));
+        position.setHighestPriceUsdt(new BigDecimal("0.036200"));
+
+        when(positionRepository.findFirstBySymbolAndStatusOrderByOpenedAtDesc("EDUUSDT", "OPEN"))
+                .thenReturn(Optional.of(position));
+        position.setSymbol("EDUUSDT");
+
+        var result = service.evaluatePrice("EDUUSDT", new BigDecimal("0.036300"));
+
+        assertThat(result.active()).isTrue();
+        assertThat(result.activationPercent()).isEqualByComparingTo("40");
+        assertThat(result.progressPercent()).isGreaterThanOrEqualTo(new BigDecimal("40"));
+        assertThat(result.lockPrice()).isGreaterThan(new BigDecimal("0.036200"));
+        assertThat(result.explanation()).contains("BALANCED").contains("entry quality=76/100");
+    }
+
+    @Test
+    void higherQualityTradeGetsMoreRoomBeforeLockActivation() {
+        position.setEntryTotalScore(88);
+        position.setEntryConfidence(90);
+
+        var result = service.evaluatePrice("ETHUSDT", new BigDecimal("1916.95"));
+
+        assertThat(result.activationPercent()).isEqualByComparingTo("75");
+        assertThat(result.active()).isFalse();
+        assertThat(result.explanation()).contains("HIGH_CONVICTION");
+    }
+
+    @Test
     void triggersWhenPriceFallsThroughPreviouslyProtectedLevel() {
         position.setHighestPriceUsdt(new BigDecimal("1917.67"));
         position.setProfitLockActive(true);
