@@ -1,8 +1,8 @@
 package com.crypto.service;
 
 import com.crypto.indicator.event.CandleClosedEvent;
-import com.crypto.indicator.service.TechnicalIndicatorService;
 import com.crypto.repository.CandleRepository;
+import com.crypto.position.service.LivePositionProtectionService;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import org.slf4j.Logger;
@@ -21,13 +21,16 @@ public class BinanceKlineService {
             LoggerFactory.getLogger(BinanceKlineService.class);
     private final CandleRepository candleRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final LivePositionProtectionService livePositionProtectionService;
 
     public BinanceKlineService(
             CandleRepository candleRepository,
-            ApplicationEventPublisher eventPublisher
+            ApplicationEventPublisher eventPublisher,
+            LivePositionProtectionService livePositionProtectionService
     ) {
         this.candleRepository = candleRepository;
         this.eventPublisher = eventPublisher;
+        this.livePositionProtectionService = livePositionProtectionService;
     }
 
     @Transactional
@@ -64,6 +67,7 @@ public class BinanceKlineService {
 
         boolean closed = kline.path("x")
                 .asBoolean(false);
+        BigDecimal livePrice = decimal(kline, "c");
 
         candleRepository.upsert(
                 symbol,
@@ -73,7 +77,7 @@ public class BinanceKlineService {
                 decimal(kline, "o"),
                 decimal(kline, "h"),
                 decimal(kline, "l"),
-                decimal(kline, "c"),
+                livePrice,
                 decimal(kline, "v"),
                 decimal(kline, "q"),
                 kline.path("n").asLong(),
@@ -81,6 +85,18 @@ public class BinanceKlineService {
                 decimal(kline, "Q"),
                 closed
         );
+
+        // Mechanical position protection must react to live price updates, not wait
+        // for a candle-close analysis signal. Use the 1m stream as the canonical live feed
+        // to avoid duplicate checks from 5m/1h subscriptions.
+        if ("1m".equals(intervalCode)) {
+            try {
+                livePositionProtectionService.onPrice(symbol, livePrice);
+            } catch (RuntimeException ex) {
+                log.error("Live position protection failed: symbol={}, price={}, error={}",
+                        symbol, livePrice, ex.getMessage(), ex);
+            }
+        }
 
         
         log.info(

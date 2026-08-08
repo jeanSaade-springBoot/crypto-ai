@@ -40,12 +40,24 @@ public class DynamicProfitLockService {
 
     @Transactional
     public Evaluation evaluate(TradeSignal signal) {
-        if (signal == null || signal.getSymbol() == null || signal.getLatestPrice() == null
-                || signal.getLatestPrice().signum() <= 0) {
+        if (signal == null) {
+            return Evaluation.inactive("No valid market price is available.");
+        }
+        return evaluatePrice(signal.getSymbol(), signal.getLatestPrice());
+    }
+
+    /**
+     * Evaluates Dynamic Profit Lock directly from a live market price.
+     * This path is used by live position protection between candle-close signals.
+     */
+    @Transactional
+    public Evaluation evaluatePrice(String symbolValue, BigDecimal currentPrice) {
+        if (symbolValue == null || symbolValue.isBlank() || currentPrice == null
+                || currentPrice.signum() <= 0) {
             return Evaluation.inactive("No valid market price is available.");
         }
 
-        String symbol = signal.getSymbol().trim().toUpperCase(Locale.ROOT);
+        String symbol = symbolValue.trim().toUpperCase(Locale.ROOT);
         WalletManagedPosition position = positionRepository
                 .findFirstBySymbolAndStatusOrderByOpenedAtDesc(symbol, "OPEN")
                 .orElse(null);
@@ -60,7 +72,7 @@ public class DynamicProfitLockService {
 
         BigDecimal entry = position.getAverageEntryPriceUsdt();
         BigDecimal target = position.getTakeProfitUsdt();
-        BigDecimal current = signal.getLatestPrice();
+        BigDecimal current = currentPrice;
         if (entry == null || target == null || entry.signum() <= 0 || target.compareTo(entry) <= 0) {
             return Evaluation.inactive("The position does not have a valid long take-profit distance.");
         }

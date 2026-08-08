@@ -342,6 +342,91 @@ public class WalletAutoExecutionService {
         return true;
     }
 
+
+    /**
+     * Executes a mechanical live-price exit (TP / SL / Profit Lock) without requiring
+     * a newly generated trade signal. The open wallet position is the source of truth.
+     */
+    @Transactional
+    public synchronized boolean executeMechanicalExit(
+            String symbol,
+            BigDecimal executionPrice,
+            String executionReason,
+            String executionMessage
+    ) {
+        String pair = normalizePair(symbol);
+        WalletManagedPosition position = managedPositionRepository
+                .findFirstBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
+                .orElse(null);
+        if (position == null || position.getId() == null || position.getQuantity() == null
+                || position.getQuantity().signum() <= 0) {
+            return false;
+        }
+
+        String reason = executionReason == null || executionReason.isBlank()
+                ? "MECHANICAL_EXIT"
+                : executionReason.trim().toUpperCase(Locale.ROOT);
+        String key = "POSITION:" + position.getId() + ":" + reason;
+        if (tradeRepository.existsByExecutionKey(key)) return true;
+
+        String assetSymbol = pair.substring(0, pair.length() - 4);
+        WalletAsset coin = getOrCreate(assetSymbol);
+        WalletAsset usdt = getOrCreate("USDT");
+        BigDecimal quantity = position.getQuantity().min(coin.getQuantity());
+        if (quantity.signum() <= 0) return false;
+
+        BigDecimal price = positive(executionPrice);
+        BigDecimal gross = quantity.multiply(price);
+        BigDecimal costBasis = position.getAverageEntryPriceUsdt().multiply(quantity);
+        BigDecimal realized = gross.subtract(costBasis);
+        BigDecimal realizedPercent = costBasis.signum() == 0 ? ZERO : realized
+                .divide(costBasis, 8, RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(100));
+
+        coin.setQuantity(coin.getQuantity().subtract(quantity));
+        if (coin.getQuantity().signum() == 0) coin.setAverageBuyPriceUsdt(null);
+        usdt.setQuantity(usdt.getQuantity().add(gross));
+        assetRepository.save(coin);
+        assetRepository.save(usdt);
+
+        position.setQuantity(ZERO);
+        position.setTotalCostUsdt(ZERO);
+        position.setAverageEntryPriceUsdt(ZERO);
+        position.setStatus("CLOSED");
+        position.setUpdatedAt(Instant.now());
+        managedPositionRepository.save(position);
+
+        tradeRepository.save(WalletTrade.builder()
+                .executionKey(key)
+                .symbol(pair)
+                .side("SELL")
+                .quantity(quantity)
+                .priceUsdt(price)
+                .grossAmountUsdt(gross)
+                .feeUsdt(ZERO)
+                .netAmountUsdt(gross)
+                .costBasisUsdt(costBasis)
+                .realizedPnlUsdt(realized)
+                .realizedPnlPercent(realizedPercent)
+                .executionType("PAPER_AUTO")
+                .executionReason(reason)
+                .status("EXECUTED")
+                .executedAt(Instant.now())
+                .notes("Mechanical live-price position exit")
+                .executionMessage(executionMessage == null ? reason + " triggered at " + price : executionMessage)
+                .build());
+
+        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneId.systemDefault()))
+                .ifPresent(daily -> {
+                    daily.setEndingUsdt(usdt.getQuantity());
+                    daily.setEndingPortfolioUsdt(walletService.currentPortfolioValue());
+                    daily.setUpdatedAt(Instant.now());
+                    dailyStatisticsRepository.save(daily);
+                });
+        walletService.captureSnapshot();
+        return true;
+    }
+
     private WalletDailyStatistics dailyStatistics(WalletSettings settings, WalletAsset usdt) {
         LocalDate today = LocalDate.now(ZoneId.systemDefault());
         WalletDailyStatistics existing = dailyStatisticsRepository
