@@ -100,6 +100,83 @@ class ExecutionIntelligenceServiceTest {
         assertThat(decision.code()).isEqualTo("BEARISH_REVERSAL");
     }
 
+    @Test
+    void higherTimeframeBuyStronglyRecoversGenericOpportunityHealth() {
+        TradeSignal current = signal(20L, "TESTUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 67, 73);
+        TradeSignal priorSell = signal(19L, "TESTUSDT", "1m", SignalDecision.NEUTRAL, SignalDecision.SELL,
+                now.minusSeconds(300), 35, 65);
+        TradeSignal priorWatch = signal(18L, "TESTUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(600), 66, 72);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("TESTUSDT", "1m"))
+                .thenReturn(List.of(current, priorSell, priorWatch));
+        context("TESTUSDT", "5m", SignalDecision.BUY, now.minusSeconds(60));
+        context("TESTUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.evidence().opportunityHealth()).isGreaterThanOrEqualTo(60);
+        assertThat(decision.evidence().healthMomentum()).isPositive();
+    }
+
+    @Test
+    void bearishCurrentSignalCannotExecuteEvenWhenHigherFramesAreSupportive() {
+        TradeSignal current = signal(30L, "ANYUSDT", "1m", SignalDecision.NEUTRAL, SignalDecision.SELL,
+                now, 40, 70);
+        TradeSignal priorBuy = signal(29L, "ANYUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now.minusSeconds(300), 80, 80);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("ANYUSDT", "1m"))
+                .thenReturn(List.of(current, priorBuy));
+        context("ANYUSDT", "5m", SignalDecision.BUY, now.minusSeconds(60));
+        context("ANYUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.state()).isEqualTo("WEAKENING");
+    }
+
+    @Test
+    void improvingSequenceProducesPositiveEvidenceMomentum() {
+        TradeSignal current = signal(40L, "MKTUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 76, 75);
+        TradeSignal watch2 = signal(39L, "MKTUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(300), 70, 72);
+        TradeSignal watch1 = signal(38L, "MKTUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(600), 66, 70);
+        TradeSignal sell = signal(37L, "MKTUSDT", "1m", SignalDecision.NEUTRAL, SignalDecision.SELL,
+                now.minusSeconds(900), 38, 65);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("MKTUSDT", "1m"))
+                .thenReturn(List.of(current, watch2, watch1, sell));
+        context("MKTUSDT", "5m", SignalDecision.WATCH, now.minusSeconds(60));
+        context("MKTUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));
+        when(properties.minimumBuyScore()).thenReturn(999);
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.evidence().evidenceMomentum()).isPositive();
+        assertThat(decision.evidence().opportunityHealth()).isGreaterThan(50);
+    }
+
+    @Test
+    void deterioratingSequenceProducesNegativeEvidenceMomentum() {
+        TradeSignal current = signal(50L, "MKT2USDT", "1m", SignalDecision.NEUTRAL, SignalDecision.SELL,
+                now, 38, 66);
+        TradeSignal watch = signal(49L, "MKT2USDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(300), 68, 72);
+        TradeSignal buy = signal(48L, "MKT2USDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now.minusSeconds(600), 78, 78);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("MKT2USDT", "1m"))
+                .thenReturn(List.of(current, watch, buy));
+        context("MKT2USDT", "5m", SignalDecision.WATCH, now.minusSeconds(60));
+        context("MKT2USDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.evidence().evidenceMomentum()).isNegative();
+        assertThat(decision.allowed()).isFalse();
+    }
+
     private void context(String symbol, String interval, SignalDecision decision, Instant generatedAt) {
         when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
                 symbol, interval, now)).thenReturn(Optional.of(

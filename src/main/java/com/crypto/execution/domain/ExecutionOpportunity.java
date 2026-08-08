@@ -62,6 +62,12 @@ public class ExecutionOpportunity {
     @Column(name = "opportunity_health", nullable = false)
     private int opportunityHealth;
 
+    @Column(name = "health_momentum", nullable = false)
+    private int healthMomentum;
+
+    @Column(name = "evidence_momentum", nullable = false)
+    private int evidenceMomentum;
+
     @Column(name = "last_bearish_at")
     private Instant lastBearishAt;
 

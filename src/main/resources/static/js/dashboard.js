@@ -322,7 +322,7 @@ function renderExecutionIntelligence(summary = {}, opportunities = []) {
             return `<article class="opportunity-row">
                 <div class="opportunity-main"><strong>${escapeHtml(o.symbol || '—')}</strong><span class="badge ${tone}">${escapeHtml(status)}</span></div>
                 <div class="opportunity-score"><span>Opportunity health</span><strong>${health}/100</strong><div><i style="width:${health}%"></i></div></div>
-                <div class="opportunity-context"><span>Evidence ${Number(o.evidenceScore || 0)} pts</span><span>1H ${escapeHtml(o.oneHourDecision || '—')}</span><span>5M ${escapeHtml(o.fiveMinuteDecision || '—')}</span></div>
+                <div class="opportunity-context"><span>Evidence ${Number(o.evidenceScore || 0)} pts</span><span>Health Δ ${Number(o.healthMomentum || 0) >= 0 ? '+' : ''}${Number(o.healthMomentum || 0)}</span><span>Evidence Momentum ${Number(o.evidenceMomentum || 0) >= 0 ? '+' : ''}${Number(o.evidenceMomentum || 0)}</span><span>1H ${escapeHtml(o.oneHourDecision || '—')}</span><span>5M ${escapeHtml(o.fiveMinuteDecision || '—')}</span></div>
                 <div class="opportunity-context"><span>${Number(o.buyCount || 0)} BUY</span><span>${Number(o.watchCount || 0)} WATCH</span><span>${Number(o.bearishCount || 0)} bearish interruptions</span></div>
                 <small>${escapeHtml(o.decisionExplanation || o.decisionCode || 'Accumulating fresh execution evidence.')}</small>
             </article>`;
