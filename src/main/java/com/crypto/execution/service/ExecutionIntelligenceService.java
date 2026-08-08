@@ -42,6 +42,9 @@ public class ExecutionIntelligenceService {
     private static final int WATCH_EVIDENCE_MIN_CONFIDENCE = 60;
     private static final int MIN_EVIDENCE_SCORE = 7;
     private static final int STRONG_EVIDENCE_SCORE = 11;
+    private static final int WEAK_SELL_EVIDENCE_PENALTY = 2;
+    private static final int OPPORTUNITY_HEALTH_START = 50;
+    private static final int OPPORTUNITY_HEALTH_MIN_TO_KEEP = 20;
 
     private final TradingProperties properties;
     private final TradeExecutionValidationService validationService;
@@ -59,9 +62,30 @@ public class ExecutionIntelligenceService {
         }
 
         if (isBearish(signal.getDecision()) || isBearish(signal.getOriginalDecision())) {
-            closeOpportunity(signal, "CANCELLED", "BEARISH_REVERSAL",
-                    "Current 1m evidence became bearish; the BUY opportunity was cancelled.");
-            return ExecutionDecision.reject("BEARISH_REVERSAL", "Current 1m signal is bearish.");
+            Evidence evidence = evidence(signal);
+            if (isHardBearishReversal(signal, evidence)) {
+                saveOpportunity(signal, evidence, "CANCELLED", "OPPORTUNITY_MEMORY", 0,
+                        "BEARISH_REVERSAL",
+                        "BUY opportunity cancelled because bearish evidence is strong or confirmed by 5m/1h context.");
+                return ExecutionDecision.reject("BEARISH_REVERSAL",
+                        "Current bearish evidence is strong enough to invalidate the BUY opportunity.", evidence);
+            }
+
+            if (evidence.opportunityHealth() < OPPORTUNITY_HEALTH_MIN_TO_KEEP) {
+                saveOpportunity(signal, evidence, "CANCELLED", "OPPORTUNITY_MEMORY", 0,
+                        "OPPORTUNITY_HEALTH_EXHAUSTED",
+                        "BUY opportunity health fell below the minimum after bearish/aging penalties.");
+                return ExecutionDecision.reject("OPPORTUNITY_HEALTH_EXHAUSTED",
+                        "Opportunity memory decayed below the safe minimum and was cancelled.", evidence);
+            }
+
+            saveOpportunity(signal, evidence, "WEAKENING", "OPPORTUNITY_MEMORY", 0,
+                    "SOFT_BEARISH_INTERRUPTION",
+                    "A brief 1m bearish interruption reduced opportunity evidence instead of erasing it. "
+                            + "Health=" + evidence.opportunityHealth() + "/100, evidence=" + evidence.evidenceScore()
+                            + ". A new supportive signal is required before execution.");
+            return ExecutionDecision.weakening("SOFT_BEARISH_INTERRUPTION",
+                    "Bearish 1m evidence weakened the opportunity but did not invalidate supportive 5m/1h context.", evidence);
         }
 
         HardRiskBlock hardBlock = hardRiskBlock(signal);
@@ -155,6 +179,11 @@ public class ExecutionIntelligenceService {
             return ExecutionDecision.reject("HIGHER_TIMEFRAME_BEARISH",
                     "Opportunity cancelled because 5m or 1h context is bearish.", e);
         }
+        if (e.opportunityHealth() < 40) {
+            return ExecutionDecision.building("OPPORTUNITY_RECOVERING",
+                    "Bullish evidence is returning, but opportunity health is only "
+                            + e.opportunityHealth() + "/100 after recent bearish/aging penalties.", e);
+        }
         if (e.evidenceScore() < MIN_EVIDENCE_SCORE) {
             return ExecutionDecision.building("EVIDENCE_BUILDING",
                     "Bullish evidence is accumulating: score " + e.evidenceScore() + "/" + MIN_EVIDENCE_SCORE
@@ -233,52 +262,97 @@ public class ExecutionIntelligenceService {
         List<TradeSignal> recent = signalRepository
                 .findTop20BySymbolAndIntervalOrderByGeneratedAtDesc(current.getSymbol(), EXECUTION_INTERVAL);
 
-        int buy = 0, watch = 0, neutral = 0, evidenceScore = 0;
+        int buy = 0, watch = 0, neutral = 0, bearish = 0, evidenceScore = 0;
         int scoreTotal = 0, confidenceTotal = 0, qualityCount = 0;
+        int health = OPPORTUNITY_HEALTH_START;
+        Instant lastBearishAt = null;
+        Instant oldestObservedAt = null;
         List<Long> signalIds = new ArrayList<>();
 
         for (TradeSignal signal : recent) {
             if (signal.getGeneratedAt() == null || signal.getGeneratedAt().isAfter(current.getGeneratedAt())) continue;
             if (signal.getGeneratedAt().isBefore(cutoff)) break;
-            if (isBearish(signal.getDecision()) || isBearish(signal.getOriginalDecision())) break;
+
+            if (oldestObservedAt == null || signal.getGeneratedAt().isBefore(oldestObservedAt)) {
+                oldestObservedAt = signal.getGeneratedAt();
+            }
 
             SignalDecision decision = signal.getDecision();
-            if (isBullish(decision) || isBullish(signal.getOriginalDecision())) {
+            SignalDecision original = signal.getOriginalDecision();
+
+            if (decision == SignalDecision.STRONG_SELL || original == SignalDecision.STRONG_SELL) {
+                bearish++;
+                health -= 45;
+                if (lastBearishAt == null) lastBearishAt = signal.getGeneratedAt();
+                break; // strong bearish evidence is a true memory boundary
+            }
+
+            if (decision == SignalDecision.SELL || original == SignalDecision.SELL) {
+                bearish++;
+                evidenceScore -= WEAK_SELL_EVIDENCE_PENALTY;
+                health -= 18;
+                if (lastBearishAt == null) lastBearishAt = signal.getGeneratedAt();
+                continue; // preserve older bullish memory through a brief weak SELL
+            }
+
+            if (isBullish(decision) || isBullish(original)) {
                 buy++;
                 evidenceScore += 3;
+                health += 8;
                 signalIds.add(signal.getId());
             } else if (decision == SignalDecision.WATCH
                     && signal.getTotalScore() >= WATCH_EVIDENCE_MIN_SCORE
                     && signal.getConfidenceScore() >= WATCH_EVIDENCE_MIN_CONFIDENCE) {
                 watch++;
                 evidenceScore += 1;
+                health += 3;
                 signalIds.add(signal.getId());
             } else if (decision == SignalDecision.NEUTRAL) {
                 neutral++;
+                health -= 3;
             }
 
-            if (decision == SignalDecision.WATCH || isBullish(decision) || isBullish(signal.getOriginalDecision())) {
+            if (decision == SignalDecision.WATCH || isBullish(decision) || isBullish(original)) {
                 scoreTotal += signal.getTotalScore();
                 confidenceTotal += signal.getConfidenceScore();
                 qualityCount++;
             }
         }
 
+        long ageMinutes = oldestObservedAt == null ? 0
+                : Math.max(0, Duration.between(oldestObservedAt, current.getGeneratedAt()).toMinutes());
+        // Evidence is bounded by a 30-minute window. Apply a small age penalty to the
+        // retained opportunity history so stale evidence fades gradually.
+        health -= Math.min(12, (int) (ageMinutes / 5));
+        evidenceScore = Math.max(0, evidenceScore);
+        health = Math.max(0, Math.min(100, health));
+
         TradeSignal five = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
         TradeSignal one = latestAtOrBefore(current, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
 
         return new Evidence(
-                buy + watch + neutral,
+                buy + watch + neutral + bearish,
                 buy,
                 watch,
                 neutral,
+                bearish,
                 evidenceScore,
+                health,
                 qualityCount == 0 ? 0 : Math.round((float) scoreTotal / qualityCount),
                 qualityCount == 0 ? 0 : Math.round((float) confidenceTotal / qualityCount),
                 five == null ? null : five.getDecision(),
                 one == null ? null : one.getDecision(),
+                lastBearishAt,
                 List.copyOf(signalIds)
         );
+    }
+
+    private boolean isHardBearishReversal(TradeSignal current, Evidence evidence) {
+        if (current.getDecision() == SignalDecision.STRONG_SELL
+                || current.getOriginalDecision() == SignalDecision.STRONG_SELL) {
+            return true;
+        }
+        return isBearish(evidence.fiveMinute()) || isBearish(evidence.oneHour());
     }
 
     private TradeSignal latestAtOrBefore(TradeSignal current, String interval, Duration maxAge) {
@@ -313,7 +387,10 @@ public class ExecutionIntelligenceService {
         opportunity.setBuyCount(evidence.buyCount());
         opportunity.setWatchCount(evidence.watchCount());
         opportunity.setNeutralCount(evidence.neutralCount());
+        opportunity.setBearishCount(evidence.bearishCount());
         opportunity.setEvidenceScore(evidence.evidenceScore());
+        opportunity.setOpportunityHealth(evidence.opportunityHealth());
+        opportunity.setLastBearishAt(evidence.lastBearishAt());
         opportunity.setAverageSignalScore(evidence.averageScore());
         opportunity.setAverageConfidence(evidence.averageConfidence());
         opportunity.setFiveMinuteDecision(evidence.fiveMinute() == null ? null : evidence.fiveMinute().name());
@@ -383,6 +460,10 @@ public class ExecutionIntelligenceService {
             return new ExecutionDecision(false, "ACCUMULATED_EVIDENCE", code, "BUILDING", 0, explanation, evidence);
         }
 
+        public static ExecutionDecision weakening(String code, String explanation, Evidence evidence) {
+            return new ExecutionDecision(false, "OPPORTUNITY_MEMORY", code, "WEAKENING", 0, explanation, evidence);
+        }
+
         public static ExecutionDecision observe(String code, String explanation) {
             return observe(code, explanation, Evidence.empty());
         }
@@ -397,15 +478,18 @@ public class ExecutionIntelligenceService {
             int buyCount,
             int watchCount,
             int neutralCount,
+            int bearishCount,
             int evidenceScore,
+            int opportunityHealth,
             int averageScore,
             int averageConfidence,
             SignalDecision fiveMinute,
             SignalDecision oneHour,
+            Instant lastBearishAt,
             List<Long> supportingSignalIds
     ) {
         static Evidence empty() {
-            return new Evidence(0, 0, 0, 0, 0, 0, 0, null, null, List.of());
+            return new Evidence(0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null, List.of());
         }
     }
 

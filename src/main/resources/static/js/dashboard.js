@@ -306,15 +306,20 @@ function renderExecutionIntelligence(summary = {}, opportunities = []) {
     if (el('nav-opportunity-count')) el('nav-opportunity-count').textContent = active;
     if (el('nav-position-count')) el('nav-position-count').textContent = Number(summary.activePositions || 0);
 
-    const queue = [...opportunities].sort((a,b) => Number(b.evidenceScore || 0) - Number(a.evidenceScore || 0)).slice(0, 6);
+    const queue = [...opportunities].sort((a,b) => {
+        const healthDiff = Number(b.opportunityHealth || 0) - Number(a.opportunityHealth || 0);
+        return healthDiff !== 0 ? healthDiff : Number(b.evidenceScore || 0) - Number(a.evidenceScore || 0);
+    }).slice(0, 6);
     if (el('opportunity-queue')) {
         el('opportunity-queue').innerHTML = queue.length ? queue.map(o => {
             const status = String(o.status || 'BUILDING').replaceAll('_',' ');
             const tone = String(o.status || '').toUpperCase() === 'BLOCKED' ? 'reject' : String(o.status || '').toUpperCase() === 'CONFIRMED' ? 'buy' : 'watch';
+            const health = Math.max(0, Math.min(100, Number(o.opportunityHealth || 0)));
             return `<article class="opportunity-row">
                 <div class="opportunity-main"><strong>${escapeHtml(o.symbol || '—')}</strong><span class="badge ${tone}">${escapeHtml(status)}</span></div>
-                <div class="opportunity-score"><span>Evidence</span><strong>${Number(o.evidenceScore || 0)}/100</strong><div><i style="width:${Math.max(0, Math.min(100, Number(o.evidenceScore || 0)))}%"></i></div></div>
-                <div class="opportunity-context"><span>1H ${escapeHtml(o.oneHourDecision || '—')}</span><span>5M ${escapeHtml(o.fiveMinuteDecision || '—')}</span><span>${Number(o.buyCount || 0)} BUY · ${Number(o.watchCount || 0)} WATCH</span></div>
+                <div class="opportunity-score"><span>Opportunity health</span><strong>${health}/100</strong><div><i style="width:${health}%"></i></div></div>
+                <div class="opportunity-context"><span>Evidence ${Number(o.evidenceScore || 0)} pts</span><span>1H ${escapeHtml(o.oneHourDecision || '—')}</span><span>5M ${escapeHtml(o.fiveMinuteDecision || '—')}</span></div>
+                <div class="opportunity-context"><span>${Number(o.buyCount || 0)} BUY</span><span>${Number(o.watchCount || 0)} WATCH</span><span>${Number(o.bearishCount || 0)} bearish interruptions</span></div>
                 <small>${escapeHtml(o.decisionExplanation || o.decisionCode || 'Accumulating fresh execution evidence.')}</small>
             </article>`;
         }).join('') : '<div class="empty">No active opportunities right now.</div>';

@@ -53,8 +53,17 @@ public class ExecutionOpportunity {
     @Column(name = "neutral_count", nullable = false)
     private int neutralCount;
 
+    @Column(name = "bearish_count", nullable = false)
+    private int bearishCount;
+
     @Column(name = "evidence_score", nullable = false)
     private int evidenceScore;
+
+    @Column(name = "opportunity_health", nullable = false)
+    private int opportunityHealth;
+
+    @Column(name = "last_bearish_at")
+    private Instant lastBearishAt;
 
     @Column(name = "average_signal_score", nullable = false)
     private int averageSignalScore;
