@@ -40,7 +40,7 @@
     <main>
         <header class="topbar">
             <div class="topbar-main">
-                <div><p class="eyebrow">AUTOMATIC TRADING MONITOR</p><h1>Trading dashboard</h1></div>
+                <div class="monitor-title"><p class="eyebrow">AUTOMATIC TRADING MONITOR</p></div>
                 <div class="filters">
                 <a class="header-link" href="/trade-inspector">Trade Inspector</a>
                 <a class="header-link" href="/administration">Administration</a>
@@ -66,17 +66,15 @@
             <section class="ai-performance-header-strip" aria-label="Global AI performance">
                 <div class="ai-performance-title">
                     <span>AI PERFORMANCE</span>
-                    <small>All configured coins</small>
-                </div>
-                <label class="ai-period-control">Period
-                    <select id="ai-period-select">
+                    <small>ALL COINS</small>
+                    <select id="ai-period-select" aria-label="AI performance period">
                         <option value="ALL_TIME" selected>All Time</option>
                         <option value="TODAY">Today</option>
                         <option value="LAST_24_HOURS">Last 24 Hours</option>
                         <option value="LAST_7_DAYS">Last 7 Days</option>
                         <option value="LAST_30_DAYS">Last 30 Days</option>
                     </select>
-                </label>
+                </div>
                 <div class="ai-header-metric"><span>Executed</span><strong id="ai-executed">0</strong></div>
                 <div class="ai-header-metric positive-metric"><span>Wins</span><strong id="ai-wins">0</strong></div>
                 <div class="ai-header-metric negative-metric"><span>Losses</span><strong id="ai-losses">0</strong></div>
