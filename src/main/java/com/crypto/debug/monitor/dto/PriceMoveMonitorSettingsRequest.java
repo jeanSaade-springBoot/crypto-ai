@@ -5,6 +5,8 @@ import java.math.BigDecimal;
 public record PriceMoveMonitorSettingsRequest(
         boolean enabled,
         BigDecimal minimumMovePercent,
-        int windowMinutes,
+        int minimumDurationMinutes,
+        BigDecimal retracementClosePercent,
+        int cooldownMinutes,
         int retentionDays
 ) {}

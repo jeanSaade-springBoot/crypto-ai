@@ -19,8 +19,21 @@ public class PriceMoveMonitorSettings {
     @Column(name = "minimum_move_percent", nullable = false, precision = 12, scale = 6)
     private BigDecimal minimumMovePercent;
 
+    /**
+     * Legacy column retained for Flyway/database compatibility with V47.
+     * The Market Move Tracker no longer uses a rolling monitoring window.
+     */
     @Column(name = "window_minutes", nullable = false)
     private int windowMinutes;
+
+    @Column(name = "minimum_duration_minutes", nullable = false)
+    private int minimumDurationMinutes;
+
+    @Column(name = "retracement_close_percent", nullable = false, precision = 12, scale = 6)
+    private BigDecimal retracementClosePercent;
+
+    @Column(name = "cooldown_minutes", nullable = false)
+    private int cooldownMinutes;
 
     @Column(name = "retention_days", nullable = false)
     private int retentionDays;

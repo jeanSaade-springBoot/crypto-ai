@@ -22,10 +22,10 @@
 
 .interval-checkbox-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:10px}.dashboard-interval-config{margin-top:20px}
 
-/* DEBUG-ONLY Price Move Monitor. Deliberately visually separated from trading configuration. */
+/* DEBUG-ONLY Market Move Tracker. Deliberately visually separated from trading configuration. */
 .debug-monitor-panel { margin-top: 24px; border: 1px dashed rgba(148,163,184,.45); }
 .debug-isolation-note { margin: 12px 0 18px; padding: 12px 14px; border-radius: 10px; background: rgba(148,163,184,.08); color: inherit; }
-.price-move-settings { display: grid; grid-template-columns: 1.35fr repeat(3,minmax(145px,1fr)) auto; gap: 12px; align-items: end; margin-bottom: 16px; }
+.price-move-settings { display: grid; grid-template-columns: 1.35fr repeat(5,minmax(130px,1fr)) auto; gap: 12px; align-items: end; margin-bottom: 16px; }
 .price-move-settings .toggle-row { align-self: center; margin-bottom: 8px; }
 .price-move-summary { display: flex; flex-wrap: wrap; gap: 18px; margin: 8px 0 14px; color: #cbd5e1; }
 .price-move-summary strong { color: inherit; }

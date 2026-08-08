@@ -88,7 +88,7 @@ document.getElementById('reload-streams').addEventListener('click', async event 
 loadCoins();
 
 // -----------------------------------------------------------------------------
-// DEBUG-ONLY Price Move Monitor
+// DEBUG-ONLY Market Move Tracker
 // This UI is intentionally isolated from every live trading decision path.
 // -----------------------------------------------------------------------------
 const priceMoveBody = document.getElementById('price-move-body');
@@ -121,7 +121,9 @@ async function loadPriceMoveSettings() {
     const settings = await api('/api/administration/debug/price-moves/settings');
     document.getElementById('price-move-enabled').checked = Boolean(settings.enabled);
     document.getElementById('price-move-threshold').value = Number(settings.minimumMovePercent ?? 0.30);
-    document.getElementById('price-move-window').value = Number(settings.windowMinutes ?? 30);
+    document.getElementById('price-move-min-duration').value = Number(settings.minimumDurationMinutes ?? 1);
+    document.getElementById('price-move-retracement').value = Number(settings.retracementClosePercent ?? 30);
+    document.getElementById('price-move-cooldown').value = Number(settings.cooldownMinutes ?? 10);
     document.getElementById('price-move-retention').value = Number(settings.retentionDays ?? 7);
 }
 
@@ -176,11 +178,13 @@ if (priceMoveSettingsForm) {
                 body: JSON.stringify({
                     enabled: document.getElementById('price-move-enabled').checked,
                     minimumMovePercent: Number(document.getElementById('price-move-threshold').value),
-                    windowMinutes: Number(document.getElementById('price-move-window').value),
+                    minimumDurationMinutes: Number(document.getElementById('price-move-min-duration').value),
+                    retracementClosePercent: Number(document.getElementById('price-move-retracement').value),
+                    cooldownMinutes: Number(document.getElementById('price-move-cooldown').value),
                     retentionDays: Number(document.getElementById('price-move-retention').value)
                 })
             });
-            showAdminMessage('Debug Price Move Monitor settings saved. Trading logic was not changed.');
+            showAdminMessage('Debug Market Move Tracker settings saved. Trading logic was not changed.');
             await loadPriceMoves();
         } catch (error) {
             showAdminMessage(error.message, true);
