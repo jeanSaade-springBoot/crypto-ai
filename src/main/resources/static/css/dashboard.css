@@ -1819,3 +1819,40 @@ body.sidebar-collapsed .app-shell{grid-template-columns:76px minmax(0,1fr)}
 @media(max-width:900px){.opportunity-row{grid-template-columns:1fr 1fr}.opportunity-context{grid-column:1/-1}.intelligence-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){
  body.sidebar-collapsed .app-shell,.app-shell{display:block}.sidebar{position:relative;height:auto;padding:12px 14px}.sidebar.collapsed .sidebar-label,.sidebar.collapsed .nav-text,.sidebar.collapsed .nav-group-label,.sidebar.collapsed .nav-badge{display:initial}.sidebar.collapsed .sidebar-nav a{justify-content:flex-start}.sidebar.collapsed .sidebar-toggle{position:static;width:30px;height:30px}.sidebar-nav{display:none!important}.sidebar.mobile-open .sidebar-nav{display:grid!important}.connection{display:none}.wallet-status-strip{grid-template-columns:repeat(2,minmax(0,1fr));border-radius:10px}.wallet-kpi{padding:8px}.command-center-grid{grid-template-columns:1fr}.execution-funnel{grid-template-columns:1fr}.execution-funnel>b{transform:rotate(90deg)}.pipeline-grid.pipeline-grid-compact{grid-template-columns:1fr}.opportunity-row{grid-template-columns:1fr}.opportunity-context{grid-column:auto}.content-grid.ai-analysis-grid{grid-template-columns:1fr}.topbar-main h1{font-size:24px}}
+
+/* v3.1: true desktop sidebar collapse — shrink rail and reclaim content width */
+@media (min-width: 761px) {
+    body.sidebar-collapsed .sidebar {
+        width: 76px !important;
+        min-width: 76px !important;
+        max-width: 76px !important;
+        padding-left: 13px !important;
+        padding-right: 13px !important;
+    }
+
+    body.sidebar-collapsed main {
+        margin-left: 76px !important;
+    }
+
+    body.sidebar-collapsed main > .topbar {
+        left: 76px !important;
+    }
+
+    body:not(.sidebar-collapsed) .sidebar {
+        width: 240px;
+    }
+
+    body:not(.sidebar-collapsed) main {
+        margin-left: 240px;
+    }
+
+    body:not(.sidebar-collapsed) main > .topbar {
+        left: 240px;
+    }
+
+    .sidebar,
+    main,
+    main > .topbar {
+        transition: width .22s ease, margin-left .22s ease, left .22s ease, padding .22s ease;
+    }
+}
