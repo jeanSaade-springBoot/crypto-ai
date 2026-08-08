@@ -16,6 +16,9 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
 
     java.util.Optional<WalletTrade> findTopBySymbolAndStatusOrderByExecutedAtDesc(String symbol, String status);
 
+    java.util.Optional<WalletTrade> findTopBySignalIdAndSideAndStatusOrderByExecutedAtDesc(
+            Long signalId, String side, String status);
+
     @Query("select coalesce(sum(t.realizedPnlUsdt), 0) from WalletTrade t where t.status='EXECUTED'")
     BigDecimal totalRealizedPnl();
 

@@ -628,7 +628,22 @@ public class DashboardApiController {
         result.put("symbol", position.getSymbol());
         result.put("side", position.getSide());
         result.put("status", position.getStatus().name());
-        result.put("quantity", position.getQuantity());
+        BigDecimal displayQuantity = position.getQuantity();
+        if (open) {
+            WalletManagedPosition liveManaged = walletManagedPositionRepository
+                    .findTopBySymbolAndStatusOrderByOpenedAtDesc(position.getSymbol(), "OPEN")
+                    .orElse(null);
+            if (liveManaged != null && liveManaged.getQuantity() != null && liveManaged.getQuantity().signum() > 0) {
+                displayQuantity = liveManaged.getQuantity();
+            }
+        } else if (exitSignal != null && exitSignal.getId() != null) {
+            displayQuantity = walletTradeRepository
+                    .findTopBySignalIdAndSideAndStatusOrderByExecutedAtDesc(exitSignal.getId(), "SELL", "EXECUTED")
+                    .map(WalletTrade::getQuantity)
+                    .filter(q -> q != null && q.signum() > 0)
+                    .orElse(displayQuantity);
+        }
+        result.put("quantity", displayQuantity);
         result.put("entryPrice", position.getEntryPrice());
         result.put("currentPrice", displayPrice);
         result.put("stopLoss", position.getStopLoss());

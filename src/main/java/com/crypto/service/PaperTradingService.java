@@ -7,6 +7,7 @@ import com.crypto.repository.TradeSignalRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import com.crypto.wallet.service.WalletAutoExecutionService;
+import com.crypto.wallet.repository.WalletTradeRepository;
 import com.crypto.execution.service.ExecutionIntelligenceService;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,6 +34,7 @@ public class PaperTradingService {
     private final TradeSignalRepository signalRepository;
     private final PaperPositionRepository positionRepository;
     private final WalletAutoExecutionService walletAutoExecutionService;
+    private final WalletTradeRepository walletTradeRepository;
     private final TradeExecutionValidationService executionValidationService;
     private final ExecutionIntelligenceService executionIntelligenceService;
     private final DynamicProfitLockService dynamicProfitLockService;
@@ -156,7 +158,7 @@ public class PaperTradingService {
             throw new IllegalStateException("Invalid stop-loss distance");
         }
 
-        BigDecimal quantity = riskAmount.divide(riskPerUnit, MC);
+        BigDecimal riskModelQuantity = riskAmount.divide(riskPerUnit, MC);
 
         final boolean walletExecuted;
         try {
@@ -171,12 +173,18 @@ public class PaperTradingService {
             return Optional.empty();
         }
 
+        BigDecimal executedQuantity = walletTradeRepository
+                .findTopBySignalIdAndSideAndStatusOrderByExecutedAtDesc(signal.getId(), "BUY", "EXECUTED")
+                .map(com.crypto.wallet.domain.WalletTrade::getQuantity)
+                .filter(q -> q != null && q.signum() > 0)
+                .orElse(riskModelQuantity);
+
         executionIntelligenceService.markExecuted(signal, executionDecision);
         PaperPosition position = positionRepository.save(PaperPosition.builder()
                 .symbol(symbol)
                 .side(PositionSide.BUY)
                 .status(PositionStatus.OPEN)
-                .quantity(quantity)
+                .quantity(executedQuantity)
                 .entryPrice(signal.getLatestPrice())
                 .stopLoss(signal.getStopLoss())
                 .takeProfit(signal.getTakeProfit())
