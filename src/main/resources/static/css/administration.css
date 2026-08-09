@@ -122,3 +122,6 @@
     .regression-test-form { grid-template-columns: 1fr; }
     .regression-result-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+.regression-test-form select,
+.regression-test-form input { min-width: 0; }
+.regression-derived-input { opacity: .78; cursor: default; }

@@ -176,11 +176,16 @@
 
             <form id="regression-test-form" class="regression-test-form">
                 <label>Test name<input id="regression-test-name" type="text" value="BNB Rally 09-Aug" maxlength="150" required></label>
-                <label>Symbol<input id="regression-symbol" type="text" value="BNBUSDT" maxlength="30" required></label>
+                <label>Symbol
+                    <select id="regression-symbol" required>
+                        <option value="">Loading configured coins…</option>
+                    </select>
+                </label>
                 <label>From (UTC)<input id="regression-start" type="datetime-local" value="2026-08-09T07:00" required></label>
                 <label>To (UTC)<input id="regression-end" type="datetime-local" value="2026-08-09T16:00" required></label>
-                <button id="regression-run" type="submit">Run Regression Test</button>
+                <button id="regression-run" type="submit">Run Full Production Replay</button>
             </form>
+            <p id="regression-window-note" class="form-note">Select the exact historical From/To window. The replay simulates production decisions and trades without touching the real wallet.</p>
 
             <div id="regression-active" class="regression-active hidden">
                 <div class="regression-progress-heading">
@@ -198,6 +203,8 @@
                     <article><span>1h event path</span><strong id="regression-1h">—</strong><small id="regression-1h-historical">—</small></article>
                     <article><span>Fresh BUY signals</span><strong id="regression-generated-buys">—</strong><small id="regression-generated-total">Generated from historical candles</small></article>
                     <article><span>Generation errors</span><strong id="regression-generation-errors">—</strong><small>Must be 0 for PASS</small></article>
+                    <article><span>Shadow trades</span><strong id="regression-shadow-trades">—</strong><small>Simulated BUY→SELL cycles</small></article>
+                    <article><span>Shadow P/L</span><strong id="regression-shadow-pnl">—</strong><small id="regression-shadow-wallet">Final wallet —</small></article>
                     <article><span>Decision corrections</span><strong id="regression-corrections">—</strong><small>Original bearish → final non-bearish</small></article>
                     <article><span>Old hard reversals</span><strong id="regression-old-reversals">—</strong><small>Pre-fix interpretation</small></article>
                     <article><span>Corrected hard reversals</span><strong id="regression-new-reversals">—</strong><small>Final decision authority</small></article>
@@ -213,6 +220,14 @@
                 </table>
             </div>
 
+            <div id="regression-trades" class="regression-detail hidden">
+                <h3>Shadow trades · exact BUY / SELL points</h3>
+                <div class="table-wrap"><table>
+                    <thead><tr><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th></tr></thead>
+                    <tbody id="regression-trades-body"><tr><td colspan="8">Run a full replay to see simulated trades.</td></tr></tbody>
+                </table></div>
+            </div>
+
             <div id="regression-detail" class="regression-detail hidden">
                 <div class="section-heading"><div><p class="eyebrow">FRESH SIGNAL REPLAY</p><h3>Generated signals &amp; hard-reversal comparison</h3></div></div>
                 <div class="table-wrap">
@@ -223,7 +238,7 @@
                 </div>
                 <div class="table-wrap regression-opportunity-wrap">
                     <table>
-                        <thead><tr><th>Time</th><th>Original</th><th>Final</th><th>5m</th><th>1h</th><th>Old hard reversal</th><th>Corrected hard reversal</th><th>Result</th></tr></thead>
+                        <thead><tr><th>Time</th><th>Stage</th><th>Final</th><th>5m</th><th>1h</th><th>Evidence</th><th>Health</th><th>Position %</th><th>Result</th></tr></thead>
                         <tbody id="regression-opportunities-body"></tbody>
                     </table>
                 </div>

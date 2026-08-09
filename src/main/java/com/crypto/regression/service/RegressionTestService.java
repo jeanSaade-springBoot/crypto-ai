@@ -3,6 +3,8 @@ package com.crypto.regression.service;
 import com.crypto.regression.dto.RegressionTestRunRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 
@@ -24,11 +26,29 @@ public class RegressionTestService {
     private final JdbcTemplate jdbcTemplate;
     private final RegressionTestWorker worker;
 
-    public long start(RegressionTestRunRequest request) {
+    public synchronized long start(RegressionTestRunRequest request) {
         if (request == null || request.symbol() == null || request.symbol().isBlank()
                 || request.startTime() == null || request.endTime() == null
                 || !request.endTime().isAfter(request.startTime())) {
             throw new IllegalArgumentException("Symbol, start time and end time are required, and end must be after start.");
+        }
+
+        Integer activeRuns = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM analysis_test_run
+                WHERE status IN ('PENDING', 'RUNNING')
+                """, Integer.class);
+        if (activeRuns != null && activeRuns > 0) {
+            Map<String, Object> active = jdbcTemplate.queryForMap("""
+                    SELECT id, test_name, symbol, status, progress_percent, started_at, created_at
+                    FROM analysis_test_run
+                    WHERE status IN ('PENDING', 'RUNNING')
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """);
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Regression test #" + active.get("id") + " is already " + active.get("status")
+                            + " for " + active.get("symbol") + ". Wait for it to finish before starting another run.");
         }
 
         String symbol = request.symbol().trim().toUpperCase(Locale.ROOT);
@@ -75,7 +95,9 @@ public class RegressionTestService {
                 SELECT candles_1m, signals_1m_historical, replayable_1m_events, generated_signals_1m, generated_buys_1m,
                        candles_5m, signals_5m_historical, replayable_5m_events, generated_signals_5m, generated_buys_5m,
                        candles_1h, signals_1h_historical, replayable_1h_events, generated_signals_1h, generated_buys_1h,
-                       generated_signal_errors, decision_authority_corrections, old_hard_bearish_reversals,
+                       generated_signal_errors, simulated_trades, simulated_wins, simulated_losses,
+                       simulated_realized_pnl, simulated_final_wallet,
+                       decision_authority_corrections, old_hard_bearish_reversals,
                        corrected_hard_bearish_reversals, cadence_path_passed,
                        decision_authority_passed, test_passed, notes
                 FROM analysis_test_result
@@ -110,16 +132,27 @@ public class RegressionTestService {
     }
 
     @Transactional(readOnly = true)
-    public List<Map<String, Object>> opportunities(long runId) {
+    public List<Map<String, Object>> trades(long runId) {
         return jdbcTemplate.queryForList("""
-                SELECT generated_at, current_original_decision, current_final_decision,
-                       five_minute_decision, one_hour_decision,
-                       old_hard_bearish_reversal, corrected_hard_bearish_reversal,
-                       decision_code, decision_explanation
-                FROM execution_opportunity_test
+                SELECT entry_time, entry_price, exit_time, exit_price, exit_reason,
+                       realized_pnl_usdt, realized_pnl_percent, position_percent, status
+                FROM wallet_position_test
                 WHERE test_run_id = ?
-                ORDER BY generated_at ASC
-                LIMIT 1500
+                ORDER BY entry_time ASC
+                LIMIT 500
                 """, runId);
     }
-}
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> opportunities(long runId) {
+        return jdbcTemplate.queryForList("""
+                SELECT generated_at, replay_stage, current_original_decision, current_final_decision,
+                       five_minute_decision, one_hour_decision, evidence_count, buy_count, watch_count,
+                       neutral_count, bearish_count, evidence_score, opportunity_health,
+                       recommended_position_percent, decision_code, decision_explanation
+                FROM execution_opportunity_test
+                WHERE test_run_id = ? AND replay_stage IS NOT NULL
+                ORDER BY generated_at ASC
+                LIMIT 3000
+                """, runId);
+    }}

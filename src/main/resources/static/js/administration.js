@@ -239,6 +239,60 @@ function regressionBool(value) {
     return value === true || value === 1 || value === '1';
 }
 
+function regressionUtcLocalValue(date) {
+    const pad = value => String(value).padStart(2, '0');
+    return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+}
+
+async function loadRegressionSymbols() {
+    const select = document.getElementById('regression-symbol');
+    if (!select) return;
+    const previous = select.value || 'BNBUSDT';
+    try {
+        const coins = await api('/api/administration/coins');
+        select.innerHTML = coins.map(coin => `
+            <option value="${escapeHtml(coin.symbol)}"${coin.symbol === previous ? ' selected' : ''}>
+                ${escapeHtml(coin.symbol)}${coin.enabled ? '' : ' · disabled'}
+            </option>`).join('') || '<option value="">No configured coins</option>';
+        if (![...select.options].some(option => option.selected) && select.options.length) select.selectedIndex = 0;
+    } catch (error) {
+        select.innerHTML = '<option value="BNBUSDT">BNBUSDT</option>';
+        showAdminMessage(`Could not load regression symbols: ${error.message}`, true);
+    }
+}
+
+function applyRegressionPeriod() {
+    const period = document.getElementById('regression-period');
+    const start = document.getElementById('regression-start');
+    const end = document.getElementById('regression-end');
+    const note = document.getElementById('regression-window-note');
+    if (!period || !start || !end) return;
+
+    const custom = period.value === 'custom';
+    start.readOnly = !custom;
+    start.classList.toggle('regression-derived-input', !custom);
+
+    if (!custom) {
+        const hours = Number(period.value);
+        let endDate = end.value ? new Date(`${end.value}:00Z`) : new Date();
+        if (Number.isNaN(endDate.getTime())) endDate = new Date();
+        const startDate = new Date(endDate.getTime() - hours * 60 * 60 * 1000);
+        start.value = regressionUtcLocalValue(startDate);
+        if (note) note.textContent = `${hours} hour${hours === 1 ? '' : 's'} ending at the selected To time · From is calculated automatically.`;
+    } else if (note) {
+        note.textContent = 'Custom historical range · choose any configured symbol and UTC start/end time.';
+    }
+}
+
+function setRegressionRunButtonRunning(running, run = null) {
+    const button = document.getElementById('regression-run');
+    if (!button) return;
+    button.disabled = running;
+    button.textContent = running
+        ? `Test ${run?.id ? `#${run.id} ` : ''}Running…`
+        : 'Run Regression Test';
+}
+
 function regressionStatusClass(status) {
     const s = String(status || '').toLowerCase();
     if (s === 'passed') return 'reviewed';
@@ -262,6 +316,9 @@ async function loadRegressionRuns() {
                 <td><button type="button" class="secondary-button" data-regression-run-id="${run.id}">View</button></td>
             </tr>
         `).join('') || '<tr><td colspan="7">No regression tests have been run yet.</td></tr>';
+        const active = runs.find(run => ['PENDING', 'RUNNING'].includes(String(run.status)));
+        setRegressionRunButtonRunning(Boolean(active), active);
+        return runs;
     } catch (error) {
         body.innerHTML = `<tr><td colspan="7">${escapeHtml(error.message)}</td></tr>`;
     }
@@ -297,6 +354,9 @@ async function loadRegressionDetail(runId, includeTables = true) {
         document.getElementById('regression-generated-buys').textContent = generatedBuys;
         document.getElementById('regression-generated-total').textContent = `Fresh signals: ${generatedTotal}`;
         document.getElementById('regression-generation-errors').textContent = r.generated_signal_errors || 0;
+        document.getElementById('regression-shadow-trades').textContent = r.simulated_trades || 0;
+        document.getElementById('regression-shadow-pnl').textContent = `${Number(r.simulated_realized_pnl || 0).toFixed(4)} USDT`;
+        document.getElementById('regression-shadow-wallet').textContent = `Final wallet ${Number(r.simulated_final_wallet || 0).toFixed(2)} USDT`;
         document.getElementById('regression-corrections').textContent = r.decision_authority_corrections;
         document.getElementById('regression-old-reversals').textContent = r.old_hard_bearish_reversals;
         document.getElementById('regression-new-reversals').textContent = r.corrected_hard_bearish_reversals;
@@ -306,9 +366,10 @@ async function loadRegressionDetail(runId, includeTables = true) {
     }
 
     if (finished && includeTables) {
-        const [signals, opportunities] = await Promise.all([
+        const [signals, opportunities, trades] = await Promise.all([
             api(`/api/administration/regression-tests/runs/${runId}/signals`),
-            api(`/api/administration/regression-tests/runs/${runId}/opportunities`)
+            api(`/api/administration/regression-tests/runs/${runId}/opportunities`),
+            api(`/api/administration/regression-tests/runs/${runId}/trades`)
         ]);
         const detail = document.getElementById('regression-detail');
         detail.classList.remove('hidden');
@@ -329,23 +390,32 @@ async function loadRegressionDetail(runId, includeTables = true) {
                 </tr>`;
         }).join('') || '<tr><td colspan="8">No generated signals in this test window.</td></tr>';
 
-        document.getElementById('regression-opportunities-body').innerHTML = opportunities
-            .filter(row => regressionBool(row.old_hard_bearish_reversal) || regressionBool(row.corrected_hard_bearish_reversal))
-            .map(row => {
-                const oldHard = regressionBool(row.old_hard_bearish_reversal);
-                const newHard = regressionBool(row.corrected_hard_bearish_reversal);
-                return `
-                    <tr${oldHard && !newHard ? ' class="regression-corrected"' : ''}>
+        document.getElementById('regression-opportunities-body').innerHTML = opportunities.map(row => `
+                    <tr${String(row.replay_stage) === 'CONFIRMED' ? ' class="regression-corrected"' : ''}>
                         <td>${formatMoveTime(row.generated_at)}</td>
-                        <td>${escapeHtml(row.current_original_decision || '—')}</td>
+                        <td>${escapeHtml(row.replay_stage || '—')}</td>
                         <td>${escapeHtml(row.current_final_decision || '—')}</td>
                         <td>${escapeHtml(row.five_minute_decision || '—')}</td>
                         <td>${escapeHtml(row.one_hour_decision || '—')}</td>
-                        <td>${oldHard ? 'YES' : 'NO'}</td>
-                        <td>${newHard ? 'YES' : 'NO'}</td>
+                        <td>${row.evidence_score ?? 0} (${row.buy_count ?? 0}B/${row.watch_count ?? 0}W)</td>
+                        <td>${row.opportunity_health ?? 0}/100</td>
+                        <td>${row.recommended_position_percent ?? 0}%</td>
                         <td>${escapeHtml(row.decision_code || '—')}</td>
-                    </tr>`;
-            }).join('') || '<tr><td colspan="8">No hard bearish reversal rows in this window.</td></tr>';
+                    </tr>`).join('') || '<tr><td colspan="9">No 1m execution-opportunity evaluations in this window.</td></tr>';
+
+        const tradePanel = document.getElementById('regression-trades');
+        tradePanel.classList.remove('hidden');
+        document.getElementById('regression-trades-body').innerHTML = trades.map((trade, index) => `
+            <tr>
+                <td>${index + 1}</td>
+                <td>${formatMoveTime(trade.entry_time)}</td>
+                <td>${formatMovePrice(trade.entry_price)}</td>
+                <td>${trade.exit_time ? formatMoveTime(trade.exit_time) : 'OPEN'}</td>
+                <td>${trade.exit_price ? formatMovePrice(trade.exit_price) : '—'}</td>
+                <td>${escapeHtml(trade.exit_reason || 'OPEN')}</td>
+                <td>${trade.realized_pnl_usdt == null ? '—' : Number(trade.realized_pnl_usdt).toFixed(4)}</td>
+                <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>
+            </tr>`).join('') || '<tr><td colspan="8">NO BUY EXECUTED in this replay window.</td></tr>';
     }
 
     return finished;
@@ -361,12 +431,12 @@ function pollRegressionRun(runId) {
                 window.clearInterval(regressionPollTimer);
                 regressionPollTimer = null;
                 await loadRegressionDetail(runId, true);
-                document.getElementById('regression-run').disabled = false;
+                setRegressionRunButtonRunning(false);
             }
         } catch (error) {
             window.clearInterval(regressionPollTimer);
             regressionPollTimer = null;
-            document.getElementById('regression-run').disabled = false;
+            setRegressionRunButtonRunning(false);
             showAdminMessage(error.message, true);
         }
     }, 1200);
@@ -377,7 +447,7 @@ if (regressionForm) {
     regressionForm.addEventListener('submit', async event => {
         event.preventDefault();
         const button = document.getElementById('regression-run');
-        button.disabled = true;
+        setRegressionRunButtonRunning(true);
         document.getElementById('regression-detail').classList.add('hidden');
         document.getElementById('regression-result').classList.add('hidden');
         try {
@@ -396,7 +466,7 @@ if (regressionForm) {
             await loadRegressionRuns();
             pollRegressionRun(created.id);
         } catch (error) {
-            button.disabled = false;
+            setRegressionRunButtonRunning(false);
             showAdminMessage(error.message, true);
         }
     });
@@ -417,5 +487,21 @@ if (regressionRunsBody) {
 }
 
 const regressionRefresh = document.getElementById('regression-refresh');
-if (regressionRefresh) regressionRefresh.addEventListener('click', loadRegressionRuns);
-loadRegressionRuns();
+if (regressionRefresh) regressionRefresh.addEventListener('click', async () => {
+    const runs = await loadRegressionRuns();
+    const active = runs?.find(run => ['PENDING', 'RUNNING'].includes(String(run.status)));
+    if (active) {
+        await loadRegressionDetail(active.id, false);
+        pollRegressionRun(active.id);
+    }
+});
+
+(async function initializeRegressionUi() {
+    await loadRegressionSymbols();
+    const runs = await loadRegressionRuns();
+    const active = runs?.find(run => ['PENDING', 'RUNNING'].includes(String(run.status)));
+    if (active) {
+        await loadRegressionDetail(active.id, false);
+        pollRegressionRun(active.id);
+    }
+})().catch(error => showAdminMessage(error.message, true));

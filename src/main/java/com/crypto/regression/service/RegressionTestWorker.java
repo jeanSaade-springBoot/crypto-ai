@@ -32,6 +32,7 @@ public class RegressionTestWorker {
     private final TradeSignalRepository signalRepository;
     private final TechnicalIndicatorService technicalIndicatorService;
     private final AnalysisService analysisService;
+    private final ShadowProductionReplayService shadowReplayService;
 
     @Async
     public void runAsync(long runId) {
@@ -68,7 +69,10 @@ public class RegressionTestWorker {
                     WHERE id=?
                     """, fresh.total(), fresh.buys(), fresh.watches(), fresh.sells(), fresh.strongSells(), runId);
 
-            updateRun(runId, "RUNNING", 75, "Comparing historical decision authority", null);
+            updateRun(runId, "RUNNING", 74, "Running full shadow-production execution flow", null);
+            ShadowProductionReplayService.ReplayStats shadow = shadowReplayService.replay(runId, symbol, fresh.generatedSignals());
+
+            updateRun(runId, "RUNNING", 82, "Comparing historical decision authority", null);
             int authorityCorrections = 0;
             int replaySignals = 0;
             int oldHardReversals = 0;
@@ -149,7 +153,7 @@ public class RegressionTestWorker {
                     WHERE id=?
                     """, replaySignals, authorityCorrections, oldHardReversals, correctedHardReversals, runId);
 
-            updateRun(runId, "RUNNING", 92, "Calculating regression result", null);
+            updateRun(runId, "RUNNING", 94, "Calculating regression result", null);
 
             int historical1m = countSignals(sourceSignals, "1m");
             int historical5m = countSignals(sourceSignals, "5m");
@@ -169,8 +173,7 @@ public class RegressionTestWorker {
                     + "Historical signal counts are retained only as the pre-fix reference. "
                     + "Replayable event counts validate that each historical candle can now be resolved as-of its own close. "
                     + "The decision replay validates that originalDecision is audit-only and cannot override a non-null final decision. "
-                    + "Regression AnalysisService returns unsaved TradeSignal objects; wallet, live execution, trade_signal "
-                    + "and production execution_opportunity writes are never performed by this test.";
+                    + "Regression AnalysisService returns unsaved TradeSignal objects. Fresh signals then pass through an isolated shadow execution/position lifecycle that records exact simulated BUY/SELL points. Real wallet, trade_signal and production execution_opportunity tables are never written.";
 
             jdbcTemplate.update("""
                     INSERT INTO analysis_test_result
@@ -178,15 +181,18 @@ public class RegressionTestWorker {
                          candles_1m, signals_1m_historical, replayable_1m_events, generated_signals_1m, generated_buys_1m,
                          candles_5m, signals_5m_historical, replayable_5m_events, generated_signals_5m, generated_buys_5m,
                          candles_1h, signals_1h_historical, replayable_1h_events, generated_signals_1h, generated_buys_1h,
-                         generated_signal_errors, decision_authority_corrections, old_hard_bearish_reversals,
+                         generated_signal_errors, simulated_trades, simulated_wins, simulated_losses,
+                         simulated_realized_pnl, simulated_final_wallet,
+                         decision_authority_corrections, old_hard_bearish_reversals,
                          corrected_hard_bearish_reversals, cadence_path_passed, decision_authority_passed, test_passed, notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     runId,
                     oneMinuteCandles.size(), historical1m, replay1m, fresh.oneMinuteSignals(), fresh.oneMinuteBuys(),
                     fiveMinuteCandles.size(), historical5m, replay5m, fresh.fiveMinuteSignals(), fresh.fiveMinuteBuys(),
                     oneHourCandles.size(), historical1h, replay1h, fresh.oneHourSignals(), fresh.oneHourBuys(),
-                    fresh.errors(), authorityCorrections, oldHardReversals, correctedHardReversals,
+                    fresh.errors(), shadow.trades(), shadow.wins(), shadow.losses(), shadow.realizedPnl(), shadow.finalWallet(),
+                    authorityCorrections, oldHardReversals, correctedHardReversals,
                     cadencePass, authorityPass, passed, notes
             );
 
@@ -246,6 +252,7 @@ public class RegressionTestWorker {
         int oneMinuteSignals = 0, fiveMinuteSignals = 0, oneHourSignals = 0;
         int oneMinuteBuys = 0, fiveMinuteBuys = 0, oneHourBuys = 0;
         int buys = 0, watches = 0, sells = 0, strongSells = 0, errors = 0;
+        java.util.List<TradeSignal> generatedSignals = new java.util.ArrayList<>();
 
         for (int index = 0; index < timeline.size(); index++) {
             ReplayCandle replay = timeline.get(index);
@@ -263,6 +270,7 @@ public class RegressionTestWorker {
                 Instant evaluationTime = candle.getOpenTime().plusSeconds(intervalSeconds(replay.interval()));
                 TradeSignal generated = analysisService.analyzeForRegression(snapshot.get(), evaluationTime);
                 SignalDecision decision = generated.getDecision();
+                generatedSignals.add(generated);
 
                 if ("1m".equals(replay.interval())) { oneMinuteSignals++; if (isBuy(decision)) oneMinuteBuys++; }
                 else if ("5m".equals(replay.interval())) { fiveMinuteSignals++; if (isBuy(decision)) fiveMinuteBuys++; }
@@ -303,7 +311,7 @@ public class RegressionTestWorker {
         }
 
         return new FreshReplayStats(oneMinuteSignals, oneMinuteBuys, fiveMinuteSignals, fiveMinuteBuys,
-                oneHourSignals, oneHourBuys, buys, watches, sells, strongSells, errors);
+                oneHourSignals, oneHourBuys, buys, watches, sells, strongSells, errors, generatedSignals);
     }
 
     private void saveGenerationError(long runId, String symbol, String interval, Candle candle, String error) {
@@ -344,7 +352,8 @@ public class RegressionTestWorker {
             int oneMinuteSignals, int oneMinuteBuys,
             int fiveMinuteSignals, int fiveMinuteBuys,
             int oneHourSignals, int oneHourBuys,
-            int buys, int watches, int sells, int strongSells, int errors
+            int buys, int watches, int sells, int strongSells, int errors,
+            java.util.List<TradeSignal> generatedSignals
     ) {
         int total() { return oneMinuteSignals + fiveMinuteSignals + oneHourSignals; }
     }
