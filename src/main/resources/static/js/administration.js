@@ -157,6 +157,8 @@ async function loadPriceMoves() {
                     <td><span class="status-pill ${String(move.importanceLevel || 'MEDIUM').toLowerCase()}">${escapeHtml(move.importanceLevel || 'MEDIUM')}</span></td>
                     <td><span class="status-pill ${status}">${escapeHtml(move.reviewStatus)}</span></td>
                     <td class="price-move-actions">
+                        <a class="secondary-button price-move-chart-link"
+                           href="/dashboard?symbol=${encodeURIComponent(move.symbol)}&interval=5m&focusStart=${encodeURIComponent(move.startTime)}&focusEnd=${encodeURIComponent(move.endTime)}&focusDirection=${encodeURIComponent(move.direction || '')}&focusChange=${encodeURIComponent(move.changePercent ?? '')}#market">View 5m Chart</a>
                         <button type="button" class="secondary-button" data-move-id="${move.id}" data-review-status="REVIEWED">Reviewed</button>
                         <button type="button" class="secondary-button" data-move-id="${move.id}" data-review-status="IGNORED">Ignore</button>
                     </td>

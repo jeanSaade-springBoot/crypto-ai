@@ -37,6 +37,34 @@ const openSignalAnalysisIds = new Set();
 let pinnedSignalId = localStorage.getItem('cryptoPinnedSignalId');
 let aiPerformancePeriod = localStorage.getItem('cryptoAiPerformancePeriod') || 'ALL_TIME';
 
+// Debug-only deep link from Administration > Market Move Tracker.
+// This only controls dashboard navigation/chart rendering and never feeds back into trading logic.
+const dashboardUrlParams = new URLSearchParams(window.location.search);
+const requestedDashboardSymbol = String(dashboardUrlParams.get('symbol') || '').trim().toUpperCase();
+const requestedDashboardInterval = String(dashboardUrlParams.get('interval') || '').trim().toLowerCase();
+const debugFocusStart = dashboardUrlParams.get('focusStart');
+const debugFocusEnd = dashboardUrlParams.get('focusEnd');
+const debugFocusDirection = String(dashboardUrlParams.get('focusDirection') || '').trim().toUpperCase();
+const debugFocusChange = dashboardUrlParams.get('focusChange');
+const debugMoveFocus = (() => {
+    if (!debugFocusStart || !debugFocusEnd) return null;
+    const start = new Date(debugFocusStart);
+    const end = new Date(debugFocusEnd);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return null;
+    return { start, end, direction: debugFocusDirection, change: debugFocusChange };
+})();
+
+function applyDashboardDeepLinkSelection() {
+    const symbolSelect = el('symbol-select');
+    const intervalSelect = el('interval-select');
+    if (requestedDashboardSymbol && [...symbolSelect.options].some(option => option.value === requestedDashboardSymbol)) {
+        symbolSelect.value = requestedDashboardSymbol;
+    }
+    if (requestedDashboardInterval && [...intervalSelect.options].some(option => option.value === requestedDashboardInterval)) {
+        intervalSelect.value = requestedDashboardInterval;
+    }
+}
+
 async function loadSymbols() {
     try {
         const response = await fetch('/api/dashboard/symbols');
@@ -76,7 +104,12 @@ async function refreshDashboard() {
     const interval = el('interval-select').value;
     el('refresh-button').disabled = true;
     try {
-        const response = await fetch(`/api/dashboard/overview?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`);
+        const overviewParams = new URLSearchParams({symbol, interval});
+        if (debugMoveFocus && interval === '5m') {
+            overviewParams.set('focusStart', debugMoveFocus.start.toISOString());
+            overviewParams.set('focusEnd', debugMoveFocus.end.toISOString());
+        }
+        const response = await fetch(`/api/dashboard/overview?${overviewParams.toString()}`);
         if (!response.ok) throw new Error(`Dashboard API returned ${response.status}`);
 
         const data = await response.json();
@@ -162,7 +195,7 @@ function render(data) {
     const s = data.summary;
     el('last-updated').textContent = `Updated ${preciseDateTime(data.updatedAt)}`;
     renderHeaderLivePrice(data);
-    el('market-subtitle').textContent = `${data.symbol} · ${displayInterval(data.interval)}${data.displayOnlyInterval ? ' · display only' : ''}`;
+    el('market-subtitle').textContent = `${data.symbol} · ${displayInterval(data.interval)}${data.displayOnlyInterval ? ' · display only' : ''}${debugMoveFocus && data.interval === '5m' ? ' · DEBUG MOVE ZONE' : ''}`;
     renderWalletHeader(data.wallet || {});
     renderPipeline(data.pipeline);
     renderScoreDiagnostics(data.scoreDiagnostics || {});
@@ -687,15 +720,26 @@ function renderCharts(candles, executions = []) {
             }
         };
     });
+    const debugZoneAnnotations = debugMoveFocus ? [{
+        x: debugMoveFocus.start.getTime(),
+        x2: debugMoveFocus.end.getTime(),
+        borderColor: debugMoveFocus.direction === 'DOWN' ? '#ff6b72' : '#39d98a',
+        fillColor: debugMoveFocus.direction === 'DOWN' ? '#ff6b72' : '#39d98a',
+        opacity: 0.12,
+        label: {
+            text: `Debug ${debugMoveFocus.direction || 'MOVE'}${debugMoveFocus.change ? ` ${Number(debugMoveFocus.change) >= 0 ? '+' : ''}${Number(debugMoveFocus.change).toFixed(2)}%` : ''}`,
+            style: { background: '#132430', color: '#dce9f2', fontSize: '11px', fontWeight: 700 }
+        }
+    }] : [];
     const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime' }, noData: { text: 'Waiting for closed candles' } };
     if (!candleChart) {
-        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390 }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations }, yaxis: { tooltip: { enabled: true }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
+        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390 }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations }, yaxis: { tooltip: { enabled: true }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
         candleChart.render().then(bindExecutionMarkerClicks);
         volumeChart = new ApexCharts(el('volume-chart'), { ...common, chart: { ...common.chart, type: 'bar', height: 150 }, series: [{ name: 'Volume', data: volumeSeries }], dataLabels: { enabled: false }, yaxis: { labels: { formatter: v => Number(v).toLocaleString(undefined, { notation: 'compact' }) } } });
         volumeChart.render();
     } else {
         candleChart.updateSeries([{ name: 'Price', data: candleSeries }], false);
-        candleChart.updateOptions({ annotations: { points: annotations } }, false, true, false).then(bindExecutionMarkerClicks);
+        candleChart.updateOptions({ annotations: { points: annotations, xaxis: debugZoneAnnotations } }, false, true, false).then(bindExecutionMarkerClicks);
         volumeChart.updateSeries([{ name: 'Volume', data: volumeSeries }], false);
     }
 }
@@ -1782,7 +1826,17 @@ el('symbol-select').addEventListener('change', refreshDashboard);
 el('interval-select').addEventListener('change', refreshDashboard);
 setupCollapsibleSections();
 setupSidebar();
-(async () => { await loadSymbols(); await refreshDashboard(); })();
+(async () => {
+    await loadSymbols();
+    applyDashboardDeepLinkSelection();
+    await refreshDashboard();
+    if (debugMoveFocus) {
+        window.requestAnimationFrame(() => {
+            const marketSection = el('market');
+            if (marketSection) marketSection.scrollIntoView({behavior: 'smooth', block: 'start'});
+        });
+    }
+})();
 
 
 async function openTradeReplay(positionId) {

@@ -92,7 +92,9 @@ public class DashboardApiController {
     @Transactional(readOnly = true)
     public Map<String, Object> overview(
             @RequestParam(defaultValue = "BTCUSDT") String symbol,
-            @RequestParam(defaultValue = "1m") String interval
+            @RequestParam(defaultValue = "1m") String interval,
+            @RequestParam(required = false) Instant focusStart,
+            @RequestParam(required = false) Instant focusEnd
     ) {
         String normalizedSymbol = symbol.trim().toUpperCase();
         String normalizedInterval = interval.trim().toLowerCase();
@@ -100,7 +102,7 @@ public class DashboardApiController {
 
         List<Candle> candles = displayOnlyInterval
                 ? loadAggregatedCandles(normalizedSymbol, normalizedInterval, 120)
-                : loadClosedCandles(normalizedSymbol, normalizedInterval, 120);
+                : loadDashboardCandles(normalizedSymbol, normalizedInterval, focusStart, focusEnd);
 
         TechnicalIndicator latestIndicator = displayOnlyInterval ? null : technicalIndicatorRepository
                 .findTopBySymbolAndIntervalCodeOrderByCandleOpenTimeDesc(normalizedSymbol, normalizedInterval)
@@ -244,6 +246,30 @@ public class DashboardApiController {
         List<Candle> candles = candleRepository.findClosedCandles(symbol, interval, PageRequest.of(0, limit));
         Collections.reverse(candles);
         return candles;
+    }
+
+    /**
+     * Debug chart navigation may request a historical move window. This is read-only
+     * presentation logic and is intentionally isolated from analysis/execution.
+     */
+    private List<Candle> loadDashboardCandles(
+            String symbol,
+            String interval,
+            Instant focusStart,
+            Instant focusEnd
+    ) {
+        if (!"5m".equals(interval) || focusStart == null || focusEnd == null || !focusEnd.isAfter(focusStart)) {
+            return loadClosedCandles(symbol, interval, 120);
+        }
+
+        Instant from = focusStart.minus(Duration.ofMinutes(30));
+        Instant to = focusEnd.plus(Duration.ofMinutes(30));
+        return candleRepository
+                .findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(symbol, interval, from, to)
+                .stream()
+                .filter(Candle::isClosed)
+                .limit(500)
+                .toList();
     }
 
     private List<Candle> loadAggregatedCandles(String symbol, String interval, int targetBuckets) {

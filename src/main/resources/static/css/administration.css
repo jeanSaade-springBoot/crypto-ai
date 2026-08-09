@@ -53,3 +53,8 @@
     color: #f87171;
     background: rgba(239, 68, 68, 0.12);
 }
+
+
+/* Debug Market Move Tracker chart navigation */
+.price-move-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
+.price-move-chart-link { text-decoration: none; white-space: nowrap; }
