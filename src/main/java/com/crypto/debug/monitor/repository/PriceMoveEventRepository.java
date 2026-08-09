@@ -12,6 +12,8 @@ import java.util.List;
 public interface PriceMoveEventRepository extends JpaRepository<PriceMoveEvent, Long> {
     List<PriceMoveEvent> findTop250ByOrderByEndTimeDesc();
 
+    List<PriceMoveEvent> findTop250BySymbolOrderByEndTimeDesc(String symbol);
+
     @Modifying
     @Query("delete from PriceMoveEvent e where e.endTime < :cutoff")
     int deleteOlderThan(@Param("cutoff") Instant cutoff);

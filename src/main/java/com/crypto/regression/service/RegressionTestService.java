@@ -79,6 +79,40 @@ public class RegressionTestService {
         return id;
     }
 
+    public synchronized Map<String, Object> resetAllTestData() {
+        Integer activeRuns = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM analysis_test_run
+                WHERE status IN ('PENDING', 'RUNNING')
+                """, Integer.class);
+        if (activeRuns != null && activeRuns > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "A regression test is still running. Wait for it to finish before resetting test data.");
+        }
+
+        int executions = jdbcTemplate.update("DELETE FROM wallet_execution_test");
+        int positions = jdbcTemplate.update("DELETE FROM wallet_position_test");
+        int opportunities = jdbcTemplate.update("DELETE FROM execution_opportunity_test");
+        int signals = jdbcTemplate.update("DELETE FROM analysis_test_signal");
+        int results = jdbcTemplate.update("DELETE FROM analysis_test_result");
+        int runs = jdbcTemplate.update("DELETE FROM analysis_test_run");
+
+        jdbcTemplate.execute("ALTER TABLE wallet_execution_test AUTO_INCREMENT = 1");
+        jdbcTemplate.execute("ALTER TABLE wallet_position_test AUTO_INCREMENT = 1");
+        jdbcTemplate.execute("ALTER TABLE execution_opportunity_test AUTO_INCREMENT = 1");
+        jdbcTemplate.execute("ALTER TABLE analysis_test_signal AUTO_INCREMENT = 1");
+        jdbcTemplate.execute("ALTER TABLE analysis_test_result AUTO_INCREMENT = 1");
+        jdbcTemplate.execute("ALTER TABLE analysis_test_run AUTO_INCREMENT = 1");
+
+        return Map.of(
+                "runs", runs,
+                "results", results,
+                "signals", signals,
+                "opportunities", opportunities,
+                "positions", positions,
+                "executions", executions
+        );
+    }
+
     @Transactional(readOnly = true)
     public Map<String, Object> getRun(long id) {
         Map<String, Object> run = jdbcTemplate.queryForMap("""

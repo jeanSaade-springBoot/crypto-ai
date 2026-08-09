@@ -23,6 +23,11 @@ public class RegressionTestController {
         return Map.of("id", id, "status", "PENDING");
     }
 
+    @DeleteMapping("/runs")
+    public Map<String, Object> resetAll() {
+        return service.resetAllTestData();
+    }
+
     @GetMapping("/runs")
     public List<Map<String, Object>> latestRuns() {
         return service.latestRuns();

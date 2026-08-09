@@ -170,7 +170,10 @@
                     <p class="eyebrow">SAFE REPLAY · NO LIVE WRITES</p>
                     <h2>AI Regression Tests</h2>
                 </div>
-                <button id="regression-refresh" type="button" class="secondary-button">Refresh Runs</button>
+                <div class="section-actions">
+                    <button id="regression-refresh" type="button" class="secondary-button">Refresh Runs</button>
+                    <button id="regression-reset" type="button" class="danger-button">Reset Test Data</button>
+                </div>
             </div>
             <p class="debug-isolation-note"><strong>Administration-triggered regression only.</strong> This test reads historical candles/signals and writes only to the isolated <code>analysis_test_*</code> and <code>execution_opportunity_test</code> tables. It never calls wallet execution, live position management, <code>trade_signal</code> writes or production <code>execution_opportunity</code> writes.</p>
 
@@ -251,7 +254,14 @@
                     <p class="eyebrow">DEBUG ONLY · STANDALONE MONITOR</p>
                     <h2>Market Move Tracker</h2>
                 </div>
-                <button id="price-move-refresh" type="button" class="secondary-button">Refresh Moves</button>
+                <div class="debug-symbol-actions">
+                    <label>Debug symbol
+                        <select id="price-move-symbol">
+                            <option value="">Loading configured coins…</option>
+                        </select>
+                    </label>
+                    <button id="price-move-refresh" type="button" class="secondary-button">Refresh Moves</button>
+                </div>
             </div>
             <p class="debug-isolation-note"><strong>Monitoring only.</strong> This module groups live prices into meaningful UP and DOWN rallies/drops for manual review. Only MEDIUM/HIGH completed moves lasting more than 5 minutes create a row. MEDIUM = 0.75% to &lt;1.50%; HIGH = 1.50%+. It does not affect AI analysis, signals, Execution Intelligence, wallet execution, position management, Profit Lock, stop loss or take profit.</p>
 
@@ -269,6 +279,17 @@
                 <span><strong id="price-move-new-count">0</strong> new</span>
                 <span><strong id="price-move-medium-count">0</strong> medium</span>
                 <span><strong id="price-move-high-count">0</strong> high</span>
+            </div>
+
+            <div id="price-move-active" class="price-move-active">
+                <div><span>Selected coin</span><strong id="price-move-active-symbol">—</strong></div>
+                <div><span>Live state</span><strong id="price-move-active-phase">—</strong></div>
+                <div><span>Direction</span><strong id="price-move-active-direction">—</strong></div>
+                <div><span>Start</span><strong id="price-move-active-start">—</strong></div>
+                <div><span>Current / extreme</span><strong id="price-move-active-price">—</strong></div>
+                <div><span>Move</span><strong id="price-move-active-change">—</strong></div>
+                <div><span>Duration</span><strong id="price-move-active-duration">—</strong></div>
+                <div><span>Priority</span><strong id="price-move-active-priority">—</strong></div>
             </div>
 
             <div class="table-wrap">

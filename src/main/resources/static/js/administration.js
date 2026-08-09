@@ -117,6 +117,52 @@ function formatDuration(seconds) {
     return `${hours}h ${minutes % 60}m`;
 }
 
+async function loadPriceMoveSymbols() {
+    const select = document.getElementById('price-move-symbol');
+    if (!select) return;
+    const previous = select.value || 'BNBUSDT';
+    try {
+        const coins = await api('/api/administration/coins');
+        select.innerHTML = coins.map(coin => `
+            <option value="${escapeHtml(coin.symbol)}"${coin.symbol === previous ? ' selected' : ''}>
+                ${escapeHtml(coin.symbol)}${coin.enabled ? '' : ' · disabled'}
+            </option>`).join('') || '<option value="">No configured coins</option>';
+        if (![...select.options].some(option => option.selected) && select.options.length) select.selectedIndex = 0;
+    } catch (error) {
+        select.innerHTML = '<option value="BNBUSDT">BNBUSDT</option>';
+        showAdminMessage(`Could not load debug symbols: ${error.message}`, true);
+    }
+}
+
+function selectedPriceMoveSymbol() {
+    return document.getElementById('price-move-symbol')?.value || '';
+}
+
+async function loadActivePriceMove() {
+    const symbol = selectedPriceMoveSymbol();
+    if (!symbol) return;
+    try {
+        const active = await api(`/api/administration/debug/price-moves/active?symbol=${encodeURIComponent(symbol)}`);
+        document.getElementById('price-move-active-symbol').textContent = active.symbol || symbol;
+        document.getElementById('price-move-active-phase').textContent = active.phase || 'WAITING';
+        document.getElementById('price-move-active-direction').textContent = active.direction || '—';
+        document.getElementById('price-move-active-start').textContent = active.startTime
+            ? `${formatMoveTime(active.startTime)} · ${formatMovePrice(active.startPrice)}` : '—';
+        document.getElementById('price-move-active-price').textContent = active.extremePrice != null
+            ? `${formatMovePrice(active.extremePrice)}${active.lastPrice != null ? ` · live ${formatMovePrice(active.lastPrice)}` : ''}`
+            : (active.lastPrice != null ? formatMovePrice(active.lastPrice) : '—');
+        const change = Number(active.changePercent || 0);
+        document.getElementById('price-move-active-change').textContent = active.tracking
+            ? `${change >= 0 ? '+' : ''}${change.toFixed(3)}%` : '—';
+        document.getElementById('price-move-active-duration').textContent = active.tracking
+            ? formatDuration(active.durationSeconds) : '—';
+        document.getElementById('price-move-active-priority').textContent = active.tracking
+            ? (active.importanceLevel || 'LOW') : '—';
+    } catch (error) {
+        showAdminMessage(`Could not load live debug state: ${error.message}`, true);
+    }
+}
+
 async function loadPriceMoveSettings() {
     const settings = await api('/api/administration/debug/price-moves/settings');
     document.getElementById('price-move-enabled').checked = Boolean(settings.enabled);
@@ -130,7 +176,8 @@ async function loadPriceMoveSettings() {
 async function loadPriceMoves() {
     if (!priceMoveBody) return;
     try {
-        const moves = await api('/api/administration/debug/price-moves');
+        const symbol = selectedPriceMoveSymbol();
+        const moves = await api(`/api/administration/debug/price-moves${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`);
         const newCount = moves.filter(move => move.reviewStatus === 'NEW').length;
         const mediumCount = moves.filter(move => move.importanceLevel === 'MEDIUM').length;
         const highCount = moves.filter(move => move.importanceLevel === 'HIGH').length;
@@ -188,7 +235,7 @@ if (priceMoveSettingsForm) {
                 })
             });
             showAdminMessage('Debug Market Move Tracker settings saved. Trading logic was not changed.');
-            await loadPriceMoves();
+            await Promise.all([loadPriceMoves(), loadActivePriceMove()]);
         } catch (error) {
             showAdminMessage(error.message, true);
         }
@@ -217,10 +264,15 @@ if (priceMoveBody) {
 
 const priceMoveRefresh = document.getElementById('price-move-refresh');
 if (priceMoveRefresh) {
-    priceMoveRefresh.addEventListener('click', loadPriceMoves);
+    priceMoveRefresh.addEventListener('click', async () => { await Promise.all([loadPriceMoves(), loadActivePriceMove()]); });
 }
 
-Promise.all([loadPriceMoveSettings(), loadPriceMoves()]).catch(error => showAdminMessage(error.message, true));
+Promise.all([loadPriceMoveSymbols(), loadPriceMoveSettings()]).then(() => Promise.all([loadPriceMoves(), loadActivePriceMove()])).catch(error => showAdminMessage(error.message, true));
+
+const priceMoveSymbol = document.getElementById('price-move-symbol');
+if (priceMoveSymbol) priceMoveSymbol.addEventListener('change', async () => {
+    await Promise.all([loadPriceMoves(), loadActivePriceMove()]);
+});
 
 // -----------------------------------------------------------------------------
 // AI REGRESSION TESTS
@@ -318,6 +370,11 @@ async function loadRegressionRuns() {
         `).join('') || '<tr><td colspan="7">No regression tests have been run yet.</td></tr>';
         const active = runs.find(run => ['PENDING', 'RUNNING'].includes(String(run.status)));
         setRegressionRunButtonRunning(Boolean(active), active);
+        const resetButton = document.getElementById('regression-reset');
+        if (resetButton) {
+            resetButton.disabled = Boolean(active);
+            resetButton.title = active ? `Test #${active.id} is still ${active.status}. Wait for it to finish before resetting.` : 'Clear all isolated regression/shadow test data';
+        }
         return runs;
     } catch (error) {
         body.innerHTML = `<tr><td colspan="7">${escapeHtml(error.message)}</td></tr>`;
@@ -485,6 +542,29 @@ if (regressionRunsBody) {
         }
     });
 }
+
+const regressionReset = document.getElementById('regression-reset');
+if (regressionReset) regressionReset.addEventListener('click', async () => {
+    const confirmed = window.confirm('Clear ALL regression/shadow test data? This does not touch live signals, opportunities, positions, wallet or trades.');
+    if (!confirmed) return;
+    regressionReset.disabled = true;
+    try {
+        const deleted = await api('/api/administration/regression-tests/runs', {method: 'DELETE'});
+        if (regressionPollTimer) { window.clearInterval(regressionPollTimer); regressionPollTimer = null; }
+        activeRegressionRunId = null;
+        document.getElementById('regression-active').classList.add('hidden');
+        document.getElementById('regression-result').classList.add('hidden');
+        document.getElementById('regression-detail').classList.add('hidden');
+        document.getElementById('regression-trades').classList.add('hidden');
+        setRegressionRunButtonRunning(false);
+        await loadRegressionRuns();
+        showAdminMessage(`Test data reset. Runs ${deleted.runs || 0}, signals ${deleted.signals || 0}, opportunities ${deleted.opportunities || 0}, positions ${deleted.positions || 0}, executions ${deleted.executions || 0} removed.`);
+    } catch (error) {
+        showAdminMessage(error.message, true);
+    } finally {
+        regressionReset.disabled = false;
+    }
+});
 
 const regressionRefresh = document.getElementById('regression-refresh');
 if (regressionRefresh) regressionRefresh.addEventListener('click', async () => {

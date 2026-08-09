@@ -19,8 +19,13 @@ public class PriceMoveMonitorController {
     private final PriceMoveMonitorService service;
 
     @GetMapping
-    public List<PriceMoveEvent> events() {
-        return service.recentEvents();
+    public List<PriceMoveEvent> events(@RequestParam(required = false) String symbol) {
+        return service.recentEvents(symbol);
+    }
+
+    @GetMapping("/active")
+    public Map<String, Object> active(@RequestParam String symbol) {
+        return service.activeTracker(symbol);
     }
 
     @GetMapping("/settings")

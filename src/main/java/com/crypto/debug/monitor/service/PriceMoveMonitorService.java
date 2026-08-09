@@ -60,6 +60,8 @@ public class PriceMoveMonitorService {
         SymbolTracker tracker = trackers.computeIfAbsent(symbol, ignored -> new SymbolTracker());
 
         synchronized (tracker) {
+            tracker.lastPrice = price;
+            tracker.lastObservedAt = observedAt;
             if (tracker.cooldownUntil != null) {
                 if (observedAt.isBefore(tracker.cooldownUntil)) return;
                 tracker.resetWaiting(price, observedAt);
@@ -219,8 +221,62 @@ public class PriceMoveMonitorService {
     }
 
     @Transactional(readOnly = true)
-    public List<PriceMoveEvent> recentEvents() {
-        return eventRepository.findTop250ByOrderByEndTimeDesc();
+    public List<PriceMoveEvent> recentEvents(String rawSymbol) {
+        if (rawSymbol == null || rawSymbol.isBlank()) {
+            return eventRepository.findTop250ByOrderByEndTimeDesc();
+        }
+        String symbol = rawSymbol.trim().toUpperCase(Locale.ROOT);
+        return eventRepository.findTop250BySymbolOrderByEndTimeDesc(symbol);
+    }
+
+    /**
+     * In-memory debug snapshot for one selected symbol. This is intentionally
+     * read-only and never feeds back into trading logic.
+     */
+    public Map<String, Object> activeTracker(String rawSymbol) {
+        if (rawSymbol == null || rawSymbol.isBlank()) {
+            throw new IllegalArgumentException("Symbol is required");
+        }
+        String symbol = rawSymbol.trim().toUpperCase(Locale.ROOT);
+        SymbolTracker tracker = trackers.get(symbol);
+        if (tracker == null) {
+            return Map.of(
+                    "symbol", symbol,
+                    "phase", "WAITING_FOR_PRICE",
+                    "tracking", false
+            );
+        }
+
+        synchronized (tracker) {
+            boolean tracking = tracker.phase == Phase.TRACKING_UP || tracker.phase == Phase.TRACKING_DOWN;
+            String direction = tracker.phase == Phase.TRACKING_UP ? "UP"
+                    : tracker.phase == Phase.TRACKING_DOWN ? "DOWN" : null;
+            BigDecimal change = tracking && tracker.startPrice != null && tracker.extremePrice != null
+                    ? percentChange(tracker.startPrice, tracker.extremePrice).setScale(8, RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO;
+            long duration = tracking && tracker.startTime != null && tracker.lastObservedAt != null
+                    ? Math.max(0L, Duration.between(tracker.startTime, tracker.lastObservedAt).getSeconds())
+                    : 0L;
+            String importance = change.abs().compareTo(HIGH_MOVE_PERCENT) >= 0 ? "HIGH"
+                    : change.abs().compareTo(MEDIUM_MOVE_PERCENT) >= 0 ? "MEDIUM" : "LOW";
+
+            Map<String, Object> result = new java.util.LinkedHashMap<>();
+            result.put("symbol", symbol);
+            result.put("phase", tracker.phase.name());
+            result.put("tracking", tracking);
+            result.put("direction", direction);
+            result.put("startTime", tracker.startTime);
+            result.put("startPrice", tracker.startPrice);
+            result.put("extremeTime", tracker.extremeTime);
+            result.put("extremePrice", tracker.extremePrice);
+            result.put("lastObservedAt", tracker.lastObservedAt);
+            result.put("lastPrice", tracker.lastPrice);
+            result.put("changePercent", change);
+            result.put("durationSeconds", duration);
+            result.put("importanceLevel", importance);
+            result.put("cooldownUntil", tracker.cooldownUntil);
+            return result;
+        }
     }
 
     @Transactional(readOnly = true)
@@ -329,6 +385,8 @@ public class PriceMoveMonitorService {
         private BigDecimal extremePrice;
         private Instant extremeTime;
         private Instant cooldownUntil;
+        private BigDecimal lastPrice;
+        private Instant lastObservedAt;
 
         private void resetWaiting(BigDecimal price, Instant time) {
             phase = Phase.WAITING;
@@ -341,6 +399,8 @@ public class PriceMoveMonitorService {
             extremePrice = null;
             extremeTime = null;
             cooldownUntil = null;
+            lastPrice = price;
+            lastObservedAt = time;
         }
 
         private void startUp(BigDecimal basePrice, Instant baseTime, BigDecimal price, Instant time) {
