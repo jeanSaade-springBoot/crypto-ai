@@ -110,6 +110,22 @@ public class TechnicalIndicatorService {
         );
     }
 
+    /**
+     * Regression-only calculation path. Computes the exact technical snapshot as of
+     * the supplied historical candle without persisting a technical_indicator row.
+     */
+    @Transactional(readOnly = true)
+    public Optional<IndicatorSnapshot> calculateSnapshotForRegression(
+            String symbol,
+            String intervalCode,
+            Instant candleOpenTime
+    ) {
+        if (candleOpenTime == null) {
+            throw new IllegalArgumentException("Regression candle open time is required");
+        }
+        return calculateSnapshotFromDatabase(symbol, intervalCode, candleOpenTime);
+    }
+
     @Transactional(readOnly = true)
     public Optional<TechnicalIndicator> getLatest(
             String symbol,

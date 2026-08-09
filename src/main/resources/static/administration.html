@@ -196,6 +196,8 @@
                     <article><span>1m event path</span><strong id="regression-1m">—</strong><small id="regression-1m-historical">—</small></article>
                     <article><span>5m event path</span><strong id="regression-5m">—</strong><small id="regression-5m-historical">—</small></article>
                     <article><span>1h event path</span><strong id="regression-1h">—</strong><small id="regression-1h-historical">—</small></article>
+                    <article><span>Fresh BUY signals</span><strong id="regression-generated-buys">—</strong><small id="regression-generated-total">Generated from historical candles</small></article>
+                    <article><span>Generation errors</span><strong id="regression-generation-errors">—</strong><small>Must be 0 for PASS</small></article>
                     <article><span>Decision corrections</span><strong id="regression-corrections">—</strong><small>Original bearish → final non-bearish</small></article>
                     <article><span>Old hard reversals</span><strong id="regression-old-reversals">—</strong><small>Pre-fix interpretation</small></article>
                     <article><span>Corrected hard reversals</span><strong id="regression-new-reversals">—</strong><small>Final decision authority</small></article>
@@ -212,10 +214,10 @@
             </div>
 
             <div id="regression-detail" class="regression-detail hidden">
-                <div class="section-heading"><div><p class="eyebrow">DECISION AUTHORITY AUDIT</p><h3>Signals &amp; hard-reversal comparison</h3></div></div>
+                <div class="section-heading"><div><p class="eyebrow">FRESH SIGNAL REPLAY</p><h3>Generated signals &amp; hard-reversal comparison</h3></div></div>
                 <div class="table-wrap">
                     <table>
-                        <thead><tr><th>Time</th><th>TF</th><th>Price</th><th>Original</th><th>Final</th><th>Execution sees</th><th>Corrected?</th></tr></thead>
+                        <thead><tr><th>Time</th><th>TF</th><th>Price</th><th>Original</th><th>Final</th><th>Execution sees</th><th>Replay</th><th>Error</th></tr></thead>
                         <tbody id="regression-signals-body"></tbody>
                     </table>
                 </div>

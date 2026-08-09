@@ -292,6 +292,11 @@ async function loadRegressionDetail(runId, includeTables = true) {
         document.getElementById('regression-5m-historical').textContent = `Historical signals: ${r.signals_5m_historical}`;
         document.getElementById('regression-1h').textContent = `${r.replayable_1h_events}/${r.candles_1h}`;
         document.getElementById('regression-1h-historical').textContent = `Historical signals: ${r.signals_1h_historical}`;
+        const generatedBuys = Number(r.generated_buys_1m || 0) + Number(r.generated_buys_5m || 0) + Number(r.generated_buys_1h || 0);
+        const generatedTotal = Number(r.generated_signals_1m || 0) + Number(r.generated_signals_5m || 0) + Number(r.generated_signals_1h || 0);
+        document.getElementById('regression-generated-buys').textContent = generatedBuys;
+        document.getElementById('regression-generated-total').textContent = `Fresh signals: ${generatedTotal}`;
+        document.getElementById('regression-generation-errors').textContent = r.generated_signal_errors || 0;
         document.getElementById('regression-corrections').textContent = r.decision_authority_corrections;
         document.getElementById('regression-old-reversals').textContent = r.old_hard_bearish_reversals;
         document.getElementById('regression-new-reversals').textContent = r.corrected_hard_bearish_reversals;
@@ -308,18 +313,21 @@ async function loadRegressionDetail(runId, includeTables = true) {
         const detail = document.getElementById('regression-detail');
         detail.classList.remove('hidden');
         document.getElementById('regression-signals-body').innerHTML = signals.map(signal => {
-            const corrected = regressionBool(signal.decision_authority_corrected);
+            const replay = regressionBool(signal.replay_generated);
+            const hasError = Boolean(signal.generation_error);
+            const highlight = replay && ['BUY', 'STRONG_BUY'].includes(String(signal.final_decision || ''));
             return `
-                <tr${corrected ? ' class="regression-corrected"' : ''}>
+                <tr${highlight ? ' class="regression-corrected"' : ''}>
                     <td>${formatMoveTime(signal.generated_at)}</td>
                     <td>${escapeHtml(signal.interval_code)}</td>
                     <td>${formatMovePrice(signal.latest_price)}</td>
                     <td>${escapeHtml(signal.original_decision || '—')}</td>
                     <td>${escapeHtml(signal.final_decision || '—')}</td>
                     <td>${escapeHtml(signal.execution_effective_decision || '—')}</td>
-                    <td>${corrected ? 'YES' : '—'}</td>
+                    <td>${replay ? 'FRESH' : 'REFERENCE'}</td>
+                    <td>${hasError ? escapeHtml(signal.generation_error) : '—'}</td>
                 </tr>`;
-        }).join('') || '<tr><td colspan="7">No signals in this test window.</td></tr>';
+        }).join('') || '<tr><td colspan="8">No generated signals in this test window.</td></tr>';
 
         document.getElementById('regression-opportunities-body').innerHTML = opportunities
             .filter(row => regressionBool(row.old_hard_bearish_reversal) || regressionBool(row.corrected_hard_bearish_reversal))

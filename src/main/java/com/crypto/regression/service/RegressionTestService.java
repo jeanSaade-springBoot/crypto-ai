@@ -63,7 +63,8 @@ public class RegressionTestService {
     public Map<String, Object> getRun(long id) {
         Map<String, Object> run = jdbcTemplate.queryForMap("""
                 SELECT id, test_name, symbol, start_time, end_time, status, progress_percent,
-                       current_step, source_signal_count, replay_signal_count,
+                       current_step, source_signal_count, replay_signal_count, generated_signal_count,
+                       generated_buy_count, generated_watch_count, generated_sell_count, generated_strong_sell_count,
                        neutralized_original_bearish_count, corrected_hard_reversal_count,
                        historical_hard_reversal_count, error_message, started_at, completed_at, created_at
                 FROM analysis_test_run
@@ -71,10 +72,10 @@ public class RegressionTestService {
                 """, id);
 
         List<Map<String, Object>> results = jdbcTemplate.queryForList("""
-                SELECT candles_1m, signals_1m_historical, replayable_1m_events,
-                       candles_5m, signals_5m_historical, replayable_5m_events,
-                       candles_1h, signals_1h_historical, replayable_1h_events,
-                       decision_authority_corrections, old_hard_bearish_reversals,
+                SELECT candles_1m, signals_1m_historical, replayable_1m_events, generated_signals_1m, generated_buys_1m,
+                       candles_5m, signals_5m_historical, replayable_5m_events, generated_signals_5m, generated_buys_5m,
+                       candles_1h, signals_1h_historical, replayable_1h_events, generated_signals_1h, generated_buys_1h,
+                       generated_signal_errors, decision_authority_corrections, old_hard_bearish_reversals,
                        corrected_hard_bearish_reversals, cadence_path_passed,
                        decision_authority_passed, test_passed, notes
                 FROM analysis_test_result
@@ -100,7 +101,7 @@ public class RegressionTestService {
         return jdbcTemplate.queryForList("""
                 SELECT generated_at, interval_code, latest_price, original_decision, final_decision,
                        execution_effective_decision, total_score, confidence_score, trend_score,
-                       volume_score, momentum_score, decision_authority_corrected
+                       volume_score, momentum_score, decision_authority_corrected, replay_generated, generation_error
                 FROM analysis_test_signal
                 WHERE test_run_id = ?
                 ORDER BY generated_at ASC, FIELD(interval_code, '1h', '5m', '1m')

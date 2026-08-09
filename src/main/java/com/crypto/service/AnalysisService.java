@@ -98,14 +98,30 @@ public class AnalysisService {
      */
     @Transactional
     public TradeSignal analyze(TechnicalIndicator indicator) {
-        IndicatorSnapshot i = toSnapshot(indicator);
+        IndicatorSnapshot snapshot = toSnapshot(indicator);
+        TradeSignal signal = buildSignal(snapshot, Instant.now());
+        return signalRepository.save(signal);
+    }
+
+    /**
+     * Regression-only analysis path. Runs the same production scoring/final-decision
+     * code but returns an unsaved TradeSignal so replay can never write to trade_signal.
+     */
+    @Transactional(readOnly = true)
+    public TradeSignal analyzeForRegression(IndicatorSnapshot snapshot, Instant evaluationTime) {
+        if (snapshot == null) {
+            throw new IllegalArgumentException("Regression indicator snapshot is required");
+        }
+        return buildSignal(snapshot, evaluationTime == null ? snapshot.candleOpenTime() : evaluationTime);
+    }
+
+    private TradeSignal buildSignal(IndicatorSnapshot i, Instant signalGeneratedAt) {
         String symbol = i.symbol();
 
         boolean sentimentEnabled = sentimentService.isEnabled();
         SentimentOverview sentimentOverview = sentimentService.overview(symbol);
         BigDecimal sentiment = sentimentOverview.weightedScore();
         MarketFundamental fundamental = fundamentalService.latest(symbol).orElse(null);
-        Instant signalGeneratedAt = Instant.now();
         boolean sentimentAvailable = sentimentEnabled && sentimentOverview != null
                 && sentimentOverview.providers() != null
                 && sentimentOverview.providers().stream().anyMatch(provider -> provider.enabled()
@@ -220,7 +236,7 @@ public class AnalysisService {
                 + " | Order-book liquidity: " + liquidity.explanation()
                 + " | " + finalDecision.explanation();
 
-        return signalRepository.save(TradeSignal.builder()
+        return TradeSignal.builder()
                 .symbol(symbol)
                 .interval(i.intervalCode())
                 .candleOpenTime(i.candleOpenTime())
@@ -347,7 +363,7 @@ public class AnalysisService {
                 .atrExplanation(atrRisk.explanation())
                 .explanation(explanation)
                 .generatedAt(signalGeneratedAt)
-                .build());
+                .build();
     }
 
     private String serializeDecisionPath(FinalDecisionResult finalDecision) {
