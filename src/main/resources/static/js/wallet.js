@@ -107,6 +107,8 @@ function setPnl(id, value) {
 }
 
 function renderChart(snapshots) {
+    const chartElement = byId('wallet-chart');
+    if (!chartElement) return;
     const options = {
         chart: {type: 'line', height: 320, toolbar: {show: false}},
         series: [
@@ -122,7 +124,7 @@ function renderChart(snapshots) {
         chart.updateSeries(options.series, false);
         return;
     }
-    chart = new ApexCharts(byId('wallet-chart'), options);
+    chart = new ApexCharts(chartElement, options);
     chart.render();
 }
 

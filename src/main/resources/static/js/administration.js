@@ -118,46 +118,75 @@ function formatDuration(seconds) {
 }
 
 async function loadPriceMoveSymbols() {
-    const select = document.getElementById('price-move-symbol');
-    if (!select) return;
-    const previous = select.value || 'BNBUSDT';
+    const container = document.getElementById('price-move-symbols');
+    if (!container) return;
+    const previouslySelected = new Set(selectedPriceMoveSymbols());
     try {
         const coins = await api('/api/administration/coins');
-        select.innerHTML = coins.map(coin => `
-            <option value="${escapeHtml(coin.symbol)}"${coin.symbol === previous ? ' selected' : ''}>
-                ${escapeHtml(coin.symbol)}${coin.enabled ? '' : ' · disabled'}
-            </option>`).join('') || '<option value="">No configured coins</option>';
-        if (![...select.options].some(option => option.selected) && select.options.length) select.selectedIndex = 0;
+        const defaults = previouslySelected.size ? previouslySelected : new Set(['BNBUSDT']);
+        container.innerHTML = coins.map((coin, index) => {
+            const checked = defaults.has(coin.symbol) || (!defaults.size && index === 0);
+            return `
+                <label class="debug-symbol-check">
+                    <input type="checkbox" value="${escapeHtml(coin.symbol)}" ${checked ? 'checked' : ''}>
+                    <span>${escapeHtml(coin.symbol)}${coin.enabled ? '' : ' · disabled'}</span>
+                </label>`;
+        }).join('') || '<span>No configured coins</span>';
     } catch (error) {
-        select.innerHTML = '<option value="BNBUSDT">BNBUSDT</option>';
+        container.innerHTML = '<label class="debug-symbol-check"><input type="checkbox" value="BNBUSDT" checked><span>BNBUSDT</span></label>';
         showAdminMessage(`Could not load debug symbols: ${error.message}`, true);
     }
 }
 
-function selectedPriceMoveSymbol() {
-    return document.getElementById('price-move-symbol')?.value || '';
+function selectedPriceMoveSymbols() {
+    return [...document.querySelectorAll('#price-move-symbols input[type="checkbox"]:checked')]
+        .map(input => input.value)
+        .filter(Boolean);
+}
+
+function renderActivePriceMoves(states) {
+    const container = document.getElementById('price-move-active-list');
+    if (!container) return;
+    if (!states.length) {
+        container.innerHTML = '<div class="debug-empty-state">Select at least one symbol to inspect its live tracker state.</div>';
+        return;
+    }
+    container.innerHTML = states.map(active => {
+        const change = Number(active.changePercent || 0);
+        const changeText = active.tracking ? `${change >= 0 ? '+' : ''}${change.toFixed(3)}%` : '—';
+        const start = active.startTime ? `${formatMoveTime(active.startTime)} · ${formatMovePrice(active.startPrice)}` : '—';
+        const price = active.extremePrice != null
+            ? `${formatMovePrice(active.extremePrice)}${active.lastPrice != null ? ` · live ${formatMovePrice(active.lastPrice)}` : ''}`
+            : (active.lastPrice != null ? formatMovePrice(active.lastPrice) : '—');
+        return `
+            <article class="price-move-active-card">
+                <div class="price-move-active-card-head">
+                    <strong>${escapeHtml(active.symbol || '—')}</strong>
+                    <span class="status-pill ${(active.importanceLevel || 'LOW').toLowerCase()}">${escapeHtml(active.importanceLevel || 'LOW')}</span>
+                </div>
+                <div class="price-move-active-metrics">
+                    <div><span>State</span><strong>${escapeHtml(active.phase || 'WAITING')}</strong></div>
+                    <div><span>Direction</span><strong>${escapeHtml(active.direction || '—')}</strong></div>
+                    <div><span>Move</span><strong>${changeText}</strong></div>
+                    <div><span>Duration</span><strong>${active.tracking ? formatDuration(active.durationSeconds) : '—'}</strong></div>
+                    <div class="wide"><span>Start</span><strong>${start}</strong></div>
+                    <div class="wide"><span>Current / extreme</span><strong>${price}</strong></div>
+                </div>
+            </article>`;
+    }).join('');
 }
 
 async function loadActivePriceMove() {
-    const symbol = selectedPriceMoveSymbol();
-    if (!symbol) return;
+    const symbols = selectedPriceMoveSymbols();
+    if (!symbols.length) {
+        renderActivePriceMoves([]);
+        return;
+    }
     try {
-        const active = await api(`/api/administration/debug/price-moves/active?symbol=${encodeURIComponent(symbol)}`);
-        document.getElementById('price-move-active-symbol').textContent = active.symbol || symbol;
-        document.getElementById('price-move-active-phase').textContent = active.phase || 'WAITING';
-        document.getElementById('price-move-active-direction').textContent = active.direction || '—';
-        document.getElementById('price-move-active-start').textContent = active.startTime
-            ? `${formatMoveTime(active.startTime)} · ${formatMovePrice(active.startPrice)}` : '—';
-        document.getElementById('price-move-active-price').textContent = active.extremePrice != null
-            ? `${formatMovePrice(active.extremePrice)}${active.lastPrice != null ? ` · live ${formatMovePrice(active.lastPrice)}` : ''}`
-            : (active.lastPrice != null ? formatMovePrice(active.lastPrice) : '—');
-        const change = Number(active.changePercent || 0);
-        document.getElementById('price-move-active-change').textContent = active.tracking
-            ? `${change >= 0 ? '+' : ''}${change.toFixed(3)}%` : '—';
-        document.getElementById('price-move-active-duration').textContent = active.tracking
-            ? formatDuration(active.durationSeconds) : '—';
-        document.getElementById('price-move-active-priority').textContent = active.tracking
-            ? (active.importanceLevel || 'LOW') : '—';
+        const states = await Promise.all(symbols.map(symbol =>
+            api(`/api/administration/debug/price-moves/active?symbol=${encodeURIComponent(symbol)}`)
+        ));
+        renderActivePriceMoves(states);
     } catch (error) {
         showAdminMessage(`Could not load live debug state: ${error.message}`, true);
     }
@@ -176,8 +205,11 @@ async function loadPriceMoveSettings() {
 async function loadPriceMoves() {
     if (!priceMoveBody) return;
     try {
-        const symbol = selectedPriceMoveSymbol();
-        const moves = await api(`/api/administration/debug/price-moves${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`);
+        const symbols = selectedPriceMoveSymbols();
+        const moveGroups = symbols.length
+            ? await Promise.all(symbols.map(symbol => api(`/api/administration/debug/price-moves?symbol=${encodeURIComponent(symbol)}`)))
+            : [];
+        const moves = moveGroups.flat().sort((a, b) => new Date(b.endTime || 0) - new Date(a.endTime || 0));
         const newCount = moves.filter(move => move.reviewStatus === 'NEW').length;
         const mediumCount = moves.filter(move => move.importanceLevel === 'MEDIUM').length;
         const highCount = moves.filter(move => move.importanceLevel === 'HIGH').length;
@@ -269,8 +301,21 @@ if (priceMoveRefresh) {
 
 Promise.all([loadPriceMoveSymbols(), loadPriceMoveSettings()]).then(() => Promise.all([loadPriceMoves(), loadActivePriceMove()])).catch(error => showAdminMessage(error.message, true));
 
-const priceMoveSymbol = document.getElementById('price-move-symbol');
-if (priceMoveSymbol) priceMoveSymbol.addEventListener('change', async () => {
+const priceMoveSymbols = document.getElementById('price-move-symbols');
+if (priceMoveSymbols) priceMoveSymbols.addEventListener('change', async event => {
+    if (!event.target.matches('input[type="checkbox"]')) return;
+    await Promise.all([loadPriceMoves(), loadActivePriceMove()]);
+});
+
+const priceMoveSelectAll = document.getElementById('price-move-select-all');
+if (priceMoveSelectAll) priceMoveSelectAll.addEventListener('click', async () => {
+    document.querySelectorAll('#price-move-symbols input[type="checkbox"]').forEach(input => { input.checked = true; });
+    await Promise.all([loadPriceMoves(), loadActivePriceMove()]);
+});
+
+const priceMoveClearSymbols = document.getElementById('price-move-clear-symbols');
+if (priceMoveClearSymbols) priceMoveClearSymbols.addEventListener('click', async () => {
+    document.querySelectorAll('#price-move-symbols input[type="checkbox"]').forEach(input => { input.checked = false; });
     await Promise.all([loadPriceMoves(), loadActivePriceMove()]);
 });
 
@@ -310,29 +355,6 @@ async function loadRegressionSymbols() {
     } catch (error) {
         select.innerHTML = '<option value="BNBUSDT">BNBUSDT</option>';
         showAdminMessage(`Could not load regression symbols: ${error.message}`, true);
-    }
-}
-
-function applyRegressionPeriod() {
-    const period = document.getElementById('regression-period');
-    const start = document.getElementById('regression-start');
-    const end = document.getElementById('regression-end');
-    const note = document.getElementById('regression-window-note');
-    if (!period || !start || !end) return;
-
-    const custom = period.value === 'custom';
-    start.readOnly = !custom;
-    start.classList.toggle('regression-derived-input', !custom);
-
-    if (!custom) {
-        const hours = Number(period.value);
-        let endDate = end.value ? new Date(`${end.value}:00Z`) : new Date();
-        if (Number.isNaN(endDate.getTime())) endDate = new Date();
-        const startDate = new Date(endDate.getTime() - hours * 60 * 60 * 1000);
-        start.value = regressionUtcLocalValue(startDate);
-        if (note) note.textContent = `${hours} hour${hours === 1 ? '' : 's'} ending at the selected To time · From is calculated automatically.`;
-    } else if (note) {
-        note.textContent = 'Custom historical range · choose any configured symbol and UTC start/end time.';
     }
 }
 
@@ -379,6 +401,119 @@ async function loadRegressionRuns() {
     } catch (error) {
         body.innerHTML = `<tr><td colspan="7">${escapeHtml(error.message)}</td></tr>`;
     }
+}
+
+
+function regressionPipelineState(value, kind = 'decision') {
+    const normalized = String(value || '').toUpperCase();
+    if (kind === 'decision') {
+        if (['BUY', 'STRONG_BUY'].includes(normalized)) return 'pass';
+        if (normalized === 'WATCH') return 'wait';
+        if (['SELL', 'STRONG_SELL'].includes(normalized)) return 'fail';
+        return 'neutral';
+    }
+    return normalized;
+}
+
+function regressionPipelineNode(label, value, state, detail = '') {
+    return `
+        <div class="pipeline-node ${state}">
+            <span class="pipeline-node-label">${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value ?? '—')}</strong>
+            ${detail ? `<small>${escapeHtml(detail)}</small>` : ''}
+        </div>`;
+}
+
+function nearestOpportunityForCandidate(candidate, opportunities) {
+    const candidateTime = new Date(candidate.generated_at).getTime();
+    const within = opportunities
+        .map(row => ({row, distance: Math.abs(new Date(row.generated_at).getTime() - candidateTime)}))
+        .filter(item => Number.isFinite(item.distance) && item.distance <= 10 * 60 * 1000)
+        .sort((a, b) => a.distance - b.distance);
+    return within[0]?.row || null;
+}
+
+function matchingTradeForCandidate(candidate, trades) {
+    const candidateTime = new Date(candidate.generated_at).getTime();
+    return trades
+        .map(trade => ({trade, delta: new Date(trade.entry_time).getTime() - candidateTime}))
+        .filter(item => Number.isFinite(item.delta) && item.delta >= 0 && item.delta <= 15 * 60 * 1000)
+        .sort((a, b) => a.delta - b.delta)[0]?.trade || null;
+}
+
+function renderRegressionPipeline(signals, opportunities, trades) {
+    const panel = document.getElementById('regression-pipeline');
+    const body = document.getElementById('regression-pipeline-body');
+    if (!panel || !body) return;
+
+    const candidates = signals
+        .filter(signal => regressionBool(signal.replay_generated)
+            && ['BUY', 'STRONG_BUY'].includes(String(signal.final_decision || '')))
+        .slice(0, 20);
+
+    panel.classList.remove('hidden');
+    if (!candidates.length) {
+        body.innerHTML = `
+            <div class="pipeline-empty">
+                <strong>No fresh BUY/STRONG_BUY signal was generated.</strong>
+                <span>The pipeline stopped inside Analysis/FinalDecisionService before Execution Intelligence.</span>
+            </div>`;
+        return;
+    }
+
+    body.innerHTML = candidates.map((candidate, index) => {
+        const opportunity = nearestOpportunityForCandidate(candidate, opportunities);
+        const trade = matchingTradeForCandidate(candidate, trades);
+        const oneMinute = opportunity?.current_final_decision || 'NO 1m CONTEXT';
+        const fiveMinute = opportunity?.five_minute_decision || (candidate.interval_code === '5m' ? candidate.final_decision : 'MISSING');
+        const oneHour = opportunity?.one_hour_decision || (candidate.interval_code === '1h' ? candidate.final_decision : 'MISSING');
+        const evidence = Number(opportunity?.evidence_score ?? 0);
+        const health = Number(opportunity?.opportunity_health ?? 0);
+        const stage = String(opportunity?.replay_stage || 'NOT_REACHED').toUpperCase();
+        const code = opportunity?.decision_code || 'NO_EXECUTION_EVALUATION';
+
+        let evidenceState = evidence >= 7 ? 'pass' : evidence >= 4 ? 'wait' : 'fail';
+        let healthState = health >= 40 ? 'pass' : health > 0 ? 'fail' : 'neutral';
+        let executionState = ['CONFIRMED', 'MANAGED'].includes(stage) || ['DIRECT_BUY', 'OPPORTUNITY_CONFIRMED'].includes(String(code))
+            ? 'pass' : ['BUILDING', 'RECOVERING'].includes(stage) ? 'wait' : 'fail';
+        let walletState = trade ? 'pass' : 'fail';
+        let exitState = trade?.exit_time ? 'pass' : trade ? 'wait' : 'neutral';
+
+        const stopReason = trade
+            ? (trade.exit_time ? `Trade completed: ${trade.exit_reason || 'SELL'}` : 'BUY reached shadow wallet; position stayed open')
+            : (opportunity?.decision_explanation || `Execution stopped at ${code}`);
+
+        return `
+            <article class="pipeline-candidate">
+                <div class="pipeline-candidate-head">
+                    <div>
+                        <span class="pipeline-kicker">Candidate #${index + 1} · ${escapeHtml(candidate.interval_code || '—')}</span>
+                        <strong>${formatMoveTime(candidate.generated_at)} · ${formatMovePrice(candidate.latest_price)}</strong>
+                    </div>
+                    <span class="status-pill ${trade ? 'reviewed' : 'new'}">${trade ? 'SHADOW BUY' : 'NOT EXECUTED'}</span>
+                </div>
+                <div class="pipeline-flow">
+                    ${regressionPipelineNode('Fresh analysis', candidate.final_decision || '—', 'pass', `Score ${candidate.total_score ?? '—'} · C${candidate.confidence_score ?? '—'}`)}
+                    <span class="pipeline-arrow">→</span>
+                    ${regressionPipelineNode('1m trigger', oneMinute, regressionPipelineState(oneMinute), opportunity ? code : 'No nearby 1m evaluation')}
+                    <span class="pipeline-arrow">→</span>
+                    ${regressionPipelineNode('5m context', fiveMinute, regressionPipelineState(fiveMinute))}
+                    <span class="pipeline-arrow">→</span>
+                    ${regressionPipelineNode('1h context', oneHour, regressionPipelineState(oneHour))}
+                    <span class="pipeline-arrow">→</span>
+                    ${regressionPipelineNode('Evidence', `${evidence}/7`, evidenceState, `${opportunity?.buy_count ?? 0} BUY · ${opportunity?.watch_count ?? 0} WATCH`)}
+                    <span class="pipeline-arrow">→</span>
+                    ${regressionPipelineNode('Health', `${health}/100`, healthState, 'Minimum 40')}
+                    <span class="pipeline-arrow">→</span>
+                    ${regressionPipelineNode('Execution', stage, executionState, code)}
+                    <span class="pipeline-arrow">→</span>
+                    ${regressionPipelineNode('Shadow wallet', trade ? `BUY ${formatMovePrice(trade.entry_price)}` : 'NO BUY', walletState, trade ? formatMoveTime(trade.entry_time) : 'No wallet write')}
+                    <span class="pipeline-arrow">→</span>
+                    ${regressionPipelineNode('Exit', trade?.exit_time ? `SELL ${formatMovePrice(trade.exit_price)}` : (trade ? 'OPEN' : 'NOT REACHED'), exitState, trade?.exit_reason || '')}
+                </div>
+                <div class="pipeline-stop-reason"><strong>Diagnosis:</strong> ${escapeHtml(stopReason)}</div>
+            </article>`;
+    }).join('');
 }
 
 async function loadRegressionDetail(runId, includeTables = true) {
@@ -460,6 +595,8 @@ async function loadRegressionDetail(runId, includeTables = true) {
                         <td>${escapeHtml(row.decision_code || '—')}</td>
                     </tr>`).join('') || '<tr><td colspan="9">No 1m execution-opportunity evaluations in this window.</td></tr>';
 
+        renderRegressionPipeline(signals, opportunities, trades);
+
         const tradePanel = document.getElementById('regression-trades');
         tradePanel.classList.remove('hidden');
         document.getElementById('regression-trades-body').innerHTML = trades.map((trade, index) => `
@@ -507,6 +644,7 @@ if (regressionForm) {
         setRegressionRunButtonRunning(true);
         document.getElementById('regression-detail').classList.add('hidden');
         document.getElementById('regression-result').classList.add('hidden');
+        document.getElementById('regression-pipeline')?.classList.add('hidden');
         try {
             const created = await api('/api/administration/regression-tests/runs', {
                 method: 'POST',
@@ -556,6 +694,7 @@ if (regressionReset) regressionReset.addEventListener('click', async () => {
         document.getElementById('regression-result').classList.add('hidden');
         document.getElementById('regression-detail').classList.add('hidden');
         document.getElementById('regression-trades').classList.add('hidden');
+        document.getElementById('regression-pipeline')?.classList.add('hidden');
         setRegressionRunButtonRunning(false);
         await loadRegressionRuns();
         showAdminMessage(`Test data reset. Runs ${deleted.runs || 0}, signals ${deleted.signals || 0}, opportunities ${deleted.opportunities || 0}, positions ${deleted.positions || 0}, executions ${deleted.executions || 0} removed.`);

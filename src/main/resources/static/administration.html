@@ -49,11 +49,6 @@
             <article class="metric-card"><span>Unrealized P&amp;L</span><strong id="unrealized">—</strong><small>Current holdings</small></article>
         </section>
 
-        <section class="panel">
-            <div class="section-heading"><div><p class="eyebrow">SINCE START</p><h2>Portfolio vs invested capital</h2></div></div>
-            <div id="wallet-chart"></div>
-        </section>
-
         <section class="wallet-form-grid">
             <article id="settings" class="panel">
                 <h2>Trading configuration</h2>
@@ -215,6 +210,14 @@
                 <p id="regression-notes" class="form-note"></p>
             </div>
 
+            <div id="regression-pipeline" class="regression-pipeline hidden">
+                <div class="section-heading">
+                    <div><p class="eyebrow">WHY DID IT BUY / WHY DID IT STOP?</p><h3>Visual execution pipeline</h3></div>
+                </div>
+                <p class="form-note">Each fresh BUY context is traced through the exact shadow-production gates. Green = passed, amber = waiting/supportive, red = blocked. The first red stage is the reason no simulated BUY reached the wallet.</p>
+                <div id="regression-pipeline-body" class="regression-pipeline-body"></div>
+            </div>
+
             <h3>Recent test runs</h3>
             <div class="table-wrap">
                 <table>
@@ -255,11 +258,12 @@
                     <h2>Market Move Tracker</h2>
                 </div>
                 <div class="debug-symbol-actions">
-                    <label>Debug symbol
-                        <select id="price-move-symbol">
-                            <option value="">Loading configured coins…</option>
-                        </select>
-                    </label>
+                    <div class="debug-symbol-picker">
+                        <span>Debug symbols</span>
+                        <div id="price-move-symbols" class="debug-symbol-checks">Loading configured coins…</div>
+                    </div>
+                    <button id="price-move-select-all" type="button" class="secondary-button">Select All</button>
+                    <button id="price-move-clear-symbols" type="button" class="secondary-button">Clear</button>
                     <button id="price-move-refresh" type="button" class="secondary-button">Refresh Moves</button>
                 </div>
             </div>
@@ -281,16 +285,7 @@
                 <span><strong id="price-move-high-count">0</strong> high</span>
             </div>
 
-            <div id="price-move-active" class="price-move-active">
-                <div><span>Selected coin</span><strong id="price-move-active-symbol">—</strong></div>
-                <div><span>Live state</span><strong id="price-move-active-phase">—</strong></div>
-                <div><span>Direction</span><strong id="price-move-active-direction">—</strong></div>
-                <div><span>Start</span><strong id="price-move-active-start">—</strong></div>
-                <div><span>Current / extreme</span><strong id="price-move-active-price">—</strong></div>
-                <div><span>Move</span><strong id="price-move-active-change">—</strong></div>
-                <div><span>Duration</span><strong id="price-move-active-duration">—</strong></div>
-                <div><span>Priority</span><strong id="price-move-active-priority">—</strong></div>
-            </div>
+            <div id="price-move-active-list" class="price-move-active-list"></div>
 
             <div class="table-wrap">
                 <table class="price-move-table">
