@@ -142,6 +142,22 @@ public interface CandleRepository extends JpaRepository<Candle, Long> {
             @Param("intervalCode") String intervalCode,
             Pageable pageable
     );
+
+    @Query("""
+            SELECT c
+            FROM Candle c
+            WHERE c.symbol = :symbol
+              AND c.intervalCode = :intervalCode
+              AND c.closed = true
+              AND c.openTime <= :maxOpenTime
+            ORDER BY c.openTime DESC
+            """)
+    List<Candle> findClosedCandlesAtOrBefore(
+            @Param("symbol") String symbol,
+            @Param("intervalCode") String intervalCode,
+            @Param("maxOpenTime") Instant maxOpenTime,
+            Pageable pageable
+    );
     @Query("select distinct c.symbol from Candle c order by c.symbol")
     List<String> findDistinctSymbols();
 

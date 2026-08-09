@@ -113,7 +113,7 @@ public class ExecutionIntelligenceService {
             return ExecutionDecision.observe("CONTEXT_ONLY", "Only fresh 1m signals may trigger a BUY execution.");
         }
 
-        if (isBearish(signal.getDecision()) || isBearish(signal.getOriginalDecision())) {
+        if (isBearish(signal.getDecision())) {
             Evidence evidence = evidence(signal);
             if (isHardBearishReversal(signal, evidence)) {
                 saveOpportunity(signal, evidence, "CANCELLED", "OPPORTUNITY_MEMORY", 0,
@@ -717,7 +717,7 @@ public class ExecutionIntelligenceService {
                 health += HEALTH_1M_NEUTRAL;
             }
 
-            if (decision == SignalDecision.WATCH || isBullish(decision) || isBullish(original)) {
+            if (decision == SignalDecision.WATCH || isBullish(decision)) {
                 scoreTotal += signal.getTotalScore();
                 confidenceTotal += signal.getConfidenceScore();
                 qualityCount++;
@@ -836,18 +836,17 @@ public class ExecutionIntelligenceService {
         return (int) Math.round(base * factor);
     }
 
+    /**
+     * Downstream execution must respect FinalDecisionService as the authority.
+     * originalDecision is retained for audit/explainability only and is used
+     * solely as a null fallback for legacy rows.
+     */
     private SignalDecision strongerDecision(SignalDecision decision, SignalDecision original) {
-        if (decision == SignalDecision.STRONG_SELL || original == SignalDecision.STRONG_SELL) return SignalDecision.STRONG_SELL;
-        if (decision == SignalDecision.SELL || original == SignalDecision.SELL) return SignalDecision.SELL;
-        if (decision == SignalDecision.STRONG_BUY || original == SignalDecision.STRONG_BUY) return SignalDecision.STRONG_BUY;
-        if (decision == SignalDecision.BUY || original == SignalDecision.BUY) return SignalDecision.BUY;
-        if (decision == SignalDecision.WATCH || original == SignalDecision.WATCH) return SignalDecision.WATCH;
-        return decision == null ? original : decision;
+        return decision != null ? decision : original;
     }
 
     private boolean isHardBearishReversal(TradeSignal current, Evidence evidence) {
-        if (current.getDecision() == SignalDecision.STRONG_SELL
-                || current.getOriginalDecision() == SignalDecision.STRONG_SELL) {
+        if (current.getDecision() == SignalDecision.STRONG_SELL) {
             return true;
         }
         return isBearish(evidence.fiveMinute()) || isBearish(evidence.oneHour());

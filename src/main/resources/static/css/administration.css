@@ -58,3 +58,67 @@
 /* Debug Market Move Tracker chart navigation */
 .price-move-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
 .price-move-chart-link { text-decoration: none; white-space: nowrap; }
+
+/* AI regression tests: isolated diagnostic/replay UI. */
+.regression-test-panel { margin-top: 1.25rem; }
+.regression-test-form {
+    display: grid;
+    grid-template-columns: 1.25fr 0.8fr 1fr 1fr auto;
+    gap: .75rem;
+    align-items: end;
+    margin: 1rem 0;
+}
+.regression-test-form label { display: grid; gap: .35rem; }
+.regression-active {
+    padding: .9rem 1rem;
+    border: 1px solid var(--border, #dfe4ea);
+    border-radius: 12px;
+    margin: .8rem 0 1rem;
+}
+.regression-progress-heading,
+.regression-progress-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: center;
+}
+.regression-progress-track {
+    height: 8px;
+    background: rgba(127,127,127,.18);
+    border-radius: 999px;
+    overflow: hidden;
+    margin: .7rem 0 .45rem;
+}
+.regression-progress-bar {
+    height: 100%;
+    width: 0;
+    background: currentColor;
+    border-radius: inherit;
+    transition: width .25s ease;
+}
+.regression-result-grid {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: .65rem;
+    margin: 1rem 0;
+}
+.regression-result-grid article {
+    border: 1px solid var(--border, #dfe4ea);
+    border-radius: 10px;
+    padding: .75rem;
+    min-height: 82px;
+}
+.regression-result-grid span,
+.regression-result-grid small { display: block; }
+.regression-result-grid strong { display: block; font-size: 1.2rem; margin: .25rem 0; }
+.regression-detail { margin-top: 1.25rem; }
+.regression-opportunity-wrap { margin-top: 1rem; }
+.regression-corrected { font-weight: 700; }
+@media (max-width: 1100px) {
+    .regression-test-form { grid-template-columns: 1fr 1fr; }
+    .regression-result-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 650px) {
+    .regression-test-form { grid-template-columns: 1fr; }
+    .regression-result-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

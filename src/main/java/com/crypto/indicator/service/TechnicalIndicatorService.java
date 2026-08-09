@@ -89,7 +89,8 @@ public class TechnicalIndicatorService {
         Optional<IndicatorSnapshot> snapshotResult =
                 calculateSnapshotFromDatabase(
                         symbol,
-                        intervalCode
+                        intervalCode,
+                        expectedCandleOpenTime
                 );
 
         if (snapshotResult.isEmpty()) {
@@ -136,7 +137,8 @@ public class TechnicalIndicatorService {
     private Optional<IndicatorSnapshot>
     calculateSnapshotFromDatabase(
             String symbol,
-            String intervalCode
+            String intervalCode,
+            Instant maxOpenTime
     ) {
         String normalisedSymbol =
                 normaliseSymbol(symbol);
@@ -146,14 +148,18 @@ public class TechnicalIndicatorService {
 
         List<Candle> candles =
                 new ArrayList<>(
-                        candleRepository.findClosedCandles(
-                                normalisedSymbol,
-                                normalisedInterval,
-                                PageRequest.of(
-                                        0,
-                                        HISTORY_LIMIT
+                        maxOpenTime == null
+                                ? candleRepository.findClosedCandles(
+                                        normalisedSymbol,
+                                        normalisedInterval,
+                                        PageRequest.of(0, HISTORY_LIMIT)
                                 )
-                        )
+                                : candleRepository.findClosedCandlesAtOrBefore(
+                                        normalisedSymbol,
+                                        normalisedInterval,
+                                        maxOpenTime,
+                                        PageRequest.of(0, HISTORY_LIMIT)
+                                )
                 );
 
         if (candles.size() < MINIMUM_CANDLES) {
