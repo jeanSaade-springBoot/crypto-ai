@@ -54,8 +54,11 @@ public class TrendStructureService {
         List<Candle> window = candles.subList(candles.size() - REQUIRED_CANDLES, candles.size());
         List<String> evidence = new ArrayList<>();
 
-        Segment previous = segment(window.subList(1, 5));
-        Segment recent = segment(window.subList(6, 10));
+        // Compare two consecutive 5-candle blocks. The previous implementation
+        // skipped candles 0 and 5, which could hide the exact transition where
+        // a range begins expanding into a trend.
+        Segment previous = segment(window.subList(0, 5));
+        Segment recent = segment(window.subList(5, 10));
 
         boolean higherHigh = recent.high().compareTo(previous.high()) > 0;
         boolean higherLow = recent.low().compareTo(previous.low()) > 0;
@@ -71,10 +74,12 @@ public class TrendStructureService {
         if (ema20Respected) evidence.add("Price tested and closed back above EMA20");
 
         boolean compression = detectsCompression(window, indicator);
-        int breakoutPreparation = compression ? 1 : 0;
+        boolean bullishExpansion = detectsBullishExpansion(indicator, previous, recent);
+        int breakoutPreparation = (compression || bullishExpansion) ? 1 : 0;
         if (compression) evidence.add("Recent candle ranges compressed while price held above EMA20");
+        if (bullishExpansion) evidence.add("Price broke prior structure with bullish momentum and confirming relative volume");
 
-        boolean continuation = supportsContinuation(indicator, recent);
+        boolean continuation = supportsContinuation(indicator, recent, bullishExpansion);
         int continuationScore = continuation ? 1 : 0;
         if (continuation) evidence.add("Momentum and price location support continuation");
 
@@ -163,7 +168,11 @@ public class TrendStructureService {
                 && window.get(window.size() - 1).getClosePrice().compareTo(indicator.ema20()) >= 0;
     }
 
-    private boolean supportsContinuation(IndicatorSnapshot indicator, Segment recent) {
+    private boolean supportsContinuation(
+            IndicatorSnapshot indicator,
+            Segment recent,
+            boolean bullishExpansion
+    ) {
         boolean rsiHealthy = indicator.rsi14() != null
                 && indicator.rsi14().compareTo(new BigDecimal("45")) >= 0
                 && indicator.rsi14().compareTo(new BigDecimal("72")) <= 0;
@@ -171,7 +180,42 @@ public class TrendStructureService {
                 && indicator.macdHistogram().signum() >= 0;
         boolean priceHealthy = indicator.latestPrice().compareTo(indicator.ema20()) >= 0
                 && recent.close().compareTo(recent.open()) >= 0;
-        return rsiHealthy && momentumHealthy && priceHealthy;
+
+        // RSI is already scored independently in the Momentum group. Do not
+        // remove the structure-continuation point a second time merely because
+        // RSI moved above 72 during a genuinely confirmed expansion. The
+        // breakout must independently prove itself through price structure,
+        // MACD and relative volume before this exception applies.
+        boolean continuationRsiAccepted = rsiHealthy || bullishExpansion;
+        return continuationRsiAccepted && momentumHealthy && priceHealthy;
+    }
+
+    private boolean detectsBullishExpansion(
+            IndicatorSnapshot indicator,
+            Segment previous,
+            Segment recent
+    ) {
+        if (indicator.latestPrice() == null
+                || indicator.ema20() == null
+                || indicator.ema50() == null
+                || indicator.macdHistogram() == null
+                || indicator.relativeVolume() == null) {
+            return false;
+        }
+
+        boolean brokePreviousHigh = recent.high().compareTo(previous.high()) > 0
+                && recent.close().compareTo(previous.high()) > 0;
+        boolean closeAdvanced = recent.close().compareTo(previous.close()) > 0;
+        boolean aboveFastTrend = indicator.latestPrice().compareTo(indicator.ema20()) > 0
+                && indicator.ema20().compareTo(indicator.ema50()) >= 0;
+        boolean bullishMomentum = indicator.macdHistogram().signum() > 0;
+        boolean volumeConfirmation = indicator.relativeVolume().compareTo(new BigDecimal("1.50")) >= 0;
+
+        return brokePreviousHigh
+                && closeAdvanced
+                && aboveFastTrend
+                && bullishMomentum
+                && volumeConfirmation;
     }
 
     private Segment segment(List<Candle> candles) {
