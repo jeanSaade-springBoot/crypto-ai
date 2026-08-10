@@ -132,7 +132,7 @@ public class AnalysisService {
         TrendStructureResult trendStructure = trendStructureService.evaluate(i);
         MovingAverageBreakdown movingAverages = movingAverageScore(i, previous, trendStructure);
         MomentumBreakdown momentumBreakdown = momentumScore(i);
-        BandsVolumeBreakdown bandsVolume = bandsVolumeScore(i);
+        BandsVolumeBreakdown bandsVolume = bandsVolumeScore(i, previous);
         int trend = movingAverages.total();
         int volume = bandsVolume.total();
         int momentum = momentumBreakdown.total();
@@ -580,7 +580,7 @@ public class AnalysisService {
         return new MomentumBreakdown(rsi, macd);
     }
 
-    private BandsVolumeBreakdown bandsVolumeScore(IndicatorSnapshot i) {
+    private BandsVolumeBreakdown bandsVolumeScore(IndicatorSnapshot i, IndicatorSnapshot previous) {
         BigDecimal price = i.latestPrice();
         BigDecimal upper = i.bollingerUpper();
         BigDecimal lower = i.bollingerLower();
@@ -596,17 +596,32 @@ public class AnalysisService {
                 : percentB.compareTo(BigDecimal.ONE) <= 0 ? 4 : 2;
 
         BigDecimal rvol = i.relativeVolume();
-        int relativeVolume = rvol.compareTo(BigDecimal.valueOf(2.0)) >= 0 ? 8
-                : rvol.compareTo(BigDecimal.valueOf(1.5)) >= 0 ? 7
-                : rvol.compareTo(BigDecimal.valueOf(1.2)) >= 0 ? 5
-                : rvol.compareTo(BigDecimal.ONE) >= 0 ? 3
-                : rvol.compareTo(BigDecimal.valueOf(0.75)) >= 0 ? 1 : 0;
 
-        boolean priceConfirms = i.latestPrice().compareTo(i.sma20()) > 0;
+        // Volume is directional evidence. A large volume spike is bullish only when
+        // price is also confirming the move. Previously this method checked only
+        // close > SMA20, so a violent red candle that remained above SMA20 could
+        // receive the full 8 RVOL points plus 6 confirmation points. That can turn
+        // distribution/sell pressure into a false BUY signal.
+        boolean priceAboveSma20 = i.latestPrice().compareTo(i.sma20()) > 0;
+        boolean priceAdvancing = previous == null
+                || previous.latestPrice() == null
+                || i.latestPrice().compareTo(previous.latestPrice()) >= 0;
+        boolean bullishPriceConfirmation = priceAboveSma20 && priceAdvancing;
+
+        int relativeVolume = bullishPriceConfirmation
+                ? (rvol.compareTo(BigDecimal.valueOf(2.0)) >= 0 ? 8
+                    : rvol.compareTo(BigDecimal.valueOf(1.5)) >= 0 ? 7
+                    : rvol.compareTo(BigDecimal.valueOf(1.2)) >= 0 ? 5
+                    : rvol.compareTo(BigDecimal.ONE) >= 0 ? 3
+                    : rvol.compareTo(BigDecimal.valueOf(0.75)) >= 0 ? 1 : 0)
+                : 0;
+
         boolean momentumConfirms = i.macdHistogram().signum() >= 0;
         int volumeConfirmation;
-        if (!priceConfirms) {
-            volumeConfirmation = 0; // high volume on falling price is not bullish confirmation
+        if (!bullishPriceConfirmation) {
+            // High volume while the candle closes below the previous close is not
+            // bullish confirmation, even if price is still above SMA20.
+            volumeConfirmation = 0;
         } else if (rvol.compareTo(BigDecimal.valueOf(1.5)) >= 0 && momentumConfirms) {
             volumeConfirmation = 6;
         } else if (rvol.compareTo(BigDecimal.valueOf(1.2)) >= 0 && momentumConfirms) {
@@ -829,7 +844,10 @@ public class AnalysisService {
                 i.relativeVolume().setScale(2, RoundingMode.HALF_UP) + "x",
                 "Current volume versus 20-period average",
                 bandsVolume.relativeVolume(), 8,
-                i.relativeVolume().compareTo(BigDecimal.valueOf(1.2)) >= 0 ? "Volume confirms interest" : "Volume is weak"
+                bandsVolume.relativeVolume() == 0 && i.relativeVolume().compareTo(BigDecimal.ONE) >= 0
+                        ? "Volume expanded without bullish price confirmation"
+                        : i.relativeVolume().compareTo(BigDecimal.valueOf(1.2)) >= 0
+                                ? "Volume confirms bullish interest" : "Volume is weak"
         ));
         breakdown.put("volumeSma20", componentDetail(
                 i.latestVolume().setScale(4, RoundingMode.HALF_UP) + " / avg "

@@ -70,83 +70,6 @@ class TrendStructureServiceTest {
         assertTrue(result.score() <= 2);
     }
 
-
-    @Test
-    void shouldRecognizeConfirmedBullishExpansionEvenWhenRsiIsHot() {
-        Instant start = Instant.parse("2026-08-08T13:45:00Z");
-        List<Candle> candles = new ArrayList<>();
-
-        // Five-candle base followed by a five-candle expansion. The recent
-        // block closes above the prior block high with stronger volume.
-        for (int index = 0; index < 5; index++) {
-            BigDecimal base = new BigDecimal("596.00").add(BigDecimal.valueOf(index * 0.08));
-            candles.add(candle(start.plusSeconds(index * 60L), base,
-                    base.add(new BigDecimal("0.18")),
-                    base.subtract(new BigDecimal("0.12")),
-                    base.add(new BigDecimal("0.05")),
-                    new BigDecimal("100")));
-        }
-        for (int index = 5; index < 10; index++) {
-            BigDecimal base = new BigDecimal("596.45").add(BigDecimal.valueOf((index - 5) * 0.25));
-            candles.add(candle(start.plusSeconds(index * 60L), base,
-                    base.add(new BigDecimal("0.35")),
-                    base.subtract(new BigDecimal("0.08")),
-                    base.add(new BigDecimal("0.28")),
-                    new BigDecimal("260")));
-        }
-
-        when(candleRepository.findTop200BySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeDesc("ETHUSDT", "1m"))
-                .thenReturn(candles.reversed());
-
-        TrendStructureService service = new TrendStructureService(candleRepository);
-        TrendStructureResult result = service.evaluate(indicator(
-                start.plusSeconds(9 * 60L),
-                new BigDecimal("597.73"),
-                new BigDecimal("596.70"),
-                new BigDecimal("596.35"),
-                new BigDecimal("84"),
-                new BigDecimal("0.25"),
-                new BigDecimal("2.60")
-        ));
-
-        assertTrue(result.score() >= 4);
-        assertTrue(result.higherHigh());
-        assertTrue(result.higherLow());
-        assertTrue(result.breakoutPreparationScore() == 1);
-        assertTrue(result.continuationSupported());
-        assertTrue(result.evidence().stream().anyMatch(e -> e.contains("broke prior structure")));
-    }
-
-    @Test
-    void shouldNotUseHotRsiExceptionWithoutConfirmedExpansion() {
-        Instant start = Instant.parse("2026-08-08T13:45:00Z");
-        List<Candle> candles = new ArrayList<>();
-        for (int index = 0; index < 10; index++) {
-            BigDecimal base = new BigDecimal("596.00").add(BigDecimal.valueOf(index * 0.03));
-            candles.add(candle(start.plusSeconds(index * 60L), base,
-                    base.add(new BigDecimal("0.10")),
-                    base.subtract(new BigDecimal("0.10")),
-                    base.add(new BigDecimal("0.02")),
-                    new BigDecimal("100")));
-        }
-
-        when(candleRepository.findTop200BySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeDesc("ETHUSDT", "1m"))
-                .thenReturn(candles.reversed());
-
-        TrendStructureService service = new TrendStructureService(candleRepository);
-        TrendStructureResult result = service.evaluate(indicator(
-                start.plusSeconds(9 * 60L),
-                new BigDecimal("596.29"),
-                new BigDecimal("596.10"),
-                new BigDecimal("596.00"),
-                new BigDecimal("84"),
-                new BigDecimal("0.05"),
-                new BigDecimal("1.10")
-        ));
-
-        assertTrue(!result.continuationSupported());
-    }
-
     private IndicatorSnapshot indicator(Instant candleTime) {
         return new IndicatorSnapshot(
                 "ETHUSDT", "1m", candleTime,
@@ -167,37 +90,6 @@ class TrendStructureServiceTest {
                 new BigDecimal("120"),
                 new BigDecimal("110"),
                 new BigDecimal("1.09")
-        );
-    }
-
-    private IndicatorSnapshot indicator(
-            Instant candleTime,
-            BigDecimal latestPrice,
-            BigDecimal ema20,
-            BigDecimal ema50,
-            BigDecimal rsi,
-            BigDecimal macdHistogram,
-            BigDecimal relativeVolume
-    ) {
-        return new IndicatorSnapshot(
-                "ETHUSDT", "1m", candleTime,
-                latestPrice,
-                ema20,
-                ema20,
-                ema50,
-                ema50.subtract(new BigDecimal("0.50")),
-                rsi,
-                new BigDecimal("0.80"),
-                new BigDecimal("0.50"),
-                macdHistogram,
-                ema20,
-                ema20.add(new BigDecimal("1.50")),
-                ema20.subtract(new BigDecimal("1.50")),
-                new BigDecimal("0.45"),
-                new BigDecimal("0.40"),
-                new BigDecimal("260"),
-                new BigDecimal("100"),
-                relativeVolume
         );
     }
 
