@@ -3,7 +3,9 @@ package com.crypto.service;
 import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
 import com.crypto.repository.TradeSignalRepository;
+import com.crypto.execution.service.ExecutionReplayScope;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -36,6 +38,8 @@ public class OpportunityConsolidationService {
     private static final int MIN_AVERAGE_CONFIDENCE = 70;
 
     private final TradeSignalRepository signalRepository;
+    @Autowired(required = false)
+    private ExecutionReplayScope replayScope;
 
     public Assessment evaluate(TradeSignal currentSignal) {
         if (currentSignal == null || currentSignal.getGeneratedAt() == null) {
@@ -61,8 +65,9 @@ public class OpportunityConsolidationService {
             return Assessment.reject("1H_BEARISH_VETO", "Consolidated BUY cancelled because 1h is " + oneHour.getDecision() + ".");
         }
 
-        List<TradeSignal> recent = signalRepository
-                .findTop20BySymbolAndIntervalOrderByGeneratedAtDesc(currentSignal.getSymbol(), EXECUTION_INTERVAL);
+        List<TradeSignal> recent = replayScope != null && replayScope.active()
+                ? replayScope.recent(currentSignal.getSymbol(), EXECUTION_INTERVAL, currentSignal.getGeneratedAt(), 20)
+                : signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc(currentSignal.getSymbol(), EXECUTION_INTERVAL);
         List<TradeSignal> consecutive = consecutiveFreshBuys(recent, currentSignal.getGeneratedAt());
 
         int count = consecutive.size();
@@ -184,9 +189,10 @@ public class OpportunityConsolidationService {
     }
 
     private TradeSignal latestAtOrBefore(TradeSignal executionSignal, String interval) {
-        return signalRepository
-                .findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
-                        executionSignal.getSymbol(), interval, executionSignal.getGeneratedAt())
+        return (replayScope != null && replayScope.active()
+                ? replayScope.latestAtOrBefore(executionSignal.getSymbol(), interval, executionSignal.getGeneratedAt())
+                : signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                        executionSignal.getSymbol(), interval, executionSignal.getGeneratedAt()))
                 .orElse(null);
     }
 

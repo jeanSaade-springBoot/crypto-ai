@@ -3,10 +3,12 @@ package com.crypto.service;
 import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
 import com.crypto.repository.TradeSignalRepository;
+import com.crypto.execution.service.ExecutionReplayScope;
 import com.crypto.wallet.domain.ExecutionProfile;
 import com.crypto.wallet.domain.WalletSettings;
 import com.crypto.wallet.repository.WalletSettingsRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -37,6 +39,8 @@ public class TradeExecutionValidationService {
 
     private final TradeSignalRepository signalRepository;
     private final WalletSettingsRepository settingsRepository;
+    @Autowired(required = false)
+    private ExecutionReplayScope replayScope;
 
     public ValidationResult validateBuy(TradeSignal executionSignal) {
         ValidationResult structural = validateBaseSignal(executionSignal, true);
@@ -44,10 +48,7 @@ public class TradeExecutionValidationService {
 
         WalletSettings settings = settings();
         if (settings.isRequireNewBuyTransition()) {
-            TradeSignal previous = signalRepository
-                    .findTopBySymbolAndIntervalAndGeneratedAtLessThanOrderByGeneratedAtDesc(
-                            executionSignal.getSymbol(), EXECUTION_INTERVAL, executionSignal.getGeneratedAt())
-                    .orElse(null);
+            TradeSignal previous = previousSignal(executionSignal.getSymbol(), EXECUTION_INTERVAL, executionSignal.getGeneratedAt()).orElse(null);
             if (isFresh(previous, executionSignal.getGeneratedAt(), ONE_MINUTE_TRANSITION_MAX_AGE)
                     && isBullish(previous.getDecision())) {
                 return ValidationResult.reject("BUY_CONTINUATION",
@@ -194,10 +195,17 @@ public class TradeExecutionValidationService {
     }
 
     private TradeSignal latestAtOrBefore(TradeSignal signal, String interval) {
-        return signalRepository
-                .findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
-                        signal.getSymbol(), interval, signal.getGeneratedAt())
-                .orElse(null);
+        return latestSignal(signal.getSymbol(), interval, signal.getGeneratedAt()).orElse(null);
+    }
+
+    private java.util.Optional<TradeSignal> previousSignal(String symbol, String interval, Instant reference) {
+        if (replayScope != null && replayScope.active()) return replayScope.previousBefore(symbol, interval, reference);
+        return signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanOrderByGeneratedAtDesc(symbol, interval, reference);
+    }
+
+    private java.util.Optional<TradeSignal> latestSignal(String symbol, String interval, Instant reference) {
+        if (replayScope != null && replayScope.active()) return replayScope.latestAtOrBefore(symbol, interval, reference);
+        return signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(symbol, interval, reference);
     }
 
     private boolean isFresh(TradeSignal signal, Instant reference, Duration maximumAge) {

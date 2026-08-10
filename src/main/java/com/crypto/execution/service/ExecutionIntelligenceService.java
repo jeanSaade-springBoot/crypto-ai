@@ -11,6 +11,7 @@ import com.crypto.service.OpportunityConsolidationService;
 import com.crypto.service.TradeExecutionValidationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -98,6 +99,8 @@ public class ExecutionIntelligenceService {
     private final OpportunityConsolidationService consolidationService;
     private final TradeSignalRepository signalRepository;
     private final ExecutionOpportunityRepository opportunityRepository;
+    @Autowired(required = false)
+    private ExecutionReplayScope replayScope;
 
     @Transactional
     public ExecutionDecision evaluateBuy(TradeSignal signal) {
@@ -258,8 +261,7 @@ public class ExecutionIntelligenceService {
     @Transactional
     public void markExecuted(TradeSignal signal, ExecutionDecision decision) {
         if (signal == null || decision == null || !decision.allowed()) return;
-        opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(
-                        signal.getSymbol(), "BUY", List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
+        currentOpportunity(signal.getSymbol(), List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
                 .ifPresent(opportunity -> {
                     boolean stillBuilding = "SCOUT_ENTRY".equals(decision.source())
                             || "CONFIRMATION_ADD".equals(decision.source());
@@ -274,7 +276,7 @@ public class ExecutionIntelligenceService {
                         opportunity.setExecutedAt(Instant.now());
                     }
                     opportunity.setUpdatedAt(Instant.now());
-                    opportunityRepository.save(opportunity);
+                    saveOpportunityEntity(opportunity);
                 });
     }
 
@@ -291,8 +293,7 @@ public class ExecutionIntelligenceService {
         }
 
         Instant cutoff = current.getGeneratedAt().minus(EVIDENCE_WINDOW);
-        List<TradeSignal> recent = signalRepository
-                .findTop20BySymbolAndIntervalOrderByGeneratedAtDesc(current.getSymbol(), EXECUTION_INTERVAL);
+        List<TradeSignal> recent = recentSignals(current.getSymbol(), EXECUTION_INTERVAL, current.getGeneratedAt());
 
         BigDecimal reference = current.getLatestPrice();
         for (TradeSignal s : recent) {
@@ -314,9 +315,7 @@ public class ExecutionIntelligenceService {
                     .divide(current.getAtrAtSignal(), 8, RoundingMode.HALF_UP).doubleValue();
         }
 
-        long ageMinutes = opportunityRepository
-                .findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(
-                        current.getSymbol(), "BUY", List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
+        long ageMinutes = currentOpportunity(current.getSymbol(), List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
                 .map(o -> o.getStartedAt() == null ? 0L
                         : Math.max(0L, Duration.between(o.getStartedAt(), current.getGeneratedAt()).toMinutes()))
                 .orElse(0L);
@@ -542,8 +541,7 @@ public class ExecutionIntelligenceService {
 
     private TradeSignal priorAtrDeferredBuy(TradeSignal current) {
         Instant cutoff = current.getGeneratedAt().minus(DEFERRED_BUY_LOOKBACK);
-        return signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc(
-                        current.getSymbol(), EXECUTION_INTERVAL).stream()
+        return recentSignals(current.getSymbol(), EXECUTION_INTERVAL, current.getGeneratedAt()).stream()
                 .filter(s -> s.getGeneratedAt() != null
                         && s.getGeneratedAt().isBefore(current.getGeneratedAt())
                         && !s.getGeneratedAt().isBefore(cutoff))
@@ -660,8 +658,7 @@ public class ExecutionIntelligenceService {
 
     private Evidence evidence(TradeSignal current) {
         Instant cutoff = current.getGeneratedAt().minus(EVIDENCE_WINDOW);
-        List<TradeSignal> recent = signalRepository
-                .findTop20BySymbolAndIntervalOrderByGeneratedAtDesc(current.getSymbol(), EXECUTION_INTERVAL);
+        List<TradeSignal> recent = recentSignals(current.getSymbol(), EXECUTION_INTERVAL, current.getGeneratedAt());
 
         int buy = 0, watch = 0, neutral = 0, bearish = 0, evidenceScore = 0;
         int scoreTotal = 0, confidenceTotal = 0, qualityCount = 0;
@@ -742,9 +739,7 @@ public class ExecutionIntelligenceService {
         evidenceScore = Math.max(0, evidenceScore);
         health = Math.max(0, Math.min(100, health));
 
-        int previousHealth = opportunityRepository
-                .findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(
-                        current.getSymbol(), "BUY", List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
+        int previousHealth = currentOpportunity(current.getSymbol(), List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
                 .map(ExecutionOpportunity::getOpportunityHealth)
                 .orElse(OPPORTUNITY_HEALTH_START);
         int healthMomentum = health - previousHealth;
@@ -853,10 +848,7 @@ public class ExecutionIntelligenceService {
     }
 
     private TradeSignal latestAtOrBefore(TradeSignal current, String interval, Duration maxAge) {
-        TradeSignal result = signalRepository
-                .findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
-                        current.getSymbol(), interval, current.getGeneratedAt())
-                .orElse(null);
+        TradeSignal result = latestSignalAtOrBefore(current.getSymbol(), interval, current.getGeneratedAt()).orElse(null);
         if (result == null || result.getGeneratedAt() == null
                 || result.getGeneratedAt().isBefore(current.getGeneratedAt().minus(maxAge))) {
             return null;
@@ -867,9 +859,7 @@ public class ExecutionIntelligenceService {
     private void saveOpportunity(TradeSignal signal, Evidence evidence, String status, String source,
                                  int positionPercent, String code, String explanation) {
         Instant now = Instant.now();
-        ExecutionOpportunity opportunity = opportunityRepository
-                .findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(
-                        signal.getSymbol(), "BUY", List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
+        ExecutionOpportunity opportunity = currentOpportunity(signal.getSymbol(), List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
                 .orElseGet(() -> ExecutionOpportunity.builder()
                         .symbol(signal.getSymbol())
                         .direction("BUY")
@@ -899,12 +889,11 @@ public class ExecutionIntelligenceService {
         opportunity.setDecisionCode(code);
         opportunity.setDecisionExplanation(explanation);
         opportunity.setUpdatedAt(now);
-        opportunityRepository.save(opportunity);
+        saveOpportunityEntity(opportunity);
     }
 
     private void closeOpportunity(TradeSignal signal, String status, String code, String explanation) {
-        opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(
-                        signal.getSymbol(), "BUY", List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
+        currentOpportunity(signal.getSymbol(), List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
                 .ifPresent(opportunity -> {
                     opportunity.setStatus(status);
                     opportunity.setLatestSignal(signal);
@@ -912,8 +901,28 @@ public class ExecutionIntelligenceService {
                     opportunity.setDecisionCode(code);
                     opportunity.setDecisionExplanation(explanation);
                     opportunity.setUpdatedAt(Instant.now());
-                    opportunityRepository.save(opportunity);
+                    saveOpportunityEntity(opportunity);
                 });
+    }
+
+    private List<TradeSignal> recentSignals(String symbol, String interval, Instant reference) {
+        if (replayScope != null && replayScope.active()) return replayScope.recent(symbol, interval, reference, 20);
+        return signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc(symbol, interval);
+    }
+
+    private java.util.Optional<TradeSignal> latestSignalAtOrBefore(String symbol, String interval, Instant reference) {
+        if (replayScope != null && replayScope.active()) return replayScope.latestAtOrBefore(symbol, interval, reference);
+        return signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(symbol, interval, reference);
+    }
+
+    private java.util.Optional<ExecutionOpportunity> currentOpportunity(String symbol, List<String> statuses) {
+        if (replayScope != null && replayScope.active()) return replayScope.currentOpportunity(symbol, statuses);
+        return opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(symbol, "BUY", statuses);
+    }
+
+    private ExecutionOpportunity saveOpportunityEntity(ExecutionOpportunity opportunity) {
+        if (replayScope != null && replayScope.active()) return replayScope.saveOpportunity(opportunity);
+        return opportunityRepository.save(opportunity);
     }
 
     private String normalizeStatus(String status) {

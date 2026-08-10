@@ -1,8 +1,10 @@
 package com.crypto.regression.service;
 
-import com.crypto.config.TradingProperties;
 import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
+import com.crypto.execution.domain.ExecutionOpportunity;
+import com.crypto.execution.service.ExecutionIntelligenceService;
+import com.crypto.execution.service.ExecutionReplayScope;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -11,9 +13,7 @@ import java.math.BigDecimal;
 import java.math.MathContext;
 import java.math.RoundingMode;
 import java.sql.Timestamp;
-import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
@@ -21,12 +21,11 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ShadowProductionReplayService {
     private static final MathContext MC = MathContext.DECIMAL64;
-    private static final Duration EVIDENCE_WINDOW = Duration.ofMinutes(30);
-    private static final int MIN_EVIDENCE_SCORE = 7;
     private static final BigDecimal INITIAL_CAPITAL = BigDecimal.valueOf(10000);
 
     private final JdbcTemplate jdbcTemplate;
-    private final TradingProperties properties;
+    private final ExecutionIntelligenceService executionIntelligenceService;
+    private final ExecutionReplayScope replayScope;
 
     public ReplayStats replay(long runId, String symbol, List<TradeSignal> generatedSignals) {
         List<TradeSignal> timeline = generatedSignals.stream()
@@ -35,7 +34,6 @@ public class ShadowProductionReplayService {
                         .thenComparingInt(s -> intervalOrder(s.getInterval())))
                 .toList();
 
-        List<TradeSignal> oneMinuteHistory = new ArrayList<>();
         TradeSignal latest5m = null;
         TradeSignal latest1h = null;
         ShadowPosition open = null;
@@ -43,7 +41,10 @@ public class ShadowProductionReplayService {
         BigDecimal realized = BigDecimal.ZERO;
         int trades = 0, wins = 0, losses = 0;
 
+        try (ExecutionReplayScope.Scope ignored = replayScope.open(runId, timeline,
+                opportunity -> persistProductionOpportunity(runId, opportunity))) {
         for (TradeSignal signal : timeline) {
+            replayScope.reference(signal.getGeneratedAt());
             if ("5m".equals(signal.getInterval())) latest5m = signal;
             if ("1h".equals(signal.getInterval())) latest1h = signal;
 
@@ -66,13 +67,7 @@ public class ShadowProductionReplayService {
             }
 
             if (!"1m".equals(signal.getInterval())) continue;
-            oneMinuteHistory.add(signal);
-            Instant cutoff = signal.getGeneratedAt().minus(EVIDENCE_WINDOW);
-            oneMinuteHistory.removeIf(s -> s.getGeneratedAt().isBefore(cutoff));
-
-            Evidence evidence = evidence(oneMinuteHistory, latest5m, latest1h);
-            EntryDecision decision = evaluateEntry(signal, latest5m, latest1h, evidence, open != null);
-            persistOpportunity(runId, signal, latest5m, latest1h, evidence, decision);
+            ExecutionIntelligenceService.ExecutionDecision decision = executionIntelligenceService.evaluateBuy(signal);
 
             if (open == null && decision.allowed()) {
                 int atrPercent = signal.getAtrRecommendedPositionPercent() <= 0 ? 100 : signal.getAtrRecommendedPositionPercent();
@@ -84,12 +79,14 @@ public class ShadowProductionReplayService {
                     BigDecimal qty = budget.divide(signal.getLatestPrice(), 12, RoundingMode.HALF_UP);
                     long positionId = openPosition(runId, symbol, signal, qty, budget, effectivePercent);
                     persistBuy(runId, symbol, signal, qty, budget, effectivePercent, decision);
+                    executionIntelligenceService.markExecuted(signal, decision);
                     cash = cash.subtract(budget, MC);
                     open = new ShadowPosition(positionId, signal.getGeneratedAt(), signal.getLatestPrice(), qty, budget,
                             signal.getStopLoss(), signal.getTakeProfit(), signal.getLatestPrice(), false, null,
                             signal.getTotalScore(), signal.getConfidenceScore());
                 }
             }
+        }
         }
 
         BigDecimal finalWallet = cash;
@@ -105,49 +102,6 @@ public class ShadowProductionReplayService {
                 WHERE id=?
                 """, trades, wins, losses, realized, finalWallet, runId);
         return new ReplayStats(trades, wins, losses, realized, finalWallet);
-    }
-
-    private EntryDecision evaluateEntry(TradeSignal s, TradeSignal five, TradeSignal one, Evidence e, boolean alreadyOpen) {
-        if (alreadyOpen) return EntryDecision.no("POSITION_ALREADY_OPEN", "A shadow position is already open.", "MANAGED");
-        if (s.getDecision() == SignalDecision.STRONG_SELL || bearish(decision(five)) || bearish(decision(one)))
-            return EntryDecision.no("BEARISH_REVERSAL", "Final 1m/5m/1h bearish context invalidated the BUY opportunity.", "CANCELLED");
-        if (!s.isStrategyEntryAllowed()) return EntryDecision.no("STRATEGY_ENTRY_BLOCKED", "Strategy entry gate blocked execution.", "BLOCKED");
-        if (!s.isBtcContextEntryAllowed()) return EntryDecision.no("BTC_CONTEXT_BLOCKED", "BTC context blocked execution.", "BLOCKED");
-        if (!s.isDerivativesEntryAllowed()) return EntryDecision.no("DERIVATIVES_BLOCKED", "Derivatives context blocked execution.", "BLOCKED");
-        if (!s.isLiquidityEntryAllowed()) return EntryDecision.no("LIQUIDITY_BLOCKED", "Liquidity/order-book context blocked execution.", "BLOCKED");
-        if (s.getLatestPrice() == null || s.getStopLoss() == null || s.getTakeProfit() == null)
-            return EntryDecision.no("MISSING_RISK_PLAN", "Entry price/stop/target is incomplete.", "BLOCKED");
-
-        boolean direct = bullish(s.getDecision()) && s.isFinalEntryAllowed() && s.isAtrImmediateEntryAllowed()
-                && s.getTotalScore() >= properties.minimumBuyScore();
-        if (direct) {
-            int pct = balancedPositionPercent(five, one);
-            if (pct > 0) return EntryDecision.yes("DIRECT_BUY", "DIRECT_SIGNAL", pct,
-                    "Fresh 1m BUY passed final decision, ATR and higher-timeframe confirmation.");
-        }
-
-        if (!supportive(s)) return EntryDecision.no("NO_BULLISH_EVIDENCE", "Current 1m signal is not supportive.", "BUILDING");
-        if (five == null || one == null) return EntryDecision.no("MISSING_CONTEXT", "Fresh 5m/1h context is unavailable.", "BUILDING");
-        if (bearish(five.getDecision()) || bearish(one.getDecision()))
-            return EntryDecision.no("HIGHER_TIMEFRAME_BEARISH", "5m or 1h final decision is bearish.", "CANCELLED");
-        if (e.health() < 40) return EntryDecision.no("OPPORTUNITY_RECOVERING", "Opportunity health is below 40.", "RECOVERING");
-        if (e.score() < MIN_EVIDENCE_SCORE)
-            return EntryDecision.no("EVIDENCE_BUILDING", "Evidence score " + e.score() + "/" + MIN_EVIDENCE_SCORE + ".", "BUILDING");
-        if (e.buys() == 0 && e.watches() < 5)
-            return EntryDecision.no("WATCH_ONLY_BUILDING", "WATCH evidence has not persisted long enough.", "BUILDING");
-        if (e.avgScore() < 65 || e.avgConfidence() < 65)
-            return EntryDecision.no("EVIDENCE_QUALITY_LOW", "Average evidence quality is below 65.", "BUILDING");
-        if (!s.isAtrImmediateEntryAllowed())
-            return EntryDecision.no("ATR_ENTRY_BLOCKED", "ATR requested pullback/retracement before entry.", "BLOCKED");
-
-        int pct = e.score() >= 11 ? 50 : 25;
-        if (e.buys() >= 2) pct += 10;
-        if (five.getDecision() == SignalDecision.WATCH) pct += 5;
-        if (bullish(five.getDecision())) pct += 15;
-        if (one.getDecision() == SignalDecision.WATCH) pct += 5;
-        if (bullish(one.getDecision())) pct += 10;
-        return EntryDecision.yes("ACCUMULATED_EVIDENCE", "OPPORTUNITY_CONFIRMED", Math.min(75, pct),
-                "Accumulated fresh evidence confirmed the opportunity.");
     }
 
     private ExitDecision evaluateExit(ShadowPosition p, TradeSignal s, TradeSignal five, TradeSignal one) {
@@ -204,46 +158,9 @@ public class ShadowProductionReplayService {
         return p.withLock(highest, active, lock);
     }
 
-    private Evidence evidence(List<TradeSignal> history, TradeSignal five, TradeSignal one) {
-        int buys=0,watches=0,neutrals=0,bearish=0,score=0,total=0,confidence=0;
-        for (TradeSignal s : history) {
-            SignalDecision d=s.getDecision();
-            if (bullish(d)) { buys++; score+=3; }
-            else if (d==SignalDecision.WATCH && s.getTotalScore()>=60 && s.getConfidenceScore()>=60) { watches++; score+=1; }
-            else if (d==SignalDecision.SELL) { bearish++; score-=2; }
-            else if (d==SignalDecision.STRONG_SELL) { bearish++; score-=4; }
-            else neutrals++;
-            total+=s.getTotalScore(); confidence+=s.getConfidenceScore();
-        }
-        int health=50;
-        if (!history.isEmpty()) {
-            TradeSignal last=history.get(history.size()-1);
-            health += bullish(last.getDecision()) ? 15 : last.getDecision()==SignalDecision.WATCH ? 5
-                    : last.getDecision()==SignalDecision.SELL ? -15 : last.getDecision()==SignalDecision.STRONG_SELL ? -30 : -2;
-        }
-        health += tfHealth(five,25,10,-25,-35);
-        health += tfHealth(one,40,15,-40,-50);
-        health=Math.max(0,Math.min(100,health));
-        int n=Math.max(1,history.size());
-        return new Evidence(history.size(),buys,watches,neutrals,bearish,score,health,total/n,confidence/n);
-    }
-
-    private int tfHealth(TradeSignal s,int buy,int watch,int sell,int strongSell) {
-        if (s==null||s.getDecision()==null) return 0;
-        return switch(s.getDecision()) { case BUY,STRONG_BUY -> buy; case WATCH -> watch; case SELL -> sell; case STRONG_SELL -> strongSell; default -> 0;};
-    }
-
-    private int balancedPositionPercent(TradeSignal five, TradeSignal one) {
-        if (five==null||one==null) return 0;
-        SignalDecision f=five.getDecision(), o=one.getDecision();
-        if (bullish(f)&&bullish(o)) return 100;
-        if (bullish(f)&&(o==SignalDecision.WATCH||o==SignalDecision.NEUTRAL)) return 75;
-        if (f==SignalDecision.WATCH&&bullish(o)) return 75;
-        if (f==SignalDecision.WATCH&&o==SignalDecision.WATCH) return 50;
-        return 0;
-    }
-
-    private void persistOpportunity(long runId, TradeSignal s, TradeSignal five, TradeSignal one, Evidence e, EntryDecision d) {
+    private void persistProductionOpportunity(long runId, ExecutionOpportunity o) {
+        TradeSignal s = o.getLatestSignal();
+        if (s == null || s.getGeneratedAt() == null) return;
         jdbcTemplate.update("""
             INSERT INTO execution_opportunity_test
             (test_run_id, source_signal_id, symbol, generated_at, replay_stage, evidence_count, buy_count, watch_count,
@@ -251,11 +168,14 @@ public class ShadowProductionReplayService {
              current_final_decision, current_original_decision, five_minute_decision, one_hour_decision,
              old_hard_bearish_reversal, corrected_hard_bearish_reversal, decision_code, decision_explanation)
             VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
-            """, runId,s.getSymbol(),Timestamp.from(s.getGeneratedAt()),d.stage(),e.count(),e.buys(),e.watches(),e.neutrals(),e.bearish(),
-                e.score(),e.health(),d.positionPercent(),name(s.getDecision()),name(s.getOriginalDecision()),name(decision(five)),name(decision(one)),d.code(),d.explanation());
+            """, runId, s.getSymbol(), Timestamp.from(s.getGeneratedAt()), o.getStatus(), o.getEvidenceCount(),
+                o.getBuyCount(), o.getWatchCount(), o.getNeutralCount(), o.getBearishCount(), o.getEvidenceScore(),
+                o.getOpportunityHealth(), o.getRecommendedPositionPercent(), name(s.getDecision()),
+                name(s.getOriginalDecision()), o.getFiveMinuteDecision(), o.getOneHourDecision(),
+                o.getDecisionCode(), o.getDecisionExplanation());
     }
 
-    private void persistBuy(long runId,String symbol,TradeSignal s,BigDecimal qty,BigDecimal budget,int pct,EntryDecision d){
+    private void persistBuy(long runId,String symbol,TradeSignal s,BigDecimal qty,BigDecimal budget,int pct,ExecutionIntelligenceService.ExecutionDecision d){
         jdbcTemplate.update("""
             INSERT INTO wallet_execution_test
             (test_run_id,symbol,side,execution_time,execution_price,quantity,notional_usdt,position_percent,signal_interval,signal_decision,execution_source,execution_code,execution_reason)
@@ -290,20 +210,13 @@ public class ShadowProductionReplayService {
     }
 
     private BigDecimal percentage(BigDecimal entry,BigDecimal exit){return exit.subtract(entry).multiply(BigDecimal.valueOf(100)).divide(entry,8,RoundingMode.HALF_UP);}
-    private boolean supportive(TradeSignal s){return bullish(s.getDecision())||(s.getDecision()==SignalDecision.WATCH&&s.getTotalScore()>=60&&s.getConfidenceScore()>=60);}
     private boolean bullish(SignalDecision d){return d==SignalDecision.BUY||d==SignalDecision.STRONG_BUY;}
     private boolean bearish(SignalDecision d){return d==SignalDecision.SELL||d==SignalDecision.STRONG_SELL;}
-    private SignalDecision decision(TradeSignal s){return s==null?null:s.getDecision();}
     private String name(SignalDecision d){return d==null?null:d.name();}
     private int intervalOrder(String i){return "1h".equals(i)?0:"5m".equals(i)?1:2;}
     private boolean equalsNullable(BigDecimal a,BigDecimal b){return a==null?b==null:b!=null&&a.compareTo(b)==0;}
 
     public record ReplayStats(int trades,int wins,int losses,BigDecimal realizedPnl,BigDecimal finalWallet){}
-    private record Evidence(int count,int buys,int watches,int neutrals,int bearish,int score,int health,int avgScore,int avgConfidence){}
-    private record EntryDecision(boolean allowed,String source,String code,String stage,int positionPercent,String explanation){
-        static EntryDecision yes(String source,String code,int pct,String exp){return new EntryDecision(true,source,code,"CONFIRMED",pct,exp);}
-        static EntryDecision no(String code,String exp,String stage){return new EntryDecision(false,"SHADOW_EXECUTION",code,stage,0,exp);}
-    }
     private record ExitDecision(boolean exit,String reason,String explanation){static ExitDecision hold(){return new ExitDecision(false,"HOLD","Position remains open.");}}
     private record ShadowPosition(long positionId,Instant entryTime,BigDecimal entryPrice,BigDecimal quantity,BigDecimal cost,BigDecimal stopLoss,BigDecimal takeProfit,BigDecimal highest,boolean profitLockActive,BigDecimal profitLockPrice,int entryScore,int entryConfidence){
         ShadowPosition withLock(BigDecimal h,boolean a,BigDecimal l){return new ShadowPosition(positionId,entryTime,entryPrice,quantity,cost,stopLoss,takeProfit,h,a,l,entryScore,entryConfidence);}
