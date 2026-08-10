@@ -6,6 +6,7 @@ import com.crypto.dto.TrendStructureResult;
 import com.crypto.repository.CandleRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.data.domain.PageRequest;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -37,11 +38,19 @@ public class TrendStructureService {
             return TrendStructureResult.unavailable("Indicator candle time is unavailable");
         }
 
+        // Query the candle history AS OF the indicator timestamp. This is critical
+        // for both live production and historical replay: live gets the latest
+        // closed candles up to the current signal, while replay gets the exact
+        // historical candles that were available at that moment. Querying the
+        // latest candles first and filtering in memory can return no historical
+        // context when the replay timestamp is older than the repository window.
         List<Candle> candles = candleRepository
-                .findTop200BySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeDesc(
-                        indicator.symbol(), indicator.intervalCode())
+                .findClosedCandlesAtOrBefore(
+                        indicator.symbol(),
+                        indicator.intervalCode(),
+                        indicator.candleOpenTime(),
+                        PageRequest.of(0, REQUIRED_CANDLES))
                 .stream()
-                .filter(c -> !c.getOpenTime().isAfter(indicator.candleOpenTime()))
                 .sorted(Comparator.comparing(Candle::getOpenTime))
                 .toList();
 

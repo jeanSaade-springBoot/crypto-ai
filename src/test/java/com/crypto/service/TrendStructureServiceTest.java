@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -15,6 +16,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -36,7 +39,8 @@ class TrendStructureServiceTest {
                     new BigDecimal("100")));
         }
 
-        when(candleRepository.findTop200BySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeDesc("ETHUSDT", "1m"))
+        when(candleRepository.findClosedCandlesAtOrBefore(
+                eq("ETHUSDT"), eq("1m"), eq(start.plusSeconds(9 * 60L)), any(Pageable.class)))
                 .thenReturn(candles.reversed());
 
         TrendStructureService service = new TrendStructureService(candleRepository);
@@ -61,7 +65,8 @@ class TrendStructureServiceTest {
                     new BigDecimal("150")));
         }
 
-        when(candleRepository.findTop200BySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeDesc("ETHUSDT", "1m"))
+        when(candleRepository.findClosedCandlesAtOrBefore(
+                eq("ETHUSDT"), eq("1m"), eq(start.plusSeconds(9 * 60L)), any(Pageable.class)))
                 .thenReturn(candles.reversed());
 
         TrendStructureService service = new TrendStructureService(candleRepository);
