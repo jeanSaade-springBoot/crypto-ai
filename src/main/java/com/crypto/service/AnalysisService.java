@@ -99,7 +99,7 @@ public class AnalysisService {
     @Transactional
     public TradeSignal analyze(TechnicalIndicator indicator) {
         IndicatorSnapshot snapshot = toSnapshot(indicator);
-        TradeSignal signal = buildSignal(snapshot, Instant.now());
+        TradeSignal signal = buildSignal(snapshot, Instant.now(), false);
         return signalRepository.save(signal);
     }
 
@@ -112,16 +112,16 @@ public class AnalysisService {
         if (snapshot == null) {
             throw new IllegalArgumentException("Regression indicator snapshot is required");
         }
-        return buildSignal(snapshot, evaluationTime == null ? snapshot.candleOpenTime() : evaluationTime);
+        return buildSignal(snapshot, evaluationTime == null ? snapshot.candleOpenTime() : evaluationTime, true);
     }
 
-    private TradeSignal buildSignal(IndicatorSnapshot i, Instant signalGeneratedAt) {
+    private TradeSignal buildSignal(IndicatorSnapshot i, Instant signalGeneratedAt, boolean historicalReplay) {
         String symbol = i.symbol();
 
         boolean sentimentEnabled = sentimentService.isEnabled();
-        SentimentOverview sentimentOverview = sentimentService.overview(symbol);
+        SentimentOverview sentimentOverview = sentimentService.overviewAsOf(symbol, signalGeneratedAt);
         BigDecimal sentiment = sentimentOverview.weightedScore();
-        MarketFundamental fundamental = fundamentalService.latest(symbol).orElse(null);
+        MarketFundamental fundamental = fundamentalService.latestAsOf(symbol, signalGeneratedAt).orElse(null);
         boolean sentimentAvailable = sentimentEnabled && sentimentOverview != null
                 && sentimentOverview.providers() != null
                 && sentimentOverview.providers().stream().anyMatch(provider -> provider.enabled()
@@ -151,7 +151,7 @@ public class AnalysisService {
         MarketRegimeAssessment regimeAssessment = marketRegimeService.assess(i);
         MarketRegime marketRegime = regimeAssessment.regime();
         MarketContextSnapshot marketContext = marketContextService.build(
-                i, atrRisk, sentimentOverview, sentimentEnabled, signalGeneratedAt);
+                i, atrRisk, sentimentOverview, sentimentEnabled, signalGeneratedAt, historicalReplay);
         StrategyProfile strategyProfile = marketStrategyService.select(regimeAssessment, marketContext);
         atrRisk = atrRiskService.applyStrategyEntryPlan(atrRisk, i, strategyProfile.strategy());
         StrategyScoreResult strategyScore = marketStrategyService.score(
@@ -407,11 +407,8 @@ public class AnalysisService {
 
     private IndicatorSnapshot previousSnapshot(IndicatorSnapshot current) {
         return technicalIndicatorRepository
-                .findTop100BySymbolAndIntervalCodeOrderByCandleOpenTimeDesc(
-                        current.symbol(), current.intervalCode())
-                .stream()
-                .filter(candidate -> candidate.getCandleOpenTime().isBefore(current.candleOpenTime()))
-                .findFirst()
+                .findTopBySymbolAndIntervalCodeAndCandleOpenTimeLessThanOrderByCandleOpenTimeDesc(
+                        current.symbol(), current.intervalCode(), current.candleOpenTime())
                 .map(this::toSnapshot)
                 .orElse(null);
     }

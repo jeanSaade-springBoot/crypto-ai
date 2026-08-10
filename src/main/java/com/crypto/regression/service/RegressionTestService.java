@@ -120,7 +120,8 @@ public class RegressionTestService {
                        current_step, source_signal_count, replay_signal_count, generated_signal_count,
                        generated_buy_count, generated_watch_count, generated_sell_count, generated_strong_sell_count,
                        neutralized_original_bearish_count, corrected_hard_reversal_count,
-                       historical_hard_reversal_count, error_message, started_at, completed_at, created_at
+                       historical_hard_reversal_count, error_message, failure_step, failure_exception,
+                       failure_root_cause, failure_stack_trace, started_at, completed_at, created_at
                 FROM analysis_test_run
                 WHERE id = ?
                 """, id);

@@ -16,6 +16,8 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.sql.Timestamp;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -204,8 +206,19 @@ public class RegressionTestWorker {
 
         } catch (Exception exception) {
             log.error("Regression test run {} failed", runId, exception);
-            updateRun(runId, "ERROR", 100, "Regression test failed", abbreviate(exception.getMessage(), 1900));
-            jdbcTemplate.update("UPDATE analysis_test_run SET completed_at=CURRENT_TIMESTAMP(6) WHERE id=?", runId);
+            String failedStep = currentStep(runId);
+            String summary = errorDetail(exception, 1900);
+            Throwable root = rootCause(exception);
+            jdbcTemplate.update("""
+                    UPDATE analysis_test_run
+                    SET status='ERROR', progress_percent=100, current_step='Regression test failed',
+                        error_message=?, failure_step=?, failure_exception=?, failure_root_cause=?,
+                        failure_stack_trace=?, started_at=COALESCE(started_at, CURRENT_TIMESTAMP(6)),
+                        completed_at=CURRENT_TIMESTAMP(6)
+                    WHERE id=?
+                    """,
+                    summary, failedStep, exception.getClass().getName(),
+                    rootCauseDetail(root, 1000), stackTrace(exception), runId);
         }
     }
 
@@ -298,7 +311,7 @@ public class RegressionTestWorker {
                         generated.getVolumeScore(), generated.getMomentumScore());
             } catch (Exception exception) {
                 errors++;
-                saveGenerationError(runId, symbol, replay.interval(), candle, abbreviate(exception.getMessage(), 900));
+                saveGenerationError(runId, symbol, replay.interval(), candle, errorDetail(exception, 900));
                 log.warn("Regression fresh-signal generation failed: run={}, symbol={}, interval={}, candle={}",
                         runId, symbol, replay.interval(), candle.getOpenTime(), exception);
             }
@@ -376,11 +389,66 @@ public class RegressionTestWorker {
     }
 
 
+
+    private String currentStep(long runId) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    "SELECT current_step FROM analysis_test_run WHERE id = ?", String.class, runId);
+        } catch (Exception ignored) {
+            return "Unknown regression phase";
+        }
+    }
+
+    private Throwable rootCause(Throwable exception) {
+        if (exception == null) return null;
+        Throwable root = exception;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root;
+    }
+
+    private String rootCauseDetail(Throwable root, int max) {
+        if (root == null) return "Unknown root cause";
+        String message = root.getMessage();
+        String detail = root.getClass().getName() + (message == null || message.isBlank() ? "" : ": " + message);
+        return abbreviate(detail, max);
+    }
+
+    private String stackTrace(Throwable exception) {
+        if (exception == null) return "Unknown regression test error";
+        StringWriter buffer = new StringWriter();
+        try (PrintWriter writer = new PrintWriter(buffer)) {
+            exception.printStackTrace(writer);
+        }
+        return buffer.toString();
+    }
+
     private Instant toInstant(Object value) {
         if (value instanceof Timestamp timestamp) return timestamp.toInstant();
         if (value instanceof Instant instant) return instant;
         if (value instanceof LocalDateTime localDateTime) return localDateTime.toInstant(ZoneOffset.UTC);
         throw new IllegalStateException("Unsupported regression timestamp value: " + value);
+    }
+
+
+    private String errorDetail(Throwable exception, int max) {
+        if (exception == null) return "Unknown regression test error";
+        Throwable root = exception;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        StringBuilder detail = new StringBuilder()
+                .append(exception.getClass().getName())
+                .append(": ")
+                .append(exception.getMessage() == null ? exception.toString() : exception.getMessage());
+        if (root != exception) {
+            detail.append(" | Root cause: ")
+                    .append(root.getClass().getName())
+                    .append(": ")
+                    .append(root.getMessage() == null ? root.toString() : root.getMessage());
+        }
+        return abbreviate(detail.toString(), max);
     }
 
     private String abbreviate(String value, int max) {

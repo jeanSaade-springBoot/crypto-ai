@@ -22,6 +22,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Single execution-decision layer between TradeSignal generation and wallet execution.
@@ -701,14 +702,18 @@ public class ExecutionIntelligenceService {
                 buy++;
                 evidenceScore += 3;
                 health += scaledHealthContribution(HEALTH_1M_BUY, signal);
-                signalIds.add(signal.getId());
+                if (signal.getId() != null) {
+                    signalIds.add(signal.getId());
+                }
             } else if (decision == SignalDecision.WATCH
                     && signal.getTotalScore() >= WATCH_EVIDENCE_MIN_SCORE
                     && signal.getConfidenceScore() >= WATCH_EVIDENCE_MIN_CONFIDENCE) {
                 watch++;
                 evidenceScore += 1;
                 health += scaledHealthContribution(HEALTH_1M_WATCH, signal);
-                signalIds.add(signal.getId());
+                if (signal.getId() != null) {
+                    signalIds.add(signal.getId());
+                }
             } else if (decision == SignalDecision.NEUTRAL) {
                 neutral++;
                 health += HEALTH_1M_NEUTRAL;
@@ -759,7 +764,7 @@ public class ExecutionIntelligenceService {
                 five == null ? null : five.getDecision(),
                 one == null ? null : one.getDecision(),
                 lastBearishAt,
-                List.copyOf(signalIds)
+                signalIds.stream().filter(Objects::nonNull).toList()
         );
     }
 

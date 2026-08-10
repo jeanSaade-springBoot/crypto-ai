@@ -43,6 +43,16 @@ public class FundamentalService {
         return repository.findTopBySymbolOrderByObservedAtDesc(symbol.toUpperCase());
     }
 
+    @Transactional(readOnly = true)
+    public Optional<MarketFundamental> latestAsOf(String symbol, Instant evaluatedAt) {
+        String normalized = symbol.toUpperCase();
+        if (evaluatedAt == null) {
+            return latest(normalized);
+        }
+        return repository.findTopBySymbolAndObservedAtLessThanEqualOrderByObservedAtDesc(
+                normalized, evaluatedAt);
+    }
+
     public boolean isAvailable(MarketFundamental fundamental, Instant evaluatedAt) {
         if (fundamental == null || fundamental.getObservedAt() == null) return false;
         Instant reference = evaluatedAt == null ? Instant.now() : evaluatedAt;

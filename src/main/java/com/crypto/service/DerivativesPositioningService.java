@@ -30,6 +30,25 @@ public class DerivativesPositioningService {
     private final DerivativesPositioningProperties properties;
     private final CandleRepository candleRepository;
 
+    /**
+     * Historical replay must never call the live Binance futures endpoints.
+     * Derivatives history is not persisted by this application, so the only
+     * truthful replay result is UNAVAILABLE for that historical timestamp.
+     */
+    public DerivativesPositioningResult evaluateHistorical(String symbol, String interval, SignalDecision decision,
+                                                            boolean entryAllowed, Instant evaluatedAt) {
+        Instant time = evaluatedAt == null ? Instant.now() : evaluatedAt;
+        if (!properties.enabled()) {
+            return result(DerivativesPositioningStatus.NOT_APPLICABLE, decision, entryAllowed,
+                    null, null, null, null, null, null, 0, period(interval), 0,
+                    "Derivatives positioning is disabled.", time);
+        }
+        return result(DerivativesPositioningStatus.UNAVAILABLE, decision, entryAllowed,
+                null, null, null, null, null, null, 0, period(interval), 0,
+                "Historical derivatives positioning was not persisted; live Binance data is intentionally not used during replay.",
+                time);
+    }
+
     public DerivativesPositioningResult evaluate(String symbol, String interval, SignalDecision decision,
                                                   boolean entryAllowed, Instant evaluatedAt) {
         Instant now = evaluatedAt == null ? Instant.now() : evaluatedAt;

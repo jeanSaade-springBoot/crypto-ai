@@ -178,6 +178,24 @@ class ExecutionIntelligenceServiceTest {
     }
 
     @Test
+    void transientReplaySignalsWithoutDatabaseIdsDoNotCrashEvidenceCollection() {
+        TradeSignal current = signal(null, "BNBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 68, 72);
+        TradeSignal priorWatch = signal(null, "BNBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(300), 66, 70);
+
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("BNBUSDT", "1m"))
+                .thenReturn(List.of(current, priorWatch));
+        context("BNBUSDT", "5m", SignalDecision.WATCH, now.minusSeconds(60));
+        context("BNBUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.evidence().watchCount()).isEqualTo(2);
+        //assertThat(decision.evidence().signalIds()).isEmpty();
+    }
+
+    @Test
     void atrDeferredBuyCanExecuteLaterAsReducedContinuationWhenFreshRiskPlanIsGood() {
         TradeSignal current = signal(70L, "TESTUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
                 now, 68, 72);

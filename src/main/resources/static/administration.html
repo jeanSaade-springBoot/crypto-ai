@@ -210,6 +210,23 @@
                 <p id="regression-notes" class="form-note"></p>
             </div>
 
+            <div id="regression-failure" class="regression-failure hidden">
+                <div class="section-heading">
+                    <div><p class="eyebrow">TEST EXCEPTION</p><h3>Failure details</h3></div>
+                </div>
+                <div class="regression-failure-grid">
+                    <div><span>Run</span><strong id="regression-failure-run">—</strong></div>
+                    <div><span>Failed phase</span><strong id="regression-failure-step">—</strong></div>
+                    <div><span>Exception</span><strong id="regression-failure-exception">—</strong></div>
+                </div>
+                <p id="regression-failure-message" class="regression-failure-message"></p>
+                <p id="regression-failure-root" class="regression-failure-root"></p>
+                <details class="regression-stack-details">
+                    <summary>Show full stack trace</summary>
+                    <pre id="regression-failure-stack">No stack trace recorded.</pre>
+                </details>
+            </div>
+
             <div id="regression-pipeline" class="regression-pipeline hidden">
                 <div class="section-heading">
                     <div><p class="eyebrow">WHY DID IT BUY / WHY DID IT STOP?</p><h3>Visual execution pipeline</h3></div>

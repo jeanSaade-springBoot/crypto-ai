@@ -178,3 +178,17 @@
     .debug-symbol-picker { min-width:100%; width:100%; }
     .pipeline-candidate-head { align-items:flex-start; flex-direction:column; }
 }
+
+
+/* Regression failure diagnostics */
+.regression-failure { margin: 18px 0; padding: 18px; border: 1px solid rgba(220, 53, 69, .35); border-radius: 14px; background: rgba(220, 53, 69, .06); }
+.regression-failure-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.regression-failure-grid > div { padding: 12px; border-radius: 10px; background: rgba(255,255,255,.04); }
+.regression-failure-grid span { display: block; font-size: .78rem; opacity: .72; margin-bottom: 5px; }
+.regression-failure-grid strong { display: block; overflow-wrap: anywhere; }
+.regression-failure-message, .regression-failure-root { overflow-wrap: anywhere; }
+.regression-failure-message { font-weight: 700; }
+.regression-stack-details { margin-top: 12px; }
+.regression-stack-details summary { cursor: pointer; font-weight: 700; }
+.regression-stack-details pre { margin-top: 10px; max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-word; padding: 14px; border-radius: 10px; background: rgba(0,0,0,.28); font-size: .78rem; line-height: 1.45; }
+@media (max-width: 800px) { .regression-failure-grid { grid-template-columns: 1fr; } }

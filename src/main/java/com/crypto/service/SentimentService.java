@@ -105,7 +105,18 @@ public class SentimentService {
 
     @Transactional(readOnly = true)
     public SentimentOverview overview(String symbol) {
+        return overviewAsOf(symbol, Instant.now());
+    }
+
+    /**
+     * Historical/as-of sentiment view. No sentiment row newer than evaluatedAt
+     * is visible to the caller. This keeps Administration replay deterministic
+     * and prevents current/future sentiment from leaking into historical runs.
+     */
+    @Transactional(readOnly = true)
+    public SentimentOverview overviewAsOf(String symbol, Instant evaluatedAt) {
         String normalized = normalizeSymbol(symbol);
+        Instant reference = evaluatedAt == null ? Instant.now() : evaluatedAt;
         if (!properties.enabled()) {
             return new SentimentOverview(
                     normalized,
@@ -116,8 +127,9 @@ public class SentimentService {
                     List.of()
             );
         }
-        List<SentimentSignal> recent = repository.findTop20BySymbolOrderByObservedAtDesc(normalized);
-        Aggregation aggregation = aggregate(normalized);
+        List<SentimentSignal> recent = repository
+                .findTop20BySymbolAndObservedAtLessThanEqualOrderByObservedAtDesc(normalized, reference);
+        Aggregation aggregation = aggregate(normalized, reference);
         return new SentimentOverview(
                 normalized,
                 aggregation.score(),
@@ -137,7 +149,7 @@ public class SentimentService {
         if (!properties.enabled()) {
             return BigDecimal.ZERO;
         }
-        return aggregate(normalizeSymbol(symbol)).score();
+        return aggregate(normalizeSymbol(symbol), Instant.now()).score();
     }
 
     /**
@@ -152,11 +164,12 @@ public class SentimentService {
         return properties.enabled();
     }
 
-    private Aggregation aggregate(String symbol) {
-        Instant now = Instant.now();
+    private Aggregation aggregate(String symbol, Instant reference) {
+        Instant now = reference == null ? Instant.now() : reference;
         Instant after = now.minus(properties.activeWindow());
         List<SentimentSignal> signals = repository
-                .findBySymbolAndObservedAtAfterOrderByObservedAtDesc(symbol, after);
+                .findBySymbolAndObservedAtAfterAndObservedAtLessThanEqualOrderByObservedAtDesc(
+                        symbol, after, now);
 
         Map<String, List<SentimentSignal>> byProvider = new LinkedHashMap<>();
         for (SentimentSignal signal : signals) {
@@ -179,7 +192,10 @@ public class SentimentService {
             BigDecimal configuredWeight = providerConfig.getWeight();
             BigDecimal effectiveWeight = provider.confidence().multiply(configuredWeight, MC);
 
-            boolean healthyEnough = providerConfigService.contributes(providerConfig, now);
+            boolean historicalReference = now.isBefore(Instant.now().minusSeconds(1));
+            boolean healthyEnough = historicalReference
+                    ? provider.sampleCount() > 0
+                    : providerConfigService.contributes(providerConfig, now);
             if (properties.enabled() && providerConfig.isEnabled() && healthyEnough
                     && provider.sampleCount() > 0 && effectiveWeight.signum() > 0) {
                 total = total.add(provider.score().multiply(effectiveWeight, MC), MC);

@@ -38,18 +38,26 @@ public class MarketContextService {
             AtrRiskAssessment atrRisk,
             SentimentOverview sentimentOverview,
             boolean sentimentEnabled,
-            Instant evaluatedAt
+            Instant evaluatedAt,
+            boolean historicalReplay
     ) {
         Instant snapshotTime = evaluatedAt == null ? Instant.now() : evaluatedAt;
         MultiTimeframeConfluenceResult timeframe = multiTimeframeConfluenceService.evaluate(
                 indicator.symbol(), indicator.intervalCode(), SignalDecision.NEUTRAL, snapshotTime);
         BtcMarketContextResult btc = btcMarketContextService.evaluate(
                 indicator.symbol(), indicator.intervalCode(), SignalDecision.NEUTRAL, true, snapshotTime);
-        OrderBookLiquidityResult liquidity = orderBookLiquidityService.evaluate(
-                indicator.symbol(), indicator.intervalCode(), SignalDecision.NEUTRAL, true, indicator.latestPrice(),
-                atrRisk.stopLoss(), atrRisk.takeProfit(), snapshotTime);
-        DerivativesPositioningResult derivatives = derivativesPositioningService.evaluate(
-                indicator.symbol(), indicator.intervalCode(), SignalDecision.NEUTRAL, true, snapshotTime);
+        OrderBookLiquidityResult liquidity = historicalReplay
+                ? orderBookLiquidityService.evaluateHistorical(
+                        indicator.symbol(), indicator.intervalCode(), SignalDecision.NEUTRAL, true,
+                        indicator.latestPrice(), atrRisk.stopLoss(), atrRisk.takeProfit(), snapshotTime)
+                : orderBookLiquidityService.evaluate(
+                        indicator.symbol(), indicator.intervalCode(), SignalDecision.NEUTRAL, true, indicator.latestPrice(),
+                        atrRisk.stopLoss(), atrRisk.takeProfit(), snapshotTime);
+        DerivativesPositioningResult derivatives = historicalReplay
+                ? derivativesPositioningService.evaluateHistorical(
+                        indicator.symbol(), indicator.intervalCode(), SignalDecision.NEUTRAL, true, snapshotTime)
+                : derivativesPositioningService.evaluate(
+                        indicator.symbol(), indicator.intervalCode(), SignalDecision.NEUTRAL, true, snapshotTime);
 
         List<ProviderSentiment> providers = sentimentOverview == null || sentimentOverview.providers() == null
                 ? List.of() : sentimentOverview.providers();

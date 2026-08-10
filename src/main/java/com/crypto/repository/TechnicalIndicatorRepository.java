@@ -23,6 +23,13 @@ public interface TechnicalIndicatorRepository
             String intervalCode
     );
 
+    Optional<TechnicalIndicator>
+    findTopBySymbolAndIntervalCodeAndCandleOpenTimeLessThanOrderByCandleOpenTimeDesc(
+            String symbol,
+            String intervalCode,
+            Instant candleOpenTime
+    );
+
     List<TechnicalIndicator>
     findTop100BySymbolAndIntervalCodeOrderByCandleOpenTimeDesc(
             String symbol,

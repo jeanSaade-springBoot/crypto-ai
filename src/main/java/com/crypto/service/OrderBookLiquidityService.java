@@ -81,6 +81,60 @@ public class OrderBookLiquidityService {
                 currentPrice, stopLoss, takeProfit, evaluatedAt);
     }
 
+    /**
+     * Historical replay path. Order-book snapshots currently live only in memory,
+     * so replay must not collect a fresh live book and pretend it existed at the
+     * historical timestamp. If an already-captured snapshot genuinely exists in
+     * the historical window it may be used; otherwise the context is UNAVAILABLE.
+     */
+    public OrderBookLiquidityResult evaluateHistorical(
+            String symbol,
+            String interval,
+            SignalDecision currentDecision,
+            boolean entryAllowed,
+            BigDecimal currentPrice,
+            BigDecimal stopLoss,
+            BigDecimal takeProfit,
+            Instant evaluatedAt
+    ) {
+        IntervalPolicy policy = properties.policyFor(interval == null ? "5m" : interval);
+        Instant snapshotTime = evaluatedAt == null ? Instant.now() : evaluatedAt;
+        if (!properties.enabled()) {
+            return result(LiquidityContextStatus.DISABLED, currentDecision, currentDecision,
+                    entryAllowed, null, null, null, null, null, null, null, null,
+                    false, false, 0, "Order-book liquidity analysis is disabled.", snapshotTime,
+                    policy, 0L);
+        }
+
+        String normalizedSymbol = normalize(symbol);
+        Deque<OrderBookSnapshot> deque = historyBySymbol.get(normalizedSymbol);
+        if (deque == null || deque.isEmpty()) {
+            return result(LiquidityContextStatus.UNAVAILABLE, currentDecision, currentDecision,
+                    entryAllowed, null, null, null, null, null, null, null, null,
+                    false, false, 0,
+                    "Historical order-book snapshots were not persisted; live order-book data is intentionally not used during replay.",
+                    snapshotTime, policy, 0L);
+        }
+
+        List<OrderBookSnapshot> snapshots;
+        synchronized (deque) {
+            Instant windowStart = snapshotTime.minusSeconds(policy.windowSeconds());
+            snapshots = deque.stream()
+                    .filter(snapshot -> !snapshot.capturedAt().isAfter(snapshotTime))
+                    .filter(snapshot -> !snapshot.capturedAt().isBefore(windowStart))
+                    .toList();
+        }
+        if (snapshots.isEmpty()) {
+            return result(LiquidityContextStatus.UNAVAILABLE, currentDecision, currentDecision,
+                    entryAllowed, null, null, null, null, null, null, null, null,
+                    false, false, 0,
+                    "No persisted/in-memory order-book observation exists for the historical replay window; live data was not substituted.",
+                    snapshotTime, policy, 0L);
+        }
+
+        return evaluate(symbol, interval, currentDecision, entryAllowed, currentPrice, stopLoss, takeProfit, evaluatedAt);
+    }
+
     public OrderBookLiquidityResult evaluate(
             String symbol,
             String interval,

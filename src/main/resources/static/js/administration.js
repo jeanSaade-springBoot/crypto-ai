@@ -530,6 +530,22 @@ async function loadRegressionDetail(runId, includeTables = true) {
     document.getElementById('regression-progress-percent').textContent = `${progress}%`;
     document.getElementById('regression-current-step').textContent = run.error_message || run.current_step || '—';
 
+    const failurePanel = document.getElementById('regression-failure');
+    const hasFailure = ['FAILED', 'ERROR'].includes(String(run.status)) &&
+        Boolean(run.error_message || run.failure_exception || run.failure_root_cause || run.failure_stack_trace);
+    if (hasFailure) {
+        failurePanel.classList.remove('hidden');
+        document.getElementById('regression-failure-run').textContent = `#${run.id} · ${run.symbol}`;
+        document.getElementById('regression-failure-step').textContent = run.failure_step || run.current_step || 'Unknown phase';
+        document.getElementById('regression-failure-exception').textContent = run.failure_exception || 'Regression failure';
+        document.getElementById('regression-failure-message').textContent = run.error_message || 'No concise error message recorded.';
+        document.getElementById('regression-failure-root').textContent = `Root cause: ${run.failure_root_cause || run.error_message || 'Unknown'}`;
+        document.getElementById('regression-failure-stack').textContent = run.failure_stack_trace || 'No stack trace recorded.';
+    } else {
+        failurePanel.classList.add('hidden');
+        document.getElementById('regression-failure-stack').textContent = '';
+    }
+
     const finished = ['PASSED', 'FAILED', 'ERROR'].includes(String(run.status));
     const resultPanel = document.getElementById('regression-result');
     if (run.result) {
