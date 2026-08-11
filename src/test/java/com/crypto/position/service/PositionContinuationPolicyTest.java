@@ -30,6 +30,27 @@ class PositionContinuationPolicyTest {
     }
 
     @Test
+    void healthyConsolidationExtendsForWatchNeutralWatchWhenUnderlyingScoresRemainHealthy() {
+        // Mirrors the 2026-08-11 12:06 BNB continuation state:
+        // current WATCH, 5m NEUTRAL, 1h WATCH, trend 21/15, momentum 9/7, volume 16/soft 8.
+        TradeSignal one = signal(SignalDecision.WATCH, 21, 9, 16);
+        TradeSignal five = signal(SignalDecision.NEUTRAL, 13, 9, 14);
+        TradeSignal hour = signal(SignalDecision.WATCH, 18, 11, 9);
+        var result = policy.evaluate(one, five, hour, 18, 11, 16);
+        assertTrue(result.extendTarget());
+        assertTrue(result.explanation().contains("HEALTHY_CONSOLIDATION"));
+    }
+
+    @Test
+    void healthyConsolidationDoesNotOverrideWeakCurrentVolume() {
+        TradeSignal one = signal(SignalDecision.WATCH, 21, 9, 7);
+        TradeSignal five = signal(SignalDecision.NEUTRAL, 13, 9, 14);
+        TradeSignal hour = signal(SignalDecision.WATCH, 18, 11, 9);
+        var result = policy.evaluate(one, five, hour, 18, 11, 16);
+        assertFalse(result.extendTarget());
+    }
+
+    @Test
     void doesNotExtendWhenFiveMinuteTurnsBearish() {
         TradeSignal one = signal(SignalDecision.BUY, 20, 15, 19);
         TradeSignal five = signal(SignalDecision.SELL, 10, 8, 8);

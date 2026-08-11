@@ -40,8 +40,16 @@ public class PositionContinuationPolicy {
         boolean htfProtected = currentSupport && oneBullish && fiveNonBearish
                 && trendHealthy && momentumHealthy;
 
-        boolean extend = standard || htfProtected;
-        String path = htfProtected ? "HTF_TREND" : (standard ? "STANDARD" : "NONE");
+        // Healthy consolidation: an already-profitable position may keep running while both
+        // higher timeframes cool to WATCH/NEUTRAL, provided neither is bearish and the live
+        // 1m trend/momentum/volume structure remains healthy. This is deliberately narrower
+        // than changing supportive() globally, so entry logic and other policies are untouched.
+        boolean healthyConsolidation = currentSupport && fiveNonBearish && oneSafe
+                && trendHealthy && momentumHealthy && volumeSupportive;
+
+        boolean extend = standard || htfProtected || healthyConsolidation;
+        String path = htfProtected ? "HTF_TREND"
+                : (standard ? "STANDARD" : (healthyConsolidation ? "HEALTHY_CONSOLIDATION" : "NONE"));
         String checks = "current=" + decision(current)
                 + ", 5m=" + decision(fiveMinute)
                 + ", 1h=" + decision(oneHour)
