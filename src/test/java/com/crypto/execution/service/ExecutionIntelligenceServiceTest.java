@@ -196,6 +196,68 @@ class ExecutionIntelligenceServiceTest {
     }
 
     @Test
+    void fiveMinuteBuyAtrAuthorityPreventsOneMinuteAtrFromPermanentlyBlockingEntry() {
+        TradeSignal current = signal(65L, "BNBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 69, 72);
+        current.setLatestPrice(BigDecimal.valueOf(597.32));
+        current.setStopLoss(BigDecimal.valueOf(596.50));
+        current.setTakeProfit(BigDecimal.valueOf(598.80));
+        current.setAtrImmediateEntryAllowed(false);
+        current.setFinalEntryAllowed(false);
+        current.setAtrEntryType("WAIT_FOR_RETRACEMENT");
+
+        TradeSignal priorWatch = signal(64L, "BNBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(60), 68, 70);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("BNBUSDT", "1m"))
+                .thenReturn(List.of(current, priorWatch));
+
+        TradeSignal five = signal(66L, "BNBUSDT", "5m", SignalDecision.BUY, SignalDecision.BUY,
+                now.minusSeconds(60), 75, 70);
+        five.setAtrImmediateEntryAllowed(true);
+        five.setFinalEntryAllowed(true);
+        five.setAtrRecommendedPositionPercent(60);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "BNBUSDT", "5m", now)).thenReturn(Optional.of(five));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "BNBUSDT", "1h", now)).thenReturn(Optional.empty());
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.source()).isEqualTo("SETUP_TIMEFRAME_ATR");
+        assertThat(decision.code()).isEqualTo("REDUCED_POSITION_ALLOWED");
+        assertThat(decision.positionPercent()).isEqualTo(30);
+    }
+
+    @Test
+    void bearishOneHourStillVetoesFiveMinuteAtrAuthorityFallback() {
+        TradeSignal current = signal(67L, "BNBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 69, 72);
+        current.setAtrImmediateEntryAllowed(false);
+        current.setFinalEntryAllowed(false);
+        current.setAtrEntryType("WAIT_FOR_RETRACEMENT");
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("BNBUSDT", "1m"))
+                .thenReturn(List.of(current));
+
+        TradeSignal five = signal(68L, "BNBUSDT", "5m", SignalDecision.BUY, SignalDecision.BUY,
+                now.minusSeconds(60), 75, 70);
+        five.setAtrImmediateEntryAllowed(true);
+        five.setFinalEntryAllowed(true);
+        five.setAtrRecommendedPositionPercent(60);
+        TradeSignal one = signal(69L, "BNBUSDT", "1h", SignalDecision.SELL, SignalDecision.SELL,
+                now.minusSeconds(1200), 35, 70);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "BNBUSDT", "5m", now)).thenReturn(Optional.of(five));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "BNBUSDT", "1h", now)).thenReturn(Optional.of(one));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.code()).isEqualTo("ATR_ENTRY_BLOCKED");
+    }
+
+    @Test
     void atrDeferredBuyCanExecuteLaterAsReducedContinuationWhenFreshRiskPlanIsGood() {
         TradeSignal current = signal(70L, "TESTUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
                 now, 68, 72);

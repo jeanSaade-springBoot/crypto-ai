@@ -201,15 +201,26 @@ public class ExecutionIntelligenceService {
             return deferred;
         }
 
-        // ATR is a risk/entry-timing control, not an independent directional veto.
-        // A noisy 1m ATR extension may request a pullback while the just-closed 5m candle
-        // confirms that the move is a healthy breakout. In that case execution may proceed
-        // at reduced size. A true NO_ENTRY remains absolute and can never be overridden.
-        AtrExecutionPermission atrPermission = atrExecutionPermission(signal);
-        if (!atrPermission.allowed()) {
+        // A valid 5m BUY owns setup-level ATR risk. The 1m ATR still controls timing,
+        // but it must not permanently kill a fresh 5m setup whose own ATR explicitly
+        // permits immediate/reduced entry. If a fresh 1h context exists and is bearish,
+        // it still vetoes this route. Missing 1h context does not manufacture a veto.
+        ExecutionDecision setupAtrAuthority = setupTimeframeAtrAuthorityDecision(signal, evidence);
+        if (setupAtrAuthority != null) {
+            setupAtrAuthority = applyInitialEntryQualityGuard(setupAtrAuthority, entryQuality);
+            saveOpportunity(signal, evidence,
+                    setupAtrAuthority.allowed() ? "CONFIRMED" : setupAtrAuthority.state(),
+                    setupAtrAuthority.source(), setupAtrAuthority.positionPercent(),
+                    setupAtrAuthority.code(), setupAtrAuthority.explanation());
+            return setupAtrAuthority;
+        }
+
+        // For every remaining non-continuation path, ATR immediate-entry permission remains mandatory.
+        if (!signal.isAtrImmediateEntryAllowed()) {
             saveOpportunity(signal, evidence, "BLOCKED", "HARD_RISK", 0,
-                    "ATR_ENTRY_BLOCKED", atrPermission.explanation());
-            return ExecutionDecision.reject("ATR_ENTRY_BLOCKED", atrPermission.explanation(), evidence);
+                    "ATR_ENTRY_BLOCKED", "ATR risk controls do not allow immediate entry.");
+            return ExecutionDecision.reject("ATR_ENTRY_BLOCKED",
+                    "ATR risk controls do not allow immediate entry.", evidence);
         }
 
         // Fast path: a normal fresh BUY can execute immediately using the configured profile.
@@ -492,6 +503,35 @@ public class ExecutionIntelligenceService {
         return String.format(java.util.Locale.ROOT, "%.2f", value);
     }
 
+    private ExecutionDecision setupTimeframeAtrAuthorityDecision(TradeSignal current, Evidence e) {
+        if (current.isAtrImmediateEntryAllowed()) return null;
+        if (!isSupportiveCurrentSignal(current)) return null;
+
+        TradeSignal five = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
+        if (five == null || !isBullish(five.getDecision())) return null;
+        if (!five.isFinalEntryAllowed() || !five.isAtrImmediateEntryAllowed()) return null;
+
+        TradeSignal oneHour = latestAtOrBefore(current, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
+        if (oneHour != null && isBearish(oneHour.getDecision())) return null;
+
+        int fiveRecommended = five.getAtrRecommendedPositionPercent() > 0
+                ? five.getAtrRecommendedPositionPercent()
+                : DEFERRED_POSITION_PERCENT;
+        int percent = Math.min(DEFERRED_POSITION_PERCENT, fiveRecommended);
+
+        return ExecutionDecision.allow(
+                "SETUP_TIMEFRAME_ATR",
+                "REDUCED_POSITION_ALLOWED",
+                percent,
+                "The current 1m signal is temporarily ATR-extended, but the fresh 5m BUY remains "
+                        + "the setup-risk authority and its ATR plan explicitly allows immediate entry at "
+                        + fiveRecommended + "%. Execution is therefore allowed at a conservative "
+                        + percent + "% allocation instead of permanently rejecting the opportunity. "
+                        + "1m timing remains supportive and no fresh bearish 1h veto is present.",
+                e
+        );
+    }
+
     private ExecutionDecision deferredContinuationDecision(TradeSignal current, Evidence e) {
         if (!isSupportiveCurrentSignal(current)) return null;
         // Do not require finalEntryAllowed/atrImmediateEntryAllowed here. The aggregate final
@@ -627,43 +667,10 @@ public class ExecutionIntelligenceService {
     }
 
     private boolean isDirectBuyCandidate(TradeSignal signal) {
-        AtrExecutionPermission atrPermission = atrExecutionPermission(signal);
-        boolean finalEntryOrAtrOnlyDeferral = signal.isFinalEntryAllowed() || atrPermission.fiveMinuteOverride();
-        return finalEntryOrAtrOnlyDeferral
-                && atrPermission.allowed()
+        return signal.isFinalEntryAllowed()
+                && signal.isAtrImmediateEntryAllowed()
                 && signal.getTotalScore() >= properties.minimumBuyScore()
                 && isBullish(signal.getDecision());
-    }
-
-    /**
-     * Resolves ATR authority for wallet execution. The current 1m ATR remains authoritative
-     * when it allows entry or declares NO_ENTRY. For a soft timing deferral
-     * (PULLBACK_ENTRY / WAIT_FOR_RETRACEMENT), a fresh supportive 5m signal may confirm the
-     * breakout and permit a reduced entry. This prevents tiny 1m ATR values from turning a
-     * valid multi-timeframe breakout into a permanent ATR_ENTRY_BLOCKED result.
-     */
-    private AtrExecutionPermission atrExecutionPermission(TradeSignal signal) {
-        if (signal.isAtrImmediateEntryAllowed()) {
-            return AtrExecutionPermission.allow(false, "Current 1m ATR allows immediate entry.");
-        }
-
-        String entryType = signal.getAtrEntryType();
-        if (entryType != null && "NO_ENTRY".equalsIgnoreCase(entryType)) {
-            return AtrExecutionPermission.block("ATR hard veto is active (NO_ENTRY); higher-timeframe confirmation cannot override it.");
-        }
-
-        TradeSignal five = latestAtOrBefore(signal, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
-        boolean supportiveFive = five != null
-                && five.isAtrImmediateEntryAllowed()
-                && !isBearish(five.getDecision())
-                && five.getTotalScore() >= 65
-                && five.getConfidenceScore() >= 65;
-        if (supportiveFive) {
-            return AtrExecutionPermission.allow(true,
-                    "Current 1m ATR requested a pullback, but fresh 5m ATR permits immediate entry and 5m context is supportive; reduced execution is allowed.");
-        }
-
-        return AtrExecutionPermission.block("ATR risk controls request a pullback/retracement and no fresh supportive 5m ATR confirmation allows execution yet.");
     }
 
     private boolean isSupportiveCurrentSignal(TradeSignal signal) {
@@ -1059,14 +1066,4 @@ public class ExecutionIntelligenceService {
             return new HardRiskBlock(true, code, explanation);
         }
     }
-
-    private record AtrExecutionPermission(boolean allowed, boolean fiveMinuteOverride, String explanation) {
-        static AtrExecutionPermission allow(boolean fiveMinuteOverride, String explanation) {
-            return new AtrExecutionPermission(true, fiveMinuteOverride, explanation);
-        }
-        static AtrExecutionPermission block(String explanation) {
-            return new AtrExecutionPermission(false, false, explanation);
-        }
-    }
-
 }
