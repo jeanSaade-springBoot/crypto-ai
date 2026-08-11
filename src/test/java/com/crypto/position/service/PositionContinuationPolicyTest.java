@@ -16,21 +16,45 @@ class PositionContinuationPolicyTest {
         TradeSignal hour = signal(SignalDecision.WATCH, 12, 10, 10);
         var result = policy.evaluate(one, five, hour, 19, 14, 17);
         assertTrue(result.extendTarget());
+        assertTrue(result.explanation().contains("STANDARD"));
+    }
+
+    @Test
+    void extendsDuringFiveMinuteCoolingWhenOneHourThesisIsStillBullish() {
+        // Regression for BNBUSDT 2026-08-11 08:12 UTC:
+        // current 1m WATCH trend=20 momentum=9 volume=6, 5m NEUTRAL, 1h BUY.
+        TradeSignal one = signal(SignalDecision.WATCH, 20, 9, 6);
+        TradeSignal five = signal(SignalDecision.NEUTRAL, 13, 9, 14);
+        TradeSignal hour = signal(SignalDecision.BUY, 18, 15, 16);
+        var result = policy.evaluate(one, five, hour, 19, 9, 12);
+        assertTrue(result.extendTarget());
+        assertTrue(result.explanation().contains("HTF_TREND"));
     }
 
     @Test
     void doesNotExtendWhenFiveMinuteTurnsBearish() {
         TradeSignal one = signal(SignalDecision.BUY, 20, 15, 19);
         TradeSignal five = signal(SignalDecision.SELL, 10, 8, 8);
-        var result = policy.evaluate(one, five, null, 19, 14, 17);
+        TradeSignal hour = signal(SignalDecision.BUY, 18, 15, 16);
+        var result = policy.evaluate(one, five, hour, 19, 14, 17);
         assertFalse(result.extendTarget());
     }
 
     @Test
-    void doesNotExtendWhenContinuationIsNoLongerImproving() {
-        TradeSignal one = signal(SignalDecision.WATCH, 17, 12, 14);
-        TradeSignal five = signal(SignalDecision.WATCH, 18, 13, 15);
-        var result = policy.evaluate(one, five, null, 19, 14, 17);
+    void doesNotUseHtfExceptionWhenOneHourIsOnlyWatch() {
+        TradeSignal one = signal(SignalDecision.WATCH, 20, 9, 6);
+        TradeSignal five = signal(SignalDecision.NEUTRAL, 13, 9, 14);
+        TradeSignal hour = signal(SignalDecision.WATCH, 18, 15, 16);
+        var result = policy.evaluate(one, five, hour, 19, 9, 12);
+        assertFalse(result.extendTarget());
+    }
+
+    @Test
+    void doesNotUseHtfExceptionWhenCurrentMomentumBreaksDown() {
+        TradeSignal one = signal(SignalDecision.WATCH, 20, 4, 6);
+        TradeSignal five = signal(SignalDecision.NEUTRAL, 13, 9, 14);
+        TradeSignal hour = signal(SignalDecision.BUY, 18, 15, 16);
+        var result = policy.evaluate(one, five, hour, 19, 9, 12);
         assertFalse(result.extendTarget());
     }
 

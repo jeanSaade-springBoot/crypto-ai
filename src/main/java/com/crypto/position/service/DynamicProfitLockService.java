@@ -138,10 +138,11 @@ public class DynamicProfitLockService {
             positionRepository.save(position);
         }
 
-        BigDecimal minimumProfitableExit = entry.multiply(BigDecimal.valueOf(1.0005));
+        // Once a protected lock is breached we must exit immediately. Waiting for the
+        // price to recover above a separate minimum-profit threshold defeats the purpose
+        // of a trailing lock and can turn a protected winner into a larger giveback.
         boolean triggered = active && lockPrice != null
-                && current.compareTo(lockPrice) <= 0
-                && current.compareTo(minimumProfitableExit) >= 0;
+                && current.compareTo(lockPrice) <= 0;
         String explanation;
         String profileText = " Adaptive profile=" + profile.name() +
                 " (entry quality=" + profile.entryQuality() + "/100, activation=" +
