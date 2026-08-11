@@ -201,12 +201,15 @@ public class ExecutionIntelligenceService {
             return deferred;
         }
 
-        // For every non-continuation path, ATR immediate-entry permission remains mandatory.
-        if (!signal.isAtrImmediateEntryAllowed()) {
+        // ATR is a risk/entry-timing control, not an independent directional veto.
+        // A noisy 1m ATR extension may request a pullback while the just-closed 5m candle
+        // confirms that the move is a healthy breakout. In that case execution may proceed
+        // at reduced size. A true NO_ENTRY remains absolute and can never be overridden.
+        AtrExecutionPermission atrPermission = atrExecutionPermission(signal);
+        if (!atrPermission.allowed()) {
             saveOpportunity(signal, evidence, "BLOCKED", "HARD_RISK", 0,
-                    "ATR_ENTRY_BLOCKED", "ATR risk controls do not allow immediate entry.");
-            return ExecutionDecision.reject("ATR_ENTRY_BLOCKED",
-                    "ATR risk controls do not allow immediate entry.", evidence);
+                    "ATR_ENTRY_BLOCKED", atrPermission.explanation());
+            return ExecutionDecision.reject("ATR_ENTRY_BLOCKED", atrPermission.explanation(), evidence);
         }
 
         // Fast path: a normal fresh BUY can execute immediately using the configured profile.
@@ -624,10 +627,43 @@ public class ExecutionIntelligenceService {
     }
 
     private boolean isDirectBuyCandidate(TradeSignal signal) {
-        return signal.isFinalEntryAllowed()
-                && signal.isAtrImmediateEntryAllowed()
+        AtrExecutionPermission atrPermission = atrExecutionPermission(signal);
+        boolean finalEntryOrAtrOnlyDeferral = signal.isFinalEntryAllowed() || atrPermission.fiveMinuteOverride();
+        return finalEntryOrAtrOnlyDeferral
+                && atrPermission.allowed()
                 && signal.getTotalScore() >= properties.minimumBuyScore()
                 && isBullish(signal.getDecision());
+    }
+
+    /**
+     * Resolves ATR authority for wallet execution. The current 1m ATR remains authoritative
+     * when it allows entry or declares NO_ENTRY. For a soft timing deferral
+     * (PULLBACK_ENTRY / WAIT_FOR_RETRACEMENT), a fresh supportive 5m signal may confirm the
+     * breakout and permit a reduced entry. This prevents tiny 1m ATR values from turning a
+     * valid multi-timeframe breakout into a permanent ATR_ENTRY_BLOCKED result.
+     */
+    private AtrExecutionPermission atrExecutionPermission(TradeSignal signal) {
+        if (signal.isAtrImmediateEntryAllowed()) {
+            return AtrExecutionPermission.allow(false, "Current 1m ATR allows immediate entry.");
+        }
+
+        String entryType = signal.getAtrEntryType();
+        if (entryType != null && "NO_ENTRY".equalsIgnoreCase(entryType)) {
+            return AtrExecutionPermission.block("ATR hard veto is active (NO_ENTRY); higher-timeframe confirmation cannot override it.");
+        }
+
+        TradeSignal five = latestAtOrBefore(signal, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
+        boolean supportiveFive = five != null
+                && five.isAtrImmediateEntryAllowed()
+                && !isBearish(five.getDecision())
+                && five.getTotalScore() >= 65
+                && five.getConfidenceScore() >= 65;
+        if (supportiveFive) {
+            return AtrExecutionPermission.allow(true,
+                    "Current 1m ATR requested a pullback, but fresh 5m ATR permits immediate entry and 5m context is supportive; reduced execution is allowed.");
+        }
+
+        return AtrExecutionPermission.block("ATR risk controls request a pullback/retracement and no fresh supportive 5m ATR confirmation allows execution yet.");
     }
 
     private boolean isSupportiveCurrentSignal(TradeSignal signal) {
@@ -1023,4 +1059,14 @@ public class ExecutionIntelligenceService {
             return new HardRiskBlock(true, code, explanation);
         }
     }
+
+    private record AtrExecutionPermission(boolean allowed, boolean fiveMinuteOverride, String explanation) {
+        static AtrExecutionPermission allow(boolean fiveMinuteOverride, String explanation) {
+            return new AtrExecutionPermission(true, fiveMinuteOverride, explanation);
+        }
+        static AtrExecutionPermission block(String explanation) {
+            return new AtrExecutionPermission(false, false, explanation);
+        }
+    }
+
 }
