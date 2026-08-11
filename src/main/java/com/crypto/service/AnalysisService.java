@@ -122,10 +122,7 @@ public class AnalysisService {
         SentimentOverview sentimentOverview = sentimentService.overviewAsOf(symbol, signalGeneratedAt);
         BigDecimal sentiment = sentimentOverview.weightedScore();
         MarketFundamental fundamental = fundamentalService.latestAsOf(symbol, signalGeneratedAt).orElse(null);
-        boolean sentimentAvailable = sentimentEnabled && sentimentOverview != null
-                && sentimentOverview.providers() != null
-                && sentimentOverview.providers().stream().anyMatch(provider -> provider.enabled()
-                && provider.effectiveWeight() != null && provider.effectiveWeight().signum() > 0);
+        boolean sentimentAvailable = hasUsableSentimentCoverage(sentimentEnabled, sentimentOverview);
         boolean fundamentalAvailable = fundamentalService.isAvailable(fundamental, signalGeneratedAt);
 
         IndicatorSnapshot previous = previousSnapshot(i);
@@ -164,6 +161,8 @@ public class AnalysisService {
                 sentimentAvailable,
                 fundamentalAvailable
         );
+        strategyScore = marketStrategyService.promoteEarlyBreakout(
+                strategyProfile, strategyScore, marketContext, atrRisk);
 
         int rawTotal = strategyScore.rawScore();
         int maximumAvailableScore = strategyScore.maximumScore();
@@ -721,6 +720,27 @@ public class AnalysisService {
             reasons.add("No fresh complete market-cap/supply record was used");
         }
         return String.join(" | ", reasons);
+    }
+
+    private boolean hasUsableSentimentCoverage(boolean sentimentEnabled, SentimentOverview overview) {
+        if (!sentimentEnabled || overview == null || overview.providers() == null) return false;
+        var enabled = overview.providers().stream().filter(provider -> provider.enabled()).toList();
+        if (enabled.isEmpty()) return false;
+
+        var usable = enabled.stream()
+                .filter(provider -> provider.sampleCount() > 0)
+                .filter(provider -> provider.confidence() != null
+                        && provider.confidence().compareTo(BigDecimal.valueOf(0.40)) >= 0)
+                .filter(provider -> provider.effectiveWeight() != null
+                        && provider.effectiveWeight().compareTo(BigDecimal.valueOf(0.05)) >= 0)
+                .toList();
+        if (usable.isEmpty()) return false;
+
+        double coverage = usable.size() / (double) enabled.size();
+        BigDecimal totalEffectiveWeight = usable.stream()
+                .map(provider -> provider.effectiveWeight())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return coverage >= 0.50 && totalEffectiveWeight.compareTo(BigDecimal.valueOf(0.05)) >= 0;
     }
 
     private String serializeExcludedCategories(boolean sentimentEnabled, boolean sentimentAvailable,

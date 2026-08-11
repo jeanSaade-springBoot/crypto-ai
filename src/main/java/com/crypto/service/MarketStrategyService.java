@@ -103,25 +103,62 @@ public class MarketStrategyService {
         int normalized = maximum <= 0 ? 0 : (int) Math.round(raw * 100.0 / maximum);
         SignalDecision decision = decision(normalized, profile);
 
-        // A newly confirmed breakout can arrive while the normal BREAKOUT threshold is still
-        // deliberately conservative. Do not globally lower that threshold: promote only a
-        // high-quality early breakout where all three market-derived pillars are already strong.
-        // This keeps weak/volume-only breakouts as WATCH while allowing a trend + volume +
-        // momentum expansion to become actionable without waiting for price to run further.
-        if (decision == SignalDecision.WATCH
-                && profile.strategy() == TradingStrategy.BREAKOUT
-                && normalized >= 75
-                && baseTrend * 100 >= BASE_TREND_MAX * 76
-                && baseVolume * 100 >= BASE_VOLUME_MAX * 75
-                && baseMomentum * 100 >= BASE_MOMENTUM_MAX * 90) {
-            decision = SignalDecision.BUY;
-        }
-
         if (!profile.entryAllowed() && (decision == SignalDecision.BUY || decision == SignalDecision.STRONG_BUY)) {
             decision = SignalDecision.WATCH;
         }
         return new StrategyScoreResult(trend, volume, momentum, sentiment, fundamentals,
                 raw, maximum, normalized, decision);
+    }
+
+    /**
+     * Promotes only a technically strong early BREAKOUT WATCH. The normal BUY threshold stays
+     * untouched (80 by configuration). ATR and higher-timeframe context are required here so
+     * the promotion cannot bypass entry-risk or 1m/5m/1h safety checks.
+     */
+    public StrategyScoreResult promoteEarlyBreakout(
+            StrategyProfile profile,
+            StrategyScoreResult score,
+            MarketContextSnapshot context,
+            com.crypto.dto.AtrRiskAssessment atrRisk
+    ) {
+        if (profile == null || score == null || profile.strategy() != TradingStrategy.BREAKOUT
+                || score.decision() != SignalDecision.WATCH) {
+            return score;
+        }
+
+        boolean higherTimeframeSafe = context != null
+                && context.higherTimeframeStatus() != com.crypto.domain.ConfluenceStatus.UNAVAILABLE
+                && context.higherTimeframeStatus() != com.crypto.domain.ConfluenceStatus.CONFLICT
+                && context.higherTimeframeStatus() != com.crypto.domain.ConfluenceStatus.STRONG_CONFLICT;
+        boolean atrAllowsEntry = atrRisk != null && atrRisk.immediateEntryAllowed();
+        return promoteEarlyBreakout(profile, score, higherTimeframeSafe, atrAllowsEntry);
+    }
+
+    StrategyScoreResult promoteEarlyBreakout(
+            StrategyProfile profile,
+            StrategyScoreResult score,
+            boolean higherTimeframeSafe,
+            boolean atrAllowsEntry
+    ) {
+        if (profile == null || score == null || profile.strategy() != TradingStrategy.BREAKOUT
+                || score.decision() != SignalDecision.WATCH) {
+            return score;
+        }
+        boolean strongTechnicalBreakout = score.normalizedScore() >= 70
+                && percent(score.trendScore(), profile.trendMaximum()) >= 60
+                && percent(score.volumeScore(), profile.volumeMaximum()) >= 80
+                && percent(score.momentumScore(), profile.momentumMaximum()) >= 85;
+        if (!strongTechnicalBreakout || !higherTimeframeSafe || !atrAllowsEntry || !profile.entryAllowed()) {
+            return score;
+        }
+        return new StrategyScoreResult(
+                score.trendScore(), score.volumeScore(), score.momentumScore(),
+                score.sentimentScore(), score.fundamentalScore(), score.rawScore(),
+                score.maximumScore(), score.normalizedScore(), SignalDecision.BUY);
+    }
+
+    private int percent(int score, int maximum) {
+        return maximum <= 0 ? 0 : (int) Math.round(score * 100.0 / maximum);
     }
 
     private StrategyProfile profile(TradingStrategy strategy, DynamicStrategyProperties.Profile p,

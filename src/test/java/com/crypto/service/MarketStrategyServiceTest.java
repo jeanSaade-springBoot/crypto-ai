@@ -15,20 +15,37 @@ class MarketStrategyServiceTest {
     private final MarketStrategyService service = new MarketStrategyService(properties);
 
     @Test
-    void promotesHighQualityEarlyBreakoutWithoutLoweringGlobalBreakoutThreshold() {
+    void promotesExactEarlyBreakoutShapeWithoutLoweringNormalBuyThreshold() {
         StrategyProfile breakout = new StrategyProfile(
                 TradingStrategy.BREAKOUT, "1.0",
                 20, 30, 20, 10, 5,
                 90, 80, 65, 45, 30,
                 true, "test");
 
-        StrategyScoreResult result = service.score(
-                breakout,
-                20, 15, 14, 4, 6,
-                true, true);
+        // Mirrors the BNB case: 12/20 trend, 24/30 volume, 19/20 momentum,
+        // normalized 72. Normal scoring remains WATCH because BUY is still 80.
+        StrategyScoreResult watch = new StrategyScoreResult(
+                12, 24, 19, 3, 3, 61, 85, 72, SignalDecision.WATCH);
+        StrategyScoreResult promoted = service.promoteEarlyBreakout(breakout, watch, true, true);
 
-        assertThat(result.normalizedScore()).isBetween(75, 79);
-        assertThat(result.decision()).isEqualTo(SignalDecision.BUY);
+        assertThat(breakout.buyThreshold()).isEqualTo(80);
+        assertThat(promoted.decision()).isEqualTo(SignalDecision.BUY);
+    }
+
+    @Test
+    void doesNotPromoteEarlyBreakoutWhenAtrOrHigherTimeframeBlocks() {
+        StrategyProfile breakout = new StrategyProfile(
+                TradingStrategy.BREAKOUT, "1.0",
+                20, 30, 20, 10, 5,
+                90, 80, 65, 45, 30,
+                true, "test");
+        StrategyScoreResult watch = new StrategyScoreResult(
+                12, 24, 19, 3, 3, 61, 85, 72, SignalDecision.WATCH);
+
+        assertThat(service.promoteEarlyBreakout(breakout, watch, false, true).decision())
+                .isEqualTo(SignalDecision.WATCH);
+        assertThat(service.promoteEarlyBreakout(breakout, watch, true, false).decision())
+                .isEqualTo(SignalDecision.WATCH);
     }
 
     @Test
