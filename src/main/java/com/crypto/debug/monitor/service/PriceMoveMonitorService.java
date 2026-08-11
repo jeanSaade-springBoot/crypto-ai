@@ -13,9 +13,12 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -57,6 +60,7 @@ public class PriceMoveMonitorService {
         if (!settings.isEnabled()) return;
 
         String symbol = rawSymbol.trim().toUpperCase(Locale.ROOT);
+        if (!selectedSymbols(settings).contains(symbol)) return;
         SymbolTracker tracker = trackers.computeIfAbsent(symbol, ignored -> new SymbolTracker());
 
         synchronized (tracker) {
@@ -312,6 +316,7 @@ public class PriceMoveMonitorService {
         settings.setRetracementClosePercent(request.retracementClosePercent().setScale(6, RoundingMode.HALF_UP));
         settings.setCooldownMinutes(request.cooldownMinutes());
         settings.setRetentionDays(request.retentionDays());
+        settings.setSelectedSymbols(normalizeSelectedSymbols(request.symbols()));
 
         // V47 compatibility only. The tracker no longer uses this value.
         if (settings.getWindowMinutes() <= 0) settings.setWindowMinutes(30);
@@ -355,6 +360,27 @@ public class PriceMoveMonitorService {
         return local;
     }
 
+    private String normalizeSelectedSymbols(List<String> rawSymbols) {
+        if (rawSymbols == null || rawSymbols.isEmpty()) return "";
+        return rawSymbols.stream()
+                .filter(Objects::nonNull)
+                .map(value -> value.trim().toUpperCase(Locale.ROOT))
+                .filter(value -> !value.isBlank())
+                .filter(value -> value.matches("[A-Z0-9_-]{2,30}"))
+                .distinct()
+                .limit(50)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    private Set<String> selectedSymbols(PriceMoveMonitorSettings settings) {
+        if (settings == null || settings.getSelectedSymbols() == null
+                || settings.getSelectedSymbols().isBlank()) return Set.of();
+        return Arrays.stream(settings.getSelectedSymbols().split(","))
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
+
     private PriceMoveMonitorSettings defaults() {
         return PriceMoveMonitorSettings.builder()
                 .id(1L)
@@ -365,6 +391,7 @@ public class PriceMoveMonitorService {
                 .retracementClosePercent(new BigDecimal("30.000000"))
                 .cooldownMinutes(10)
                 .retentionDays(7)
+                .selectedSymbols("BNBUSDT")
                 .build();
     }
 

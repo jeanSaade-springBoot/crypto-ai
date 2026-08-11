@@ -205,9 +205,14 @@ public class ExecutionIntelligenceService {
         // but it must not permanently kill a fresh 5m setup whose own ATR explicitly
         // permits immediate/reduced entry. If a fresh 1h context exists and is bearish,
         // it still vetoes this route. Missing 1h context does not manufacture a veto.
-        ExecutionDecision setupAtrAuthority = setupTimeframeAtrAuthorityDecision(signal, evidence);
-        if (setupAtrAuthority != null) {
-            setupAtrAuthority = applyInitialEntryQualityGuard(setupAtrAuthority, entryQuality);
+        TradeSignal setupAtrSignal = setupTimeframeAtrAuthoritySignal(signal, evidence);
+        if (setupAtrSignal != null) {
+            ExecutionDecision setupAtrAuthority = setupTimeframeAtrAuthorityDecision(signal, evidence, setupAtrSignal);
+            // Entry-quality ATR extension must use the same setup timeframe that owns
+            // ATR risk. Using the much smaller 1m ATR here can falsely label a valid
+            // 5m setup as a 9-10 ATR chase even when the 5m risk plan permits entry.
+            EntryQuality setupEntryQuality = assessEntryQuality(signal, setupAtrSignal.getAtrAtSignal());
+            setupAtrAuthority = applyInitialEntryQualityGuard(setupAtrAuthority, setupEntryQuality);
             saveOpportunity(signal, evidence,
                     setupAtrAuthority.allowed() ? "CONFIRMED" : setupAtrAuthority.state(),
                     setupAtrAuthority.source(), setupAtrAuthority.positionPercent(),
@@ -302,6 +307,10 @@ public class ExecutionIntelligenceService {
      * more certain while simultaneously becoming a worse price to enter.
      */
     public EntryQuality assessEntryQuality(TradeSignal current) {
+        return assessEntryQuality(current, current == null ? null : current.getAtrAtSignal());
+    }
+
+    private EntryQuality assessEntryQuality(TradeSignal current, BigDecimal authoritativeAtr) {
         if (current == null || current.getGeneratedAt() == null || current.getLatestPrice() == null
                 || current.getLatestPrice().signum() <= 0) {
             return new EntryQuality(0, "UNKNOWN", 0d, 0d, 0d, 0L);
@@ -325,9 +334,12 @@ public class ExecutionIntelligenceService {
                 .multiply(BigDecimal.valueOf(100)).doubleValue();
 
         double atrExtension = 0d;
-        if (current.getAtrAtSignal() != null && current.getAtrAtSignal().signum() > 0) {
+        BigDecimal atrForExtension = authoritativeAtr != null && authoritativeAtr.signum() > 0
+                ? authoritativeAtr
+                : current.getAtrAtSignal();
+        if (atrForExtension != null && atrForExtension.signum() > 0) {
             atrExtension = current.getLatestPrice().subtract(reference).max(BigDecimal.ZERO)
-                    .divide(current.getAtrAtSignal(), 8, RoundingMode.HALF_UP).doubleValue();
+                    .divide(atrForExtension, 8, RoundingMode.HALF_UP).doubleValue();
         }
 
         long ageMinutes = currentOpportunity(current.getSymbol(), List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
@@ -503,9 +515,18 @@ public class ExecutionIntelligenceService {
         return String.format(java.util.Locale.ROOT, "%.2f", value);
     }
 
-    private ExecutionDecision setupTimeframeAtrAuthorityDecision(TradeSignal current, Evidence e) {
+    private TradeSignal setupTimeframeAtrAuthoritySignal(TradeSignal current, Evidence e) {
         if (current.isAtrImmediateEntryAllowed()) return null;
-        if (!isSupportiveCurrentSignal(current)) return null;
+
+        // A neutral 1m candle is timing-neutral, not a bearish veto. A fresh 5m BUY
+        // may still own setup-level ATR risk when opportunity evidence is already healthy.
+        // Explicit bearish 1m information remains a veto for this fallback.
+        if (isBearish(current.getDecision()) || isBearish(current.getOriginalDecision())) return null;
+        boolean supportiveCurrent = isSupportiveCurrentSignal(current);
+        boolean healthyNeutralTiming = current.getDecision() == SignalDecision.NEUTRAL
+                && e.opportunityHealth() >= 60
+                && e.evidenceScore() >= MIN_EVIDENCE_SCORE;
+        if (!supportiveCurrent && !healthyNeutralTiming) return null;
 
         TradeSignal five = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
         if (five == null || !isBullish(five.getDecision())) return null;
@@ -513,7 +534,11 @@ public class ExecutionIntelligenceService {
 
         TradeSignal oneHour = latestAtOrBefore(current, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
         if (oneHour != null && isBearish(oneHour.getDecision())) return null;
+        return five;
+    }
 
+    private ExecutionDecision setupTimeframeAtrAuthorityDecision(
+            TradeSignal current, Evidence e, TradeSignal five) {
         int fiveRecommended = five.getAtrRecommendedPositionPercent() > 0
                 ? five.getAtrRecommendedPositionPercent()
                 : DEFERRED_POSITION_PERCENT;
@@ -523,11 +548,13 @@ public class ExecutionIntelligenceService {
                 "SETUP_TIMEFRAME_ATR",
                 "REDUCED_POSITION_ALLOWED",
                 percent,
-                "The current 1m signal is temporarily ATR-extended, but the fresh 5m BUY remains "
+                "The current 1m signal is ATR-extended, but the fresh 5m BUY remains "
                         + "the setup-risk authority and its ATR plan explicitly allows immediate entry at "
                         + fiveRecommended + "%. Execution is therefore allowed at a conservative "
                         + percent + "% allocation instead of permanently rejecting the opportunity. "
-                        + "1m timing remains supportive and no fresh bearish 1h veto is present.",
+                        + "A neutral 1m candle is treated as timing-neutral; explicit bearish 1m/1h context still vetoes. "
+                        + "Entry Quality is evaluated with the authoritative 5m ATR so a tiny 1m ATR cannot manufacture "
+                        + "a false late-stage chase classification.",
                 e
         );
     }

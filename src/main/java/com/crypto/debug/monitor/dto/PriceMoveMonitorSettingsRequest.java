@@ -1,6 +1,7 @@
 package com.crypto.debug.monitor.dto;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 public record PriceMoveMonitorSettingsRequest(
         boolean enabled,
@@ -8,5 +9,6 @@ public record PriceMoveMonitorSettingsRequest(
         int minimumDurationMinutes,
         BigDecimal retracementClosePercent,
         int cooldownMinutes,
-        int retentionDays
+        int retentionDays,
+        List<String> symbols
 ) {}

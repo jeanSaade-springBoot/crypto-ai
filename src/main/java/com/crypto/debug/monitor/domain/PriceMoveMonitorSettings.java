@@ -38,6 +38,10 @@ public class PriceMoveMonitorSettings {
     @Column(name = "retention_days", nullable = false)
     private int retentionDays;
 
+    /** Comma-separated debug-only symbols selected in Administration. */
+    @Column(name = "selected_symbols", nullable = false, length = 1000)
+    private String selectedSymbols;
+
     @Column(name = "updated_at", insertable = false, updatable = false)
     private Instant updatedAt;
 }

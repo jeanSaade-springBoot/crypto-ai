@@ -92,6 +92,7 @@ loadCoins();
 // This UI is intentionally isolated from every live trading decision path.
 // -----------------------------------------------------------------------------
 const priceMoveBody = document.getElementById('price-move-body');
+let savedPriceMoveSymbols = new Set(['BNBUSDT']);
 
 function formatMovePrice(value) {
     const n = Number(value);
@@ -123,7 +124,7 @@ async function loadPriceMoveSymbols() {
     const previouslySelected = new Set(selectedPriceMoveSymbols());
     try {
         const coins = await api('/api/administration/coins');
-        const defaults = previouslySelected.size ? previouslySelected : new Set(['BNBUSDT']);
+        const defaults = previouslySelected.size ? previouslySelected : savedPriceMoveSymbols;
         container.innerHTML = coins.map((coin, index) => {
             const checked = defaults.has(coin.symbol) || (!defaults.size && index === 0);
             return `
@@ -200,6 +201,8 @@ async function loadPriceMoveSettings() {
     document.getElementById('price-move-retracement').value = Number(settings.retracementClosePercent ?? 30);
     document.getElementById('price-move-cooldown').value = Number(settings.cooldownMinutes ?? 10);
     document.getElementById('price-move-retention').value = Number(settings.retentionDays ?? 7);
+    savedPriceMoveSymbols = new Set(String(settings.selectedSymbols ?? 'BNBUSDT')
+        .split(',').map(value => value.trim()).filter(Boolean));
 }
 
 async function loadPriceMoves() {
@@ -249,24 +252,32 @@ async function loadPriceMoves() {
     }
 }
 
+async function savePriceMoveSettings(showMessage = true) {
+    const settings = await api('/api/administration/debug/price-moves/settings', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            enabled: document.getElementById('price-move-enabled').checked,
+            minimumMovePercent: Number(document.getElementById('price-move-threshold').value),
+            minimumDurationMinutes: Number(document.getElementById('price-move-min-duration').value),
+            retracementClosePercent: Number(document.getElementById('price-move-retracement').value),
+            cooldownMinutes: Number(document.getElementById('price-move-cooldown').value),
+            retentionDays: Number(document.getElementById('price-move-retention').value),
+            symbols: selectedPriceMoveSymbols()
+        })
+    });
+    savedPriceMoveSymbols = new Set(String(settings.selectedSymbols || '')
+        .split(',').map(value => value.trim()).filter(Boolean));
+    if (showMessage) showAdminMessage('Debug Market Move Tracker settings saved. Trading logic was not changed.');
+    return settings;
+}
+
 const priceMoveSettingsForm = document.getElementById('price-move-settings-form');
 if (priceMoveSettingsForm) {
     priceMoveSettingsForm.addEventListener('submit', async event => {
         event.preventDefault();
         try {
-            await api('/api/administration/debug/price-moves/settings', {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    enabled: document.getElementById('price-move-enabled').checked,
-                    minimumMovePercent: Number(document.getElementById('price-move-threshold').value),
-                    minimumDurationMinutes: Number(document.getElementById('price-move-min-duration').value),
-                    retracementClosePercent: Number(document.getElementById('price-move-retracement').value),
-                    cooldownMinutes: Number(document.getElementById('price-move-cooldown').value),
-                    retentionDays: Number(document.getElementById('price-move-retention').value)
-                })
-            });
-            showAdminMessage('Debug Market Move Tracker settings saved. Trading logic was not changed.');
+            await savePriceMoveSettings(true);
             await Promise.all([loadPriceMoves(), loadActivePriceMove()]);
         } catch (error) {
             showAdminMessage(error.message, true);
@@ -299,23 +310,26 @@ if (priceMoveRefresh) {
     priceMoveRefresh.addEventListener('click', async () => { await Promise.all([loadPriceMoves(), loadActivePriceMove()]); });
 }
 
-Promise.all([loadPriceMoveSymbols(), loadPriceMoveSettings()]).then(() => Promise.all([loadPriceMoves(), loadActivePriceMove()])).catch(error => showAdminMessage(error.message, true));
+loadPriceMoveSettings().then(loadPriceMoveSymbols).then(() => Promise.all([loadPriceMoves(), loadActivePriceMove()])).catch(error => showAdminMessage(error.message, true));
 
 const priceMoveSymbols = document.getElementById('price-move-symbols');
 if (priceMoveSymbols) priceMoveSymbols.addEventListener('change', async event => {
     if (!event.target.matches('input[type="checkbox"]')) return;
+    try { await savePriceMoveSettings(false); } catch (error) { showAdminMessage(error.message, true); }
     await Promise.all([loadPriceMoves(), loadActivePriceMove()]);
 });
 
 const priceMoveSelectAll = document.getElementById('price-move-select-all');
 if (priceMoveSelectAll) priceMoveSelectAll.addEventListener('click', async () => {
     document.querySelectorAll('#price-move-symbols input[type="checkbox"]').forEach(input => { input.checked = true; });
+    try { await savePriceMoveSettings(false); } catch (error) { showAdminMessage(error.message, true); }
     await Promise.all([loadPriceMoves(), loadActivePriceMove()]);
 });
 
 const priceMoveClearSymbols = document.getElementById('price-move-clear-symbols');
 if (priceMoveClearSymbols) priceMoveClearSymbols.addEventListener('click', async () => {
     document.querySelectorAll('#price-move-symbols input[type="checkbox"]').forEach(input => { input.checked = false; });
+    try { await savePriceMoveSettings(false); } catch (error) { showAdminMessage(error.message, true); }
     await Promise.all([loadPriceMoves(), loadActivePriceMove()]);
 });
 
@@ -426,11 +440,21 @@ function regressionPipelineNode(label, value, state, detail = '') {
 
 function nearestOpportunityForCandidate(candidate, opportunities) {
     const candidateTime = new Date(candidate.generated_at).getTime();
-    const within = opportunities
-        .map(row => ({row, distance: Math.abs(new Date(row.generated_at).getTime() - candidateTime)}))
-        .filter(item => Number.isFinite(item.distance) && item.distance <= 10 * 60 * 1000)
-        .sort((a, b) => a.distance - b.distance);
-    return within[0]?.row || null;
+
+    // Never attach an execution result that happened before the BUY candidate existed.
+    // The previous absolute-distance lookup could associate a fresh BUY with an older
+    // ATR_ENTRY_BLOCKED row, which made the visual pipeline misleading.
+    const afterCandidate = opportunities
+        .map(row => ({
+            row,
+            delta: new Date(row.generated_at).getTime() - candidateTime
+        }))
+        .filter(item => Number.isFinite(item.delta)
+            && item.delta >= 0
+            && item.delta <= 10 * 60 * 1000)
+        .sort((a, b) => a.delta - b.delta);
+
+    return afterCandidate[0]?.row || null;
 }
 
 function matchingTradeForCandidate(candidate, trades) {
@@ -471,6 +495,19 @@ function renderRegressionPipeline(signals, opportunities, trades) {
         const health = Number(opportunity?.opportunity_health ?? 0);
         const stage = String(opportunity?.replay_stage || 'NOT_REACHED').toUpperCase();
         const code = opportunity?.decision_code || 'NO_EXECUTION_EVALUATION';
+        const executionDetail = (() => {
+            const labels = {
+                ATR_ENTRY_BLOCKED: 'ATR timing gate',
+                CHASE_ENTRY_BLOCKED: 'Late-entry protection',
+                MISSING_CONTEXT: 'Waiting for context',
+                EVIDENCE_BUILDING: 'Evidence building',
+                NO_BULLISH_EVIDENCE: 'No fresh bullish trigger',
+                OPPORTUNITY_RECOVERING: 'Opportunity recovering',
+                BEARISH_REVERSAL: 'Bearish reversal',
+                OPPORTUNITY_HEALTH_EXHAUSTED: 'Opportunity health exhausted'
+            };
+            return labels[String(code)] || String(code).replaceAll('_', ' ');
+        })();
 
         let evidenceState = evidence >= 7 ? 'pass' : evidence >= 4 ? 'wait' : 'fail';
         let healthState = health >= 40 ? 'pass' : health > 0 ? 'fail' : 'neutral';
@@ -505,7 +542,7 @@ function renderRegressionPipeline(signals, opportunities, trades) {
                     <span class="pipeline-arrow">→</span>
                     ${regressionPipelineNode('Health', `${health}/100`, healthState, 'Minimum 40')}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('Execution', stage, executionState, code)}
+                    ${regressionPipelineNode('Execution', stage, executionState, executionDetail)}
                     <span class="pipeline-arrow">→</span>
                     ${regressionPipelineNode('Shadow wallet', trade ? `BUY ${formatMovePrice(trade.entry_price)}` : 'NO BUY', walletState, trade ? formatMoveTime(trade.entry_time) : 'No wallet write')}
                     <span class="pipeline-arrow">→</span>

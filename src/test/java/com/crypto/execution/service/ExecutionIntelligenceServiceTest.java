@@ -229,6 +229,59 @@ class ExecutionIntelligenceServiceTest {
         assertThat(decision.positionPercent()).isEqualTo(30);
     }
 
+
+    @Test
+    void neutralOneMinuteTimingDoesNotKillHealthyFiveMinuteBuyAndUsesFiveMinuteAtrForChaseGuard() {
+        TradeSignal current = signal(165L, "BNBUSDT", "1m", SignalDecision.NEUTRAL, SignalDecision.NEUTRAL,
+                now, 58, 67);
+        current.setLatestPrice(BigDecimal.valueOf(597.32));
+        current.setStopLoss(BigDecimal.valueOf(596.50));
+        current.setTakeProfit(BigDecimal.valueOf(597.80)); // intentionally sub-1:1 to exercise Entry Quality
+        current.setAtrAtSignal(BigDecimal.valueOf(0.16616));
+        current.setAtrImmediateEntryAllowed(false);
+        current.setFinalEntryAllowed(false);
+        current.setAtrEntryType("WAIT_FOR_RETRACEMENT");
+
+        TradeSignal w1 = signal(164L, "BNBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(60), 69, 72);
+        TradeSignal w2 = signal(163L, "BNBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(120), 68, 71);
+        TradeSignal w3 = signal(162L, "BNBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(180), 67, 70);
+        TradeSignal w4 = signal(161L, "BNBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(240), 66, 70);
+        TradeSignal w5 = signal(160L, "BNBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(300), 65, 70);
+        TradeSignal w6 = signal(159L, "BNBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(360), 65, 70);
+        TradeSignal w7 = signal(158L, "BNBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(420), 65, 70);
+        // Lower recent price forms the opportunity base used by Entry Quality.
+        w7.setLatestPrice(BigDecimal.valueOf(595.70));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("BNBUSDT", "1m"))
+                .thenReturn(List.of(current, w1, w2, w3, w4, w5, w6, w7));
+
+        TradeSignal five = signal(166L, "BNBUSDT", "5m", SignalDecision.BUY, SignalDecision.BUY,
+                now.minusSeconds(60), 75, 70);
+        five.setAtrAtSignal(BigDecimal.valueOf(0.40));
+        five.setAtrImmediateEntryAllowed(true);
+        five.setFinalEntryAllowed(true);
+        five.setAtrRecommendedPositionPercent(60);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "BNBUSDT", "5m", now)).thenReturn(Optional.of(five));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "BNBUSDT", "1h", now)).thenReturn(Optional.empty());
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.source()).isEqualTo("SETUP_TIMEFRAME_ATR");
+        assertThat(decision.code()).isEqualTo("REDUCED_POSITION_ALLOWED");
+        // Entry Quality caps the 30% setup fallback to 25%, but it must no longer
+        // become CHASE_ENTRY_BLOCKED from the tiny 1m ATR.
+        assertThat(decision.positionPercent()).isEqualTo(25);
+    }
+
     @Test
     void bearishOneHourStillVetoesFiveMinuteAtrAuthorityFallback() {
         TradeSignal current = signal(67L, "BNBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
