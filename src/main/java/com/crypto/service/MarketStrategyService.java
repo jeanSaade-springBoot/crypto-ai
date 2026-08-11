@@ -102,6 +102,21 @@ public class MarketStrategyService {
         int maximum = profile.maximum(sentimentAvailable, fundamentalAvailable);
         int normalized = maximum <= 0 ? 0 : (int) Math.round(raw * 100.0 / maximum);
         SignalDecision decision = decision(normalized, profile);
+
+        // A newly confirmed breakout can arrive while the normal BREAKOUT threshold is still
+        // deliberately conservative. Do not globally lower that threshold: promote only a
+        // high-quality early breakout where all three market-derived pillars are already strong.
+        // This keeps weak/volume-only breakouts as WATCH while allowing a trend + volume +
+        // momentum expansion to become actionable without waiting for price to run further.
+        if (decision == SignalDecision.WATCH
+                && profile.strategy() == TradingStrategy.BREAKOUT
+                && normalized >= 75
+                && baseTrend * 100 >= BASE_TREND_MAX * 76
+                && baseVolume * 100 >= BASE_VOLUME_MAX * 75
+                && baseMomentum * 100 >= BASE_MOMENTUM_MAX * 90) {
+            decision = SignalDecision.BUY;
+        }
+
         if (!profile.entryAllowed() && (decision == SignalDecision.BUY || decision == SignalDecision.STRONG_BUY)) {
             decision = SignalDecision.WATCH;
         }
