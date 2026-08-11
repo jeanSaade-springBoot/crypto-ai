@@ -23,11 +23,12 @@
                 <a href="#market" title="Market Monitor"><span class="nav-icon">⌁</span><span class="nav-text">Market Monitor</span></a>
             </div>
             <div class="nav-group"><span class="nav-group-label">EXECUTION</span>
-                <a href="#positions" title="AI Opportunity Center"><span class="nav-icon">⚡</span><span class="nav-text">Opportunity Center</span><span id="nav-opportunity-count" class="nav-badge">0</span></a>
+                <a href="/opportunity-center" title="AI Opportunity Center"><span class="nav-icon">⚡</span><span class="nav-text">Opportunity Center</span><span id="nav-opportunity-count" class="nav-badge">0</span></a>
             </div>
             <div class="nav-group"><span class="nav-group-label">ANALYSIS</span>
                 <a href="#trade-history" title="Trade History"><span class="nav-icon">≡</span><span class="nav-text">Trade History</span></a>
                 <a href="/trade-inspector" title="Trade Inspector"><span class="nav-icon">⌕</span><span class="nav-text">Trade Inspector</span></a>
+                <a href="/score-diagnostics" title="Score Diagnostics"><span class="nav-icon">◎</span><span class="nav-text">Score Diagnostics</span></a>
             </div>
             <div class="nav-group"><span class="nav-group-label">SYSTEM</span>
                 <a href="/administration" title="Administration"><span class="nav-icon">⚙</span><span class="nav-text">Administration</span></a>
@@ -123,31 +124,6 @@
                     <div class="pipeline-step" data-step="tradeInspector"><span class="step-icon">12</span><div><strong>Trade Inspector</strong><small>Post-trade audit</small><p></p></div></div>
                 </div>
             </details>
-        </section>
-
-        <section id="score-diagnostics" class="panel collapsible-panel is-collapsed" data-collapsible="score-diagnostics">
-            <div class="section-heading collapsible-heading">
-                <div><p class="eyebrow">LAST 24 HOURS</p><h2>Score diagnostics</h2></div>
-                <div class="heading-actions">
-                    <span id="diagnostics-window">Waiting for signals</span>
-                    <button class="collapse-toggle" type="button" aria-expanded="false" aria-controls="score-diagnostics-content">Expand</button>
-                </div>
-            </div>
-            <div id="score-diagnostics-content" class="collapsible-content">
-                <div id="diagnostics-warnings" class="diagnostics-warnings"></div>
-                <div class="diagnostics-summary-grid">
-                    <article><span>Signals</span><strong id="diagnostics-count">0</strong></article>
-                    <article><span>Average score</span><strong id="diagnostics-average">—</strong></article>
-                    <article><span>Score range</span><strong id="diagnostics-range">—</strong></article>
-                    <article><span>Normalization</span><strong id="diagnostics-normalization">—</strong></article>
-                </div>
-                <div class="diagnostics-grid">
-                    <div><h3>Category utilization</h3><div id="diagnostics-categories" class="diagnostics-list"></div></div>
-                    <div><h3>Original decisions</h3><div id="diagnostics-decisions" class="diagnostics-list"></div></div>
-                    <div><h3>Strategy performance</h3><div id="diagnostics-strategies" class="diagnostics-list"></div></div>
-                    <div><h3>Lowest symbol / intervals</h3><div id="diagnostics-symbols" class="diagnostics-list"></div></div>
-                </div>
-            </div>
         </section>
 
         <section id="schedules" class="panel collapsible-panel is-collapsed" data-collapsible="runtime-configuration">
@@ -250,22 +226,6 @@
         <section id="signals" class="panel">
             <div class="section-heading"><div><p class="eyebrow">RECENT SIGNAL EVIDENCE</p><h2>BUY and SELL signals</h2></div><span>Historical evidence; live execution state is shown in the AI Opportunity Center</span></div>
             <div class="table-wrap signal-board-wrap"><table class="signal-board-table"><thead><tr><th>Signal</th><th>3-frame decision</th><th>Planned trade</th><th>Execution</th><th>Status</th><th>Details</th></tr></thead><tbody id="signals-body"></tbody></table></div>
-        </section>
-
-        <section id="positions" class="panel execution-intelligence-panel opportunity-center-panel">
-            <div class="section-heading">
-                <div><p class="eyebrow">EXECUTION INTELLIGENCE</p><h2>AI Opportunity Center</h2></div>
-                <span id="execution-intelligence-updated">Waiting for evidence</span>
-            </div>
-            <div class="intelligence-kpis opportunity-center-kpis">
-                <div><span>Active opportunities</span><strong id="intel-active">0</strong><small>Currently alive</small></div>
-                <div><span>Building</span><strong id="intel-building">0</strong><small>Accumulating evidence</small></div>
-                <div><span>Recovering</span><strong id="intel-recovering">0</strong><small>Health improving</small></div>
-                <div><span>Weakening</span><strong id="intel-weakening">0</strong><small>Evidence deteriorating</small></div>
-                <div><span>Blocked</span><strong id="intel-blocked">0</strong><small>Hard risk / gate</small></div>
-                <div><span>Ready</span><strong id="intel-confirmed">0</strong><small>Confirmed for execution</small></div>
-            </div>
-            <div id="opportunity-queue" class="opportunity-queue opportunity-center-queue"><div class="empty">No active opportunities yet.</div></div>
         </section>
 
         <section id="trade-history" class="panel">

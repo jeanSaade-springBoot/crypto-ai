@@ -429,11 +429,12 @@ function regressionPipelineState(value, kind = 'decision') {
     return normalized;
 }
 
-function regressionPipelineNode(label, value, state, detail = '') {
+function regressionPipelineNode(label, value, state, detail = '', time = '') {
     return `
         <div class="pipeline-node ${state}">
             <span class="pipeline-node-label">${escapeHtml(label)}</span>
             <strong>${escapeHtml(value ?? '—')}</strong>
+            ${time ? `<em class="pipeline-node-time">${escapeHtml(time)}</em>` : ''}
             ${detail ? `<small>${escapeHtml(detail)}</small>` : ''}
         </div>`;
 }
@@ -470,9 +471,18 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
     const body = document.getElementById('regression-pipeline-body');
     if (!panel || !body) return;
 
+    const transitionTimes = new Set(opportunities
+        .filter(row => ['HTF_TRANSITION_REDUCED_ENTRY', 'REDUCED_POSITION_ALLOWED', 'BREAKOUT_CONTINUATION_ENTRY']
+            .includes(String(row.decision_code || '')))
+        .map(row => new Date(row.generated_at).getTime()));
     const candidates = signals
-        .filter(signal => regressionBool(signal.replay_generated)
-            && ['BUY', 'STRONG_BUY'].includes(String(signal.final_decision || '')))
+        .filter(signal => {
+            if (!regressionBool(signal.replay_generated)) return false;
+            const finalDecision = String(signal.final_decision || '');
+            if (['BUY', 'STRONG_BUY'].includes(finalDecision)) return true;
+            const generated = new Date(signal.generated_at).getTime();
+            return finalDecision === 'WATCH' && [...transitionTimes].some(t => Math.abs(t - generated) <= 1000);
+        })
         .slice(0, 20);
 
     panel.classList.remove('hidden');
@@ -504,7 +514,9 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
                 NO_BULLISH_EVIDENCE: 'No fresh bullish trigger',
                 OPPORTUNITY_RECOVERING: 'Opportunity recovering',
                 BEARISH_REVERSAL: 'Bearish reversal',
-                OPPORTUNITY_HEALTH_EXHAUSTED: 'Opportunity health exhausted'
+                OPPORTUNITY_HEALTH_EXHAUSTED: 'Opportunity health exhausted',
+                HTF_TRANSITION_REDUCED_ENTRY: '1h BUY + 5m/1m transition · reduced entry',
+                TRANSITION_CHASE_BLOCKED: 'Transition valid · price quality too late'
             };
             return labels[String(code)] || String(code).replaceAll('_', ' ');
         })();
@@ -539,27 +551,27 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
                     <span class="status-pill ${trade ? 'reviewed' : 'new'}">${trade ? 'SHADOW BUY' : 'NOT EXECUTED'}</span>
                 </div>
                 <div class="pipeline-flow">
-                    ${regressionPipelineNode('Fresh analysis', candidate.final_decision || '—', 'pass', `Score ${candidate.total_score ?? '—'} · C${candidate.confidence_score ?? '—'}`)}
+                    ${regressionPipelineNode('Fresh analysis', candidate.final_decision || '—', regressionPipelineState(candidate.final_decision), `Score ${candidate.total_score ?? '—'} · C${candidate.confidence_score ?? '—'}`, formatMoveTime(candidate.generated_at))}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('1m trigger', oneMinute, regressionPipelineState(oneMinute), opportunity ? code : 'No nearby 1m evaluation')}
+                    ${regressionPipelineNode('1m trigger', oneMinute, regressionPipelineState(oneMinute), opportunity ? code : 'No nearby 1m evaluation', opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('5m context', fiveMinute, regressionPipelineState(fiveMinute))}
+                    ${regressionPipelineNode('5m context', fiveMinute, regressionPipelineState(fiveMinute), '', opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('1h context', oneHour, regressionPipelineState(oneHour))}
+                    ${regressionPipelineNode('1h context', oneHour, regressionPipelineState(oneHour), '', opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('Evidence', `${evidence}/7`, evidenceState, `${opportunity?.buy_count ?? 0} BUY · ${opportunity?.watch_count ?? 0} WATCH`)}
+                    ${regressionPipelineNode('Evidence', `${evidence}/7`, evidenceState, `${opportunity?.buy_count ?? 0} BUY · ${opportunity?.watch_count ?? 0} WATCH`, opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('Health', `${health}/100`, healthState, 'Minimum 40')}
+                    ${regressionPipelineNode('Health', `${health}/100`, healthState, 'Minimum 40', opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('Execution', stage, executionState, executionDetail)}
+                    ${regressionPipelineNode('Execution', stage, executionState, executionDetail, opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('Shadow wallet', trade ? `BUY ${formatMovePrice(trade.entry_price)}` : 'NO BUY', walletState, trade ? formatMoveTime(trade.entry_time) : 'No wallet write')}
+                    ${regressionPipelineNode('Shadow wallet', trade ? `BUY ${formatMovePrice(trade.entry_price)}` : 'NO BUY', walletState, trade ? 'Wallet position opened' : 'No wallet write', trade ? formatMoveTime(trade.entry_time) : '—')}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('Position mgmt', trade ? (extensions.length ? `HOLD · TP PUSHED ×${extensions.length}` : (trade.exit_time ? 'MANAGED' : 'HOLD')) : 'NOT REACHED', trade ? 'wait' : 'neutral', lastManagement?.explanation || 'Trend / momentum / volume continuation check')}
+                    ${regressionPipelineNode('Position mgmt', trade ? (extensions.length ? `HOLD · TP PUSHED ×${extensions.length}` : (trade.exit_time ? 'MANAGED' : 'HOLD')) : 'NOT REACHED', trade ? 'wait' : 'neutral', lastManagement?.explanation || 'Trend / momentum / volume continuation check', lastManagement ? formatMoveTime(lastManagement.generated_at) : (trade ? formatMoveTime(trade.entry_time) : '—'))}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('Profit lock', lastLock ? `ACTIVE ${formatMovePrice(lastLock.profit_lock_price)}` : (trade ? 'MONITORING' : 'NOT REACHED'), lastLock ? 'pass' : (trade ? 'wait' : 'neutral'), lastLock ? `High ${formatMovePrice(lastLock.highest_price)}` : 'Activates only after profitable progress')}
+                    ${regressionPipelineNode('Profit lock', lastLock ? `ACTIVE ${formatMovePrice(lastLock.profit_lock_price)}` : (trade ? 'MONITORING' : 'NOT REACHED'), lastLock ? 'pass' : (trade ? 'wait' : 'neutral'), lastLock ? `High ${formatMovePrice(lastLock.highest_price)}` : 'Activates only after profitable progress', lastLock ? formatMoveTime(lastLock.generated_at) : (trade ? formatMoveTime(trade.entry_time) : '—'))}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('Exit', trade?.exit_time ? `SELL ${formatMovePrice(trade.exit_price)}` : (trade ? 'OPEN' : 'NOT REACHED'), exitState, trade?.exit_reason || '')}
+                    ${regressionPipelineNode('Exit', trade?.exit_time ? `SELL ${formatMovePrice(trade.exit_price)}` : (trade ? 'OPEN' : 'NOT REACHED'), exitState, trade?.exit_reason || '', trade?.exit_time ? formatMoveTime(trade.exit_time) : (trade ? 'OPEN' : '—'))}
                 </div>
                 <div class="pipeline-stop-reason"><strong>Diagnosis:</strong> ${escapeHtml(stopReason)}</div>
             </article>`;

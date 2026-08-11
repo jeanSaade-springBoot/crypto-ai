@@ -66,6 +66,18 @@ public class ExecutionIntelligenceService {
     private static final int DEFERRED_MIN_EVIDENCE_MOMENTUM = -10;
     private static final int DEFERRED_POSITION_PERCENT = 30;
 
+    // Higher-timeframe transition entry: when a fresh 1h BUY confirms a recovering market,
+    // a supportive 1m WATCH/BUY plus a fresh 5m WATCH/BUY can use a strictly reduced
+    // position even when ATR is asking for a pullback. This prevents a strong transition
+    // from being blocked for hours while still refusing bearish or low-health setups.
+    private static final int TRANSITION_MIN_HEALTH = 80;
+    private static final int TRANSITION_MIN_CURRENT_SCORE = 60;
+    private static final int TRANSITION_MIN_CURRENT_CONFIDENCE = 65;
+    private static final int TRANSITION_MIN_5M_SCORE = 65;
+    private static final int TRANSITION_MIN_5M_CONFIDENCE = 65;
+    private static final int TRANSITION_MIN_1H_SCORE = 75;
+    private static final int TRANSITION_POSITION_PERCENT = 25;
+
     // Progressive Position Building. These are portfolio-allocation stages, not
     // confidence shortcuts: a scout requires excellent price quality, confirmation
     // requires stronger evidence, and the final add requires trend continuation.
@@ -199,6 +211,22 @@ public class ExecutionIntelligenceService {
                     deferred.source(), deferred.positionPercent(),
                     deferred.code(), deferred.explanation());
             return deferred;
+        }
+
+        // A fresh 1h BUY plus supportive 5m/1m transition can justify a strictly reduced
+        // entry even when ATR is still extended. This is intentionally evaluated before
+        // the ordinary 5m-BUY ATR fallback because the 5m may still be WATCH during the
+        // first minutes of a genuine higher-timeframe reversal.
+        ExecutionDecision transition = higherTimeframeTransitionDecision(signal, evidence);
+        if (transition != null) {
+            TradeSignal five = latestAtOrBefore(signal, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
+            EntryQuality transitionQuality = assessEntryQuality(signal, five == null ? signal.getAtrAtSignal() : five.getAtrAtSignal());
+            transition = applyTransitionEntryQualityGuard(transition, transitionQuality);
+            saveOpportunity(signal, evidence,
+                    transition.allowed() ? "CONFIRMED" : transition.state(),
+                    transition.source(), transition.positionPercent(),
+                    transition.code(), transition.explanation());
+            return transition;
         }
 
         // A valid 5m BUY owns setup-level ATR risk. The 1m ATR still controls timing,
@@ -513,6 +541,70 @@ public class ExecutionIntelligenceService {
 
     private String format(double value) {
         return String.format(java.util.Locale.ROOT, "%.2f", value);
+    }
+
+    private ExecutionDecision higherTimeframeTransitionDecision(TradeSignal current, Evidence e) {
+        if (current == null || current.isAtrImmediateEntryAllowed()) return null;
+        if (!isSupportiveCurrentSignal(current)) return null;
+        if (current.getTotalScore() < TRANSITION_MIN_CURRENT_SCORE
+                || current.getConfidenceScore() < TRANSITION_MIN_CURRENT_CONFIDENCE) return null;
+        if (e.opportunityHealth() < TRANSITION_MIN_HEALTH) return null;
+
+        TradeSignal five = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
+        TradeSignal oneHour = latestAtOrBefore(current, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
+        if (five == null || oneHour == null) return null;
+
+        boolean fiveSupportive = (five.getDecision() == SignalDecision.WATCH || isBullish(five.getDecision()))
+                && five.getTotalScore() >= TRANSITION_MIN_5M_SCORE
+                && five.getConfidenceScore() >= TRANSITION_MIN_5M_CONFIDENCE;
+        boolean strongOneHour = isBullish(oneHour.getDecision())
+                && oneHour.getTotalScore() >= TRANSITION_MIN_1H_SCORE;
+        if (!fiveSupportive || !strongOneHour) return null;
+        if (isBearish(current.getOriginalDecision()) || isBearish(five.getOriginalDecision())
+                || isBearish(oneHour.getOriginalDecision())) return null;
+        if (!five.isStrategyEntryAllowed() || !five.isBtcContextEntryAllowed()
+                || !five.isDerivativesEntryAllowed() || !five.isLiquidityEntryAllowed()) return null;
+
+        int percent = TRANSITION_POSITION_PERCENT;
+        if (five.getAtrRecommendedPositionPercent() > 0) {
+            percent = Math.min(percent, five.getAtrRecommendedPositionPercent());
+        }
+        percent = Math.max(15, percent);
+
+        return ExecutionDecision.allow(
+                "HTF_TRANSITION",
+                "HTF_TRANSITION_REDUCED_ENTRY",
+                percent,
+                "Fresh higher-timeframe transition confirmed: 1h=" + oneHour.getDecision()
+                        + " (score=" + oneHour.getTotalScore() + "), 5m=" + five.getDecision()
+                        + " (score=" + five.getTotalScore() + ", confidence=" + five.getConfidenceScore() + ")"
+                        + ", current 1m=" + current.getDecision()
+                        + ", opportunity health=" + e.opportunityHealth() + "/100. "
+                        + "ATR is extended, so execution is deliberately reduced to " + percent
+                        + "% rather than rejecting the transition outright. Hard strategy/BTC/derivatives/liquidity vetoes remain absolute.",
+                e
+        );
+    }
+
+    private ExecutionDecision applyTransitionEntryQualityGuard(ExecutionDecision decision, EntryQuality q) {
+        if (decision == null || !decision.allowed()) return decision;
+        // The transition route is specifically for a fast reversal where ATR can lag. We still
+        // reject an extreme chase, but use a lower floor than the ordinary entry-quality guard.
+        if (q.score() < 40 || q.rewardRisk() <= 0d) {
+            return ExecutionDecision.building(
+                    "TRANSITION_CHASE_BLOCKED",
+                    "Higher-timeframe transition is valid, but price quality is too poor even for a reduced entry: "
+                            + q.score() + "/100 (" + q.classification() + "), expansion="
+                            + format(q.expansionPercent()) + "%, ATR extension=" + format(q.atrExtension())
+                            + ", R/R=" + format(q.rewardRisk()) + ".",
+                    decision.evidence());
+        }
+        int cap = q.score() >= 70 ? TRANSITION_POSITION_PERCENT : 20;
+        int reduced = Math.min(decision.positionPercent(), cap);
+        if (reduced == decision.positionPercent()) return decision;
+        return ExecutionDecision.allow(decision.source(), decision.code(), reduced,
+                decision.explanation() + " Entry Quality " + q.score() + "/100 capped the transition allocation at "
+                        + reduced + "%.", decision.evidence());
     }
 
     private TradeSignal setupTimeframeAtrAuthoritySignal(TradeSignal current, Evidence e) {

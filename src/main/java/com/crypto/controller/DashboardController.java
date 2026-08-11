@@ -10,4 +10,14 @@ public class DashboardController {
     public String dashboard() {
         return "forward:/dashboard.html";
     }
+
+    @GetMapping("/opportunity-center")
+    public String opportunityCenter() {
+        return "forward:/opportunity-center.html";
+    }
+
+    @GetMapping("/score-diagnostics")
+    public String scoreDiagnostics() {
+        return "forward:/score-diagnostics.html";
+    }
 }

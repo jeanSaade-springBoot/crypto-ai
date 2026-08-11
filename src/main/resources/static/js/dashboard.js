@@ -127,7 +127,6 @@ async function refreshDashboard() {
         // metadata refresh independently after the main chart/signal payload renders.
         void refreshDashboardWallet();
         void refreshSentimentMetadata(symbol);
-        void refreshScoreDiagnostics();
         void refreshExecutionIntelligence();
     } catch (error) {
         updateConnection(false);
@@ -198,7 +197,6 @@ function render(data) {
     el('market-subtitle').textContent = `${data.symbol} · ${displayInterval(data.interval)}${data.displayOnlyInterval ? ' · display only' : ''}${debugMoveFocus && data.interval === '5m' ? ' · DEBUG MOVE ZONE' : ''}`;
     renderWalletHeader(data.wallet || {});
     renderPipeline(data.pipeline);
-    renderScoreDiagnostics(data.scoreDiagnostics || {});
     renderIndicators(data.indicator || {});
     renderAiAnalysis(data.signals || [], data.indicator || {});
     renderSentiment(data.sentiment || {}, data.sentimentProviderStatuses || [], data.sentimentSystemStatus || {});

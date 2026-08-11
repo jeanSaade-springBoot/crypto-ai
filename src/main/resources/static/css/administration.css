@@ -195,3 +195,5 @@
 /* Compact regression pipeline: keep the decision path readable as position-management stages grow. */
 .regression-pipeline .pipeline-node { flex-basis:104px; min-height:62px; padding:.4rem .44rem; }
 .regression-pipeline .pipeline-flow { gap:.28rem; }
+
+.pipeline-node-time{display:block;margin-top:3px;color:var(--muted,#7f919f);font-size:10px;font-style:normal;font-weight:700;letter-spacing:.02em}
