@@ -86,7 +86,7 @@ trading:
   max-daily-loss-percent: 2.0
   max-open-positions: 3
   paper-account-balance: 10000
-  scheduled-analysis-enabled: false
+  scheduled-analysis-enabled: true
   analysis-delay-ms: 300000
   # ATR is a risk engine, not a directional score.
   atr-risk:
