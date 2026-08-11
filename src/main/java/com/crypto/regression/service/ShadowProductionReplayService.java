@@ -5,6 +5,7 @@ import com.crypto.domain.TradeSignal;
 import com.crypto.execution.domain.ExecutionOpportunity;
 import com.crypto.execution.service.ExecutionIntelligenceService;
 import com.crypto.execution.service.ExecutionReplayScope;
+import com.crypto.position.service.PositionContinuationPolicy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -26,6 +27,7 @@ public class ShadowProductionReplayService {
     private final JdbcTemplate jdbcTemplate;
     private final ExecutionIntelligenceService executionIntelligenceService;
     private final ExecutionReplayScope replayScope;
+    private final PositionContinuationPolicy continuationPolicy;
 
     public ReplayStats replay(long runId, String symbol, List<TradeSignal> generatedSignals) {
         List<TradeSignal> timeline = generatedSignals.stream()
@@ -34,6 +36,7 @@ public class ShadowProductionReplayService {
                         .thenComparingInt(s -> intervalOrder(s.getInterval())))
                 .toList();
 
+        TradeSignal latest1m = null;
         TradeSignal latest5m = null;
         TradeSignal latest1h = null;
         ShadowPosition open = null;
@@ -45,11 +48,12 @@ public class ShadowProductionReplayService {
                 opportunity -> persistProductionOpportunity(runId, opportunity))) {
         for (TradeSignal signal : timeline) {
             replayScope.reference(signal.getGeneratedAt());
+            if ("1m".equals(signal.getInterval())) latest1m = signal;
             if ("5m".equals(signal.getInterval())) latest5m = signal;
             if ("1h".equals(signal.getInterval())) latest1h = signal;
 
             if (open != null) {
-                ExitDecision exit = evaluateExit(open, signal, latest5m, latest1h);
+                ExitDecision exit = evaluateExit(runId, open, signal, latest1m, latest5m, latest1h);
                 if (exit.exit()) {
                     BigDecimal proceeds = signal.getLatestPrice().multiply(open.quantity(), MC);
                     BigDecimal pnl = proceeds.subtract(open.cost(), MC);
@@ -62,7 +66,10 @@ public class ShadowProductionReplayService {
                     closePosition(runId, open.positionId(), signal, exit, pnl, pnlPct);
                     open = null;
                 } else {
+                    if (exit.newTakeProfit() != null) open = open.withTakeProfit(exit.newTakeProfit());
                     open = updateProfitLock(open, signal);
+                    persistManagement(runId, signal, open.profitLockActive() ? "PROFIT_LOCK_ACTIVE" : "POSITION_HOLD",
+                            open.takeProfit(), open.takeProfit(), open, exit.explanation());
                 }
             }
 
@@ -83,7 +90,7 @@ public class ShadowProductionReplayService {
                     cash = cash.subtract(budget, MC);
                     open = new ShadowPosition(positionId, signal.getGeneratedAt(), signal.getLatestPrice(), qty, budget,
                             signal.getStopLoss(), signal.getTakeProfit(), signal.getLatestPrice(), false, null,
-                            signal.getTotalScore(), signal.getConfidenceScore());
+                            signal.getTotalScore(), signal.getConfidenceScore(), signal.getTrendScore(), signal.getMomentumScore(), signal.getVolumeScore());
                 }
             }
         }
@@ -104,14 +111,30 @@ public class ShadowProductionReplayService {
         return new ReplayStats(trades, wins, losses, realized, finalWallet);
     }
 
-    private ExitDecision evaluateExit(ShadowPosition p, TradeSignal s, TradeSignal five, TradeSignal one) {
+    private ExitDecision evaluateExit(long runId, ShadowPosition p, TradeSignal s, TradeSignal oneMinute, TradeSignal five, TradeSignal one) {
         BigDecimal price = s.getLatestPrice();
         if (price == null) return ExitDecision.hold();
-        if (p.takeProfit() != null && price.compareTo(p.takeProfit()) >= 0)
-            return new ExitDecision(true, "TAKE_PROFIT", "Price reached the stored take-profit target.");
+        if (p.takeProfit() != null && price.compareTo(p.takeProfit()) >= 0) {
+            PositionContinuationPolicy.Evaluation continuation = continuationPolicy.evaluate(
+                    oneMinute != null ? oneMinute : s, five, one, p.entryTrend(), p.entryMomentum(), p.entryVolume());
+            if (continuation.extendTarget()) {
+                BigDecimal distance = p.takeProfit().subtract(p.entryPrice());
+                BigDecimal newTarget = p.takeProfit().add(distance.multiply(BigDecimal.valueOf(0.50), MC), MC);
+                persistManagement(runId, s, "TAKE_PROFIT_EXTENDED", p.takeProfit(), newTarget, p, continuation.explanation());
+                jdbcTemplate.update("UPDATE wallet_position_test SET take_profit_usdt=? WHERE id=?", newTarget, p.positionId());
+                return new ExitDecision(false, "EXTEND_TAKE_PROFIT", continuation.explanation(), newTarget);
+            }
+            persistManagement(runId, s, "TAKE_PROFIT_EXIT", p.takeProfit(), p.takeProfit(), p, continuation.explanation());
+            return new ExitDecision(true, "TAKE_PROFIT", continuation.explanation());
+        }
         ShadowPosition updated = profitLockState(p, price);
-        if (updated.profitLockActive() && updated.profitLockPrice() != null && price.compareTo(updated.profitLockPrice()) <= 0)
-            return new ExitDecision(true, "PROFIT_LOCK", "Price retraced to the dynamic protected-profit level.");
+        BigDecimal minimumProfitableExit = p.entryPrice().multiply(BigDecimal.valueOf(1.0005));
+        if (updated.profitLockActive() && updated.profitLockPrice() != null
+                && price.compareTo(updated.profitLockPrice()) <= 0 && price.compareTo(minimumProfitableExit) >= 0) {
+            persistManagement(runId, s, "PROFIT_LOCK_EXIT", p.takeProfit(), p.takeProfit(), updated,
+                    "Price retraced to the protected profit level after a profitable advance.");
+            return new ExitDecision(true, "PROFIT_LOCK", "Price retraced to the protected profit level after a profitable advance.");
+        }
         if (p.stopLoss() != null && price.compareTo(p.stopLoss()) <= 0)
             return new ExitDecision(true, "STOP_LOSS", "Price reached the stored stop loss.");
         if ("1m".equals(s.getInterval()) && bearish(s.getDecision()) && five != null && bearish(five.getDecision())
@@ -153,9 +176,19 @@ public class ShadowProductionReplayService {
             BigDecimal maximum = progress.subtract(step).max(initial);
             lockedProgress = lockedProgress.min(maximum).max(initial);
             BigDecimal candidate = p.entryPrice().add(distance.multiply(lockedProgress).divide(BigDecimal.valueOf(100), 12, RoundingMode.HALF_UP));
+            candidate = candidate.max(p.entryPrice().multiply(BigDecimal.valueOf(1.0005)));
             if (lock == null || candidate.compareTo(lock) > 0) lock = candidate;
         }
         return p.withLock(highest, active, lock);
+    }
+
+    private void persistManagement(long runId, TradeSignal s, String code, BigDecimal oldTp, BigDecimal newTp, ShadowPosition p, String explanation) {
+        jdbcTemplate.update("""
+            INSERT INTO position_management_test
+            (test_run_id,symbol,generated_at,action_code,current_price,old_take_profit,new_take_profit,highest_price,profit_lock_active,profit_lock_price,explanation)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, runId, s.getSymbol(), Timestamp.from(s.getGeneratedAt()), code, s.getLatestPrice(), oldTp, newTp,
+                p.highest(), p.profitLockActive(), p.profitLockPrice(), explanation);
     }
 
     private void persistProductionOpportunity(long runId, ExecutionOpportunity o) {
@@ -217,8 +250,12 @@ public class ShadowProductionReplayService {
     private boolean equalsNullable(BigDecimal a,BigDecimal b){return a==null?b==null:b!=null&&a.compareTo(b)==0;}
 
     public record ReplayStats(int trades,int wins,int losses,BigDecimal realizedPnl,BigDecimal finalWallet){}
-    private record ExitDecision(boolean exit,String reason,String explanation){static ExitDecision hold(){return new ExitDecision(false,"HOLD","Position remains open.");}}
-    private record ShadowPosition(long positionId,Instant entryTime,BigDecimal entryPrice,BigDecimal quantity,BigDecimal cost,BigDecimal stopLoss,BigDecimal takeProfit,BigDecimal highest,boolean profitLockActive,BigDecimal profitLockPrice,int entryScore,int entryConfidence){
-        ShadowPosition withLock(BigDecimal h,boolean a,BigDecimal l){return new ShadowPosition(positionId,entryTime,entryPrice,quantity,cost,stopLoss,takeProfit,h,a,l,entryScore,entryConfidence);}
+    private record ExitDecision(boolean exit,String reason,String explanation,BigDecimal newTakeProfit){
+        ExitDecision(boolean exit,String reason,String explanation){this(exit,reason,explanation,null);}
+        static ExitDecision hold(){return new ExitDecision(false,"HOLD","Position remains open.",null);}
+    }
+    private record ShadowPosition(long positionId,Instant entryTime,BigDecimal entryPrice,BigDecimal quantity,BigDecimal cost,BigDecimal stopLoss,BigDecimal takeProfit,BigDecimal highest,boolean profitLockActive,BigDecimal profitLockPrice,int entryScore,int entryConfidence,int entryTrend,int entryMomentum,int entryVolume){
+        ShadowPosition withLock(BigDecimal h,boolean a,BigDecimal l){return new ShadowPosition(positionId,entryTime,entryPrice,quantity,cost,stopLoss,takeProfit,h,a,l,entryScore,entryConfidence,entryTrend,entryMomentum,entryVolume);}
+        ShadowPosition withTakeProfit(BigDecimal tp){return new ShadowPosition(positionId,entryTime,entryPrice,quantity,cost,stopLoss,tp,highest,profitLockActive,profitLockPrice,entryScore,entryConfidence,entryTrend,entryMomentum,entryVolume);}
     }
 }

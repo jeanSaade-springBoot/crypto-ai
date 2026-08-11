@@ -114,6 +114,8 @@ public class DynamicProfitLockService {
             BigDecimal candidateLock = entry.add(targetDistance
                     .multiply(lockedProgress)
                     .divide(HUNDRED, SCALE, RoundingMode.HALF_UP));
+            BigDecimal minimumProfitableLock = entry.multiply(BigDecimal.valueOf(1.0005));
+            candidateLock = candidateLock.max(minimumProfitableLock);
             if (lockPrice == null || candidateLock.compareTo(lockPrice) > 0) {
                 lockPrice = candidateLock;
             }
@@ -136,7 +138,10 @@ public class DynamicProfitLockService {
             positionRepository.save(position);
         }
 
-        boolean triggered = active && lockPrice != null && current.compareTo(lockPrice) <= 0;
+        BigDecimal minimumProfitableExit = entry.multiply(BigDecimal.valueOf(1.0005));
+        boolean triggered = active && lockPrice != null
+                && current.compareTo(lockPrice) <= 0
+                && current.compareTo(minimumProfitableExit) >= 0;
         String explanation;
         String profileText = " Adaptive profile=" + profile.name() +
                 " (entry quality=" + profile.entryQuality() + "/100, activation=" +

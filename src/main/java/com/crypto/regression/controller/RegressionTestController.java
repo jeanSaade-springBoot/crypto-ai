@@ -48,6 +48,11 @@ public class RegressionTestController {
         return service.trades(id);
     }
 
+    @GetMapping("/runs/{id}/position-management")
+    public List<Map<String, Object>> positionManagement(@PathVariable long id) {
+        return service.positionManagement(id);
+    }
+
     @GetMapping("/runs/{id}/opportunities")
     public List<Map<String, Object>> opportunities(@PathVariable long id) {
         return service.opportunities(id);

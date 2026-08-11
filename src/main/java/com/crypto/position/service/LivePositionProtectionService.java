@@ -3,6 +3,8 @@ package com.crypto.position.service;
 import com.crypto.domain.PaperPosition;
 import com.crypto.domain.PositionStatus;
 import com.crypto.repository.PaperPositionRepository;
+import com.crypto.repository.TradeSignalRepository;
+import com.crypto.domain.TradeSignal;
 import com.crypto.wallet.domain.WalletManagedPosition;
 import com.crypto.wallet.repository.WalletManagedPositionRepository;
 import com.crypto.wallet.service.WalletAutoExecutionService;
@@ -29,6 +31,8 @@ public class LivePositionProtectionService {
     private final WalletManagedPositionRepository managedPositionRepository;
     private final PaperPositionRepository paperPositionRepository;
     private final DynamicProfitLockService dynamicProfitLockService;
+    private final PositionContinuationPolicy continuationPolicy;
+    private final TradeSignalRepository tradeSignalRepository;
     private final WalletAutoExecutionService walletAutoExecutionService;
 
     @Transactional
@@ -41,13 +45,24 @@ public class LivePositionProtectionService {
                 .orElse(null);
         if (managed == null || managed.getQuantity() == null || managed.getQuantity().signum() <= 0) return;
 
-        // TP has first priority: once the configured target is reached, realize it immediately.
+        // Reaching TP is a management checkpoint, not an unconditional full exit.
         if (managed.getTakeProfitUsdt() != null && price.compareTo(managed.getTakeProfitUsdt()) >= 0) {
-            if (walletAutoExecutionService.executeMechanicalExit(
-                    symbol, price, "TAKE_PROFIT",
-                    "Live price " + price + " reached take profit " + managed.getTakeProfitUsdt())) {
-                closePaper(symbol, price, PositionStatus.CLOSED, "TAKE_PROFIT",
-                        "Live market price reached the configured take-profit target.");
+            TradeSignal one = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "1m").orElse(null);
+            TradeSignal five = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "5m").orElse(null);
+            TradeSignal hour = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "1h").orElse(null);
+            PositionContinuationPolicy.Evaluation continuation = continuationPolicy.evaluate(one, five, hour,
+                    managed.getEntryTrendScore(), managed.getEntryMomentumScore(), managed.getEntryVolumeScore());
+            if (continuation.extendTarget()) {
+                BigDecimal distance = managed.getTakeProfitUsdt().subtract(managed.getAverageEntryPriceUsdt());
+                BigDecimal oldTarget = managed.getTakeProfitUsdt();
+                BigDecimal newTarget = oldTarget.add(distance.multiply(BigDecimal.valueOf(0.50), MC), MC);
+                managed.setTakeProfitUsdt(newTarget);
+                managed.setUpdatedAt(Instant.now());
+                managedPositionRepository.save(managed);
+                log.info("Live TAKE_PROFIT extended: symbol={}, oldTarget={}, newTarget={}, reason={}", symbol, oldTarget, newTarget, continuation.explanation());
+            } else if (walletAutoExecutionService.executeMechanicalExit(
+                    symbol, price, "TAKE_PROFIT", continuation.explanation())) {
+                closePaper(symbol, price, PositionStatus.CLOSED, "TAKE_PROFIT", continuation.explanation());
                 log.info("Live TAKE_PROFIT executed: symbol={}, price={}, target={}", symbol, price, managed.getTakeProfitUsdt());
             }
             return;

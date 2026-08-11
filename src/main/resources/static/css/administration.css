@@ -192,3 +192,6 @@
 .regression-stack-details summary { cursor: pointer; font-weight: 700; }
 .regression-stack-details pre { margin-top: 10px; max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-word; padding: 14px; border-radius: 10px; background: rgba(0,0,0,.28); font-size: .78rem; line-height: 1.45; }
 @media (max-width: 800px) { .regression-failure-grid { grid-template-columns: 1fr; } }
+/* Compact regression pipeline: keep the decision path readable as position-management stages grow. */
+.regression-pipeline .pipeline-node { flex-basis:104px; min-height:62px; padding:.4rem .44rem; }
+.regression-pipeline .pipeline-flow { gap:.28rem; }

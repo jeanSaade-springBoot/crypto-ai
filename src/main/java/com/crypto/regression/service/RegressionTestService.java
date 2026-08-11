@@ -91,12 +91,14 @@ public class RegressionTestService {
 
         int executions = jdbcTemplate.update("DELETE FROM wallet_execution_test");
         int positions = jdbcTemplate.update("DELETE FROM wallet_position_test");
+        int management = jdbcTemplate.update("DELETE FROM position_management_test");
         int opportunities = jdbcTemplate.update("DELETE FROM execution_opportunity_test");
         int signals = jdbcTemplate.update("DELETE FROM analysis_test_signal");
         int results = jdbcTemplate.update("DELETE FROM analysis_test_result");
         int runs = jdbcTemplate.update("DELETE FROM analysis_test_run");
 
         jdbcTemplate.execute("ALTER TABLE wallet_execution_test AUTO_INCREMENT = 1");
+        jdbcTemplate.execute("ALTER TABLE position_management_test AUTO_INCREMENT = 1");
         jdbcTemplate.execute("ALTER TABLE wallet_position_test AUTO_INCREMENT = 1");
         jdbcTemplate.execute("ALTER TABLE execution_opportunity_test AUTO_INCREMENT = 1");
         jdbcTemplate.execute("ALTER TABLE analysis_test_signal AUTO_INCREMENT = 1");
@@ -108,6 +110,7 @@ public class RegressionTestService {
                 "results", results,
                 "signals", signals,
                 "opportunities", opportunities,
+                "management", management,
                 "positions", positions,
                 "executions", executions
         );
@@ -175,6 +178,18 @@ public class RegressionTestService {
                 WHERE test_run_id = ?
                 ORDER BY entry_time ASC
                 LIMIT 500
+                """, runId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> positionManagement(long runId) {
+        return jdbcTemplate.queryForList("""
+                SELECT generated_at, action_code, current_price, old_take_profit, new_take_profit,
+                       highest_price, profit_lock_active, profit_lock_price, explanation
+                FROM position_management_test
+                WHERE test_run_id = ?
+                ORDER BY generated_at ASC, id ASC
+                LIMIT 5000
                 """, runId);
     }
 

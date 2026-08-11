@@ -465,7 +465,7 @@ function matchingTradeForCandidate(candidate, trades) {
         .sort((a, b) => a.delta - b.delta)[0]?.trade || null;
 }
 
-function renderRegressionPipeline(signals, opportunities, trades) {
+function renderRegressionPipeline(signals, opportunities, trades, management = []) {
     const panel = document.getElementById('regression-pipeline');
     const body = document.getElementById('regression-pipeline-body');
     if (!panel || !body) return;
@@ -515,6 +515,15 @@ function renderRegressionPipeline(signals, opportunities, trades) {
             ? 'pass' : ['BUILDING', 'RECOVERING'].includes(stage) ? 'wait' : 'fail';
         let walletState = trade ? 'pass' : 'fail';
         let exitState = trade?.exit_time ? 'pass' : trade ? 'wait' : 'neutral';
+        const entryMs = trade ? new Date(trade.entry_time).getTime() : NaN;
+        const exitMs = trade?.exit_time ? new Date(trade.exit_time).getTime() : Number.POSITIVE_INFINITY;
+        const managementEvents = trade ? management.filter(event => {
+            const t = new Date(event.generated_at).getTime();
+            return Number.isFinite(t) && t >= entryMs && t <= exitMs;
+        }) : [];
+        const extensions = managementEvents.filter(event => String(event.action_code) === 'TAKE_PROFIT_EXTENDED');
+        const lastManagement = managementEvents.at(-1);
+        const lastLock = [...managementEvents].reverse().find(event => regressionBool(event.profit_lock_active));
 
         const stopReason = trade
             ? (trade.exit_time ? `Trade completed: ${trade.exit_reason || 'SELL'}` : 'BUY reached shadow wallet; position stayed open')
@@ -545,6 +554,10 @@ function renderRegressionPipeline(signals, opportunities, trades) {
                     ${regressionPipelineNode('Execution', stage, executionState, executionDetail)}
                     <span class="pipeline-arrow">→</span>
                     ${regressionPipelineNode('Shadow wallet', trade ? `BUY ${formatMovePrice(trade.entry_price)}` : 'NO BUY', walletState, trade ? formatMoveTime(trade.entry_time) : 'No wallet write')}
+                    <span class="pipeline-arrow">→</span>
+                    ${regressionPipelineNode('Position mgmt', trade ? (extensions.length ? `HOLD · TP PUSHED ×${extensions.length}` : (trade.exit_time ? 'MANAGED' : 'HOLD')) : 'NOT REACHED', trade ? 'wait' : 'neutral', lastManagement?.explanation || 'Trend / momentum / volume continuation check')}
+                    <span class="pipeline-arrow">→</span>
+                    ${regressionPipelineNode('Profit lock', lastLock ? `ACTIVE ${formatMovePrice(lastLock.profit_lock_price)}` : (trade ? 'MONITORING' : 'NOT REACHED'), lastLock ? 'pass' : (trade ? 'wait' : 'neutral'), lastLock ? `High ${formatMovePrice(lastLock.highest_price)}` : 'Activates only after profitable progress')}
                     <span class="pipeline-arrow">→</span>
                     ${regressionPipelineNode('Exit', trade?.exit_time ? `SELL ${formatMovePrice(trade.exit_price)}` : (trade ? 'OPEN' : 'NOT REACHED'), exitState, trade?.exit_reason || '')}
                 </div>
@@ -611,10 +624,11 @@ async function loadRegressionDetail(runId, includeTables = true) {
     }
 
     if (finished && includeTables) {
-        const [signals, opportunities, trades] = await Promise.all([
+        const [signals, opportunities, trades, management] = await Promise.all([
             api(`/api/administration/regression-tests/runs/${runId}/signals`),
             api(`/api/administration/regression-tests/runs/${runId}/opportunities`),
-            api(`/api/administration/regression-tests/runs/${runId}/trades`)
+            api(`/api/administration/regression-tests/runs/${runId}/trades`),
+            api(`/api/administration/regression-tests/runs/${runId}/position-management`)
         ]);
         const detail = document.getElementById('regression-detail');
         detail.classList.remove('hidden');
@@ -648,7 +662,7 @@ async function loadRegressionDetail(runId, includeTables = true) {
                         <td>${escapeHtml(row.decision_code || '—')}</td>
                     </tr>`).join('') || '<tr><td colspan="9">No 1m execution-opportunity evaluations in this window.</td></tr>';
 
-        renderRegressionPipeline(signals, opportunities, trades);
+        renderRegressionPipeline(signals, opportunities, trades, management);
 
         const tradePanel = document.getElementById('regression-trades');
         tradePanel.classList.remove('hidden');

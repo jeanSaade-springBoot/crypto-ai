@@ -170,7 +170,7 @@
                     <button id="regression-reset" type="button" class="danger-button">Reset Test Data</button>
                 </div>
             </div>
-            <p class="debug-isolation-note"><strong>Administration-triggered regression only.</strong> This test reads historical candles/signals and writes only to the isolated <code>analysis_test_*</code> and <code>execution_opportunity_test</code> tables. It never calls wallet execution, live position management, <code>trade_signal</code> writes or production <code>execution_opportunity</code> writes.</p>
+            <p class="debug-isolation-note"><strong>Administration-triggered regression only.</strong> This test reads historical candles/signals and writes only to isolated regression tables including <code>analysis_test_*</code>, <code>execution_opportunity_test</code> and <code>position_management_test</code>. It never calls wallet execution, live position management, <code>trade_signal</code> writes or production <code>execution_opportunity</code> writes.</p>
 
             <form id="regression-test-form" class="regression-test-form">
                 <label>Test name<input id="regression-test-name" type="text" value="BNB Rally 09-Aug" maxlength="150" required></label>
