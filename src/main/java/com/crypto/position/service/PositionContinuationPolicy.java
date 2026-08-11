@@ -9,58 +9,51 @@ import org.springframework.stereotype.Component;
 public class PositionContinuationPolicy {
     public Evaluation evaluate(TradeSignal current, TradeSignal fiveMinute, TradeSignal oneHour,
                                Integer entryTrend, Integer entryMomentum, Integer entryVolume) {
-        if (current == null) return new Evaluation(false, "No fresh signal context is available.");
+        if (current == null) return new Evaluation(false, "Continuation FAIL · no fresh signal context.");
         if (bearish(current.getDecision()) || (fiveMinute != null && bearish(fiveMinute.getDecision()))
                 || (oneHour != null && bearish(oneHour.getDecision()))) {
-            return new Evaluation(false, "Continuation BLOCKED: a current timeframe is bearish; profit target will not be extended.");
+            return new Evaluation(false, "Continuation FAIL · bearish timeframe detected; normal exit remains active.");
         }
-
-        int trendFloor = Math.max(0, nvl(entryTrend) - 2);
-        int momentumFloor = Math.max(0, nvl(entryMomentum) - 2);
-        int volumeFloor = Math.max(0, nvl(entryVolume) - 3);
 
         boolean currentSupport = supportive(current.getDecision());
         boolean fiveSupport = fiveMinute != null && supportive(fiveMinute.getDecision());
-        boolean fiveCooling = fiveMinute != null && fiveMinute.getDecision() == SignalDecision.NEUTRAL;
-        boolean oneBullish = oneHour != null && bullish(oneHour.getDecision());
+        boolean fiveNonBearish = fiveMinute != null && !bearish(fiveMinute.getDecision());
         boolean oneSafe = oneHour == null || !bearish(oneHour.getDecision());
+        boolean oneBullish = oneHour != null && bullish(oneHour.getDecision());
+
+        int trendFloor = Math.max(12, nvl(entryTrend) - 3);
+        int momentumFloor = Math.max(7, nvl(entryMomentum) - 4);
+        int volumeSoftFloor = Math.max(2, nvl(entryVolume) - 8);
+
         boolean trendHealthy = current.getTrendScore() >= trendFloor;
         boolean momentumHealthy = current.getMomentumScore() >= momentumFloor;
-        boolean volumeHealthy = current.getVolumeScore() >= volumeFloor;
-        boolean improving = current.getTrendScore() > nvl(entryTrend)
-                || current.getMomentumScore() > nvl(entryMomentum)
-                || current.getVolumeScore() > nvl(entryVolume);
+        boolean volumeSupportive = current.getVolumeScore() >= volumeSoftFloor;
 
-        // Normal continuation: all short/setup-timeframe components remain supportive.
-        boolean standardContinuation = currentSupport && fiveSupport && oneSafe
-                && trendHealthy && momentumHealthy && volumeHealthy && improving;
+        // Standard continuation: structure is still supportive. Volume is deliberately a soft
+        // confirmation because breakout volume commonly cools while a healthy trend continues.
+        boolean standard = currentSupport && fiveSupport && oneSafe
+                && trendHealthy && momentumHealthy
+                && (volumeSupportive || oneBullish);
 
-        // Higher-timeframe trend continuation: a strong 1h BUY is allowed to carry a
-        // temporarily cooling 5m/volume phase while the 1m trend still supports the trade.
-        // This is intentionally NOT allowed for a bearish 5m, bearish current signal,
-        // weak current trend, or a non-bullish 1h context.
-        boolean htfTrendContinuation = oneBullish && currentSupport && (fiveSupport || fiveCooling)
+        // Protected HTF continuation: a live 1h BUY may carry a winner through a neutral/cooling
+        // 5m phase. It never overrides bearish context and still requires healthy 1m trend/momentum.
+        boolean htfProtected = currentSupport && oneBullish && fiveNonBearish
                 && trendHealthy && momentumHealthy;
 
-        boolean extend = standardContinuation || htfTrendContinuation;
-        String checks = " [current=" + decision(current) +
-                ", 5m=" + decision(fiveMinute) +
-                ", 1h=" + decision(oneHour) +
-                ", trend=" + current.getTrendScore() + "/floor " + trendFloor +
-                ", momentum=" + current.getMomentumScore() + "/floor " + momentumFloor +
-                ", volume=" + current.getVolumeScore() + "/floor " + volumeFloor +
-                ", improving=" + improving + "]";
+        boolean extend = standard || htfProtected;
+        String path = htfProtected ? "HTF_TREND" : (standard ? "STANDARD" : "NONE");
+        String checks = "current=" + decision(current)
+                + ", 5m=" + decision(fiveMinute)
+                + ", 1h=" + decision(oneHour)
+                + ", trend=" + current.getTrendScore() + "/" + trendFloor
+                + ", momentum=" + current.getMomentumScore() + "/" + momentumFloor
+                + ", volume=" + current.getVolumeScore() + "/soft " + volumeSoftFloor;
 
-        if (standardContinuation) {
-            return new Evaluation(true,
-                    "Continuation PASS (STANDARD): trend, momentum and volume remain healthy and at least one is improving; extend the profit target and keep the position open." + checks);
-        }
-        if (htfTrendContinuation) {
-            return new Evaluation(true,
-                    "Continuation PASS (HTF_TREND): 1h remains bullish and the current trend/momentum remain healthy; temporary 5m/volume cooling is not treated as trend failure. Extend the profit target and tighten protection instead of taking profit early." + checks);
-        }
-        return new Evaluation(false,
-                "Continuation FAIL: the position no longer satisfies either standard continuation or the protected higher-timeframe trend continuation path; allow the normal exit path." + checks);
+        return new Evaluation(extend, extend
+                ? "Continuation PASS (" + path + "): " + checks
+                    + ". Volume cooling alone does not end a healthy trend; extend the profit target and keep protection active."
+                : "Continuation FAIL: " + checks
+                    + ". Trend/momentum or higher-timeframe structure no longer supports extending the target; allow the normal exit path.");
     }
 
     private int nvl(Integer v) { return v == null ? 0 : v; }

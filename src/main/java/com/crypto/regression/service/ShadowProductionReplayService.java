@@ -128,8 +128,9 @@ public class ShadowProductionReplayService {
             return new ExitDecision(true, "TAKE_PROFIT", continuation.explanation());
         }
         ShadowPosition updated = profitLockState(p, price);
+        BigDecimal minimumProfitableExit = p.entryPrice().multiply(BigDecimal.valueOf(1.0005));
         if (updated.profitLockActive() && updated.profitLockPrice() != null
-                && price.compareTo(updated.profitLockPrice()) <= 0) {
+                && price.compareTo(updated.profitLockPrice()) <= 0 && price.compareTo(minimumProfitableExit) >= 0) {
             persistManagement(runId, s, "PROFIT_LOCK_EXIT", p.takeProfit(), p.takeProfit(), updated,
                     "Price retraced to the protected profit level after a profitable advance.");
             return new ExitDecision(true, "PROFIT_LOCK", "Price retraced to the protected profit level after a profitable advance.");

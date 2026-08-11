@@ -534,15 +534,8 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
             return Number.isFinite(t) && t >= entryMs && t <= exitMs;
         }) : [];
         const extensions = managementEvents.filter(event => String(event.action_code) === 'TAKE_PROFIT_EXTENDED');
-        const lastExtension = extensions.at(-1);
         const lastManagement = managementEvents.at(-1);
         const lastLock = [...managementEvents].reverse().find(event => regressionBool(event.profit_lock_active));
-        const managementLabel = lastExtension
-            ? `TP EXTENDED ×${extensions.length}`
-            : (trade?.exit_time ? String(lastManagement?.action_code || 'MANAGED').replaceAll('_', ' ') : 'HOLD');
-        const managementDetail = lastExtension
-            ? `${formatMovePrice(lastExtension.old_take_profit)} → ${formatMovePrice(lastExtension.new_take_profit)} · ${lastExtension.explanation || ''}`
-            : (lastManagement?.explanation || 'Trend / momentum / volume continuation check');
 
         const stopReason = trade
             ? (trade.exit_time ? `Trade completed: ${trade.exit_reason || 'SELL'}` : 'BUY reached shadow wallet; position stayed open')
@@ -574,7 +567,7 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
                     <span class="pipeline-arrow">→</span>
                     ${regressionPipelineNode('Shadow wallet', trade ? `BUY ${formatMovePrice(trade.entry_price)}` : 'NO BUY', walletState, trade ? 'Wallet position opened' : 'No wallet write', trade ? formatMoveTime(trade.entry_time) : '—')}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('Position mgmt', trade ? managementLabel : 'NOT REACHED', lastExtension ? 'pass' : (trade ? 'wait' : 'neutral'), managementDetail, lastExtension ? formatMoveTime(lastExtension.generated_at) : (lastManagement ? formatMoveTime(lastManagement.generated_at) : (trade ? formatMoveTime(trade.entry_time) : '—')))}
+                    ${regressionPipelineNode('Position mgmt', trade ? (extensions.length ? `HOLD · TP PUSHED ×${extensions.length}` : (trade.exit_time ? 'MANAGED' : 'HOLD')) : 'NOT REACHED', trade ? 'wait' : 'neutral', lastManagement?.explanation || 'Trend / momentum / volume continuation check', lastManagement ? formatMoveTime(lastManagement.generated_at) : (trade ? formatMoveTime(trade.entry_time) : '—'))}
                     <span class="pipeline-arrow">→</span>
                     ${regressionPipelineNode('Profit lock', lastLock ? `ACTIVE ${formatMovePrice(lastLock.profit_lock_price)}` : (trade ? 'MONITORING' : 'NOT REACHED'), lastLock ? 'pass' : (trade ? 'wait' : 'neutral'), lastLock ? `High ${formatMovePrice(lastLock.highest_price)}` : 'Activates only after profitable progress', lastLock ? formatMoveTime(lastLock.generated_at) : (trade ? formatMoveTime(trade.entry_time) : '—'))}
                     <span class="pipeline-arrow">→</span>

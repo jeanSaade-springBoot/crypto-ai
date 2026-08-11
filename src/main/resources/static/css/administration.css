@@ -197,3 +197,25 @@
 .regression-pipeline .pipeline-flow { gap:.28rem; }
 
 .pipeline-node-time{display:block;margin-top:3px;color:var(--muted,#7f919f);font-size:10px;font-style:normal;font-weight:700;letter-spacing:.02em}
+
+/* Dense replay pipeline: optimized to keep the full decision path on-screen. */
+.regression-pipeline { margin-top:.75rem; }
+.regression-pipeline-body { gap:.55rem; }
+.regression-pipeline .pipeline-candidate { padding:.55rem .6rem; border-radius:9px; }
+.regression-pipeline .pipeline-candidate-head { margin-bottom:.42rem; gap:.55rem; }
+.regression-pipeline .pipeline-candidate-head > div { display:flex; align-items:baseline; flex-wrap:wrap; gap:.25rem .5rem; }
+.regression-pipeline .pipeline-kicker { font-size:.66rem; }
+.regression-pipeline .pipeline-candidate-head strong { font-size:.78rem; }
+.regression-pipeline .status-pill { font-size:.62rem; padding:.2rem .42rem; }
+.regression-pipeline .pipeline-flow { gap:.18rem; padding-bottom:.2rem; }
+.regression-pipeline .pipeline-node { flex:0 0 88px; min-height:50px; padding:.3rem .34rem; border-radius:7px; }
+.regression-pipeline .pipeline-node-label { font-size:.56rem; margin-bottom:.1rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.regression-pipeline .pipeline-node strong { font-size:.7rem; line-height:1.05; }
+.regression-pipeline .pipeline-node small { margin-top:.1rem; font-size:.54rem; line-height:1.08; max-height:2.2em; overflow:hidden; }
+.regression-pipeline .pipeline-node-time { margin-top:2px; font-size:8px; line-height:1; }
+.regression-pipeline .pipeline-arrow { font-size:.7rem; }
+.regression-pipeline .pipeline-stop-reason { margin-top:.4rem; padding:.38rem .48rem; font-size:.68rem; line-height:1.2; max-height:3.1em; overflow:auto; }
+@media (max-width:650px) {
+    .regression-pipeline .pipeline-candidate-head { flex-direction:row; align-items:center; }
+    .regression-pipeline .pipeline-node { flex-basis:82px; }
+}
