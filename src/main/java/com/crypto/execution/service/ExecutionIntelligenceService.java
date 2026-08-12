@@ -758,6 +758,22 @@ public class ExecutionIntelligenceService {
             return ExecutionDecision.building("WATCH_ONLY_BUILDING",
                     "WATCH evidence is persistent but has not yet produced a BUY signal; continuing to observe.", e);
         }
+
+        // WATCH-only accumulation is intentionally allowed to keep building across symbols,
+        // but old WATCH observations must not manufacture a fresh BUY when the current
+        // higher-timeframe context is only 1h WATCH + 5m NEUTRAL. In that state there is
+        // no fresh setup confirmation: keep the opportunity memory, but wait for either a
+        // 5m WATCH/BUY or a genuine 1h BUY before committing capital. Existing routes with
+        // real BUY evidence are unchanged, as are HTF_TRANSITION / IMMEDIATE_VALIDATION.
+        if (e.buyCount() == 0
+                && !isBullish(e.oneHour())
+                && e.fiveMinute() != SignalDecision.WATCH
+                && !isBullish(e.fiveMinute())) {
+            return ExecutionDecision.building("WATCH_ONLY_NEEDS_FRESH_CONFIRMATION",
+                    "Accumulated WATCH evidence remains valid, but there is still no BUY observation and fresh "
+                            + "higher-timeframe confirmation is missing (5m=" + e.fiveMinute()
+                            + ", 1h=" + e.oneHour() + "). Wait for 5m WATCH/BUY or 1h BUY before entry.", e);
+        }
         if (e.averageScore() < 65 || e.averageConfidence() < 65) {
             return ExecutionDecision.building("EVIDENCE_QUALITY_LOW",
                     "Evidence persists, but average quality is still low: score=" + e.averageScore()

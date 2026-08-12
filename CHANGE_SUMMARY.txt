@@ -1,0 +1,3 @@
+Changed: ExecutionIntelligenceService accumulated WATCH-only guard
+Changed: Administration regression tester shows only generated BUY/STRONG_BUY signals
+Added: regression tests for watch-only neutral context and preservation of supported/real-BUY paths

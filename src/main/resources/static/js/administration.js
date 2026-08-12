@@ -692,11 +692,13 @@ async function loadRegressionDetail(runId, includeTables = true) {
         ]);
         const detail = document.getElementById('regression-detail');
         detail.classList.remove('hidden');
-        document.getElementById('regression-signals-body').innerHTML = signals.map(signal => {
+        const generatedBuySignals = signals.filter(signal =>
+            ['BUY', 'STRONG_BUY'].includes(String(signal.final_decision || ''))
+        );
+        document.getElementById('regression-signals-body').innerHTML = generatedBuySignals.map(signal => {
             const replay = regressionBool(signal.replay_generated);
             const hasError = Boolean(signal.generation_error);
-            const highlight = replay && ['BUY', 'STRONG_BUY'].includes(String(signal.final_decision || ''));
-            const buySignal = ['BUY', 'STRONG_BUY'].includes(String(signal.final_decision || ''));
+            const highlight = replay;
             return `
                 <tr${highlight ? ' class="regression-corrected"' : ''}>
                     <td>${formatMoveTime(signal.generated_at)}</td>
@@ -707,9 +709,9 @@ async function loadRegressionDetail(runId, includeTables = true) {
                     <td>${escapeHtml(signal.execution_effective_decision || '—')}</td>
                     <td>${replay ? 'FRESH' : 'REFERENCE'}</td>
                     <td>${hasError ? escapeHtml(signal.generation_error) : '—'}</td>
-                    <td>${buySignal ? `<a class="secondary-button regression-chart-link" href="${regressionSignalChartUrl(run.symbol, signal, 0)}">View Chart</a>` : '—'}</td>
+                    <td><a class="secondary-button regression-chart-link" href="${regressionSignalChartUrl(run.symbol, signal, 0)}">View Chart</a></td>
                 </tr>`;
-        }).join('') || '<tr><td colspan="9">No generated signals in this test window.</td></tr>';
+        }).join('') || '<tr><td colspan="9">No generated BUY / STRONG_BUY signals in this test window.</td></tr>';
 
         document.getElementById('regression-opportunities-body').innerHTML = opportunities.map(row => `
                     <tr${String(row.replay_stage) === 'CONFIRMED' ? ' class="regression-corrected"' : ''}>

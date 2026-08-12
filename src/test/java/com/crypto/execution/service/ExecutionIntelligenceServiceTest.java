@@ -451,6 +451,78 @@ class ExecutionIntelligenceServiceTest {
         assertThat(decision.code()).isEqualTo("CONTINUATION_RISK_REWARD_LOW");
     }
 
+    @Test
+    void watchOnlyAccumulationWaitsWhenFiveMinuteIsNeutralAndOneHourOnlyWatch() {
+        TradeSignal current = signal(220L, "GLOBALUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 66, 67);
+        List<TradeSignal> evidence = new java.util.ArrayList<>();
+        evidence.add(current);
+        for (int i = 1; i < 10; i++) {
+            evidence.add(signal(220L - i, "GLOBALUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                    now.minusSeconds(i * 60L), 66, 67));
+        }
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("GLOBALUSDT", "1m"))
+                .thenReturn(evidence);
+        context("GLOBALUSDT", "5m", SignalDecision.NEUTRAL, now.minusSeconds(60));
+        context("GLOBALUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.state()).isEqualTo("BUILDING");
+        assertThat(decision.code()).isEqualTo("WATCH_ONLY_NEEDS_FRESH_CONFIRMATION");
+        assertThat(decision.evidence().buyCount()).isZero();
+        assertThat(decision.evidence().watchCount()).isEqualTo(10);
+    }
+
+    @Test
+    void watchOnlyAccumulationCanStillExecuteWhenFiveMinuteFreshlySupportsIt() {
+        TradeSignal current = signal(240L, "SUPPORTUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 66, 67);
+        List<TradeSignal> evidence = new java.util.ArrayList<>();
+        evidence.add(current);
+        for (int i = 1; i < 10; i++) {
+            evidence.add(signal(240L - i, "SUPPORTUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                    now.minusSeconds(i * 60L), 66, 67));
+        }
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SUPPORTUSDT", "1m"))
+                .thenReturn(evidence);
+        context("SUPPORTUSDT", "5m", SignalDecision.WATCH, now.minusSeconds(60));
+        context("SUPPORTUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.source()).isEqualTo("ACCUMULATED_EVIDENCE");
+        assertThat(decision.code()).isEqualTo("OPPORTUNITY_CONFIRMED");
+        assertThat(decision.evidence().buyCount()).isZero();
+    }
+
+    @Test
+    void accumulatedEvidenceWithRealBuyObservationRemainsEligibleWithNeutralFiveMinute() {
+        TradeSignal current = signal(260L, "REALBUYUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 66, 67);
+        List<TradeSignal> evidence = new java.util.ArrayList<>();
+        evidence.add(current);
+        evidence.add(signal(259L, "REALBUYUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now.minusSeconds(60), 78, 78));
+        for (int i = 2; i < 7; i++) {
+            evidence.add(signal(260L - i, "REALBUYUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                    now.minusSeconds(i * 60L), 67, 68));
+        }
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("REALBUYUSDT", "1m"))
+                .thenReturn(evidence);
+        context("REALBUYUSDT", "5m", SignalDecision.NEUTRAL, now.minusSeconds(60));
+        context("REALBUYUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.source()).isEqualTo("ACCUMULATED_EVIDENCE");
+        assertThat(decision.code()).isEqualTo("OPPORTUNITY_CONFIRMED");
+        assertThat(decision.evidence().buyCount()).isEqualTo(1);
+    }
+
     private void context(String symbol, String interval, SignalDecision decision, Instant generatedAt) {
         when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
                 symbol, interval, now)).thenReturn(Optional.of(
