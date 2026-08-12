@@ -466,7 +466,30 @@ function matchingTradeForCandidate(candidate, trades) {
         .sort((a, b) => a.delta - b.delta)[0]?.trade || null;
 }
 
-function renderRegressionPipeline(signals, opportunities, trades, management = []) {
+function regressionTradeChartUrl(symbol, trade, index = 0) {
+    if (!trade?.entry_time || !trade?.entry_price) return '#';
+    const entry = new Date(trade.entry_time);
+    const exit = trade.exit_time ? new Date(trade.exit_time) : new Date(entry.getTime() + 60 * 60 * 1000);
+    const params = new URLSearchParams({
+        symbol: String(symbol || 'BNBUSDT').toUpperCase(),
+        interval: '5m',
+        focusStart: entry.toISOString(),
+        focusEnd: exit.toISOString(),
+        focusDirection: 'UP',
+        focusChange: trade.realized_pnl_percent == null ? '' : String(trade.realized_pnl_percent),
+        debugTrade: '1',
+        debugTradeLabel: `Replay #${index + 1}`,
+        debugEntryTime: entry.toISOString(),
+        debugEntryPrice: String(trade.entry_price)
+    });
+    if (trade.exit_time && trade.exit_price) {
+        params.set('debugExitTime', new Date(trade.exit_time).toISOString());
+        params.set('debugExitPrice', String(trade.exit_price));
+    }
+    return `/dashboard?${params.toString()}#market`;
+}
+
+function renderRegressionPipeline(signals, opportunities, trades, management = [], runSymbol = '') {
     const panel = document.getElementById('regression-pipeline');
     const body = document.getElementById('regression-pipeline-body');
     if (!panel || !body) return;
@@ -548,7 +571,10 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
                         <span class="pipeline-kicker">Candidate #${index + 1} · ${escapeHtml(candidate.interval_code || '—')}</span>
                         <strong>${formatMoveTime(candidate.generated_at)} · ${formatMovePrice(candidate.latest_price)}</strong>
                     </div>
-                    <span class="status-pill ${trade ? 'reviewed' : 'new'}">${trade ? 'SHADOW BUY' : 'NOT EXECUTED'}</span>
+                    <div class="pipeline-candidate-actions">
+                        <span class="status-pill ${trade ? 'reviewed' : 'new'}">${trade ? 'SHADOW BUY' : 'NOT EXECUTED'}</span>
+                        ${trade ? `<a class="secondary-button pipeline-chart-button" href="${regressionTradeChartUrl(runSymbol, trade, index)}">View Buy/Sell Chart</a>` : ''}
+                    </div>
                 </div>
                 <div class="pipeline-flow">
                     ${regressionPipelineNode('Fresh analysis', candidate.final_decision || '—', regressionPipelineState(candidate.final_decision), `Score ${candidate.total_score ?? '—'} · C${candidate.confidence_score ?? '—'}`, formatMoveTime(candidate.generated_at))}
@@ -674,7 +700,7 @@ async function loadRegressionDetail(runId, includeTables = true) {
                         <td>${escapeHtml(row.decision_code || '—')}</td>
                     </tr>`).join('') || '<tr><td colspan="9">No 1m execution-opportunity evaluations in this window.</td></tr>';
 
-        renderRegressionPipeline(signals, opportunities, trades, management);
+        renderRegressionPipeline(signals, opportunities, trades, management, run.symbol);
 
         const tradePanel = document.getElementById('regression-trades');
         tradePanel.classList.remove('hidden');
@@ -688,7 +714,8 @@ async function loadRegressionDetail(runId, includeTables = true) {
                 <td>${escapeHtml(trade.exit_reason || 'OPEN')}</td>
                 <td>${trade.realized_pnl_usdt == null ? '—' : Number(trade.realized_pnl_usdt).toFixed(4)}</td>
                 <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>
-            </tr>`).join('') || '<tr><td colspan="8">NO BUY EXECUTED in this replay window.</td></tr>';
+                <td><a class="secondary-button regression-chart-link" href="${regressionTradeChartUrl(run.symbol, trade, index)}">View Chart</a></td>
+            </tr>`).join('') || '<tr><td colspan="9">NO BUY EXECUTED in this replay window.</td></tr>';
     }
 
     return finished;

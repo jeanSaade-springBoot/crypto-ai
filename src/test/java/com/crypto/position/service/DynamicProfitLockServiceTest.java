@@ -117,4 +117,18 @@ class DynamicProfitLockServiceTest {
         assertThat(result.triggered()).isTrue();
         assertThat(result.lockPrice()).isEqualByComparingTo(new BigDecimal("1915.70715193"));
     }
+    @Test
+    void remainsTriggeredWhenPriceFallsBelowMinimumProfitFloorAfterLockWasActive() {
+        position.setHighestPriceUsdt(new BigDecimal("1917.67"));
+        position.setProfitLockActive(true);
+        position.setProfitLockPriceUsdt(new BigDecimal("1915.70715193"));
+        position.setProfitLockProgressPercent(new BigDecimal("81.79"));
+        position.setProfitLockActivatedAt(Instant.now().minusSeconds(60));
+
+        var result = service.evaluatePrice("ETHUSDT", new BigDecimal("1912.80"));
+
+        assertThat(result.active()).isTrue();
+        assertThat(result.triggered()).isTrue();
+    }
+
 }

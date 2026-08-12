@@ -46,6 +46,26 @@ const debugFocusStart = dashboardUrlParams.get('focusStart');
 const debugFocusEnd = dashboardUrlParams.get('focusEnd');
 const debugFocusDirection = String(dashboardUrlParams.get('focusDirection') || '').trim().toUpperCase();
 const debugFocusChange = dashboardUrlParams.get('focusChange');
+const debugTradeEnabled = dashboardUrlParams.get('debugTrade') === '1';
+const debugTradeLabel = String(dashboardUrlParams.get('debugTradeLabel') || 'Replay trade');
+const debugEntryTime = dashboardUrlParams.get('debugEntryTime');
+const debugEntryPrice = dashboardUrlParams.get('debugEntryPrice');
+const debugExitTime = dashboardUrlParams.get('debugExitTime');
+const debugExitPrice = dashboardUrlParams.get('debugExitPrice');
+const debugTradePoints = (() => {
+    if (!debugTradeEnabled) return [];
+    const points = [];
+    const add = (side, timeValue, priceValue) => {
+        if (!timeValue || priceValue == null || priceValue === '') return;
+        const time = new Date(timeValue);
+        const price = Number(priceValue);
+        if (Number.isNaN(time.getTime()) || !Number.isFinite(price)) return;
+        points.push({side, time, price});
+    };
+    add('BUY', debugEntryTime, debugEntryPrice);
+    add('SELL', debugExitTime, debugExitPrice);
+    return points;
+})();
 const debugMoveFocus = (() => {
     if (!debugFocusStart || !debugFocusEnd) return null;
     const start = new Date(debugFocusStart);
@@ -718,6 +738,21 @@ function renderCharts(candles, executions = []) {
             }
         };
     });
+    debugTradePoints.forEach((point, index) => {
+        const isBuy = point.side === 'BUY';
+        annotations.push({
+            x: point.time.getTime(),
+            y: point.price,
+            marker: { size: 7, fillColor: isBuy ? '#39d98a' : '#ff6b72', strokeColor: '#ffffff', strokeWidth: 2, radius: 2 },
+            label: {
+                text: `${isBuy ? 'TEST BUY' : 'TEST SELL'} · ${point.price}`,
+                borderColor: isBuy ? '#39d98a' : '#ff6b72',
+                offsetY: isBuy ? 22 : -14,
+                style: { background: isBuy ? '#39d98a' : '#ff6b72', color: '#071018', fontSize: '11px', fontWeight: 800 },
+                cssClass: `debug-trade-marker debug-trade-marker-${index}`
+            }
+        });
+    });
     const debugZoneAnnotations = debugMoveFocus ? [{
         x: debugMoveFocus.start.getTime(),
         x2: debugMoveFocus.end.getTime(),
@@ -725,7 +760,7 @@ function renderCharts(candles, executions = []) {
         fillColor: debugMoveFocus.direction === 'DOWN' ? '#ff6b72' : '#39d98a',
         opacity: 0.12,
         label: {
-            text: `Debug ${debugMoveFocus.direction || 'MOVE'}${debugMoveFocus.change ? ` ${Number(debugMoveFocus.change) >= 0 ? '+' : ''}${Number(debugMoveFocus.change).toFixed(2)}%` : ''}`,
+            text: `${debugTradeEnabled ? debugTradeLabel : `Debug ${debugMoveFocus.direction || 'MOVE'}`}${debugMoveFocus.change ? ` ${Number(debugMoveFocus.change) >= 0 ? '+' : ''}${Number(debugMoveFocus.change).toFixed(2)}%` : ''}`,
             style: { background: '#132430', color: '#dce9f2', fontSize: '11px', fontWeight: 700 }
         }
     }] : [];

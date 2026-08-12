@@ -70,9 +70,26 @@ public class LivePositionProtectionService {
 
         DynamicProfitLockService.Evaluation lock = dynamicProfitLockService.evaluatePrice(symbol, price);
         if (lock.triggered()) {
+            BigDecimal hardProfitFloor = managed.getAverageEntryPriceUsdt().multiply(BigDecimal.valueOf(1.0005), MC);
+            PositionContinuationPolicy.Evaluation continuation = null;
+            if (price.compareTo(hardProfitFloor) >= 0) {
+                TradeSignal one = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "1m").orElse(null);
+                TradeSignal five = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "5m").orElse(null);
+                TradeSignal hour = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "1h").orElse(null);
+                continuation = continuationPolicy.evaluate(one, five, hour,
+                        managed.getEntryTrendScore(), managed.getEntryMomentumScore(), managed.getEntryVolumeScore());
+                if (continuation.extendTarget()) {
+                    log.info("Live PROFIT_LOCK breach held by continuation: symbol={}, price={}, lock={}, reason={}",
+                            symbol, price, lock.lockPrice(), continuation.explanation());
+                    return;
+                }
+            }
+            String reason = price.compareTo(hardProfitFloor) < 0
+                    ? lock.explanation() + " Hard profit floor " + hardProfitFloor + " was breached; continuation cannot override this protection."
+                    : lock.explanation() + " " + continuation.explanation();
             if (walletAutoExecutionService.executeMechanicalExit(
-                    symbol, price, "POSITION_PROFIT_LOCK", lock.explanation())) {
-                closePaper(symbol, price, PositionStatus.CLOSED, "PROFIT_LOCK", lock.explanation());
+                    symbol, price, "POSITION_PROFIT_LOCK", reason)) {
+                closePaper(symbol, price, PositionStatus.CLOSED, "PROFIT_LOCK", reason);
                 log.info("Live PROFIT_LOCK executed: symbol={}, price={}, lock={}", symbol, price, lock.lockPrice());
             }
             return;

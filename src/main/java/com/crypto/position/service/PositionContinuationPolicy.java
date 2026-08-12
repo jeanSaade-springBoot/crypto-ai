@@ -40,16 +40,24 @@ public class PositionContinuationPolicy {
         boolean htfProtected = currentSupport && oneBullish && fiveNonBearish
                 && trendHealthy && momentumHealthy;
 
-        // Healthy consolidation: an already-profitable position may keep running while both
-        // higher timeframes cool to WATCH/NEUTRAL, provided neither is bearish and the live
-        // 1m trend/momentum/volume structure remains healthy. This is deliberately narrower
-        // than changing supportive() globally, so entry logic and other policies are untouched.
+        // Healthy consolidation: low volume is deliberately NOT a hard veto for an already
+        // profitable position. If 1m is still WATCH/BUY, the higher timeframes are non-bearish,
+        // and trend/momentum remain healthy, cooling volume alone must not force a TP exit.
         boolean healthyConsolidation = currentSupport && fiveNonBearish && oneSafe
-                && trendHealthy && momentumHealthy && volumeSupportive;
+                && trendHealthy && momentumHealthy;
 
-        boolean extend = standard || htfProtected || healthyConsolidation;
+        // HTF-supported consolidation: a strong 1h BUY may carry a winner through one neutral
+        // 1m candle when 5m remains non-bearish. This is position-management-only; supportive()
+        // is intentionally unchanged so entry rules are not loosened.
+        boolean currentNonBearish = !bearish(current.getDecision());
+        boolean htfSupportedConsolidation = currentNonBearish && !currentSupport
+                && oneBullish && fiveNonBearish && trendHealthy && momentumHealthy;
+
+        boolean extend = standard || htfProtected || healthyConsolidation || htfSupportedConsolidation;
         String path = htfProtected ? "HTF_TREND"
-                : (standard ? "STANDARD" : (healthyConsolidation ? "HEALTHY_CONSOLIDATION" : "NONE"));
+                : (standard ? "STANDARD"
+                : (htfSupportedConsolidation ? "HTF_SUPPORTED_CONSOLIDATION"
+                : (healthyConsolidation ? "HEALTHY_CONSOLIDATION" : "NONE")));
         String checks = "current=" + decision(current)
                 + ", 5m=" + decision(fiveMinute)
                 + ", 1h=" + decision(oneHour)
@@ -59,9 +67,9 @@ public class PositionContinuationPolicy {
 
         return new Evaluation(extend, extend
                 ? "Continuation PASS (" + path + "): " + checks
-                    + ". Volume cooling alone does not end a healthy trend; extend the profit target and keep protection active."
+                    + ". Volume is advisory during a healthy winner; cooling volume alone does not end the trend."
                 : "Continuation FAIL: " + checks
-                    + ". Trend/momentum or higher-timeframe structure no longer supports extending the target; allow the normal exit path.");
+                    + ". Trend/momentum or higher-timeframe structure no longer supports extending the target; allow normal protection/exit logic.");
     }
 
     private int nvl(Integer v) { return v == null ? 0 : v; }

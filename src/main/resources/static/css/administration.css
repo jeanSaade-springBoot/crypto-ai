@@ -219,3 +219,8 @@
     .regression-pipeline .pipeline-candidate-head { flex-direction:row; align-items:center; }
     .regression-pipeline .pipeline-node { flex-basis:82px; }
 }
+
+/* Regression chart deep-link actions */
+.pipeline-candidate-actions{display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;justify-content:flex-end}
+.pipeline-chart-button,.regression-chart-link{font-size:.66rem;padding:.28rem .46rem;white-space:nowrap}
+@media(max-width:650px){.pipeline-candidate-actions{width:100%;justify-content:flex-start}.pipeline-chart-button{padding:.24rem .4rem}}

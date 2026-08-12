@@ -42,11 +42,33 @@ class PositionContinuationPolicyTest {
     }
 
     @Test
-    void healthyConsolidationDoesNotOverrideWeakCurrentVolume() {
-        TradeSignal one = signal(SignalDecision.WATCH, 21, 9, 7);
+    void healthyConsolidationAllowsCoolingVolumeWhenTrendAndMomentumRemainHealthy() {
+        TradeSignal one = signal(SignalDecision.WATCH, 22, 14, 4);
         TradeSignal five = signal(SignalDecision.NEUTRAL, 13, 9, 14);
         TradeSignal hour = signal(SignalDecision.WATCH, 18, 11, 9);
         var result = policy.evaluate(one, five, hour, 18, 11, 16);
+        assertTrue(result.extendTarget());
+        assertTrue(result.explanation().contains("HEALTHY_CONSOLIDATION"));
+    }
+
+    @Test
+    void htfBuyCarriesOneNeutralMinuteWhenFiveMinuteStillSupportive() {
+        // Mirrors the BNB 08:17 state: 1m NEUTRAL, 5m WATCH, 1h BUY,
+        // trend 19/18, momentum 8/7 and cooled volume 5/soft 7.
+        TradeSignal one = signal(SignalDecision.NEUTRAL, 19, 8, 5);
+        TradeSignal five = signal(SignalDecision.WATCH, 15, 9, 10);
+        TradeSignal hour = signal(SignalDecision.BUY, 18, 15, 16);
+        var result = policy.evaluate(one, five, hour, 21, 12, 15);
+        assertTrue(result.extendTarget());
+        assertTrue(result.explanation().contains("HTF_SUPPORTED_CONSOLIDATION"));
+    }
+
+    @Test
+    void neutralMinuteCannotContinueWithoutStrongOneHourAuthority() {
+        TradeSignal one = signal(SignalDecision.NEUTRAL, 19, 8, 5);
+        TradeSignal five = signal(SignalDecision.WATCH, 15, 9, 10);
+        TradeSignal hour = signal(SignalDecision.WATCH, 18, 11, 9);
+        var result = policy.evaluate(one, five, hour, 21, 12, 15);
         assertFalse(result.extendTarget());
     }
 

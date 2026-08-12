@@ -138,10 +138,8 @@ public class DynamicProfitLockService {
             positionRepository.save(position);
         }
 
-        BigDecimal minimumProfitableExit = entry.multiply(BigDecimal.valueOf(1.0005));
         boolean triggered = active && lockPrice != null
-                && current.compareTo(lockPrice) <= 0
-                && current.compareTo(minimumProfitableExit) >= 0;
+                && current.compareTo(lockPrice) <= 0;
         String explanation;
         String profileText = " Admin profile=" + profile.name() +
                 " (activation=" + activation.stripTrailingZeros().toPlainString() + "%, initial lock=" +

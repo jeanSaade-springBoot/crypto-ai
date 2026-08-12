@@ -133,9 +133,23 @@ public class ShadowProductionReplayService {
         ShadowPosition updated = profitLockState(p, price);
         BigDecimal minimumProfitableExit = p.entryPrice().multiply(BigDecimal.valueOf(1.0005));
         if (updated.profitLockActive() && updated.profitLockPrice() != null
-                && price.compareTo(updated.profitLockPrice()) <= 0 && price.compareTo(minimumProfitableExit) >= 0) {
+                && price.compareTo(updated.profitLockPrice()) <= 0) {
+            if (price.compareTo(minimumProfitableExit) < 0) {
+                String floorReason = "Profit-lock hard floor was breached; healthy continuation cannot override the minimum protected-profit floor. "
+                        + profitLockConfigText();
+                persistManagement(runId, s, "PROFIT_LOCK_HARD_EXIT", p.takeProfit(), p.takeProfit(), updated, floorReason);
+                return new ExitDecision(true, "PROFIT_LOCK", floorReason);
+            }
+            PositionContinuationPolicy.Evaluation continuation = continuationPolicy.evaluate(
+                    oneMinute != null ? oneMinute : s, five, one, p.entryTrend(), p.entryMomentum(), p.entryVolume());
+            if (continuation.extendTarget()) {
+                String holdReason = "Profit-lock level was crossed, but the position thesis remains healthy. "
+                        + continuation.explanation() + " " + profitLockConfigText();
+                persistManagement(runId, s, "PROFIT_LOCK_HOLD", p.takeProfit(), p.takeProfit(), updated, holdReason);
+                return ExitDecision.hold();
+            }
             String lockReason = "Price retraced to the protected profit level after a profitable advance. "
-                    + profitLockConfigText();
+                    + continuation.explanation() + " " + profitLockConfigText();
             persistManagement(runId, s, "PROFIT_LOCK_EXIT", p.takeProfit(), p.takeProfit(), updated, lockReason);
             return new ExitDecision(true, "PROFIT_LOCK", lockReason);
         }
