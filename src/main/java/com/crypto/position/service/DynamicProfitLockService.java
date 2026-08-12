@@ -88,7 +88,7 @@ public class DynamicProfitLockService {
                 .divide(targetDistance, 6, RoundingMode.HALF_UP)
                 .max(BigDecimal.ZERO);
 
-        ProfitLockProfile profile = adaptiveProfile(position, settings);
+        ProfitLockProfile profile = configuredProfile(settings);
         BigDecimal activation = profile.activationPercent();
         BigDecimal initialLock = profile.initialLockPercent();
         BigDecimal trailStep = profile.trailStepPercent();
@@ -143,9 +143,8 @@ public class DynamicProfitLockService {
                 && current.compareTo(lockPrice) <= 0
                 && current.compareTo(minimumProfitableExit) >= 0;
         String explanation;
-        String profileText = " Adaptive profile=" + profile.name() +
-                " (entry quality=" + profile.entryQuality() + "/100, activation=" +
-                activation.stripTrailingZeros().toPlainString() + "%, initial lock=" +
+        String profileText = " Admin profile=" + profile.name() +
+                " (activation=" + activation.stripTrailingZeros().toPlainString() + "%, initial lock=" +
                 initialLock.stripTrailingZeros().toPlainString() + "%, trail=" +
                 trailStep.stripTrailingZeros().toPlainString() + "%).";
         if (triggered) {
@@ -176,53 +175,20 @@ public class DynamicProfitLockService {
 
 
     /**
-     * Converts immutable entry quality into a profit-protection profile.
-     * Quality is intentionally based on both normalized signal score and confidence:
-     *   55% signal score + 45% confidence.
-     *
-     * High-quality trades receive more room to run; medium/low-quality trades protect
-     * gains earlier because their continuation probability is lower.
+     * Administration is the single source of truth for Dynamic Profit Lock.
+     * Entry quality must never silently replace the percentages configured by the user.
      */
-    private ProfitLockProfile adaptiveProfile(WalletManagedPosition position, WalletSettings settings) {
-        Integer score = position.getEntryTotalScore();
-        Integer confidence = position.getEntryConfidence();
-        if (score == null || confidence == null || score <= 0 || confidence <= 0) {
-            return new ProfitLockProfile(
-                    "CONFIG_FALLBACK",
-                    0,
-                    nvl(settings.getProfitLockActivationPercent(), BigDecimal.valueOf(70)),
-                    nvl(settings.getProfitLockInitialPercent(), BigDecimal.valueOf(40)),
-                    nvl(settings.getProfitLockTrailStepPercent(), BigDecimal.valueOf(10))
-            );
-        }
-
-        int boundedScore = Math.max(0, Math.min(100, score));
-        int boundedConfidence = Math.max(0, Math.min(100, confidence));
-        int quality = (int) Math.round((boundedScore * 0.55d) + (boundedConfidence * 0.45d));
-
-        if (quality >= 85) {
-            return new ProfitLockProfile("HIGH_CONVICTION", quality,
-                    BigDecimal.valueOf(75), BigDecimal.valueOf(45), BigDecimal.valueOf(10));
-        }
-        if (quality >= 80) {
-            return new ProfitLockProfile("STRONG", quality,
-                    BigDecimal.valueOf(60), BigDecimal.valueOf(35), BigDecimal.valueOf(10));
-        }
-        if (quality >= 75) {
-            return new ProfitLockProfile("BALANCED", quality,
-                    BigDecimal.valueOf(40), BigDecimal.valueOf(20), BigDecimal.valueOf(10));
-        }
-        if (quality >= 70) {
-            return new ProfitLockProfile("CAUTIOUS", quality,
-                    BigDecimal.valueOf(35), BigDecimal.valueOf(15), BigDecimal.valueOf(5));
-        }
-        return new ProfitLockProfile("DEFENSIVE", quality,
-                BigDecimal.valueOf(30), BigDecimal.valueOf(10), BigDecimal.valueOf(5));
+    private ProfitLockProfile configuredProfile(WalletSettings settings) {
+        return new ProfitLockProfile(
+                "ADMIN_CONFIG",
+                nvl(settings.getProfitLockActivationPercent(), BigDecimal.valueOf(70)),
+                nvl(settings.getProfitLockInitialPercent(), BigDecimal.valueOf(40)),
+                nvl(settings.getProfitLockTrailStepPercent(), BigDecimal.valueOf(10))
+        );
     }
 
     private record ProfitLockProfile(
             String name,
-            int entryQuality,
             BigDecimal activationPercent,
             BigDecimal initialLockPercent,
             BigDecimal trailStepPercent

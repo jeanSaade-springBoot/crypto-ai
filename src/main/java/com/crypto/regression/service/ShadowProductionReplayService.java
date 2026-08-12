@@ -6,6 +6,8 @@ import com.crypto.execution.domain.ExecutionOpportunity;
 import com.crypto.execution.service.ExecutionIntelligenceService;
 import com.crypto.execution.service.ExecutionReplayScope;
 import com.crypto.position.service.PositionContinuationPolicy;
+import com.crypto.wallet.domain.WalletSettings;
+import com.crypto.wallet.repository.WalletSettingsRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -28,6 +30,7 @@ public class ShadowProductionReplayService {
     private final ExecutionIntelligenceService executionIntelligenceService;
     private final ExecutionReplayScope replayScope;
     private final PositionContinuationPolicy continuationPolicy;
+    private final WalletSettingsRepository walletSettingsRepository;
 
     public ReplayStats replay(long runId, String symbol, List<TradeSignal> generatedSignals) {
         List<TradeSignal> timeline = generatedSignals.stream()
@@ -131,9 +134,10 @@ public class ShadowProductionReplayService {
         BigDecimal minimumProfitableExit = p.entryPrice().multiply(BigDecimal.valueOf(1.0005));
         if (updated.profitLockActive() && updated.profitLockPrice() != null
                 && price.compareTo(updated.profitLockPrice()) <= 0 && price.compareTo(minimumProfitableExit) >= 0) {
-            persistManagement(runId, s, "PROFIT_LOCK_EXIT", p.takeProfit(), p.takeProfit(), updated,
-                    "Price retraced to the protected profit level after a profitable advance.");
-            return new ExitDecision(true, "PROFIT_LOCK", "Price retraced to the protected profit level after a profitable advance.");
+            String lockReason = "Price retraced to the protected profit level after a profitable advance. "
+                    + profitLockConfigText();
+            persistManagement(runId, s, "PROFIT_LOCK_EXIT", p.takeProfit(), p.takeProfit(), updated, lockReason);
+            return new ExitDecision(true, "PROFIT_LOCK", lockReason);
         }
         if (p.stopLoss() != null && price.compareTo(p.stopLoss()) <= 0)
             return new ExitDecision(true, "STOP_LOSS", "Price reached the stored stop loss.");
@@ -158,15 +162,19 @@ public class ShadowProductionReplayService {
         BigDecimal highest = p.highest() == null || price.compareTo(p.highest()) > 0 ? price : p.highest();
         if (p.takeProfit() == null || p.takeProfit().compareTo(p.entryPrice()) <= 0)
             return p.withLock(highest, p.profitLockActive(), p.profitLockPrice());
+        WalletSettings settings = walletSettings();
+        if (!settings.isDynamicProfitLockEnabled())
+            return p.withLock(highest, false, null);
+
         BigDecimal distance = p.takeProfit().subtract(p.entryPrice());
         BigDecimal progress = highest.subtract(p.entryPrice()).multiply(BigDecimal.valueOf(100), MC)
                 .divide(distance, 6, RoundingMode.HALF_UP).max(BigDecimal.ZERO);
-        int quality = (int)Math.round(p.entryScore() * .55 + p.entryConfidence() * .45);
-        BigDecimal activation = quality >= 85 ? BigDecimal.valueOf(75) : quality >= 80 ? BigDecimal.valueOf(60)
-                : quality >= 75 ? BigDecimal.valueOf(40) : quality >= 70 ? BigDecimal.valueOf(35) : BigDecimal.valueOf(30);
-        BigDecimal initial = quality >= 85 ? BigDecimal.valueOf(45) : quality >= 80 ? BigDecimal.valueOf(35)
-                : quality >= 75 ? BigDecimal.valueOf(20) : quality >= 70 ? BigDecimal.valueOf(15) : BigDecimal.valueOf(10);
-        BigDecimal step = quality >= 75 ? BigDecimal.TEN : BigDecimal.valueOf(5);
+        // Replay must use the exact same Administration percentages as production.
+        // Do not silently replace 70/40/10 (or any configured values) with an
+        // entry-quality-derived 30/10/5 profile.
+        BigDecimal activation = nvl(settings.getProfitLockActivationPercent(), BigDecimal.valueOf(70));
+        BigDecimal initial = nvl(settings.getProfitLockInitialPercent(), BigDecimal.valueOf(40));
+        BigDecimal step = nvl(settings.getProfitLockTrailStepPercent(), BigDecimal.valueOf(10));
         boolean active = p.profitLockActive();
         BigDecimal lock = p.profitLockPrice();
         if (progress.compareTo(activation) >= 0) {
@@ -240,6 +248,25 @@ public class ShadowProductionReplayService {
         jdbcTemplate.update("""
             UPDATE wallet_position_test SET status='CLOSED',exit_time=?,exit_price=?,exit_reason=?,exit_explanation=?,realized_pnl_usdt=?,realized_pnl_percent=? WHERE id=? AND test_run_id=?""",
                 Timestamp.from(s.getGeneratedAt()),s.getLatestPrice(),e.reason(),e.explanation(),pnl,pnlPct,id,runId);
+    }
+
+    private WalletSettings walletSettings() {
+        return walletSettingsRepository.findById(1L).orElseGet(() -> WalletSettings.builder()
+                .id(1L)
+                .dynamicProfitLockEnabled(true)
+                .profitLockActivationPercent(BigDecimal.valueOf(70))
+                .profitLockInitialPercent(BigDecimal.valueOf(40))
+                .profitLockTrailStepPercent(BigDecimal.valueOf(10))
+                .build());
+    }
+
+    private BigDecimal nvl(BigDecimal value, BigDecimal fallback) { return value == null ? fallback : value; }
+
+    private String profitLockConfigText() {
+        WalletSettings s = walletSettings();
+        return "Admin Profit Lock: activation=" + nvl(s.getProfitLockActivationPercent(), BigDecimal.valueOf(70)).stripTrailingZeros().toPlainString()
+                + "%, initial=" + nvl(s.getProfitLockInitialPercent(), BigDecimal.valueOf(40)).stripTrailingZeros().toPlainString()
+                + "%, trail=" + nvl(s.getProfitLockTrailStepPercent(), BigDecimal.valueOf(10)).stripTrailingZeros().toPlainString() + "%.";
     }
 
     private BigDecimal percentage(BigDecimal entry,BigDecimal exit){return exit.subtract(entry).multiply(BigDecimal.valueOf(100)).divide(entry,8,RoundingMode.HALF_UP);}

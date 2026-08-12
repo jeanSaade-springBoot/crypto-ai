@@ -71,7 +71,7 @@ class DynamicProfitLockServiceTest {
     }
 
     @Test
-    void balancedQualityActivatesAroundFortyPercentLikeEduCase() {
+    void entryQualityDoesNotOverrideAdministrationProfitLockPercentages() {
         position.setEntryTotalScore(75);
         position.setEntryConfidence(77);
         position.setAverageEntryPriceUsdt(new BigDecimal("0.036200"));
@@ -82,25 +82,23 @@ class DynamicProfitLockServiceTest {
                 .thenReturn(Optional.of(position));
         position.setSymbol("EDUUSDT");
 
+        // ~40% progress: old adaptive logic activated here. Admin says 70%, so it must remain inactive.
         var result = service.evaluatePrice("EDUUSDT", new BigDecimal("0.036300"));
 
-        assertThat(result.active()).isTrue();
-        assertThat(result.activationPercent()).isEqualByComparingTo("40");
-        assertThat(result.progressPercent()).isGreaterThanOrEqualTo(new BigDecimal("40"));
-        assertThat(result.lockPrice()).isGreaterThan(new BigDecimal("0.036200"));
-        assertThat(result.explanation()).contains("BALANCED").contains("entry quality=76/100");
+        assertThat(result.active()).isFalse();
+        assertThat(result.activationPercent()).isEqualByComparingTo("70");
+        assertThat(result.explanation()).contains("ADMIN_CONFIG").contains("activation=70%");
     }
 
     @Test
-    void higherQualityTradeGetsMoreRoomBeforeLockActivation() {
+    void highEntryQualityStillUsesAdministrationPercentages() {
         position.setEntryTotalScore(88);
         position.setEntryConfidence(90);
 
         var result = service.evaluatePrice("ETHUSDT", new BigDecimal("1916.95"));
 
-        assertThat(result.activationPercent()).isEqualByComparingTo("75");
-        assertThat(result.active()).isFalse();
-        assertThat(result.explanation()).contains("HIGH_CONVICTION");
+        assertThat(result.activationPercent()).isEqualByComparingTo("70");
+        assertThat(result.explanation()).contains("ADMIN_CONFIG");
     }
 
     @Test
