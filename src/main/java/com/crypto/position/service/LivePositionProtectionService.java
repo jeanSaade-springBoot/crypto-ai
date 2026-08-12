@@ -32,6 +32,7 @@ public class LivePositionProtectionService {
     private final PaperPositionRepository paperPositionRepository;
     private final DynamicProfitLockService dynamicProfitLockService;
     private final PositionContinuationPolicy continuationPolicy;
+    private final PositionExitPolicy exitPolicy;
     private final TradeSignalRepository tradeSignalRepository;
     private final WalletAutoExecutionService walletAutoExecutionService;
 
@@ -45,11 +46,12 @@ public class LivePositionProtectionService {
                 .orElse(null);
         if (managed == null || managed.getQuantity() == null || managed.getQuantity().signum() <= 0) return;
 
+        TradeSignal one = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "1m").orElse(null);
+        TradeSignal five = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "5m").orElse(null);
+        TradeSignal hour = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "1h").orElse(null);
+
         // Reaching TP is a management checkpoint, not an unconditional full exit.
         if (managed.getTakeProfitUsdt() != null && price.compareTo(managed.getTakeProfitUsdt()) >= 0) {
-            TradeSignal one = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "1m").orElse(null);
-            TradeSignal five = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "5m").orElse(null);
-            TradeSignal hour = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "1h").orElse(null);
             PositionContinuationPolicy.Evaluation continuation = continuationPolicy.evaluate(one, five, hour,
                     managed.getEntryTrendScore(), managed.getEntryMomentumScore(), managed.getEntryVolumeScore());
             if (continuation.extendTarget()) {
@@ -68,33 +70,7 @@ public class LivePositionProtectionService {
             return;
         }
 
-        DynamicProfitLockService.Evaluation lock = dynamicProfitLockService.evaluatePrice(symbol, price);
-        if (lock.triggered()) {
-            BigDecimal hardProfitFloor = managed.getAverageEntryPriceUsdt().multiply(BigDecimal.valueOf(1.0005), MC);
-            PositionContinuationPolicy.Evaluation continuation = null;
-            if (price.compareTo(hardProfitFloor) >= 0) {
-                TradeSignal one = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "1m").orElse(null);
-                TradeSignal five = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "5m").orElse(null);
-                TradeSignal hour = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "1h").orElse(null);
-                continuation = continuationPolicy.evaluate(one, five, hour,
-                        managed.getEntryTrendScore(), managed.getEntryMomentumScore(), managed.getEntryVolumeScore());
-                if (continuation.extendTarget()) {
-                    log.info("Live PROFIT_LOCK breach held by continuation: symbol={}, price={}, lock={}, reason={}",
-                            symbol, price, lock.lockPrice(), continuation.explanation());
-                    return;
-                }
-            }
-            String reason = price.compareTo(hardProfitFloor) < 0
-                    ? lock.explanation() + " Hard profit floor " + hardProfitFloor + " was breached; continuation cannot override this protection."
-                    : lock.explanation() + " " + continuation.explanation();
-            if (walletAutoExecutionService.executeMechanicalExit(
-                    symbol, price, "POSITION_PROFIT_LOCK", reason)) {
-                closePaper(symbol, price, PositionStatus.CLOSED, "PROFIT_LOCK", reason);
-                log.info("Live PROFIT_LOCK executed: symbol={}, price={}, lock={}", symbol, price, lock.lockPrice());
-            }
-            return;
-        }
-
+        // Stop loss is absolute and is never softened by continuation logic.
         if (managed.getStopLossUsdt() != null && price.compareTo(managed.getStopLossUsdt()) <= 0) {
             if (walletAutoExecutionService.executeMechanicalExit(
                     symbol, price, "STOP_LOSS",
@@ -102,6 +78,42 @@ public class LivePositionProtectionService {
                 closePaper(symbol, price, PositionStatus.STOPPED, "STOP_LOSS",
                         "Live market price reached the configured stop loss.");
                 log.info("Live STOP_LOSS executed: symbol={}, price={}, stop={}", symbol, price, managed.getStopLossUsdt());
+            }
+            return;
+        }
+
+        DynamicProfitLockService.Evaluation lock = dynamicProfitLockService.evaluatePrice(symbol, price);
+        if (lock.triggered()) {
+            BigDecimal hardProfitFloor = managed.getAverageEntryPriceUsdt().multiply(BigDecimal.valueOf(1.0005), MC);
+            if (price.compareTo(hardProfitFloor) < 0) {
+                String reason = lock.explanation() + " Hard protected-profit floor " + hardProfitFloor + " was breached.";
+                if (walletAutoExecutionService.executeMechanicalExit(symbol, price, "PROFIT_LOCK_HARD_EXIT", reason)) {
+                    closePaper(symbol, price, PositionStatus.CLOSED, "PROFIT_LOCK_HARD_EXIT", reason);
+                }
+                return;
+            }
+
+            PositionExitPolicy.Evaluation lockDecision = exitPolicy.evaluateProfitLockBreach(one, five, hour);
+            if (lockDecision.exit()) {
+                String reason = lock.explanation() + " " + lockDecision.explanation();
+                if (walletAutoExecutionService.executeMechanicalExit(symbol, price, lockDecision.code(), reason)) {
+                    closePaper(symbol, price, PositionStatus.CLOSED, lockDecision.code(), reason);
+                    log.info("Live PROFIT_LOCK exit: symbol={}, price={}, lock={}, reason={}",
+                            symbol, price, lock.lockPrice(), lockDecision.code());
+                }
+                return;
+            }
+            log.info("Live PROFIT_LOCK protected hold: symbol={}, price={}, lock={}, reason={}",
+                    symbol, price, lock.lockPrice(), lockDecision.explanation());
+        }
+
+        // Normal signal exits remain active even when Profit Lock is disabled. Higher-timeframe
+        // failure can therefore close a winner instead of waiting forever for an exact 1m SELL event.
+        PositionExitPolicy.Evaluation normalExit = exitPolicy.evaluateNormalExit(one, five, hour);
+        if (normalExit.exit()) {
+            if (walletAutoExecutionService.executeMechanicalExit(symbol, price, normalExit.code(), normalExit.explanation())) {
+                closePaper(symbol, price, PositionStatus.CLOSED, normalExit.code(), normalExit.explanation());
+                log.info("Live signal-driven exit: symbol={}, price={}, reason={}", symbol, price, normalExit.code());
             }
         }
     }

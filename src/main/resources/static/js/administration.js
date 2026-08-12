@@ -489,6 +489,28 @@ function regressionTradeChartUrl(symbol, trade, index = 0) {
     return `/dashboard?${params.toString()}#market`;
 }
 
+
+function regressionSignalChartUrl(symbol, signal, index = 0) {
+    if (!signal?.generated_at || signal?.latest_price == null) return '#';
+    const at = new Date(signal.generated_at);
+    if (Number.isNaN(at.getTime())) return '#';
+    const start = new Date(at.getTime() - 20 * 60 * 1000);
+    const end = new Date(at.getTime() + 40 * 60 * 1000);
+    const decision = String(signal.final_decision || signal.execution_effective_decision || 'BUY').replaceAll('_', ' ');
+    const params = new URLSearchParams({
+        symbol: String(symbol || signal.symbol || 'BNBUSDT').toUpperCase(),
+        interval: '5m',
+        focusStart: start.toISOString(),
+        focusEnd: end.toISOString(),
+        focusDirection: 'UP',
+        debugTrade: '1',
+        debugTradeLabel: `Signal ${decision} #${index + 1}`,
+        debugEntryTime: at.toISOString(),
+        debugEntryPrice: String(signal.latest_price)
+    });
+    return `/dashboard?${params.toString()}#market`;
+}
+
 function renderRegressionPipeline(signals, opportunities, trades, management = [], runSymbol = '') {
     const panel = document.getElementById('regression-pipeline');
     const body = document.getElementById('regression-pipeline-body');
@@ -573,7 +595,7 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
                     </div>
                     <div class="pipeline-candidate-actions">
                         <span class="status-pill ${trade ? 'reviewed' : 'new'}">${trade ? 'SHADOW BUY' : 'NOT EXECUTED'}</span>
-                        ${trade ? `<a class="secondary-button pipeline-chart-button" href="${regressionTradeChartUrl(runSymbol, trade, index)}">View Buy/Sell Chart</a>` : ''}
+                        <a class="secondary-button pipeline-chart-button" href="${trade ? regressionTradeChartUrl(runSymbol, trade, index) : regressionSignalChartUrl(runSymbol, candidate, index)}">${trade ? 'View Buy/Sell Chart' : 'View Signal Chart'}</a>
                     </div>
                 </div>
                 <div class="pipeline-flow">
@@ -674,6 +696,7 @@ async function loadRegressionDetail(runId, includeTables = true) {
             const replay = regressionBool(signal.replay_generated);
             const hasError = Boolean(signal.generation_error);
             const highlight = replay && ['BUY', 'STRONG_BUY'].includes(String(signal.final_decision || ''));
+            const buySignal = ['BUY', 'STRONG_BUY'].includes(String(signal.final_decision || ''));
             return `
                 <tr${highlight ? ' class="regression-corrected"' : ''}>
                     <td>${formatMoveTime(signal.generated_at)}</td>
@@ -684,8 +707,9 @@ async function loadRegressionDetail(runId, includeTables = true) {
                     <td>${escapeHtml(signal.execution_effective_decision || '—')}</td>
                     <td>${replay ? 'FRESH' : 'REFERENCE'}</td>
                     <td>${hasError ? escapeHtml(signal.generation_error) : '—'}</td>
+                    <td>${buySignal ? `<a class="secondary-button regression-chart-link" href="${regressionSignalChartUrl(run.symbol, signal, 0)}">View Chart</a>` : '—'}</td>
                 </tr>`;
-        }).join('') || '<tr><td colspan="8">No generated signals in this test window.</td></tr>';
+        }).join('') || '<tr><td colspan="9">No generated signals in this test window.</td></tr>';
 
         document.getElementById('regression-opportunities-body').innerHTML = opportunities.map(row => `
                     <tr${String(row.replay_stage) === 'CONFIRMED' ? ' class="regression-corrected"' : ''}>

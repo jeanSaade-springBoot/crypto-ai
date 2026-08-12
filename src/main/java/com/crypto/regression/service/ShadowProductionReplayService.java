@@ -6,6 +6,7 @@ import com.crypto.execution.domain.ExecutionOpportunity;
 import com.crypto.execution.service.ExecutionIntelligenceService;
 import com.crypto.execution.service.ExecutionReplayScope;
 import com.crypto.position.service.PositionContinuationPolicy;
+import com.crypto.position.service.PositionExitPolicy;
 import com.crypto.wallet.domain.WalletSettings;
 import com.crypto.wallet.repository.WalletSettingsRepository;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +31,7 @@ public class ShadowProductionReplayService {
     private final ExecutionIntelligenceService executionIntelligenceService;
     private final ExecutionReplayScope replayScope;
     private final PositionContinuationPolicy continuationPolicy;
+    private final PositionExitPolicy exitPolicy;
     private final WalletSettingsRepository walletSettingsRepository;
 
     public ReplayStats replay(long runId, String symbol, List<TradeSignal> generatedSignals) {
@@ -135,29 +137,31 @@ public class ShadowProductionReplayService {
         if (updated.profitLockActive() && updated.profitLockPrice() != null
                 && price.compareTo(updated.profitLockPrice()) <= 0) {
             if (price.compareTo(minimumProfitableExit) < 0) {
-                String floorReason = "Profit-lock hard floor was breached; healthy continuation cannot override the minimum protected-profit floor. "
+                String floorReason = "Profit-lock hard floor was breached; protected profit can no longer be preserved. "
                         + profitLockConfigText();
                 persistManagement(runId, s, "PROFIT_LOCK_HARD_EXIT", p.takeProfit(), p.takeProfit(), updated, floorReason);
-                return new ExitDecision(true, "PROFIT_LOCK", floorReason);
+                return new ExitDecision(true, "PROFIT_LOCK_HARD_EXIT", floorReason);
             }
-            PositionContinuationPolicy.Evaluation continuation = continuationPolicy.evaluate(
-                    oneMinute != null ? oneMinute : s, five, one, p.entryTrend(), p.entryMomentum(), p.entryVolume());
-            if (continuation.extendTarget()) {
-                String holdReason = "Profit-lock level was crossed, but the position thesis remains healthy. "
-                        + continuation.explanation() + " " + profitLockConfigText();
+            PositionExitPolicy.Evaluation lockDecision = exitPolicy.evaluateProfitLockBreach(
+                    oneMinute != null ? oneMinute : s, five, one);
+            if (!lockDecision.exit()) {
+                String holdReason = lockDecision.explanation() + " " + profitLockConfigText();
                 persistManagement(runId, s, "PROFIT_LOCK_HOLD", p.takeProfit(), p.takeProfit(), updated, holdReason);
                 return ExitDecision.hold();
             }
             String lockReason = "Price retraced to the protected profit level after a profitable advance. "
-                    + continuation.explanation() + " " + profitLockConfigText();
+                    + lockDecision.explanation() + " " + profitLockConfigText();
             persistManagement(runId, s, "PROFIT_LOCK_EXIT", p.takeProfit(), p.takeProfit(), updated, lockReason);
-            return new ExitDecision(true, "PROFIT_LOCK", lockReason);
+            return new ExitDecision(true, lockDecision.code(), lockReason);
         }
         if (p.stopLoss() != null && price.compareTo(p.stopLoss()) <= 0)
             return new ExitDecision(true, "STOP_LOSS", "Price reached the stored stop loss.");
-        if ("1m".equals(s.getInterval()) && bearish(s.getDecision()) && five != null && bearish(five.getDecision())
-                && (one == null || !bullish(one.getDecision())))
-            return new ExitDecision(true, "SELL_CONFIRMED", "1m SELL confirmed by bearish 5m while 1h was not bullish.");
+
+        PositionExitPolicy.Evaluation normalExit = exitPolicy.evaluateNormalExit(
+                oneMinute != null ? oneMinute : s, five, one);
+        if (normalExit.exit()) {
+            return new ExitDecision(true, normalExit.code(), normalExit.explanation());
+        }
         return ExitDecision.hold();
     }
 

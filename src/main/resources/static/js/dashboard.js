@@ -923,6 +923,27 @@ function signalExecutionStatusHtml(signal, execution, position) {
     return `<div class="execution-state ${actionable ? 'waiting' : 'idle'}"><strong>${actionable ? 'NOT EXECUTED' : 'ANALYSIS ONLY'}</strong><small>${actionable ? 'Execution Intelligence / opportunity evidence decides next.' : 'No wallet action required.'}</small></div>`;
 }
 
+function dashboardSignalChartUrl(signal) {
+    if (!signal?.generatedAt || signal?.latestPrice == null) return '#';
+    const at = new Date(signal.generatedAt);
+    if (Number.isNaN(at.getTime())) return '#';
+    const start = new Date(at.getTime() - 20 * 60 * 1000);
+    const end = new Date(at.getTime() + 40 * 60 * 1000);
+    const decision = String(signal.decision || 'BUY').replaceAll('_', ' ');
+    const params = new URLSearchParams({
+        symbol: String(signal.symbol || el('symbol-select')?.value || 'BNBUSDT').toUpperCase(),
+        interval: '5m',
+        focusStart: start.toISOString(),
+        focusEnd: end.toISOString(),
+        focusDirection: 'UP',
+        debugTrade: '1',
+        debugTradeLabel: `${decision} signal`,
+        debugEntryTime: at.toISOString(),
+        debugEntryPrice: String(signal.latestPrice)
+    });
+    return `/dashboard?${params.toString()}#market`;
+}
+
 function renderSignals(signals, displayOnlyInterval = false, timeframeSnapshot = {}, executions = [], openPositions = [], closedPositions = []) {
     const body = el('signals-body');
     const actionableSignals = (signals || []).filter(signal => {
@@ -971,7 +992,12 @@ function renderSignals(signals, displayOnlyInterval = false, timeframeSnapshot =
                 <td>${signalTradePlanHtml(s, execution, position)}</td>
                 <td>${signalExecutionStatusHtml(s, execution, position)}</td>
                 <td>${signalExecutionRoleHtml(s)}</td>
-                <td><button type="button" class="signal-detail-button" data-signal-id="${signalId}" data-detail-id="${detailId}">${isOpen ? 'Hide analysis' : 'View analysis'}</button></td>
+                <td>
+                    <div class="signal-row-actions">
+                        <button type="button" class="signal-detail-button" data-signal-id="${signalId}" data-detail-id="${detailId}">${isOpen ? 'Hide analysis' : 'View analysis'}</button>
+                        ${['BUY','STRONG_BUY'].includes(String(s.decision || '').toUpperCase()) ? `<a class="signal-detail-button signal-chart-button" href="${dashboardSignalChartUrl(s)}">View chart</a>` : ''}
+                    </div>
+                </td>
             </tr>
             <tr id="${detailId}" class="signal-detail-row ${isOpen ? '' : 'hidden'}">
                 <td colspan="6">
