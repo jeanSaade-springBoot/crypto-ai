@@ -361,7 +361,9 @@ function renderExecutionIntelligence(summary = {}, opportunities = []) {
         'ai-executed': summary.executed || 0,
         'ai-wins': summary.wins || 0,
         'ai-losses': summary.losses || 0,
-        'ai-open': summary.activePositions || 0
+        'ai-open': summary.activePositions || 0,
+        'ai-building-now': summary.buildingNow ?? building,
+        'ai-coins-analyzed': summary.coinsScanned || 0
     };
     Object.entries(values).forEach(([id, value]) => { const node = el(id); if (node) node.textContent = value; });
     if (el('ai-win-rate')) el('ai-win-rate').textContent = `${Number(summary.winRatePercent || 0).toFixed(1)}%`;

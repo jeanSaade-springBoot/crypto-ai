@@ -453,6 +453,117 @@ class ExecutionIntelligenceServiceTest {
     }
 
     @Test
+    void atrDeferredQualityBuyExecutesWhenRequestedRetracementIsReachedAndFiveMinuteMomentumHolds() {
+        TradeSignal current = signal(205L, "ETHUSDT", "1m", SignalDecision.NEUTRAL, SignalDecision.NEUTRAL,
+                now, 57, 67);
+        current.setLatestPrice(new BigDecimal("1868.82"));
+        current.setStopLoss(new BigDecimal("1865.50"));
+        current.setTakeProfit(new BigDecimal("1876.00"));
+
+        TradeSignal origin = signal(204L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.BUY,
+                now.minusSeconds(180), 79, 49);
+        origin.setLatestPrice(new BigDecimal("1871.69"));
+        origin.setTrendScore(21);
+        origin.setMomentumScore(9);
+        origin.setVolumeScore(18);
+        origin.setAtrAtSignal(new BigDecimal("0.911488390635"));
+        origin.setAtrOverextended(true);
+        origin.setAtrImmediateEntryAllowed(false);
+        origin.setAtrEntryType("NO_ENTRY");
+        origin.setAtrRetracementEntryPrice(new BigDecimal("1868.625976781270"));
+
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("ETHUSDT", "1m"))
+                .thenReturn(List.of(current, origin));
+
+        TradeSignal five = signal(206L, "ETHUSDT", "5m", SignalDecision.NEUTRAL, SignalDecision.NEUTRAL,
+                now.minusSeconds(330), 48, 72);
+        five.setMomentumScore(15);
+        five.setMacdScore(8);
+        five.setRsiScore(7);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "ETHUSDT", "5m", now)).thenReturn(Optional.of(five));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "ETHUSDT", "1h", now)).thenReturn(Optional.empty());
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.source()).isEqualTo("REVERSAL_RETRACEMENT");
+        assertThat(decision.code()).isEqualTo("ATR_RETRACEMENT_REACHED");
+        assertThat(decision.positionPercent()).isEqualTo(20);
+    }
+
+    @Test
+    void atrRetracementDoesNotExecuteWhenFiveMinuteMomentumHasDeteriorated() {
+        TradeSignal current = signal(208L, "ETHUSDT", "1m", SignalDecision.NEUTRAL, SignalDecision.NEUTRAL,
+                now, 57, 67);
+        current.setLatestPrice(new BigDecimal("1868.82"));
+
+        TradeSignal origin = signal(207L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.BUY,
+                now.minusSeconds(180), 79, 49);
+        origin.setLatestPrice(new BigDecimal("1871.69"));
+        origin.setTrendScore(21);
+        origin.setVolumeScore(18);
+        origin.setAtrAtSignal(new BigDecimal("0.911488390635"));
+        origin.setAtrOverextended(true);
+        origin.setAtrImmediateEntryAllowed(false);
+        origin.setAtrRetracementEntryPrice(new BigDecimal("1868.625976781270"));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("ETHUSDT", "1m"))
+                .thenReturn(List.of(current, origin));
+
+        TradeSignal five = signal(209L, "ETHUSDT", "5m", SignalDecision.NEUTRAL, SignalDecision.NEUTRAL,
+                now.minusSeconds(330), 48, 72);
+        five.setMomentumScore(8);
+        five.setMacdScore(4);
+        five.setRsiScore(4);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "ETHUSDT", "5m", now)).thenReturn(Optional.of(five));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "ETHUSDT", "1h", now)).thenReturn(Optional.empty());
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.source()).isNotEqualTo("REVERSAL_RETRACEMENT");
+    }
+
+    @Test
+    void replayScopeUsesSameAtrRetracementDecisionPathAsProduction() {
+        ExecutionReplayScope scope = new ExecutionReplayScope();
+        ReflectionTestUtils.setField(service, "replayScope", scope);
+
+        TradeSignal origin = signal(240L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.BUY,
+                now.minusSeconds(180), 79, 49);
+        origin.setLatestPrice(new BigDecimal("1871.69"));
+        origin.setTrendScore(21);
+        origin.setVolumeScore(18);
+        origin.setAtrAtSignal(new BigDecimal("0.911488390635"));
+        origin.setAtrOverextended(true);
+        origin.setAtrImmediateEntryAllowed(false);
+        origin.setAtrRetracementEntryPrice(new BigDecimal("1868.625976781270"));
+
+        TradeSignal five = signal(241L, "ETHUSDT", "5m", SignalDecision.NEUTRAL, SignalDecision.NEUTRAL,
+                now.minusSeconds(330), 48, 72);
+        five.setMomentumScore(15);
+        five.setMacdScore(8);
+        five.setRsiScore(7);
+
+        TradeSignal current = signal(242L, "ETHUSDT", "1m", SignalDecision.NEUTRAL, SignalDecision.NEUTRAL,
+                now, 57, 67);
+        current.setLatestPrice(new BigDecimal("1868.82"));
+        current.setStopLoss(new BigDecimal("1865.50"));
+        current.setTakeProfit(new BigDecimal("1876.00"));
+
+        try (ExecutionReplayScope.Scope ignored = scope.open(1L, List.of(five, origin, current), o -> {})) {
+            scope.reference(now);
+            var decision = service.evaluateBuy(current);
+            assertThat(decision.allowed()).isTrue();
+            assertThat(decision.source()).isEqualTo("REVERSAL_RETRACEMENT");
+            assertThat(decision.code()).isEqualTo("ATR_RETRACEMENT_REACHED");
+        }
+    }
+
+    @Test
     void exceptionalStrengthCanUseTinyProbeWhenOnlyBtcVetoRemains() {
         TradeSignal current = signal(210L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.STRONG_BUY,
                 now, 90, 49);

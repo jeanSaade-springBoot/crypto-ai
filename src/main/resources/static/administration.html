@@ -68,8 +68,26 @@
 
         <section id="system-health" class="panel system-health-panel">
             <div class="section-heading">
-                <div><p class="eyebrow">SYSTEM HEALTH</p><h2>Runtime configuration</h2></div>
-                <span>Collection and analysis schedules</span>
+                <div><p class="eyebrow">SYSTEM HEALTH</p><h2>AI operations</h2></div>
+                <div class="operations-heading-meta"><select id="admin-ai-period" aria-label="AI operations period"><option value="ALL_TIME">All Time</option><option value="TODAY">Today</option><option value="LAST_24_HOURS">Last 24 Hours</option><option value="LAST_7_DAYS">Last 7 Days</option><option value="LAST_30_DAYS">Last 30 Days</option></select><span id="admin-ai-updated">—</span></div>
+            </div>
+            <p class="form-note">Live state + selected-period activity. Operational visibility only; this does not alter trading decisions.</p>
+            <div class="ai-operations-grid admin-ai-operations-grid">
+                <div class="operations-stat period-stat"><span>Coins analyzed</span><strong id="admin-pipeline-coins-scanned">0</strong><small>Selected period</small></div>
+                <div class="operations-stat period-stat"><span>Opportunities</span><strong id="admin-pipeline-opportunities-found">0</strong><small>Started in period</small></div>
+                <div class="operations-stat live-stat"><span>Building now</span><strong id="admin-pipeline-building">0</strong><small>Evidence accumulating</small></div>
+                <div class="operations-stat live-stat"><span>Weakening now</span><strong id="admin-pipeline-weakening">0</strong><small>Health/evidence falling</small></div>
+                <div class="operations-stat live-stat"><span>Recovering now</span><strong id="admin-pipeline-recovering">0</strong><small>Health improving</small></div>
+                <div class="operations-stat live-stat"><span>Ready now</span><strong id="admin-pipeline-ready">0</strong><small>Confirmed for execution</small></div>
+                <div class="operations-stat rejected-stat"><span>Blocked / Rejected</span><strong id="admin-pipeline-blocked-rejected">0</strong><small>Selected period</small></div>
+                <div class="operations-stat period-stat"><span>Executed</span><strong id="admin-pipeline-executed">0</strong><small>Positions opened in period</small></div>
+                <div class="operations-stat live-stat"><span>Open positions</span><strong id="admin-pipeline-managed">0</strong><small>Live wallet state</small></div>
+                <div class="operations-stat period-stat"><span>Closed</span><strong id="admin-pipeline-closed">0</strong><small>Wins + losses in period</small></div>
+            </div>
+            <hr class="system-health-divider">
+            <div class="section-heading system-health-runtime-heading">
+                <div><p class="eyebrow">RUNTIME CONFIGURATION</p><h2>Collection and analysis schedules</h2></div>
+                <span>Operational cadence</span>
             </div>
             <p class="form-note">Operational cadence only. These values describe when market data, analysis and dashboard refresh jobs run; they do not change replay decision logic.</p>
             <div id="admin-schedule-groups" class="schedule-groups"><div class="empty">Loading runtime configuration…</div></div>

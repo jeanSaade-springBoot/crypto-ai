@@ -1,0 +1,25 @@
+Safe reversal retracement + System Health UI update
+
+Execution logic
+- Added shared production/replay REVERSAL_RETRACEMENT path in ExecutionIntelligenceService.
+- Existing ATR anti-chase rule remains unchanged.
+- A recent high-quality BUY blocked by ATR can be remembered implicitly from shared signal history for 12 minutes.
+- Entry only occurs when price reaches ATR's own retracement target zone and the latest as-of 5m context remains constructive.
+- Current 1m may be WATCH/NEUTRAL during the pullback; a new BUY is not required.
+- Existing normal BUY, HTF transition, accumulated evidence, exceptional BTC probe, risk gates, and position paths are unchanged.
+- A bearish 1h regime does not get ignored: if available and actively worsening versus the prior 1h snapshot, retracement entry stays blocked; stable bearish context caps the retracement entry to 15%.
+- Normal retracement entry size is 20%.
+- Added production-path and replay-scope parity tests plus a negative 5m-deterioration test.
+
+Dashboard / Administration
+- Removed AI Operations panel from Dashboard body.
+- Added Building now and Coins analyzed to Dashboard AI header.
+- Moved AI operations metrics into Administration > System Health.
+- Runtime Configuration remains under the same System Health section.
+- Added period selector for System Health AI operations.
+- Fixed malformed Administration JS placement around add-coin/System Health initialization.
+- Added pipeline label for ATR_RETRACEMENT_REACHED.
+
+Validation
+- node --check passed for administration.js and dashboard.js.
+- Maven wrapper/Maven is not available in this environment; run the full Java test suite in Jenkins/deployment.

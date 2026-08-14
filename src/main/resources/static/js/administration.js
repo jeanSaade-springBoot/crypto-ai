@@ -42,6 +42,11 @@ document.getElementById('add-coin-form').addEventListener('submit', async event 
         });
         input.value = '';
         await loadCoins();
+        showAdminMessage('Coin added. Live stream reload and historical bootstrap started automatically.');
+    } catch (error) {
+        showAdminMessage(error.message, true);
+    }
+});
 
 async function loadAdministrationSystemHealth() {
     const target = document.getElementById('admin-schedule-groups');
@@ -55,19 +60,41 @@ async function loadAdministrationSystemHealth() {
                 <div class="schedule-entry-list">
                     ${(group.entries || []).map(item => `
                         <div class="schedule-entry">
-                            <div class="schedule-entry-heading">
-                                <strong>${escapeHtml(item.name || '—')}</strong>
-                                <span class="badge ${item.enabled ? 'buy' : 'reject'}">${item.enabled ? 'ENABLED' : 'DISABLED'}</span>
-                            </div>
-                            <span class="schedule-cadence">${escapeHtml(item.cadence || '—')}</span>
-                            <small>${escapeHtml(item.detail || '')}</small>
-                            ${item.delayMs == null ? '' : `<code>${Number(item.delayMs).toLocaleString()} ms</code>`}
+                            <div class="schedule-entry-heading"><strong>${escapeHtml(item.name || '—')}</strong><span class="badge ${item.enabled ? 'buy' : 'reject'}">${item.enabled ? 'ENABLED' : 'DISABLED'}</span></div>
+                            <span class="schedule-cadence">${escapeHtml(item.cadence || '—')}</span><small>${escapeHtml(item.detail || '')}</small>${item.delayMs == null ? '' : `<code>${Number(item.delayMs).toLocaleString()} ms</code>`}
                         </div>`).join('')}
                 </div>
             </article>`).join('') : '<div class="empty">No runtime schedule configuration was returned.</div>';
-    } catch (error) {
-        target.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
-    }
+    } catch (error) { target.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`; }
+}
+
+async function loadAdministrationAiOperations() {
+    const period = document.getElementById('admin-ai-period')?.value || 'ALL_TIME';
+    try {
+        const [summary, opportunities] = await Promise.all([
+            api(`/api/execution-intelligence/summary?period=${encodeURIComponent(period)}`),
+            api('/api/execution-intelligence/opportunities/active')
+        ]);
+        const rows = Array.isArray(opportunities) ? opportunities : [];
+        const building = rows.filter(o => String(o.status || '').toUpperCase() === 'BUILDING').length;
+        const recovering = rows.filter(o => String(o.status || '').toUpperCase() === 'WEAKENING' && Number(o.healthMomentum || 0) > 0).length;
+        const weakening = rows.filter(o => String(o.status || '').toUpperCase() === 'WEAKENING' && Number(o.healthMomentum || 0) <= 0).length;
+        const ready = rows.filter(o => String(o.status || '').toUpperCase() === 'CONFIRMED').length;
+        const values = {
+            'admin-pipeline-coins-scanned': summary.coinsScanned || 0,
+            'admin-pipeline-opportunities-found': summary.opportunitiesFound || 0,
+            'admin-pipeline-building': summary.buildingNow ?? building,
+            'admin-pipeline-weakening': summary.weakeningNow ?? weakening,
+            'admin-pipeline-recovering': summary.recoveringNow ?? recovering,
+            'admin-pipeline-ready': summary.readyNow ?? ready,
+            'admin-pipeline-blocked-rejected': summary.blockedRejected || 0,
+            'admin-pipeline-executed': summary.executed || 0,
+            'admin-pipeline-managed': summary.activePositions || 0,
+            'admin-pipeline-closed': summary.closedTrades || 0
+        };
+        Object.entries(values).forEach(([id,value]) => { const node=document.getElementById(id); if(node) node.textContent=value; });
+        const updated=document.getElementById('admin-ai-updated'); if(updated) updated.textContent = summary.updatedAt ? new Date(summary.updatedAt).toLocaleString() : 'Live';
+    } catch (error) { const updated=document.getElementById('admin-ai-updated'); if(updated) updated.textContent=error.message; }
 }
 
 function initializeAdministrationSidebar() {
@@ -78,33 +105,18 @@ function initializeAdministrationSidebar() {
     const stored = window.localStorage.getItem(storageKey) === '1';
     sidebar.classList.toggle('collapsed', stored);
     document.body.classList.toggle('sidebar-collapsed', stored);
-    const updateToggle = () => {
-        const collapsed = sidebar.classList.contains('collapsed');
-        toggle.textContent = collapsed ? '›' : '‹';
-        toggle.setAttribute('aria-label', collapsed ? 'Expand navigation' : 'Collapse navigation');
-    };
+    const updateToggle = () => { const collapsed = sidebar.classList.contains('collapsed'); toggle.textContent = collapsed ? '›' : '‹'; toggle.setAttribute('aria-label', collapsed ? 'Expand navigation' : 'Collapse navigation'); };
     updateToggle();
     toggle.addEventListener('click', () => {
-        if (window.matchMedia('(max-width: 760px)').matches) {
-            sidebar.classList.toggle('mobile-open');
-            toggle.textContent = sidebar.classList.contains('mobile-open') ? '×' : '☰';
-            return;
-        }
-        sidebar.classList.toggle('collapsed');
-        const collapsed = sidebar.classList.contains('collapsed');
-        document.body.classList.toggle('sidebar-collapsed', collapsed);
-        window.localStorage.setItem(storageKey, collapsed ? '1' : '0');
-        updateToggle();
+        if (window.matchMedia('(max-width: 760px)').matches) { sidebar.classList.toggle('mobile-open'); toggle.textContent = sidebar.classList.contains('mobile-open') ? '×' : '☰'; return; }
+        sidebar.classList.toggle('collapsed'); const collapsed = sidebar.classList.contains('collapsed'); document.body.classList.toggle('sidebar-collapsed', collapsed); window.localStorage.setItem(storageKey, collapsed ? '1' : '0'); updateToggle();
     });
 }
 
 initializeAdministrationSidebar();
 loadAdministrationSystemHealth();
-        showAdminMessage('Coin added. Live stream reload and historical bootstrap started automatically.');
-    } catch (error) {
-        showAdminMessage(error.message, true);
-    }
-});
+loadAdministrationAiOperations();
+document.getElementById('admin-ai-period')?.addEventListener('change', loadAdministrationAiOperations);
 
 coinBody.addEventListener('click', async event => {
     const button = event.target.closest('button[data-action]');
@@ -696,6 +708,7 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
         const executionDetail = (() => {
             const labels = {
                 ATR_ENTRY_BLOCKED: 'ATR timing gate',
+                ATR_RETRACEMENT_REACHED: 'ATR retracement reached · reduced reversal entry',
                 CHASE_ENTRY_BLOCKED: 'Late-entry protection',
                 MISSING_CONTEXT: 'Waiting for context',
                 EVIDENCE_BUILDING: 'Evidence building',

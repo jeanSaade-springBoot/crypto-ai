@@ -81,6 +81,8 @@
                 <div class="ai-header-metric positive-metric"><span>Wins</span><strong id="ai-wins">0</strong></div>
                 <div class="ai-header-metric negative-metric"><span>Losses</span><strong id="ai-losses">0</strong></div>
                 <div class="ai-header-metric"><span>Open now</span><strong id="ai-open">0</strong></div>
+                <div class="ai-header-metric"><span>Building now</span><strong id="ai-building-now">0</strong></div>
+                <div class="ai-header-metric"><span>Coins analyzed</span><strong id="ai-coins-analyzed">0</strong></div>
                 <div class="ai-header-metric"><span>Win rate</span><strong id="ai-win-rate">0%</strong></div>
                 <div class="ai-header-metric"><span>PF</span><strong id="ai-profit-factor">—</strong></div>
                 <div class="ai-header-metric pnl-metric"><span>Realized P/L</span><strong id="ai-realized-pnl">—</strong></div>
@@ -91,41 +93,7 @@
         <section id="error-banner" class="error-banner hidden"></section>
         <div id="overview" class="dashboard-anchor" aria-hidden="true"></div>
 
-        <section id="pipeline" class="panel execution-pipeline-panel ai-operations-panel">
-            <div class="section-heading">
-                <div><p class="eyebrow">AI OPERATIONS</p><h2>Live state + selected-period activity</h2></div>
-                <div class="operations-heading-meta"><span id="ai-operations-period">All Time</span><span id="last-updated">—</span></div>
-            </div>
-            <div class="ai-operations-grid">
-                <div class="operations-stat period-stat"><span>Coins analyzed</span><strong id="pipeline-coins-scanned">0</strong><small>Selected period</small></div>
-                <div class="operations-stat period-stat"><span>Opportunities</span><strong id="pipeline-opportunities-found">0</strong><small>Started in period</small></div>
-                <div class="operations-stat live-stat"><span>Building now</span><strong id="pipeline-building">0</strong><small>Evidence accumulating</small></div>
-                <div class="operations-stat live-stat"><span>Weakening now</span><strong id="pipeline-weakening">0</strong><small>Health/evidence falling</small></div>
-                <div class="operations-stat live-stat"><span>Recovering now</span><strong id="pipeline-recovering">0</strong><small>Health improving</small></div>
-                <div class="operations-stat live-stat"><span>Ready now</span><strong id="pipeline-ready">0</strong><small>Confirmed for execution</small></div>
-                <div class="operations-stat rejected-stat"><span>Blocked / Rejected</span><strong id="pipeline-blocked-rejected">0</strong><small>Selected period</small></div>
-                <div class="operations-stat period-stat"><span>Executed</span><strong id="pipeline-executed">0</strong><small>Positions opened in period</small></div>
-                <div class="operations-stat live-stat"><span>Open positions</span><strong id="pipeline-managed">0</strong><small>Live wallet state</small></div>
-                <div class="operations-stat period-stat"><span>Closed</span><strong id="pipeline-closed">0</strong><small>Wins + losses in period</small></div>
-            </div>
-            <details class="pipeline-details">
-                <summary>System flow health</summary>
-                <div class="pipeline-grid pipeline-grid-compact">
-                    <div class="pipeline-step" data-step="candle"><span class="step-icon">1</span><div><strong>Closed candle</strong><small>Market data</small><p></p></div></div>
-                    <div class="pipeline-step" data-step="indicator"><span class="step-icon">2</span><div><strong>Indicators</strong><small>Technical</small><p></p></div></div>
-                    <div class="pipeline-step" data-step="marketContext"><span class="step-icon">3</span><div><strong>Market context</strong><small>HTF · BTC · Sentiment</small><p></p></div></div>
-                    <div class="pipeline-step" data-step="strategy"><span class="step-icon">4</span><div><strong>Strategy</strong><small>Regime-aware</small><p></p></div></div>
-                    <div class="pipeline-step" data-step="derivatives"><span class="step-icon">5</span><div><strong>Funding & OI</strong><small>Positioning</small><p></p></div></div>
-                    <div class="pipeline-step" data-step="orderBook"><span class="step-icon">6</span><div><strong>Order book</strong><small>Wall lifecycle</small><p></p></div></div>
-                    <div class="pipeline-step" data-step="analysis"><span class="step-icon">7</span><div><strong>Final decision</strong><small>Signal source of truth</small><p></p></div></div>
-                    <div class="pipeline-step" data-step="executionValidation"><span class="step-icon">8</span><div><strong>Execution Intelligence</strong><small>Immediate · Consolidated · Evidence</small><p></p></div></div>
-                    <div class="pipeline-step" data-step="walletExecution"><span class="step-icon">9</span><div><strong>Wallet execution</strong><small>Actual BUY / SELL</small><p></p></div></div>
-                    <div class="pipeline-step" data-step="positionManager"><span class="step-icon">10</span><div><strong>Position Manager</strong><small>SL · TP · Profit Lock</small><p></p></div></div>
-                    <div class="pipeline-step" data-step="walletTrade"><span class="step-icon">11</span><div><strong>Trade History</strong><small>Financial ledger</small><p></p></div></div>
-                    <div class="pipeline-step" data-step="tradeInspector"><span class="step-icon">12</span><div><strong>Trade Inspector</strong><small>Post-trade audit</small><p></p></div></div>
-                </div>
-            </details>
-        </section>
+
 
         <section id="market" class="panel chart-panel">
             <div class="section-heading"><div><p class="eyebrow">MARKET DATA</p><h2>Price and volume</h2></div><span id="market-subtitle">BTCUSDT · 1m</span></div>

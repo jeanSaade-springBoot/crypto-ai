@@ -92,6 +92,22 @@ public class ExecutionIntelligenceService {
     private static final int EXCEPTIONAL_PROBE_BTC_SELL_PERCENT = 15;
     private static final int EXCEPTIONAL_PROBE_BTC_STRONG_SELL_PERCENT = 10;
 
+    // Reversal retracement entry. ATR remains authoritative: an overextended BUY is
+    // still not chased. Instead, a high-quality BUY may stay actionable for a short
+    // window and execute only if price returns close to ATR's own retracement level
+    // while the latest available 5m momentum remains constructive. This is a separate
+    // execution route; it does not change normal BUY scoring or ATR thresholds.
+    private static final Duration RETRACEMENT_SETUP_LOOKBACK = Duration.ofMinutes(12);
+    private static final int RETRACEMENT_MIN_ORIGIN_SCORE = 78;
+    private static final int RETRACEMENT_MIN_ORIGIN_TREND = 20;
+    private static final int RETRACEMENT_MIN_ORIGIN_VOLUME = 16;
+    private static final int RETRACEMENT_MIN_5M_MOMENTUM = 13;
+    private static final int RETRACEMENT_MIN_5M_MACD_SCORE = 7;
+    private static final int RETRACEMENT_MIN_5M_RSI_SCORE = 5;
+    private static final double RETRACEMENT_TARGET_TOLERANCE_ATR = 0.35d;
+    private static final double RETRACEMENT_MAX_OVERSHOOT_ATR = 0.75d;
+    private static final int RETRACEMENT_POSITION_PERCENT = 20;
+
     // Progressive Position Building. These are portfolio-allocation stages, not
     // confidence shortcuts: a scout requires excellent price quality, confirmation
     // requires stronger evidence, and the final add requires trend continuation.
@@ -227,6 +243,20 @@ public class ExecutionIntelligenceService {
                     "An open position already exists at " + currentAllocationPercent
                             + "% allocation. No additional stage qualified on this signal.",
                     evidence);
+        }
+
+        // ATR retracement handoff: preserve a recent, high-quality BUY that ATR refused
+        // to chase and execute only when price actually returns to ATR's own requested
+        // retracement zone. The current 1m candle may be WATCH/NEUTRAL during the pullback;
+        // the original thesis is revalidated with as-of 5m context instead of requiring
+        // another BUY after price has already started moving again.
+        ExecutionDecision retracement = reversalRetracementDecision(signal, evidence);
+        if (retracement != null) {
+            saveOpportunity(signal, evidence,
+                    retracement.allowed() ? "CONFIRMED" : retracement.state(),
+                    retracement.source(), retracement.positionPercent(),
+                    retracement.code(), retracement.explanation());
+            return retracement;
         }
 
         ExecutionDecision deferred = deferredContinuationDecision(signal, evidence);
@@ -748,6 +778,92 @@ public class ExecutionIntelligenceService {
                         + "a false late-stage chase classification.",
                 e
         );
+    }
+
+    private ExecutionDecision reversalRetracementDecision(TradeSignal current, Evidence e) {
+        if (current == null || current.getGeneratedAt() == null || current.getLatestPrice() == null) return null;
+        if (isBearish(current.getDecision()) || isBearish(current.getOriginalDecision())) return null;
+
+        TradeSignal origin = recentAtrRetracementOrigin(current);
+        if (origin == null || origin.getAtrRetracementEntryPrice() == null
+                || origin.getAtrAtSignal() == null || origin.getAtrAtSignal().signum() <= 0) return null;
+
+        BigDecimal target = origin.getAtrRetracementEntryPrice();
+        BigDecimal atr = origin.getAtrAtSignal();
+        BigDecimal upper = target.add(atr.multiply(BigDecimal.valueOf(RETRACEMENT_TARGET_TOLERANCE_ATR)));
+        BigDecimal lower = target.subtract(atr.multiply(BigDecimal.valueOf(RETRACEMENT_MAX_OVERSHOOT_ATR)));
+        BigDecimal price = current.getLatestPrice();
+        if (price.compareTo(upper) > 0 || price.compareTo(lower) < 0) return null;
+
+        TradeSignal five = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
+        if (five == null || isBearish(five.getDecision()) || isBearish(five.getOriginalDecision())) return null;
+        if (five.getMomentumScore() < RETRACEMENT_MIN_5M_MOMENTUM
+                || five.getMacdScore() < RETRACEMENT_MIN_5M_MACD_SCORE
+                || five.getRsiScore() < RETRACEMENT_MIN_5M_RSI_SCORE) return null;
+
+        // A pre-existing bearish 1h regime may coexist with an early reversal. It is not
+        // ignored: if the latest 1h is bearish and is actively worsening versus the prior
+        // 1h snapshot, the retracement setup remains blocked. Stable/non-worsening old
+        // bearish context only caps this route to a small probe.
+        TradeSignal oneHour = latestAtOrBefore(current, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
+        if (oneHour != null && (isBearish(oneHour.getDecision()) || isBearish(oneHour.getOriginalDecision()))
+                && isOneHourBearishWorsening(oneHour, current)) return null;
+
+        if (!current.isStrategyEntryAllowed() || !current.isDerivativesEntryAllowed()
+                || !current.isLiquidityEntryAllowed() || !current.isBtcContextEntryAllowed()) return null;
+        if (current.getStopLoss() == null || current.getTakeProfit() == null
+                || current.getStopLoss().signum() <= 0 || current.getTakeProfit().signum() <= 0) return null;
+
+        int percent = RETRACEMENT_POSITION_PERCENT;
+        if (oneHour != null && (isBearish(oneHour.getDecision()) || isBearish(oneHour.getOriginalDecision()))) {
+            percent = 15;
+        }
+
+        return ExecutionDecision.allow(
+                "REVERSAL_RETRACEMENT",
+                "ATR_RETRACEMENT_REACHED",
+                percent,
+                "ATR correctly deferred the original BUY instead of chasing it. Price has now returned to the "
+                        + "ATR retracement zone: origin=" + origin.getLatestPrice()
+                        + ", target=" + target + ", current=" + price
+                        + ". Original quality remained high (score=" + origin.getTotalScore()
+                        + ", trend=" + origin.getTrendScore() + ", volume=" + origin.getVolumeScore()
+                        + ") and the latest as-of 5m context is constructive (decision=" + five.getDecision()
+                        + ", momentum=" + five.getMomentumScore() + ", MACD score=" + five.getMacdScore()
+                        + ", RSI score=" + five.getRsiScore() + "). "
+                        + (oneHour == null ? "No fresh 1h replay context is available; no bullish 1h state was invented. "
+                        : "1h=" + oneHour.getDecision() + " and is not worsening versus its prior snapshot. ")
+                        + "Execute only a reduced " + percent + "% retracement position; normal BUY logic is unchanged.",
+                e);
+    }
+
+    private TradeSignal recentAtrRetracementOrigin(TradeSignal current) {
+        Instant cutoff = current.getGeneratedAt().minus(RETRACEMENT_SETUP_LOOKBACK);
+        return recentSignals(current.getSymbol(), EXECUTION_INTERVAL, current.getGeneratedAt()).stream()
+                .filter(s -> s != null && s.getGeneratedAt() != null)
+                .filter(s -> s.getGeneratedAt().isBefore(current.getGeneratedAt())
+                        && !s.getGeneratedAt().isBefore(cutoff))
+                .filter(s -> isBullish(s.getOriginalDecision()) || isBullish(s.getDecision()))
+                .filter(s -> s.getTotalScore() >= RETRACEMENT_MIN_ORIGIN_SCORE
+                        && s.getTrendScore() >= RETRACEMENT_MIN_ORIGIN_TREND
+                        && s.getVolumeScore() >= RETRACEMENT_MIN_ORIGIN_VOLUME)
+                .filter(s -> !s.isAtrImmediateEntryAllowed() && s.isAtrOverextended())
+                .filter(s -> s.getAtrRetracementEntryPrice() != null && s.getAtrAtSignal() != null)
+                .filter(s -> s.isStrategyEntryAllowed() && s.isDerivativesEntryAllowed() && s.isLiquidityEntryAllowed())
+                .max(java.util.Comparator.comparing(TradeSignal::getGeneratedAt))
+                .orElse(null);
+    }
+
+    private boolean isOneHourBearishWorsening(TradeSignal latest, TradeSignal current) {
+        if (latest == null || current == null) return false;
+        List<TradeSignal> hours = recentSignals(current.getSymbol(), TREND_INTERVAL, current.getGeneratedAt()).stream()
+                .filter(s -> s.getGeneratedAt() != null && s.getGeneratedAt().isBefore(latest.getGeneratedAt()))
+                .toList();
+        TradeSignal previous = hours.isEmpty() ? null : hours.get(0);
+        if (previous == null) return false;
+        return latest.getTotalScore() < previous.getTotalScore()
+                || latest.getTrendScore() < previous.getTrendScore()
+                || latest.getMomentumScore() < previous.getMomentumScore();
     }
 
     private ExecutionDecision deferredContinuationDecision(TradeSignal current, Evidence e) {
