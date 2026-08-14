@@ -229,3 +229,14 @@
 .pipeline-score-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0 14px}.pipeline-score-grid>div{padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface2)}.pipeline-score-grid span{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px}.pipeline-score-grid strong{display:block;font-size:12px;line-height:1.45}.system-health-panel .schedule-groups{margin-top:14px}@media(max-width:900px){.pipeline-score-grid{grid-template-columns:1fr 1fr}}@media(max-width:560px){.pipeline-score-grid{grid-template-columns:1fr}}
 
 .system-health-divider{border:0;border-top:1px solid var(--border);margin:22px 0}.system-health-runtime-heading{margin-top:0}.admin-ai-operations-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-top:14px}.admin-ai-operations-grid .operations-stat{padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--surface2)}.admin-ai-operations-grid span,.admin-ai-operations-grid small{display:block}.admin-ai-operations-grid span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}.admin-ai-operations-grid strong{display:block;font-size:20px;margin:4px 0}.admin-ai-operations-grid small{color:var(--muted);font-size:11px}.operations-heading-meta{display:flex;align-items:center;gap:10px}.operations-heading-meta select{min-width:145px}@media(max-width:1100px){.admin-ai-operations-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:620px){.admin-ai-operations-grid{grid-template-columns:1fr}}
+
+
+/* Regression pipeline filtering and candidate/execution clarity */
+.regression-pipeline-heading{align-items:flex-end;gap:1rem;flex-wrap:wrap}
+.regression-pipeline-filter-wrap{margin-left:auto;display:flex;align-items:center;gap:.45rem;flex-wrap:wrap}
+.regression-pipeline-filter-wrap label{font-size:.68rem;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+.regression-pipeline-filter-wrap select{min-width:210px;height:34px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);padding:0 .65rem;font-size:.72rem}
+.regression-pipeline-filter-wrap span{font-size:.65rem;color:var(--muted);white-space:nowrap}
+.regression-pipeline .pipeline-candidate-actions{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;justify-content:flex-end}
+.regression-pipeline .status-pill.ignored{background:rgba(255,107,114,.14);color:var(--danger)}
+@media(max-width:900px){.regression-pipeline-filter-wrap{margin-left:0;width:100%}.regression-pipeline-filter-wrap select{flex:1;min-width:170px}}

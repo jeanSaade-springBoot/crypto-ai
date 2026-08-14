@@ -272,10 +272,24 @@
             </div>
 
             <div id="regression-pipeline" class="regression-pipeline hidden">
-                <div class="section-heading">
+                <div class="section-heading regression-pipeline-heading">
                     <div><p class="eyebrow">WHY DID IT BUY / WHY DID IT STOP?</p><h3>Visual execution pipeline</h3></div>
+                    <div class="regression-pipeline-filter-wrap">
+                        <label for="regression-pipeline-filter">Show</label>
+                        <select id="regression-pipeline-filter" aria-label="Filter visual execution pipeline">
+                            <option value="ALL">All pipeline events</option>
+                            <option value="EXECUTED">Executed BUY / SELL trades</option>
+                            <option value="BUY_CANDIDATES">BUY candidates not executed</option>
+                            <option value="BLOCKED_CONTEXT">Blocked by 5m / 1h context</option>
+                            <option value="BLOCKED_ATR">Blocked by ATR / chase protection</option>
+                            <option value="BLOCKED_BTC">Blocked by BTC context</option>
+                            <option value="BUILDING">Building / recovering / weakening</option>
+                            <option value="BEARISH_REVERSAL">Bearish reversal / cancelled</option>
+                        </select>
+                        <span id="regression-pipeline-filter-count">Showing all</span>
+                    </div>
                 </div>
-                <p class="form-note">Each fresh BUY context is traced through the same production Execution Intelligence, higher-timeframe and position-management services used by the live wallet. Every node shows its score snapshot; the BUY blocker names the exact veto, and the reversal-probe node shows every threshold independently. Green = passed, amber = waiting/supportive, red = blocked.</p>
+                <p class="form-note">A BUY candidate is not an execution. Only an evaluation whose Execution node is EXECUTED is linked to a Shadow Wallet BUY and its eventual SELL. Use the filter to isolate executed trades, blocked higher-timeframe context, ATR/BTC vetoes, or opportunity-building states. Green = passed, amber = waiting/supportive, red = blocked.</p>
                 <div id="regression-pipeline-body" class="regression-pipeline-body"></div>
             </div>
 

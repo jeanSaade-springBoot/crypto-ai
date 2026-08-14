@@ -506,6 +506,47 @@ function regressionPipelineNode(label, value, state, detail = '', time = '') {
         </div>`;
 }
 
+
+let regressionPipelineCache = null;
+
+function regressionOpportunityStagePriority(stage) {
+    const value = String(stage || '').toUpperCase();
+    return ({EXECUTED: 6, CONFIRMED: 5, MANAGED: 4, BLOCKED: 3, BUILDING: 2, RECOVERING: 2, WEAKENING: 1, CANCELLED: 0})[value] ?? 0;
+}
+
+function regressionCandidateBadge(opportunity, trade) {
+    const stage = String(opportunity?.replay_stage || '').toUpperCase();
+    if (stage === 'EXECUTED' && trade) return {label: 'EXECUTED BUY', css: 'reviewed'};
+    if (stage === 'CONFIRMED') return {label: 'BUY CONFIRMED', css: 'reviewed'};
+    if (stage === 'BLOCKED') return {label: 'BUY BLOCKED', css: 'ignored'};
+    if (stage === 'CANCELLED') return {label: 'CANCELLED', css: 'ignored'};
+    if (['BUILDING', 'RECOVERING', 'WEAKENING'].includes(stage)) return {label: 'BUY CANDIDATE', css: 'new'};
+    return {label: 'NOT EXECUTED', css: 'new'};
+}
+
+function regressionPipelineFilterMatch(item, filter) {
+    if (!filter || filter === 'ALL') return true;
+    const stage = String(item.opportunity?.replay_stage || '').toUpperCase();
+    const code = String(item.opportunity?.decision_code || '').toUpperCase();
+    const finalDecision = String(item.candidate?.final_decision || '').toUpperCase();
+    const originalDecision = String(item.candidate?.original_decision || '').toUpperCase();
+    const five = String(item.opportunity?.five_minute_decision || item.fiveMinuteSignal?.final_decision || '').toUpperCase();
+    const one = String(item.opportunity?.one_hour_decision || item.oneHourSignal?.final_decision || '').toUpperCase();
+    const bearish = value => ['SELL', 'STRONG_SELL'].includes(value);
+
+    if (filter === 'EXECUTED') return stage === 'EXECUTED' && Boolean(item.trade);
+    if (filter === 'BUY_CANDIDATES') return !item.trade && ['BUY', 'STRONG_BUY'].some(v => v === finalDecision || v === originalDecision);
+    if (filter === 'BLOCKED_CONTEXT') {
+        return ['MISSING_CONTEXT', 'WATCH_ONLY_NEEDS_FRESH_CONFIRMATION', 'BEARISH_REVERSAL'].includes(code)
+            || ((stage === 'BLOCKED' || stage === 'CANCELLED') && (bearish(five) || bearish(one)));
+    }
+    if (filter === 'BLOCKED_ATR') return code === 'ATR_ENTRY_BLOCKED' || code === 'TRANSITION_CHASE_BLOCKED' || code === 'CHASE_ENTRY_BLOCKED';
+    if (filter === 'BLOCKED_BTC') return code === 'BTC_CONTEXT_BLOCKED' || code === 'EXCEPTIONAL_PROBE_PRICE_QUALITY_BLOCKED';
+    if (filter === 'BUILDING') return ['BUILDING', 'RECOVERING', 'WEAKENING'].includes(stage);
+    if (filter === 'BEARISH_REVERSAL') return code === 'BEARISH_REVERSAL' || stage === 'CANCELLED';
+    return true;
+}
+
 function nearestOpportunityForCandidate(candidate, opportunities) {
     const candidateTime = window.CryptoTime.parseUtc(candidate.generated_at)?.getTime();
 
@@ -520,16 +561,19 @@ function nearestOpportunityForCandidate(candidate, opportunities) {
         .filter(item => Number.isFinite(item.delta)
             && item.delta >= 0
             && item.delta <= 10 * 60 * 1000)
-        .sort((a, b) => a.delta - b.delta);
+        .sort((a, b) => a.delta - b.delta || regressionOpportunityStagePriority(b.row?.replay_stage) - regressionOpportunityStagePriority(a.row?.replay_stage));
 
     return afterCandidate[0]?.row || null;
 }
 
-function matchingTradeForCandidate(candidate, trades) {
-    const candidateTime = window.CryptoTime.parseUtc(candidate.generated_at)?.getTime();
+function matchingTradeForCandidate(candidate, trades, opportunity) {
+    // A candidate owns a wallet trade only when THIS evaluation actually executed it.
+    // Do not attach a later trade to an earlier BUY candidate that was BLOCKED/BUILDING.
+    if (String(opportunity?.replay_stage || '').toUpperCase() !== 'EXECUTED') return null;
+    const executionTime = window.CryptoTime.parseUtc(opportunity?.generated_at || candidate.generated_at)?.getTime();
     return trades
-        .map(trade => ({trade, delta: window.CryptoTime.parseUtc(trade.entry_time)?.getTime() - candidateTime}))
-        .filter(item => Number.isFinite(item.delta) && item.delta >= 0 && item.delta <= 15 * 60 * 1000)
+        .map(trade => ({trade, delta: Math.abs(window.CryptoTime.parseUtc(trade.entry_time)?.getTime() - executionTime)}))
+        .filter(item => Number.isFinite(item.delta) && item.delta <= 90 * 1000)
         .sort((a, b) => a.delta - b.delta)[0]?.trade || null;
 }
 
@@ -661,20 +705,24 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
     const body = document.getElementById('regression-pipeline-body');
     if (!panel || !body) return;
 
+    regressionPipelineCache = {signals, opportunities, trades, management, runSymbol};
     const transitionTimes = new Set(opportunities
         .filter(row => ['HTF_TRANSITION_REDUCED_ENTRY', 'REDUCED_POSITION_ALLOWED', 'BREAKOUT_CONTINUATION_ENTRY']
             .includes(String(row.decision_code || '')))
+        .map(row => window.CryptoTime.parseUtc(row.generated_at)?.getTime()));
+    const executionTimes = new Set(opportunities
+        .filter(row => String(row.replay_stage || '').toUpperCase() === 'EXECUTED')
         .map(row => window.CryptoTime.parseUtc(row.generated_at)?.getTime()));
     const candidates = signals
         .filter(signal => {
             if (!regressionBool(signal.replay_generated)) return false;
             const finalDecision = String(signal.final_decision || '');
             const originalDecision = String(signal.original_decision || '');
-            if (['BUY', 'STRONG_BUY'].includes(finalDecision) || ['BUY', 'STRONG_BUY'].includes(originalDecision)) return true;
             const generated = window.CryptoTime.parseUtc(signal.generated_at)?.getTime();
+            if (['BUY', 'STRONG_BUY'].includes(finalDecision) || ['BUY', 'STRONG_BUY'].includes(originalDecision)) return true;
+            if ([...executionTimes].some(t => Math.abs(t - generated) <= 1000)) return true;
             return finalDecision === 'WATCH' && [...transitionTimes].some(t => Math.abs(t - generated) <= 1000);
-        })
-        .slice(0, 20);
+        });
 
     panel.classList.remove('hidden');
     if (!candidates.length) {
@@ -686,13 +734,26 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
         return;
     }
 
-    body.innerHTML = candidates.map((candidate, index) => {
+    const items = candidates.map((candidate, originalIndex) => {
         const opportunity = nearestOpportunityForCandidate(candidate, opportunities);
-        const trade = matchingTradeForCandidate(candidate, trades);
         const contextAt = opportunity?.generated_at || candidate.generated_at;
         const oneMinuteSignal = regressionNearestSignal(signals, '1m', contextAt);
         const fiveMinuteSignal = regressionNearestSignal(signals, '5m', contextAt);
         const oneHourSignal = regressionNearestSignal(signals, '1h', contextAt);
+        const trade = matchingTradeForCandidate(candidate, trades, opportunity);
+        return {candidate, opportunity, oneMinuteSignal, fiveMinuteSignal, oneHourSignal, trade, originalIndex};
+    });
+    const filter = String(document.getElementById('regression-pipeline-filter')?.value || 'ALL').toUpperCase();
+    const filteredItems = items.filter(item => regressionPipelineFilterMatch(item, filter));
+    const count = document.getElementById('regression-pipeline-filter-count');
+    if (count) count.textContent = `Showing ${filteredItems.length} of ${items.length}`;
+    if (!filteredItems.length) {
+        body.innerHTML = `<div class="pipeline-empty"><strong>No pipeline rows match this filter.</strong><span>Choose another filter to continue the analysis.</span></div>`;
+        return;
+    }
+
+    body.innerHTML = filteredItems.slice(0, 60).map((item, index) => {
+        const {candidate, opportunity, oneMinuteSignal, fiveMinuteSignal, oneHourSignal, trade, originalIndex} = item;
         const previousOneMinuteSignal = regressionRecentBearishAnchor(signals, candidate.generated_at);
         const reversalProbe = regressionReversalProbeDetail(candidate, previousOneMinuteSignal, fiveMinuteSignal, oneHourSignal);
         const oneMinute = opportunity?.current_final_decision || oneMinuteSignal?.final_decision || 'NO 1m CONTEXT';
@@ -725,7 +786,7 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
 
         let evidenceState = evidence >= 7 ? 'pass' : evidence >= 4 ? 'wait' : 'fail';
         let healthState = health >= 40 ? 'pass' : health > 0 ? 'fail' : 'neutral';
-        let executionState = ['CONFIRMED', 'MANAGED'].includes(stage) || ['DIRECT_BUY', 'OPPORTUNITY_CONFIRMED'].includes(String(code))
+        let executionState = ['CONFIRMED', 'EXECUTED', 'MANAGED'].includes(stage) || ['DIRECT_BUY', 'OPPORTUNITY_CONFIRMED'].includes(String(code))
             ? 'pass' : ['BUILDING', 'RECOVERING'].includes(stage) ? 'wait' : 'fail';
         let walletState = trade ? 'pass' : 'fail';
         let exitState = trade?.exit_time ? 'pass' : trade ? 'wait' : 'neutral';
@@ -747,12 +808,12 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
             <article class="pipeline-candidate">
                 <div class="pipeline-candidate-head">
                     <div>
-                        <span class="pipeline-kicker">Candidate #${index + 1} · ${escapeHtml(candidate.interval_code || '—')}</span>
+                        <span class="pipeline-kicker">Candidate #${originalIndex + 1} · ${escapeHtml(candidate.interval_code || '—')}</span>
                         <strong>${formatMoveTime(candidate.generated_at)} · ${formatMovePrice(candidate.latest_price)}</strong>
                     </div>
                     <div class="pipeline-candidate-actions">
-                        <span class="status-pill ${trade ? 'reviewed' : 'new'}">${trade ? 'SHADOW BUY' : 'NOT EXECUTED'}</span>
-                        <a class="secondary-button pipeline-chart-button" href="${trade ? regressionTradeChartUrl(runSymbol, trade, index) : regressionSignalChartUrl(runSymbol, candidate, index)}">${trade ? 'View Buy/Sell Chart' : 'View Signal Chart'}</a>
+                        ${(() => { const badge = regressionCandidateBadge(opportunity, trade); return `<span class="status-pill ${badge.css}">${badge.label}</span>`; })()}
+                        <a class="secondary-button pipeline-chart-button" href="${trade ? regressionTradeChartUrl(runSymbol, trade, originalIndex) : regressionSignalChartUrl(runSymbol, candidate, originalIndex)}">${trade ? 'View Executed Trade' : 'View Candidate Chart'}</a>
                     </div>
                 </div>
                 ${regressionScoreGrid(candidate, oneMinuteSignal, fiveMinuteSignal, oneHourSignal)}
@@ -775,7 +836,7 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
                     <span class="pipeline-arrow">→</span>
                     ${regressionPipelineNode('Execution', stage, executionState, executionDetail, opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('Shadow wallet', trade ? `BUY ${formatMovePrice(trade.entry_price)}` : 'NO BUY', walletState, trade ? 'Wallet position opened' : 'No wallet write', trade ? formatMoveTime(trade.entry_time) : '—')}
+                    ${regressionPipelineNode('Shadow wallet', trade ? `EXECUTED ${formatMovePrice(trade.entry_price)}` : 'NO EXECUTION', walletState, trade ? 'This candidate opened the wallet position' : 'This candidate did not open a wallet position', trade ? formatMoveTime(trade.entry_time) : '—')}
                     <span class="pipeline-arrow">→</span>
                     ${regressionPipelineNode('Position mgmt', trade ? (extensions.length ? `HOLD · TP PUSHED ×${extensions.length}` : (trade.exit_time ? 'MANAGED' : 'HOLD')) : 'NOT REACHED', trade ? 'wait' : 'neutral', lastManagement?.explanation || 'Trend / momentum / volume continuation check', lastManagement ? formatMoveTime(lastManagement.generated_at) : (trade ? formatMoveTime(trade.entry_time) : '—'))}
                     <span class="pipeline-arrow">→</span>
@@ -973,6 +1034,13 @@ if (regressionRefresh) regressionRefresh.addEventListener('click', async () => {
         await loadRegressionDetail(active.id, false);
         pollRegressionRun(active.id);
     }
+});
+
+const regressionPipelineFilter = document.getElementById('regression-pipeline-filter');
+if (regressionPipelineFilter) regressionPipelineFilter.addEventListener('change', () => {
+    if (!regressionPipelineCache) return;
+    const {signals, opportunities, trades, management, runSymbol} = regressionPipelineCache;
+    renderRegressionPipeline(signals, opportunities, trades, management, runSymbol);
 });
 
 (async function initializeRegressionUi() {
