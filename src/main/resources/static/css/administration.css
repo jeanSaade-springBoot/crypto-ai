@@ -224,3 +224,6 @@
 .pipeline-candidate-actions{display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;justify-content:flex-end}
 .pipeline-chart-button,.regression-chart-link{font-size:.66rem;padding:.28rem .46rem;white-space:nowrap}
 @media(max-width:650px){.pipeline-candidate-actions{width:100%;justify-content:flex-start}.pipeline-chart-button{padding:.24rem .4rem}}
+
+/* Regression explainability: keep technical scores visible without reopening raw tables. */
+.pipeline-score-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0 14px}.pipeline-score-grid>div{padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface2)}.pipeline-score-grid span{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px}.pipeline-score-grid strong{display:block;font-size:12px;line-height:1.45}.system-health-panel .schedule-groups{margin-top:14px}@media(max-width:900px){.pipeline-score-grid{grid-template-columns:1fr 1fr}}@media(max-width:560px){.pipeline-score-grid{grid-template-columns:1fr}}

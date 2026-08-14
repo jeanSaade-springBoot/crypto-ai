@@ -86,6 +86,9 @@ public class ExecutionIntelligenceService {
     private static final int EXCEPTIONAL_PROBE_MIN_TREND = 17;
     private static final int EXCEPTIONAL_PROBE_MIN_MOMENTUM = 13;
     private static final int EXCEPTIONAL_PROBE_MIN_VOLUME = 15;
+    private static final int EXCEPTIONAL_PROBE_MIN_SCORE_JUMP = 40;
+    private static final int EXCEPTIONAL_PROBE_MAX_PRIOR_SCORE = 40;
+    private static final Duration EXCEPTIONAL_PROBE_REVERSAL_LOOKBACK = Duration.ofMinutes(5);
     private static final int EXCEPTIONAL_PROBE_BTC_SELL_PERCENT = 15;
     private static final int EXCEPTIONAL_PROBE_BTC_STRONG_SELL_PERCENT = 10;
 
@@ -581,12 +584,20 @@ public class ExecutionIntelligenceService {
         if (current.getLatestPrice() == null || current.getStopLoss() == null || current.getTakeProfit() == null
                 || current.getStopLoss().signum() <= 0 || current.getTakeProfit().signum() <= 0) return null;
 
-        if (!isBullish(current.getOriginalDecision())) return null;
+        if (current.getOriginalDecision() != SignalDecision.STRONG_BUY) return null;
         if (current.getDecision() != SignalDecision.WATCH && !isBullish(current.getDecision())) return null;
         if (current.getTotalScore() < EXCEPTIONAL_PROBE_MIN_SCORE
                 || current.getTrendScore() < EXCEPTIONAL_PROBE_MIN_TREND
                 || current.getMomentumScore() < EXCEPTIONAL_PROBE_MIN_MOMENTUM
                 || current.getVolumeScore() < EXCEPTIONAL_PROBE_MIN_VOLUME) return null;
+
+        // This route is specifically a reversal probe, not a generic high-score bypass.
+        // Require a fresh bearish -> exceptional bullish acceleration on the same 1m stream.
+        TradeSignal prior = recentBearishReversalAnchor(current);
+        if (prior == null) return null;
+        SignalDecision priorEffective = strongerDecision(prior.getDecision(), prior.getOriginalDecision());
+        int scoreJump = current.getTotalScore() - prior.getTotalScore();
+        if (scoreJump < EXCEPTIONAL_PROBE_MIN_SCORE_JUMP) return null;
 
         TradeSignal five = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
         TradeSignal oneHour = latestAtOrBefore(current, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
@@ -603,8 +614,10 @@ public class ExecutionIntelligenceService {
                 "EXCEPTIONAL_STRENGTH_PROBE",
                 "BTC_CONFLICT_REDUCED_PROBE",
                 percent,
-                "Exceptional independent strength qualified for a reduced BTC-conflict probe: score="
-                        + current.getTotalScore() + ", trend=" + current.getTrendScore()
+                "High-conviction reversal qualified for a reduced BTC-conflict probe: prior="
+                        + priorEffective + " " + prior.getTotalScore() + " -> current="
+                        + current.getOriginalDecision() + " " + current.getTotalScore()
+                        + " (score jump +" + scoreJump + "), trend=" + current.getTrendScore()
                         + ", momentum=" + current.getMomentumScore() + ", volume=" + current.getVolumeScore()
                         + ", 1m=" + current.getDecision() + ", 5m=" + five.getDecision()
                         + ", 1h=" + oneHour.getDecision() + ", BTC=" + (btcDecision == null ? "BEARISH" : btcDecision)
@@ -1114,6 +1127,20 @@ public class ExecutionIntelligenceService {
             return true;
         }
         return isBearish(evidence.fiveMinute()) || isBearish(evidence.oneHour());
+    }
+
+
+    private TradeSignal recentBearishReversalAnchor(TradeSignal current) {
+        if (current == null || current.getGeneratedAt() == null) return null;
+        Instant cutoff = current.getGeneratedAt().minus(EXCEPTIONAL_PROBE_REVERSAL_LOOKBACK);
+        return recentSignals(current.getSymbol(), EXECUTION_INTERVAL, current.getGeneratedAt()).stream()
+                .filter(signal -> signal != null && signal.getGeneratedAt() != null)
+                .filter(signal -> signal.getGeneratedAt().isBefore(current.getGeneratedAt())
+                        && !signal.getGeneratedAt().isBefore(cutoff))
+                .filter(signal -> isBearish(strongerDecision(signal.getDecision(), signal.getOriginalDecision())))
+                .filter(signal -> signal.getTotalScore() <= EXCEPTIONAL_PROBE_MAX_PRIOR_SCORE)
+                .max(java.util.Comparator.comparing(TradeSignal::getGeneratedAt))
+                .orElse(null);
     }
 
     private TradeSignal latestAtOrBefore(TradeSignal current, String interval, Duration maxAge) {

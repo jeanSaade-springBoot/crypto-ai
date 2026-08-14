@@ -88,6 +88,11 @@ public class DashboardApiController {
         return scoreDiagnosticsService.last24Hours();
     }
 
+    @GetMapping("/runtime-configuration")
+    public Map<String, Object> runtimeConfiguration() {
+        return scheduleConfigurationService.dashboardSchedule();
+    }
+
     @GetMapping("/overview")
     @Transactional(readOnly = true)
     public Map<String, Object> overview(

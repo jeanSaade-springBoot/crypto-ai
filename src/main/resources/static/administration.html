@@ -11,17 +11,34 @@
 </head>
 <body>
 <div class="app-shell">
-    <aside class="sidebar">
+    <aside class="sidebar" id="administration-sidebar">
         <div class="brand">
             <span class="brand-mark">CT</span>
-            <div><strong>Crypto Trader</strong><small>Trading administration</small></div>
+            <div class="sidebar-label"><strong>Crypto Trader</strong><small>AI trading command center</small></div>
+            <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Collapse navigation" title="Collapse navigation">‹</button>
         </div>
-        <nav>
-            <a href="/dashboard">Dashboard</a>
-            <a href="/dashboard#analytics">Analytics</a>
-            <a href="/trade-inspector">Trade Inspector</a>
-            <a class="active" href="/administration">Administration</a>
+        <nav class="sidebar-nav">
+            <div class="nav-group"><span class="nav-group-label">OVERVIEW</span>
+                <a href="/dashboard" title="Dashboard"><span class="nav-icon">⌂</span><span class="nav-text">Dashboard</span></a>
+            </div>
+            <div class="nav-group"><span class="nav-group-label">MARKET</span>
+                <a href="/dashboard#market" title="Market Monitor"><span class="nav-icon">⌁</span><span class="nav-text">Market Monitor</span></a>
+            </div>
+            <div class="nav-group"><span class="nav-group-label">EXECUTION</span>
+                <a href="/opportunity-center" title="AI Opportunity Center"><span class="nav-icon">⚡</span><span class="nav-text">Opportunity Center</span></a>
+            </div>
+            <div class="nav-group"><span class="nav-group-label">ANALYSIS</span>
+                <a href="/dashboard#trade-history" title="Trade History"><span class="nav-icon">≡</span><span class="nav-text">Trade History</span></a>
+                <a href="/trade-inspector" title="Trade Inspector"><span class="nav-icon">⌕</span><span class="nav-text">Trade Inspector</span></a>
+                <a href="/score-diagnostics" title="Score Diagnostics"><span class="nav-icon">◎</span><span class="nav-text">Score Diagnostics</span></a>
+                <a href="/crypto-fundamentals" title="Crypto Fundamentals"><span class="nav-icon">ƒ</span><span class="nav-text">Crypto Fundamentals</span></a>
+            </div>
+            <div class="nav-group"><span class="nav-group-label">SYSTEM</span>
+                <a class="active" href="/administration" title="Administration"><span class="nav-icon">⚙</span><span class="nav-text">Administration</span></a>
+                <a href="#system-health" title="System Health"><span class="nav-icon">♥</span><span class="nav-text">System Health</span></a>
+            </div>
         </nav>
+        <div class="connection"><span class="online"></span><div class="sidebar-label"><strong>Administration</strong><small>Configuration & replay lab</small></div></div>
     </aside>
 
     <main>
@@ -47,6 +64,15 @@
             <article class="metric-card"><span>Today's new positions</span><strong id="daily-buys">—</strong><small id="remaining-buys">— remaining</small></article>
             <article class="metric-card"><span>Realized P&amp;L</span><strong id="realized">—</strong><small>Closed system trades</small></article>
             <article class="metric-card"><span>Unrealized P&amp;L</span><strong id="unrealized">—</strong><small>Current holdings</small></article>
+        </section>
+
+        <section id="system-health" class="panel system-health-panel">
+            <div class="section-heading">
+                <div><p class="eyebrow">SYSTEM HEALTH</p><h2>Runtime configuration</h2></div>
+                <span>Collection and analysis schedules</span>
+            </div>
+            <p class="form-note">Operational cadence only. These values describe when market data, analysis and dashboard refresh jobs run; they do not change replay decision logic.</p>
+            <div id="admin-schedule-groups" class="schedule-groups"><div class="empty">Loading runtime configuration…</div></div>
         </section>
 
         <section class="wallet-form-grid">
@@ -231,7 +257,7 @@
                 <div class="section-heading">
                     <div><p class="eyebrow">WHY DID IT BUY / WHY DID IT STOP?</p><h3>Visual execution pipeline</h3></div>
                 </div>
-                <p class="form-note">Each fresh BUY context is traced through the exact shadow-production gates. Green = passed, amber = waiting/supportive, red = blocked. The first red stage is the reason no simulated BUY reached the wallet.</p>
+                <p class="form-note">Each fresh BUY context is traced through the same production Execution Intelligence, higher-timeframe and position-management services used by the live wallet. Every node shows its score snapshot; the BUY blocker names the exact veto, and the reversal-probe node shows every threshold independently. Green = passed, amber = waiting/supportive, red = blocked.</p>
                 <div id="regression-pipeline-body" class="regression-pipeline-body"></div>
             </div>
 
@@ -251,22 +277,7 @@
                 </table></div>
             </div>
 
-            <div id="regression-detail" class="regression-detail hidden">
-                <div class="section-heading"><div><p class="eyebrow">FRESH SIGNAL REPLAY</p><h3>Generated BUY signals</h3></div></div>
-                <p class="form-note">Only generated BUY / STRONG_BUY signals are shown here, whether or not the shadow wallet executed them or later produced a SELL.</p>
-                <div class="table-wrap">
-                    <table>
-                        <thead><tr><th>Time</th><th>TF</th><th>Price</th><th>Original</th><th>Final BUY</th><th>Execution sees</th><th>Replay</th><th>Error</th><th>Chart</th></tr></thead>
-                        <tbody id="regression-signals-body"></tbody>
-                    </table>
-                </div>
-                <div class="table-wrap regression-opportunity-wrap">
-                    <table>
-                        <thead><tr><th>Time</th><th>Stage</th><th>Final</th><th>5m</th><th>1h</th><th>Evidence</th><th>Health</th><th>Position %</th><th>Result</th></tr></thead>
-                        <tbody id="regression-opportunities-body"></tbody>
-                    </table>
-                </div>
-            </div>
+
         </section>
 
         <section id="price-move-monitor" class="panel debug-monitor-panel">

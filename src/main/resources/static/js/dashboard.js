@@ -656,8 +656,10 @@ function renderScoreDiagnostics(diagnostics) {
 }
 
 function renderSchedules(schedule) {
+    const target = el('schedule-groups');
+    if (!target) return;
     const groups = schedule.groups || [];
-    el('schedule-groups').innerHTML = groups.length ? groups.map(group => `
+    target.innerHTML = groups.length ? groups.map(group => `
         <article class="schedule-group">
             <h3>${escapeHtml(group.name || 'Schedule')}</h3>
             <div class="schedule-entry-list">

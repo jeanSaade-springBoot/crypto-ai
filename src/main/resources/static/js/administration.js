@@ -42,6 +42,64 @@ document.getElementById('add-coin-form').addEventListener('submit', async event 
         });
         input.value = '';
         await loadCoins();
+
+async function loadAdministrationSystemHealth() {
+    const target = document.getElementById('admin-schedule-groups');
+    if (!target) return;
+    try {
+        const schedule = await api('/api/dashboard/runtime-configuration');
+        const groups = schedule?.groups || [];
+        target.innerHTML = groups.length ? groups.map(group => `
+            <article class="schedule-group">
+                <h3>${escapeHtml(group.name || 'Schedule')}</h3>
+                <div class="schedule-entry-list">
+                    ${(group.entries || []).map(item => `
+                        <div class="schedule-entry">
+                            <div class="schedule-entry-heading">
+                                <strong>${escapeHtml(item.name || '—')}</strong>
+                                <span class="badge ${item.enabled ? 'buy' : 'reject'}">${item.enabled ? 'ENABLED' : 'DISABLED'}</span>
+                            </div>
+                            <span class="schedule-cadence">${escapeHtml(item.cadence || '—')}</span>
+                            <small>${escapeHtml(item.detail || '')}</small>
+                            ${item.delayMs == null ? '' : `<code>${Number(item.delayMs).toLocaleString()} ms</code>`}
+                        </div>`).join('')}
+                </div>
+            </article>`).join('') : '<div class="empty">No runtime schedule configuration was returned.</div>';
+    } catch (error) {
+        target.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    }
+}
+
+function initializeAdministrationSidebar() {
+    const sidebar = document.getElementById('administration-sidebar');
+    const toggle = document.getElementById('sidebar-toggle');
+    if (!sidebar || !toggle) return;
+    const storageKey = 'crypto-sidebar-collapsed';
+    const stored = window.localStorage.getItem(storageKey) === '1';
+    sidebar.classList.toggle('collapsed', stored);
+    document.body.classList.toggle('sidebar-collapsed', stored);
+    const updateToggle = () => {
+        const collapsed = sidebar.classList.contains('collapsed');
+        toggle.textContent = collapsed ? '›' : '‹';
+        toggle.setAttribute('aria-label', collapsed ? 'Expand navigation' : 'Collapse navigation');
+    };
+    updateToggle();
+    toggle.addEventListener('click', () => {
+        if (window.matchMedia('(max-width: 760px)').matches) {
+            sidebar.classList.toggle('mobile-open');
+            toggle.textContent = sidebar.classList.contains('mobile-open') ? '×' : '☰';
+            return;
+        }
+        sidebar.classList.toggle('collapsed');
+        const collapsed = sidebar.classList.contains('collapsed');
+        document.body.classList.toggle('sidebar-collapsed', collapsed);
+        window.localStorage.setItem(storageKey, collapsed ? '1' : '0');
+        updateToggle();
+    });
+}
+
+initializeAdministrationSidebar();
+loadAdministrationSystemHealth();
         showAdminMessage('Coin added. Live stream reload and historical bootstrap started automatically.');
     } catch (error) {
         showAdminMessage(error.message, true);
@@ -511,6 +569,30 @@ function regressionSignalChartUrl(symbol, signal, index = 0) {
     return `/dashboard?${params.toString()}#market`;
 }
 
+function regressionRecentBearishAnchor(signals, atValue) {
+    const at = new Date(atValue).getTime();
+    if (!Number.isFinite(at)) return null;
+    const cutoff = at - 5 * 60 * 1000;
+    return [...(signals || [])]
+        .filter(signal => String(signal.interval_code || '').toLowerCase() === '1m')
+        .filter(signal => {
+            const t = new Date(signal.generated_at).getTime();
+            if (!Number.isFinite(t) || t >= at || t < cutoff) return false;
+            const d = String(signal.final_decision || signal.original_decision || '');
+            return ['SELL','STRONG_SELL'].includes(d) && Number(signal.total_score ?? 999) <= 40;
+        })
+        .sort((a, b) => new Date(b.generated_at).getTime() - new Date(a.generated_at).getTime())[0] || null;
+}
+
+function regressionPreviousSignal(signals, interval, atValue) {
+    const at = new Date(atValue).getTime();
+    if (!Number.isFinite(at)) return null;
+    return [...(signals || [])]
+        .filter(signal => String(signal.interval_code || '').toLowerCase() === String(interval).toLowerCase())
+        .filter(signal => { const t = new Date(signal.generated_at).getTime(); return Number.isFinite(t) && t < at; })
+        .sort((a, b) => new Date(b.generated_at).getTime() - new Date(a.generated_at).getTime())[0] || null;
+}
+
 function regressionNearestSignal(signals, interval, atValue) {
     const at = new Date(atValue).getTime();
     if (!Number.isFinite(at)) return null;
@@ -523,6 +605,46 @@ function regressionNearestSignal(signals, interval, atValue) {
 function regressionScoreDetail(signal) {
     if (!signal) return 'No score snapshot';
     return `Total ${signal.total_score ?? '—'} · C${signal.confidence_score ?? '—'} · T${signal.trend_score ?? '—'} · M${signal.momentum_score ?? '—'} · V${signal.volume_score ?? '—'}`;
+}
+
+function regressionReversalProbeDetail(candidate, previous, five, one) {
+    const score = Number(candidate?.total_score ?? 0);
+    const trend = Number(candidate?.trend_score ?? 0);
+    const momentum = Number(candidate?.momentum_score ?? 0);
+    const volume = Number(candidate?.volume_score ?? 0);
+    const priorScore = Number(previous?.total_score ?? NaN);
+    const jump = Number.isFinite(priorScore) ? score - priorScore : NaN;
+    const priorDecision = String(previous?.final_decision || previous?.original_decision || 'MISSING');
+    const raw = String(candidate?.original_decision || '');
+    const fiveDecision = String(five?.final_decision || 'MISSING');
+    const oneDecision = String(one?.final_decision || 'MISSING');
+    const bearish = value => ['SELL','STRONG_SELL'].includes(String(value));
+    const checks = [
+        [`Raw STRONG_BUY`, raw === 'STRONG_BUY'],
+        [`Score ${score} ≥ 88`, score >= 88],
+        [`Trend ${trend} ≥ 17`, trend >= 17],
+        [`Momentum ${momentum} ≥ 13`, momentum >= 13],
+        [`Volume ${volume} ≥ 15`, volume >= 15],
+        [`Prior ${priorDecision}${Number.isFinite(priorScore) ? ` ${priorScore}` : ''} bearish`, bearish(priorDecision) && (!Number.isFinite(priorScore) || priorScore <= 40)],
+        [`Score jump ${Number.isFinite(jump) ? (jump >= 0 ? '+' : '') + jump : '—'} ≥ +40`, Number.isFinite(jump) && jump >= 40],
+        [`5m ${fiveDecision} not bearish`, !bearish(fiveDecision) && fiveDecision !== 'MISSING'],
+        [`1h ${oneDecision} not bearish`, !bearish(oneDecision) && oneDecision !== 'MISSING']
+    ];
+    const passed = checks.every(([, ok]) => ok);
+    return {
+        passed,
+        text: checks.map(([label, ok]) => `${ok ? '✓' : '✕'} ${label}`).join(' · ')
+    };
+}
+
+function regressionScoreGrid(candidate, oneMinuteSignal, fiveMinuteSignal, oneHourSignal) {
+    const row = (label, signal) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(regressionScoreDetail(signal))}</strong></div>`;
+    return `<div class="pipeline-score-grid">
+        ${row('Candidate', candidate)}
+        ${row('1m', oneMinuteSignal || candidate)}
+        ${row('5m', fiveMinuteSignal)}
+        ${row('1h', oneHourSignal)}
+    </div>`;
 }
 
 function renderRegressionPipeline(signals, opportunities, trades, management = [], runSymbol = '') {
@@ -562,6 +684,8 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
         const oneMinuteSignal = regressionNearestSignal(signals, '1m', contextAt);
         const fiveMinuteSignal = regressionNearestSignal(signals, '5m', contextAt);
         const oneHourSignal = regressionNearestSignal(signals, '1h', contextAt);
+        const previousOneMinuteSignal = regressionRecentBearishAnchor(signals, candidate.generated_at);
+        const reversalProbe = regressionReversalProbeDetail(candidate, previousOneMinuteSignal, fiveMinuteSignal, oneHourSignal);
         const oneMinute = opportunity?.current_final_decision || oneMinuteSignal?.final_decision || 'NO 1m CONTEXT';
         const fiveMinute = opportunity?.five_minute_decision || fiveMinuteSignal?.final_decision || (candidate.interval_code === '5m' ? candidate.final_decision : 'MISSING');
         const oneHour = opportunity?.one_hour_decision || oneHourSignal?.final_decision || (candidate.interval_code === '1h' ? candidate.final_decision : 'MISSING');
@@ -582,7 +706,7 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
                 HTF_TRANSITION_REDUCED_ENTRY: '1h BUY + 5m/1m transition · reduced entry',
                 TRANSITION_CHASE_BLOCKED: 'Transition valid · price quality too late',
                 BTC_CONTEXT_BLOCKED: 'BTC context hard veto',
-                BTC_CONFLICT_REDUCED_PROBE: 'Exceptional strength · BTC conflict reduced probe',
+                BTC_CONFLICT_REDUCED_PROBE: 'High-conviction reversal · BTC conflict reduced probe',
                 EXCEPTIONAL_PROBE_PRICE_QUALITY_BLOCKED: 'Exceptional probe · entry price quality blocked',
                 WATCH_ONLY_NEEDS_FRESH_CONFIRMATION: 'WATCH-only evidence needs fresh HTF confirmation'
             };
@@ -621,6 +745,7 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
                         <a class="secondary-button pipeline-chart-button" href="${trade ? regressionTradeChartUrl(runSymbol, trade, index) : regressionSignalChartUrl(runSymbol, candidate, index)}">${trade ? 'View Buy/Sell Chart' : 'View Signal Chart'}</a>
                     </div>
                 </div>
+                ${regressionScoreGrid(candidate, oneMinuteSignal, fiveMinuteSignal, oneHourSignal)}
                 <div class="pipeline-flow">
                     ${regressionPipelineNode('Fresh analysis', `${candidate.original_decision || '—'} → ${candidate.final_decision || '—'}`, regressionPipelineState(candidate.final_decision), regressionScoreDetail(candidate), formatMoveTime(candidate.generated_at))}
                     <span class="pipeline-arrow">→</span>
@@ -635,6 +760,8 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
                     ${regressionPipelineNode('Health', `${health}/100`, healthState, `Evidence ${evidence}/7 · minimum health 40`, opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
                     <span class="pipeline-arrow">→</span>
                     ${regressionPipelineNode('BUY blocker', opportunity && !['CONFIRMED', 'EXECUTED', 'MANAGED'].includes(stage) ? String(code).replaceAll('_',' ') : 'CLEAR', opportunity && !['CONFIRMED', 'EXECUTED', 'MANAGED'].includes(stage) ? 'fail' : 'pass', opportunity?.decision_explanation || 'No blocking gate at this evaluation.', opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
+                    <span class="pipeline-arrow">→</span>
+                    ${regressionPipelineNode('Reversal probe test', reversalProbe.passed ? 'QUALIFIED' : 'NOT QUALIFIED', reversalProbe.passed ? 'pass' : 'wait', reversalProbe.text, formatMoveTime(candidate.generated_at))}
                     <span class="pipeline-arrow">→</span>
                     ${regressionPipelineNode('Execution', stage, executionState, executionDetail, opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
                     <span class="pipeline-arrow">→</span>
@@ -715,42 +842,8 @@ async function loadRegressionDetail(runId, includeTables = true) {
             api(`/api/administration/regression-tests/runs/${runId}/trades`),
             api(`/api/administration/regression-tests/runs/${runId}/position-management`)
         ]);
-        const detail = document.getElementById('regression-detail');
-        detail.classList.remove('hidden');
-        const generatedBuySignals = signals.filter(signal =>
-            ['BUY', 'STRONG_BUY'].includes(String(signal.final_decision || ''))
-        );
-        document.getElementById('regression-signals-body').innerHTML = generatedBuySignals.map(signal => {
-            const replay = regressionBool(signal.replay_generated);
-            const hasError = Boolean(signal.generation_error);
-            const highlight = replay;
-            return `
-                <tr${highlight ? ' class="regression-corrected"' : ''}>
-                    <td>${formatMoveTime(signal.generated_at)}</td>
-                    <td>${escapeHtml(signal.interval_code)}</td>
-                    <td>${formatMovePrice(signal.latest_price)}</td>
-                    <td>${escapeHtml(signal.original_decision || '—')}</td>
-                    <td>${escapeHtml(signal.final_decision || '—')}</td>
-                    <td>${escapeHtml(signal.execution_effective_decision || '—')}</td>
-                    <td>${replay ? 'FRESH' : 'REFERENCE'}</td>
-                    <td>${hasError ? escapeHtml(signal.generation_error) : '—'}</td>
-                    <td><a class="secondary-button regression-chart-link" href="${regressionSignalChartUrl(run.symbol, signal, 0)}">View Chart</a></td>
-                </tr>`;
-        }).join('') || '<tr><td colspan="9">No generated BUY / STRONG_BUY signals in this test window.</td></tr>';
-
-        document.getElementById('regression-opportunities-body').innerHTML = opportunities.map(row => `
-                    <tr${String(row.replay_stage) === 'CONFIRMED' ? ' class="regression-corrected"' : ''}>
-                        <td>${formatMoveTime(row.generated_at)}</td>
-                        <td>${escapeHtml(row.replay_stage || '—')}</td>
-                        <td>${escapeHtml(row.current_final_decision || '—')}</td>
-                        <td>${escapeHtml(row.five_minute_decision || '—')}</td>
-                        <td>${escapeHtml(row.one_hour_decision || '—')}</td>
-                        <td>${row.evidence_score ?? 0} (${row.buy_count ?? 0}B/${row.watch_count ?? 0}W)</td>
-                        <td>${row.opportunity_health ?? 0}/100</td>
-                        <td>${row.recommended_position_percent ?? 0}%</td>
-                        <td>${escapeHtml(row.decision_code || '—')}</td>
-                    </tr>`).join('') || '<tr><td colspan="9">No 1m execution-opportunity evaluations in this window.</td></tr>';
-
+        // Raw generated-signal/opportunity tables were intentionally removed from Administration.
+        // The visual pipeline below remains the single explainability surface.
         renderRegressionPipeline(signals, opportunities, trades, management, run.symbol);
 
         const tradePanel = document.getElementById('regression-trades');
@@ -799,7 +892,7 @@ if (regressionForm) {
         event.preventDefault();
         const button = document.getElementById('regression-run');
         setRegressionRunButtonRunning(true);
-        document.getElementById('regression-detail').classList.add('hidden');
+        document.getElementById('regression-detail')?.classList.add('hidden');
         document.getElementById('regression-result').classList.add('hidden');
         document.getElementById('regression-pipeline')?.classList.add('hidden');
         try {
@@ -849,7 +942,7 @@ if (regressionReset) regressionReset.addEventListener('click', async () => {
         activeRegressionRunId = null;
         document.getElementById('regression-active').classList.add('hidden');
         document.getElementById('regression-result').classList.add('hidden');
-        document.getElementById('regression-detail').classList.add('hidden');
+        document.getElementById('regression-detail')?.classList.add('hidden');
         document.getElementById('regression-trades').classList.add('hidden');
         document.getElementById('regression-pipeline')?.classList.add('hidden');
         setRegressionRunButtonRunning(false);
