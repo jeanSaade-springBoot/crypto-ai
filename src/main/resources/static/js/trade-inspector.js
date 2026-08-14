@@ -4,7 +4,7 @@ let symbolsLoaded = false;
 function money(v){if(v===null||v===undefined)return '—';const n=Number(v);return `${n<0?'-':''}$${Math.abs(n).toLocaleString(undefined,{maximumFractionDigits:8})}`}
 function price(v){if(v===null||v===undefined)return '—';const n=Number(v);return n>=1?`$${n.toLocaleString(undefined,{maximumFractionDigits:6})}`:`$${n.toLocaleString(undefined,{maximumFractionDigits:12})}`}
 function pct(v){if(v===null||v===undefined)return '—';const n=Number(v);return `${n>=0?'+':''}${n.toFixed(3)}%`}
-function date(v){return v?new Date(v).toLocaleString():'—'}
+function date(v){return window.CryptoTime.formatLocal(v)}
 function duration(mins){const m=Number(mins||0);if(m<60)return `${m}m`;const h=Math.floor(m/60),r=m%60;return `${h}h ${r}m`}
 function cls(v){const n=Number(v||0);return n>0?'positive':n<0?'negative':''}
 function qualityClass(q){return q==='GOOD_EXIT'?'good':q==='EARLY_EXIT'?'early':q==='PENDING'?'pending':'neutral'}
@@ -12,8 +12,8 @@ function qualityLabel(q){return (q||'NEUTRAL_EXIT').replaceAll('_',' ')}
 function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 
 function tradeChartUrl(t){
- const opened=new Date(t.openedAt);
- const closed=new Date(t.closedAt);
+ const opened=window.CryptoTime.parseUtc(t.openedAt);
+ const closed=window.CryptoTime.parseUtc(t.closedAt);
  if(Number.isNaN(opened.getTime())||Number.isNaN(closed.getTime())||closed<=opened)return '#';
  const pnl=Number(t.realizedPnlPercent??t.realizedPnl??0);
  const params=new URLSearchParams({

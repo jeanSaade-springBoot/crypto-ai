@@ -38,8 +38,8 @@ const headerNumber = v => {
     return new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 3 }).format(n);
 };
 const headerMoney = v => v === null || v === undefined ? '—' : '$' + headerNumber(v);
-const dateTime = v => v ? new Date(v).toLocaleString() : '—';
-const preciseDateTime = v => v ? new Date(v).toLocaleString(undefined, {year:'numeric', month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit'}) : '—';
+const dateTime = v => window.CryptoTime.formatLocal(v);
+const preciseDateTime = v => window.CryptoTime.formatLocal(v, {year:'numeric', month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit'});
 const openSignalAnalysisIds = new Set();
 let pinnedSignalId = localStorage.getItem('cryptoPinnedSignalId');
 let aiPerformancePeriod = localStorage.getItem('cryptoAiPerformancePeriod') || 'ALL_TIME';
@@ -64,7 +64,7 @@ const debugTradePoints = (() => {
     const points = [];
     const add = (side, timeValue, priceValue) => {
         if (!timeValue || priceValue == null || priceValue === '') return;
-        const time = new Date(timeValue);
+        const time = window.CryptoTime.parseUtc(timeValue);
         const price = Number(priceValue);
         if (Number.isNaN(time.getTime()) || !Number.isFinite(price)) return;
         points.push({side, time, price});
@@ -75,8 +75,8 @@ const debugTradePoints = (() => {
 })();
 const debugMoveFocus = (() => {
     if (!debugFocusStart || !debugFocusEnd) return null;
-    const start = new Date(debugFocusStart);
-    const end = new Date(debugFocusEnd);
+    const start = window.CryptoTime.parseUtc(debugFocusStart);
+    const end = window.CryptoTime.parseUtc(debugFocusEnd);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return null;
     return { start, end, direction: debugFocusDirection, change: debugFocusChange };
 })();
@@ -426,7 +426,7 @@ function renderOpportunityCenterCard(o) {
     const evidenceProgress = Math.max(0, Math.min(100, (evidence / evidenceTarget) * 100));
     const healthMomentum = Number(o.healthMomentum || 0);
     const evidenceMomentum = Number(o.evidenceMomentum || 0);
-    const ageMinutes = o.startedAt ? Math.max(0, Math.round((Date.now() - new Date(o.startedAt).getTime()) / 60000)) : null;
+    const ageMinutes = o.startedAt ? Math.max(0, Math.round((Date.now() - window.CryptoTime.parseUtc(o.startedAt)?.getTime()) / 60000)) : null;
     const freshness = ageMinutes == null ? 'Age unavailable' : ageMinutes < 10 ? `${ageMinutes}m · fresh` : ageMinutes < 30 ? `${ageMinutes}m · active` : `${ageMinutes}m · aging`;
     const stage = opportunityStage(o, recovering);
     const missing = opportunityMissingRequirements(o, recovering);
@@ -752,7 +752,7 @@ function renderIndicators(i) {
 
 function candleTooltipTime(value) {
     if (value === null || value === undefined || value === '') return '—';
-    const date = new Date(value);
+    const date = window.CryptoTime.parseUtc(value);
     if (Number.isNaN(date.getTime())) return '—';
     return date.toLocaleString(undefined, {
         year: 'numeric', month: '2-digit', day: '2-digit',
@@ -804,18 +804,18 @@ function candleTooltipHtml(point) {
 
 function renderCharts(candles, executions = []) {
     const candleSeries = candles.map(c => ({
-        x: new Date(c.time),
+        x: window.CryptoTime.parseUtc(c.time),
         y: [Number(c.open), Number(c.high), Number(c.low), Number(c.close)],
         openTime: c.openTime ?? c.time,
         closeTime: c.closeTime,
         open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close)
     }));
-    const volumeSeries = candles.map(c => ({ x: new Date(c.time), y: Number(c.volume) }));
+    const volumeSeries = candles.map(c => ({ x: window.CryptoTime.parseUtc(c.time), y: Number(c.volume) }));
     latestWalletExecutions = new Map((executions || []).map(execution => [String(execution.id), execution]));
     const annotations = (executions || []).map(execution => {
         const isBuy = String(execution.side || '').toUpperCase() === 'BUY';
         return {
-            x: new Date(execution.executedAt).getTime(),
+            x: window.CryptoTime.parseUtc(execution.executedAt)?.getTime(),
             y: Number(execution.price),
             marker: { size: 3, fillColor: isBuy ? '#39d98a' : '#ff6b72', strokeColor: '#071018', strokeWidth: 1, radius: 2 },
             label: {
@@ -864,7 +864,7 @@ function renderCharts(candles, executions = []) {
             if (Number.isInteger(index) && index >= 0 && candleSeries[index]) updateFixedCandleSummary(candleSeries[index]);
         }
     };
-    const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime' }, noData: { text: 'Waiting for closed candles' } };
+    const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime', labels: { datetimeUTC: false } }, noData: { text: 'Waiting for closed candles' } };
     if (!candleChart) {
         candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390, events: candleEvents }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations }, tooltip: { custom: ({ seriesIndex, dataPointIndex, w }) => candleTooltipHtml(w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex]) }, yaxis: { tooltip: { enabled: true }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
         candleChart.render().then(bindExecutionMarkerClicks);
@@ -1025,7 +1025,7 @@ function signalExecutionStatusHtml(signal, execution, position) {
 
 function dashboardSignalChartUrl(signal) {
     if (!signal?.generatedAt || signal?.latestPrice == null) return '#';
-    const at = new Date(signal.generatedAt);
+    const at = window.CryptoTime.parseUtc(signal.generatedAt);
     if (Number.isNaN(at.getTime())) return '#';
     const start = new Date(at.getTime() - 20 * 60 * 1000);
     const end = new Date(at.getTime() + 40 * 60 * 1000);

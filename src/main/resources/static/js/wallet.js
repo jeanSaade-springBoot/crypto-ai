@@ -84,7 +84,7 @@ async function load() {
 
         byId('trade-body').innerHTML = (data.trades || []).map(trade => `
             <tr>
-                <td>${new Date(trade.executedAt).toLocaleString()}</td>
+                <td>${window.CryptoTime.formatLocal(trade.executedAt)}</td>
                 <td>${trade.signalId || '—'}</td>
                 <td>${trade.symbol}</td>
                 <td><span class="badge ${trade.side === 'BUY' ? 'positive' : 'negative'}">${trade.side}</span></td>
@@ -112,10 +112,10 @@ function renderChart(snapshots) {
     const options = {
         chart: {type: 'line', height: 320, toolbar: {show: false}},
         series: [
-            {name: 'Portfolio value', data: snapshots.map(x => [new Date(x.capturedAt).getTime(), n(x.portfolioValueUsdt)])},
-            {name: 'Net invested', data: snapshots.map(x => [new Date(x.capturedAt).getTime(), n(x.netInvestedUsdt)])}
+            {name: 'Portfolio value', data: snapshots.map(x => [window.CryptoTime.parseUtc(x.capturedAt).getTime(), n(x.portfolioValueUsdt)])},
+            {name: 'Net invested', data: snapshots.map(x => [window.CryptoTime.parseUtc(x.capturedAt).getTime(), n(x.netInvestedUsdt)])}
         ],
-        xaxis: {type: 'datetime'},
+        xaxis: {type: 'datetime', labels: {datetimeUTC: false}},
         yaxis: {labels: {formatter: value => value.toFixed(0)}},
         stroke: {curve: 'smooth', width: 3},
         noData: {text: 'Add a USDT deposit to start'}

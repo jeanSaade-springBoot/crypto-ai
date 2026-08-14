@@ -223,8 +223,8 @@
                         <option value="">Loading configured coins…</option>
                     </select>
                 </label>
-                <label>From (UTC)<input id="regression-start" type="datetime-local" value="2026-08-09T07:00" required></label>
-                <label>To (UTC)<input id="regression-end" type="datetime-local" value="2026-08-09T16:00" required></label>
+                <label>From (browser local time)<input id="regression-start" type="datetime-local" value="2026-08-09T07:00" required></label>
+                <label>To (browser local time)<input id="regression-end" type="datetime-local" value="2026-08-09T16:00" required></label><small id="regression-browser-zone" class="muted">Times display in your browser time zone.</small>
                 <button id="regression-run" type="submit">Run Full Production Replay</button>
             </form>
             <p id="regression-window-note" class="form-note">Select the exact historical From/To window. The replay simulates production decisions and trades without touching the real wallet.</p>
@@ -358,6 +358,7 @@
         </section>
     </main>
 </div>
+<script src="/js/time-utils.js"></script>
 <script src="/js/wallet.js"></script>
 <script src="/js/administration.js"></script>
 </body>

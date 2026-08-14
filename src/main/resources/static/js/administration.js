@@ -93,7 +93,7 @@ async function loadAdministrationAiOperations() {
             'admin-pipeline-closed': summary.closedTrades || 0
         };
         Object.entries(values).forEach(([id,value]) => { const node=document.getElementById(id); if(node) node.textContent=value; });
-        const updated=document.getElementById('admin-ai-updated'); if(updated) updated.textContent = summary.updatedAt ? new Date(summary.updatedAt).toLocaleString() : 'Live';
+        const updated=document.getElementById('admin-ai-updated'); if(updated) updated.textContent = summary.updatedAt ? window.CryptoTime.formatLocal(summary.updatedAt) : 'Live';
     } catch (error) { const updated=document.getElementById('admin-ai-updated'); if(updated) updated.textContent=error.message; }
 }
 
@@ -174,8 +174,8 @@ function formatMovePrice(value) {
 
 function formatMoveTime(value) {
     if (!value) return '—';
-    const d = new Date(value);
-    return Number.isNaN(d.getTime()) ? escapeHtml(value) : d.toLocaleString();
+    const d = window.CryptoTime.parseUtc(value);
+    return d ? d.toLocaleString() : escapeHtml(value);
 }
 
 function formatDuration(seconds) {
@@ -282,7 +282,7 @@ async function loadPriceMoves() {
         const moveGroups = symbols.length
             ? await Promise.all(symbols.map(symbol => api(`/api/administration/debug/price-moves?symbol=${encodeURIComponent(symbol)}`)))
             : [];
-        const moves = moveGroups.flat().sort((a, b) => new Date(b.endTime || 0) - new Date(a.endTime || 0));
+        const moves = moveGroups.flat().sort((a, b) => window.CryptoTime.parseUtc(b.endTime || 0) - window.CryptoTime.parseUtc(a.endTime || 0));
         const newCount = moves.filter(move => move.reviewStatus === 'NEW').length;
         const mediumCount = moves.filter(move => move.importanceLevel === 'MEDIUM').length;
         const highCount = moves.filter(move => move.importanceLevel === 'HIGH').length;
@@ -411,9 +411,7 @@ let regressionPollTimer = null;
 let activeRegressionRunId = null;
 
 function regressionUtcInstant(value) {
-    if (!value) return null;
-    const normalized = value.length === 16 ? `${value}:00Z` : `${value}Z`;
-    return new Date(normalized).toISOString();
+    return window.CryptoTime.localInputToUtcIso(value);
 }
 
 function regressionBool(value) {
@@ -421,8 +419,7 @@ function regressionBool(value) {
 }
 
 function regressionUtcLocalValue(date) {
-    const pad = value => String(value).padStart(2, '0');
-    return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+    return window.CryptoTime.utcToLocalInput(date);
 }
 
 async function loadRegressionSymbols() {
@@ -510,7 +507,7 @@ function regressionPipelineNode(label, value, state, detail = '', time = '') {
 }
 
 function nearestOpportunityForCandidate(candidate, opportunities) {
-    const candidateTime = new Date(candidate.generated_at).getTime();
+    const candidateTime = window.CryptoTime.parseUtc(candidate.generated_at)?.getTime();
 
     // Never attach an execution result that happened before the BUY candidate existed.
     // The previous absolute-distance lookup could associate a fresh BUY with an older
@@ -518,7 +515,7 @@ function nearestOpportunityForCandidate(candidate, opportunities) {
     const afterCandidate = opportunities
         .map(row => ({
             row,
-            delta: new Date(row.generated_at).getTime() - candidateTime
+            delta: window.CryptoTime.parseUtc(row.generated_at)?.getTime() - candidateTime
         }))
         .filter(item => Number.isFinite(item.delta)
             && item.delta >= 0
@@ -529,17 +526,17 @@ function nearestOpportunityForCandidate(candidate, opportunities) {
 }
 
 function matchingTradeForCandidate(candidate, trades) {
-    const candidateTime = new Date(candidate.generated_at).getTime();
+    const candidateTime = window.CryptoTime.parseUtc(candidate.generated_at)?.getTime();
     return trades
-        .map(trade => ({trade, delta: new Date(trade.entry_time).getTime() - candidateTime}))
+        .map(trade => ({trade, delta: window.CryptoTime.parseUtc(trade.entry_time)?.getTime() - candidateTime}))
         .filter(item => Number.isFinite(item.delta) && item.delta >= 0 && item.delta <= 15 * 60 * 1000)
         .sort((a, b) => a.delta - b.delta)[0]?.trade || null;
 }
 
 function regressionTradeChartUrl(symbol, trade, index = 0) {
     if (!trade?.entry_time || !trade?.entry_price) return '#';
-    const entry = new Date(trade.entry_time);
-    const exit = trade.exit_time ? new Date(trade.exit_time) : new Date(entry.getTime() + 60 * 60 * 1000);
+    const entry = window.CryptoTime.parseUtc(trade.entry_time);
+    const exit = trade.exit_time ? window.CryptoTime.parseUtc(trade.exit_time) : new Date(entry.getTime() + 60 * 60 * 1000);
     const params = new URLSearchParams({
         symbol: String(symbol || 'BNBUSDT').toUpperCase(),
         interval: '5m',
@@ -553,7 +550,7 @@ function regressionTradeChartUrl(symbol, trade, index = 0) {
         debugEntryPrice: String(trade.entry_price)
     });
     if (trade.exit_time && trade.exit_price) {
-        params.set('debugExitTime', new Date(trade.exit_time).toISOString());
+        params.set('debugExitTime', window.CryptoTime.parseUtc(trade.exit_time).toISOString());
         params.set('debugExitPrice', String(trade.exit_price));
     }
     return `/dashboard?${params.toString()}#market`;
@@ -562,7 +559,7 @@ function regressionTradeChartUrl(symbol, trade, index = 0) {
 
 function regressionSignalChartUrl(symbol, signal, index = 0) {
     if (!signal?.generated_at || signal?.latest_price == null) return '#';
-    const at = new Date(signal.generated_at);
+    const at = window.CryptoTime.parseUtc(signal.generated_at);
     if (Number.isNaN(at.getTime())) return '#';
     const start = new Date(at.getTime() - 20 * 60 * 1000);
     const end = new Date(at.getTime() + 40 * 60 * 1000);
@@ -582,36 +579,36 @@ function regressionSignalChartUrl(symbol, signal, index = 0) {
 }
 
 function regressionRecentBearishAnchor(signals, atValue) {
-    const at = new Date(atValue).getTime();
+    const at = window.CryptoTime.parseUtc(atValue)?.getTime();
     if (!Number.isFinite(at)) return null;
     const cutoff = at - 5 * 60 * 1000;
     return [...(signals || [])]
         .filter(signal => String(signal.interval_code || '').toLowerCase() === '1m')
         .filter(signal => {
-            const t = new Date(signal.generated_at).getTime();
+            const t = window.CryptoTime.parseUtc(signal.generated_at)?.getTime();
             if (!Number.isFinite(t) || t >= at || t < cutoff) return false;
             const d = String(signal.final_decision || signal.original_decision || '');
             return ['SELL','STRONG_SELL'].includes(d) && Number(signal.total_score ?? 999) <= 40;
         })
-        .sort((a, b) => new Date(b.generated_at).getTime() - new Date(a.generated_at).getTime())[0] || null;
+        .sort((a, b) => window.CryptoTime.parseUtc(b.generated_at).getTime() - window.CryptoTime.parseUtc(a.generated_at).getTime())[0] || null;
 }
 
 function regressionPreviousSignal(signals, interval, atValue) {
-    const at = new Date(atValue).getTime();
+    const at = window.CryptoTime.parseUtc(atValue)?.getTime();
     if (!Number.isFinite(at)) return null;
     return [...(signals || [])]
         .filter(signal => String(signal.interval_code || '').toLowerCase() === String(interval).toLowerCase())
-        .filter(signal => { const t = new Date(signal.generated_at).getTime(); return Number.isFinite(t) && t < at; })
-        .sort((a, b) => new Date(b.generated_at).getTime() - new Date(a.generated_at).getTime())[0] || null;
+        .filter(signal => { const t = window.CryptoTime.parseUtc(signal.generated_at)?.getTime(); return Number.isFinite(t) && t < at; })
+        .sort((a, b) => window.CryptoTime.parseUtc(b.generated_at).getTime() - window.CryptoTime.parseUtc(a.generated_at).getTime())[0] || null;
 }
 
 function regressionNearestSignal(signals, interval, atValue) {
-    const at = new Date(atValue).getTime();
+    const at = window.CryptoTime.parseUtc(atValue)?.getTime();
     if (!Number.isFinite(at)) return null;
     return [...(signals || [])]
         .filter(signal => String(signal.interval_code || '').toLowerCase() === String(interval).toLowerCase())
-        .filter(signal => { const t = new Date(signal.generated_at).getTime(); return Number.isFinite(t) && t <= at; })
-        .sort((a, b) => new Date(b.generated_at).getTime() - new Date(a.generated_at).getTime())[0] || null;
+        .filter(signal => { const t = window.CryptoTime.parseUtc(signal.generated_at)?.getTime(); return Number.isFinite(t) && t <= at; })
+        .sort((a, b) => window.CryptoTime.parseUtc(b.generated_at).getTime() - window.CryptoTime.parseUtc(a.generated_at).getTime())[0] || null;
 }
 
 function regressionScoreDetail(signal) {
@@ -667,14 +664,14 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
     const transitionTimes = new Set(opportunities
         .filter(row => ['HTF_TRANSITION_REDUCED_ENTRY', 'REDUCED_POSITION_ALLOWED', 'BREAKOUT_CONTINUATION_ENTRY']
             .includes(String(row.decision_code || '')))
-        .map(row => new Date(row.generated_at).getTime()));
+        .map(row => window.CryptoTime.parseUtc(row.generated_at)?.getTime()));
     const candidates = signals
         .filter(signal => {
             if (!regressionBool(signal.replay_generated)) return false;
             const finalDecision = String(signal.final_decision || '');
             const originalDecision = String(signal.original_decision || '');
             if (['BUY', 'STRONG_BUY'].includes(finalDecision) || ['BUY', 'STRONG_BUY'].includes(originalDecision)) return true;
-            const generated = new Date(signal.generated_at).getTime();
+            const generated = window.CryptoTime.parseUtc(signal.generated_at)?.getTime();
             return finalDecision === 'WATCH' && [...transitionTimes].some(t => Math.abs(t - generated) <= 1000);
         })
         .slice(0, 20);
@@ -732,10 +729,10 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
             ? 'pass' : ['BUILDING', 'RECOVERING'].includes(stage) ? 'wait' : 'fail';
         let walletState = trade ? 'pass' : 'fail';
         let exitState = trade?.exit_time ? 'pass' : trade ? 'wait' : 'neutral';
-        const entryMs = trade ? new Date(trade.entry_time).getTime() : NaN;
-        const exitMs = trade?.exit_time ? new Date(trade.exit_time).getTime() : Number.POSITIVE_INFINITY;
+        const entryMs = trade ? window.CryptoTime.parseUtc(trade.entry_time)?.getTime() : NaN;
+        const exitMs = trade?.exit_time ? window.CryptoTime.parseUtc(trade.exit_time)?.getTime() : Number.POSITIVE_INFINITY;
         const managementEvents = trade ? management.filter(event => {
-            const t = new Date(event.generated_at).getTime();
+            const t = window.CryptoTime.parseUtc(event.generated_at)?.getTime();
             return Number.isFinite(t) && t >= entryMs && t <= exitMs;
         }) : [];
         const extensions = managementEvents.filter(event => String(event.action_code) === 'TAKE_PROFIT_EXTENDED');
@@ -987,3 +984,6 @@ if (regressionRefresh) regressionRefresh.addEventListener('click', async () => {
         pollRegressionRun(active.id);
     }
 })().catch(error => showAdminMessage(error.message, true));
+
+const regressionZoneEl = document.getElementById('regression-browser-zone');
+if (regressionZoneEl) regressionZoneEl.textContent = `Displayed in ${window.CryptoTime.browserZone()} (${window.CryptoTime.browserOffsetLabel()}). Inputs are converted to UTC for the replay engine.`;
