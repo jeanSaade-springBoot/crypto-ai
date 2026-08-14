@@ -20,4 +20,9 @@ public class DashboardController {
     public String scoreDiagnostics() {
         return "forward:/score-diagnostics.html";
     }
+
+    @GetMapping("/crypto-fundamentals")
+    public String cryptoFundamentals() {
+        return "forward:/crypto-fundamentals.html";
+    }
 }
