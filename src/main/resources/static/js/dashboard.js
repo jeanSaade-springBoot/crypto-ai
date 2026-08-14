@@ -730,6 +730,19 @@ function candleTooltipTime(value) {
     });
 }
 
+function updateFixedCandleSummary(candle) {
+    if (!candle) return;
+    const values = Array.isArray(candle.y) ? candle.y : [candle.open, candle.high, candle.low, candle.close];
+    const [open, high, low, close] = values.map(Number);
+    const set = (id, value) => { const node = el(id); if (node) node.textContent = value; };
+    set('candle-fixed-open-time', candleTooltipTime(candle.openTime ?? candle.x));
+    set('candle-fixed-close-time', candleTooltipTime(candle.closeTime));
+    set('candle-fixed-open', candleTooltipPrice(open));
+    set('candle-fixed-high', candleTooltipPrice(high));
+    set('candle-fixed-low', candleTooltipPrice(low));
+    set('candle-fixed-close', candleTooltipPrice(close));
+}
+
 function candleTooltipPrice(value) {
     return Number.isFinite(Number(value))
         ? Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 8 })
@@ -809,15 +822,26 @@ function renderCharts(candles, executions = []) {
             style: { background: '#132430', color: '#dce9f2', fontSize: '11px', fontWeight: 700 }
         }
     }] : [];
+    if (candleSeries.length) updateFixedCandleSummary(candleSeries.at(-1));
+    const candleEvents = {
+        mouseMove: (_event, _chart, config) => {
+            const index = config?.dataPointIndex;
+            if (Number.isInteger(index) && index >= 0 && candleSeries[index]) updateFixedCandleSummary(candleSeries[index]);
+        },
+        dataPointSelection: (_event, _chart, config) => {
+            const index = config?.dataPointIndex;
+            if (Number.isInteger(index) && index >= 0 && candleSeries[index]) updateFixedCandleSummary(candleSeries[index]);
+        }
+    };
     const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime' }, noData: { text: 'Waiting for closed candles' } };
     if (!candleChart) {
-        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390 }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations }, tooltip: { custom: ({ seriesIndex, dataPointIndex, w }) => candleTooltipHtml(w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex]) }, yaxis: { tooltip: { enabled: true }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
+        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390, events: candleEvents }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations }, tooltip: { custom: ({ seriesIndex, dataPointIndex, w }) => candleTooltipHtml(w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex]) }, yaxis: { tooltip: { enabled: true }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
         candleChart.render().then(bindExecutionMarkerClicks);
         volumeChart = new ApexCharts(el('volume-chart'), { ...common, chart: { ...common.chart, type: 'bar', height: 150 }, series: [{ name: 'Volume', data: volumeSeries }], dataLabels: { enabled: false }, yaxis: { labels: { formatter: v => Number(v).toLocaleString(undefined, { notation: 'compact' }) } } });
         volumeChart.render();
     } else {
         candleChart.updateSeries([{ name: 'Price', data: candleSeries }], false);
-        candleChart.updateOptions({ annotations: { points: annotations, xaxis: debugZoneAnnotations } }, false, true, false).then(bindExecutionMarkerClicks);
+        candleChart.updateOptions({ chart: { events: candleEvents }, annotations: { points: annotations, xaxis: debugZoneAnnotations } }, false, true, false).then(bindExecutionMarkerClicks);
         volumeChart.updateSeries([{ name: 'Volume', data: volumeSeries }], false);
     }
 }

@@ -511,6 +511,20 @@ function regressionSignalChartUrl(symbol, signal, index = 0) {
     return `/dashboard?${params.toString()}#market`;
 }
 
+function regressionNearestSignal(signals, interval, atValue) {
+    const at = new Date(atValue).getTime();
+    if (!Number.isFinite(at)) return null;
+    return [...(signals || [])]
+        .filter(signal => String(signal.interval_code || '').toLowerCase() === String(interval).toLowerCase())
+        .filter(signal => { const t = new Date(signal.generated_at).getTime(); return Number.isFinite(t) && t <= at; })
+        .sort((a, b) => new Date(b.generated_at).getTime() - new Date(a.generated_at).getTime())[0] || null;
+}
+
+function regressionScoreDetail(signal) {
+    if (!signal) return 'No score snapshot';
+    return `Total ${signal.total_score ?? '—'} · C${signal.confidence_score ?? '—'} · T${signal.trend_score ?? '—'} · M${signal.momentum_score ?? '—'} · V${signal.volume_score ?? '—'}`;
+}
+
 function renderRegressionPipeline(signals, opportunities, trades, management = [], runSymbol = '') {
     const panel = document.getElementById('regression-pipeline');
     const body = document.getElementById('regression-pipeline-body');
@@ -524,7 +538,8 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
         .filter(signal => {
             if (!regressionBool(signal.replay_generated)) return false;
             const finalDecision = String(signal.final_decision || '');
-            if (['BUY', 'STRONG_BUY'].includes(finalDecision)) return true;
+            const originalDecision = String(signal.original_decision || '');
+            if (['BUY', 'STRONG_BUY'].includes(finalDecision) || ['BUY', 'STRONG_BUY'].includes(originalDecision)) return true;
             const generated = new Date(signal.generated_at).getTime();
             return finalDecision === 'WATCH' && [...transitionTimes].some(t => Math.abs(t - generated) <= 1000);
         })
@@ -543,9 +558,13 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
     body.innerHTML = candidates.map((candidate, index) => {
         const opportunity = nearestOpportunityForCandidate(candidate, opportunities);
         const trade = matchingTradeForCandidate(candidate, trades);
-        const oneMinute = opportunity?.current_final_decision || 'NO 1m CONTEXT';
-        const fiveMinute = opportunity?.five_minute_decision || (candidate.interval_code === '5m' ? candidate.final_decision : 'MISSING');
-        const oneHour = opportunity?.one_hour_decision || (candidate.interval_code === '1h' ? candidate.final_decision : 'MISSING');
+        const contextAt = opportunity?.generated_at || candidate.generated_at;
+        const oneMinuteSignal = regressionNearestSignal(signals, '1m', contextAt);
+        const fiveMinuteSignal = regressionNearestSignal(signals, '5m', contextAt);
+        const oneHourSignal = regressionNearestSignal(signals, '1h', contextAt);
+        const oneMinute = opportunity?.current_final_decision || oneMinuteSignal?.final_decision || 'NO 1m CONTEXT';
+        const fiveMinute = opportunity?.five_minute_decision || fiveMinuteSignal?.final_decision || (candidate.interval_code === '5m' ? candidate.final_decision : 'MISSING');
+        const oneHour = opportunity?.one_hour_decision || oneHourSignal?.final_decision || (candidate.interval_code === '1h' ? candidate.final_decision : 'MISSING');
         const evidence = Number(opportunity?.evidence_score ?? 0);
         const health = Number(opportunity?.opportunity_health ?? 0);
         const stage = String(opportunity?.replay_stage || 'NOT_REACHED').toUpperCase();
@@ -561,7 +580,11 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
                 BEARISH_REVERSAL: 'Bearish reversal',
                 OPPORTUNITY_HEALTH_EXHAUSTED: 'Opportunity health exhausted',
                 HTF_TRANSITION_REDUCED_ENTRY: '1h BUY + 5m/1m transition · reduced entry',
-                TRANSITION_CHASE_BLOCKED: 'Transition valid · price quality too late'
+                TRANSITION_CHASE_BLOCKED: 'Transition valid · price quality too late',
+                BTC_CONTEXT_BLOCKED: 'BTC context hard veto',
+                BTC_CONFLICT_REDUCED_PROBE: 'Exceptional strength · BTC conflict reduced probe',
+                EXCEPTIONAL_PROBE_PRICE_QUALITY_BLOCKED: 'Exceptional probe · entry price quality blocked',
+                WATCH_ONLY_NEEDS_FRESH_CONFIRMATION: 'WATCH-only evidence needs fresh HTF confirmation'
             };
             return labels[String(code)] || String(code).replaceAll('_', ' ');
         })();
@@ -584,7 +607,7 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
 
         const stopReason = trade
             ? (trade.exit_time ? `Trade completed: ${trade.exit_reason || 'SELL'}` : 'BUY reached shadow wallet; position stayed open')
-            : (opportunity?.decision_explanation || `Execution stopped at ${code}`);
+            : `${opportunity?.decision_explanation || `Execution stopped at ${code}`} | Technical snapshot: ${regressionScoreDetail(candidate)}`;
 
         return `
             <article class="pipeline-candidate">
@@ -599,17 +622,19 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
                     </div>
                 </div>
                 <div class="pipeline-flow">
-                    ${regressionPipelineNode('Fresh analysis', candidate.final_decision || '—', regressionPipelineState(candidate.final_decision), `Score ${candidate.total_score ?? '—'} · C${candidate.confidence_score ?? '—'}`, formatMoveTime(candidate.generated_at))}
+                    ${regressionPipelineNode('Fresh analysis', `${candidate.original_decision || '—'} → ${candidate.final_decision || '—'}`, regressionPipelineState(candidate.final_decision), regressionScoreDetail(candidate), formatMoveTime(candidate.generated_at))}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('1m trigger', oneMinute, regressionPipelineState(oneMinute), opportunity ? code : 'No nearby 1m evaluation', opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
+                    ${regressionPipelineNode('1m trigger', oneMinute, regressionPipelineState(oneMinute), regressionScoreDetail(oneMinuteSignal || candidate), oneMinuteSignal ? formatMoveTime(oneMinuteSignal.generated_at) : formatMoveTime(candidate.generated_at))}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('5m context', fiveMinute, regressionPipelineState(fiveMinute), '', opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
+                    ${regressionPipelineNode('5m context', fiveMinute, regressionPipelineState(fiveMinute), regressionScoreDetail(fiveMinuteSignal), fiveMinuteSignal ? formatMoveTime(fiveMinuteSignal.generated_at) : '—')}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('1h context', oneHour, regressionPipelineState(oneHour), '', opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
+                    ${regressionPipelineNode('1h context', oneHour, regressionPipelineState(oneHour), regressionScoreDetail(oneHourSignal), oneHourSignal ? formatMoveTime(oneHourSignal.generated_at) : '—')}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('Evidence', `${evidence}/7`, evidenceState, `${opportunity?.buy_count ?? 0} BUY · ${opportunity?.watch_count ?? 0} WATCH`, opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
+                    ${regressionPipelineNode('Evidence', `${evidence}/7`, evidenceState, `${opportunity?.buy_count ?? 0} BUY · ${opportunity?.watch_count ?? 0} WATCH · ${opportunity?.bearish_count ?? 0} bearish`, opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
                     <span class="pipeline-arrow">→</span>
-                    ${regressionPipelineNode('Health', `${health}/100`, healthState, 'Minimum 40', opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
+                    ${regressionPipelineNode('Health', `${health}/100`, healthState, `Evidence ${evidence}/7 · minimum health 40`, opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
+                    <span class="pipeline-arrow">→</span>
+                    ${regressionPipelineNode('BUY blocker', opportunity && !['CONFIRMED', 'EXECUTED', 'MANAGED'].includes(stage) ? String(code).replaceAll('_',' ') : 'CLEAR', opportunity && !['CONFIRMED', 'EXECUTED', 'MANAGED'].includes(stage) ? 'fail' : 'pass', opportunity?.decision_explanation || 'No blocking gate at this evaluation.', opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
                     <span class="pipeline-arrow">→</span>
                     ${regressionPipelineNode('Execution', stage, executionState, executionDetail, opportunity ? formatMoveTime(opportunity.generated_at) : '—')}
                     <span class="pipeline-arrow">→</span>

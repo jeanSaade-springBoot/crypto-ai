@@ -78,6 +78,17 @@ public class ExecutionIntelligenceService {
     private static final int TRANSITION_MIN_1H_SCORE = 75;
     private static final int TRANSITION_POSITION_PERCENT = 25;
 
+    // Exceptional independent-strength probe. This is a global, symbol-agnostic
+    // exception for rare 1m reversal impulses that are technically exceptional but
+    // are vetoed only by BTC context. It never changes the technical score and it
+    // never bypasses bearish 5m/1h context or the other hard risk gates.
+    private static final int EXCEPTIONAL_PROBE_MIN_SCORE = 88;
+    private static final int EXCEPTIONAL_PROBE_MIN_TREND = 17;
+    private static final int EXCEPTIONAL_PROBE_MIN_MOMENTUM = 13;
+    private static final int EXCEPTIONAL_PROBE_MIN_VOLUME = 15;
+    private static final int EXCEPTIONAL_PROBE_BTC_SELL_PERCENT = 15;
+    private static final int EXCEPTIONAL_PROBE_BTC_STRONG_SELL_PERCENT = 10;
+
     // Progressive Position Building. These are portfolio-allocation stages, not
     // confidence shortcuts: a scout requires excellent price quality, confirmation
     // requires stronger evidence, and the final add requires trend continuation.
@@ -156,12 +167,24 @@ public class ExecutionIntelligenceService {
                     "Bearish 1m evidence weakened the opportunity but did not invalidate supportive 5m/1h context.", evidence);
         }
 
-        // Non-ATR safety vetoes remain absolute. ATR is intentionally handled later so an
-        // ATR-deferred BUY can be reconsidered by the continuation engine when fresh
-        // multi-timeframe evidence confirms the move and the CURRENT risk/reward remains sound.
+        // Non-ATR safety vetoes remain absolute except for one deliberately tiny,
+        // fully-auditable BTC-only exception. An exceptional independent-strength
+        // reversal may take a 10-15% probe when BTC is bearish, but only if the
+        // asset's own 5m/1h context is no longer bearish and every other hard gate
+        // plus ATR immediate-entry permission still passes.
         HardRiskBlock nonAtrHardBlock = nonAtrHardRiskBlock(signal);
         if (nonAtrHardBlock.blocked()) {
             Evidence evidence = evidence(signal);
+            ExecutionDecision exceptionalProbe = exceptionalStrengthProbeDecision(signal, evidence, nonAtrHardBlock);
+            if (exceptionalProbe != null) {
+                EntryQuality probeQuality = assessEntryQuality(signal);
+                exceptionalProbe = applyExceptionalProbeEntryQualityGuard(exceptionalProbe, probeQuality);
+                saveOpportunity(signal, evidence,
+                        exceptionalProbe.allowed() ? "CONFIRMED" : exceptionalProbe.state(),
+                        exceptionalProbe.source(), exceptionalProbe.positionPercent(),
+                        exceptionalProbe.code(), exceptionalProbe.explanation());
+                return exceptionalProbe;
+            }
             saveOpportunity(signal, evidence, "BLOCKED", "HARD_RISK", 0,
                     nonAtrHardBlock.code(), nonAtrHardBlock.explanation());
             return ExecutionDecision.reject(nonAtrHardBlock.code(), nonAtrHardBlock.explanation(), evidence);
@@ -541,6 +564,69 @@ public class ExecutionIntelligenceService {
 
     private String format(double value) {
         return String.format(java.util.Locale.ROOT, "%.2f", value);
+    }
+
+
+    private ExecutionDecision exceptionalStrengthProbeDecision(
+            TradeSignal current, Evidence e, HardRiskBlock block) {
+        if (current == null || block == null || !block.blocked()) return null;
+        if (!"BTC_CONTEXT_BLOCKED".equals(block.code())) return null;
+
+        // BTC is allowed to reduce exposure here, not to manufacture extra score.
+        // Every other risk authority remains mandatory.
+        if (!current.isStrategyEntryAllowed()
+                || !current.isDerivativesEntryAllowed()
+                || !current.isLiquidityEntryAllowed()
+                || !current.isAtrImmediateEntryAllowed()) return null;
+        if (current.getLatestPrice() == null || current.getStopLoss() == null || current.getTakeProfit() == null
+                || current.getStopLoss().signum() <= 0 || current.getTakeProfit().signum() <= 0) return null;
+
+        if (!isBullish(current.getOriginalDecision())) return null;
+        if (current.getDecision() != SignalDecision.WATCH && !isBullish(current.getDecision())) return null;
+        if (current.getTotalScore() < EXCEPTIONAL_PROBE_MIN_SCORE
+                || current.getTrendScore() < EXCEPTIONAL_PROBE_MIN_TREND
+                || current.getMomentumScore() < EXCEPTIONAL_PROBE_MIN_MOMENTUM
+                || current.getVolumeScore() < EXCEPTIONAL_PROBE_MIN_VOLUME) return null;
+
+        TradeSignal five = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
+        TradeSignal oneHour = latestAtOrBefore(current, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
+        if (five == null || oneHour == null) return null;
+        if (isBearish(five.getDecision()) || isBearish(five.getOriginalDecision())
+                || isBearish(oneHour.getDecision()) || isBearish(oneHour.getOriginalDecision())) return null;
+
+        SignalDecision btcDecision = current.getBtcContextDecision();
+        int percent = btcDecision == SignalDecision.STRONG_SELL
+                ? EXCEPTIONAL_PROBE_BTC_STRONG_SELL_PERCENT
+                : EXCEPTIONAL_PROBE_BTC_SELL_PERCENT;
+
+        return ExecutionDecision.allow(
+                "EXCEPTIONAL_STRENGTH_PROBE",
+                "BTC_CONFLICT_REDUCED_PROBE",
+                percent,
+                "Exceptional independent strength qualified for a reduced BTC-conflict probe: score="
+                        + current.getTotalScore() + ", trend=" + current.getTrendScore()
+                        + ", momentum=" + current.getMomentumScore() + ", volume=" + current.getVolumeScore()
+                        + ", 1m=" + current.getDecision() + ", 5m=" + five.getDecision()
+                        + ", 1h=" + oneHour.getDecision() + ", BTC=" + (btcDecision == null ? "BEARISH" : btcDecision)
+                        + ". BTC weakness reduces exposure to " + percent
+                        + "% instead of increasing the technical score or bypassing asset-timeframe confirmation.",
+                e
+        );
+    }
+
+    private ExecutionDecision applyExceptionalProbeEntryQualityGuard(ExecutionDecision decision, EntryQuality q) {
+        if (decision == null || !decision.allowed()) return decision;
+        // A probe is specifically for early reversal participation, but it must still
+        // have a valid reward/risk plan and may not be an obvious late-stage chase.
+        if (q.rewardRisk() <= 0d || q.score() < 40) {
+            return ExecutionDecision.building(
+                    "EXCEPTIONAL_PROBE_PRICE_QUALITY_BLOCKED",
+                    "Exceptional technical strength is present, but probe entry quality is only " + q.score()
+                            + "/100 (" + q.classification() + "), expansion=" + format(q.expansionPercent())
+                            + "%, ATR extension=" + format(q.atrExtension()) + ", R/R=" + format(q.rewardRisk()) + ".",
+                    decision.evidence());
+        }
+        return decision;
     }
 
     private ExecutionDecision higherTimeframeTransitionDecision(TradeSignal current, Evidence e) {

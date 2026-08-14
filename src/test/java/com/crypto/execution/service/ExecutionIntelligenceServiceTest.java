@@ -452,6 +452,62 @@ class ExecutionIntelligenceServiceTest {
     }
 
     @Test
+    void exceptionalStrengthCanUseTinyProbeWhenOnlyBtcVetoRemains() {
+        TradeSignal current = signal(210L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.STRONG_BUY,
+                now, 90, 49);
+        current.setTrendScore(18);
+        current.setMomentumScore(15);
+        current.setVolumeScore(20);
+        current.setBtcContextEntryAllowed(false);
+        current.setBtcContextDecision(SignalDecision.STRONG_SELL);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("ETHUSDT", "1m"))
+                .thenReturn(List.of(current));
+
+        TradeSignal five = signal(211L, "ETHUSDT", "5m", SignalDecision.NEUTRAL, SignalDecision.NEUTRAL,
+                now.minusSeconds(60), 55, 67);
+        TradeSignal one = signal(212L, "ETHUSDT", "1h", SignalDecision.NEUTRAL, SignalDecision.NEUTRAL,
+                now.minusSeconds(1200), 59, 63);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "ETHUSDT", "5m", now)).thenReturn(Optional.of(five));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "ETHUSDT", "1h", now)).thenReturn(Optional.of(one));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.source()).isEqualTo("EXCEPTIONAL_STRENGTH_PROBE");
+        assertThat(decision.code()).isEqualTo("BTC_CONFLICT_REDUCED_PROBE");
+        assertThat(decision.positionPercent()).isEqualTo(10);
+    }
+
+    @Test
+    void exceptionalStrengthDoesNotBypassBearishFiveMinuteContext() {
+        TradeSignal current = signal(215L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.STRONG_BUY,
+                now, 90, 49);
+        current.setTrendScore(18);
+        current.setMomentumScore(15);
+        current.setVolumeScore(20);
+        current.setBtcContextEntryAllowed(false);
+        current.setBtcContextDecision(SignalDecision.STRONG_SELL);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("ETHUSDT", "1m"))
+                .thenReturn(List.of(current));
+
+        TradeSignal five = signal(216L, "ETHUSDT", "5m", SignalDecision.SELL, SignalDecision.SELL,
+                now.minusSeconds(60), 43, 67);
+        TradeSignal one = signal(217L, "ETHUSDT", "1h", SignalDecision.NEUTRAL, SignalDecision.NEUTRAL,
+                now.minusSeconds(1200), 59, 63);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "ETHUSDT", "5m", now)).thenReturn(Optional.of(five));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "ETHUSDT", "1h", now)).thenReturn(Optional.of(one));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.code()).isEqualTo("BTC_CONTEXT_BLOCKED");
+    }
+
+    @Test
     void watchOnlyAccumulationWaitsWhenFiveMinuteIsNeutralAndOneHourOnlyWatch() {
         TradeSignal current = signal(220L, "GLOBALUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
                 now, 66, 67);

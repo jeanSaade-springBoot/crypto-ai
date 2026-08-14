@@ -1,3 +1,33 @@
-Changed: ExecutionIntelligenceService accumulated WATCH-only guard
-Changed: Administration regression tester shows only generated BUY/STRONG_BUY signals
-Added: regression tests for watch-only neutral context and preservation of supported/real-BUY paths
+2026-08-14 update
+
+1. Exceptional independent-strength probe (global rule)
+- Does not add artificial points to the technical score.
+- Applies only when the normal hard blocker is BTC_CONTEXT_BLOCKED.
+- Requires original BUY/STRONG_BUY strength with total score >= 88, trend >= 17, momentum >= 13, volume >= 15.
+- Requires current final decision WATCH/BUY and the asset's own 5m and 1h context to be non-bearish.
+- Keeps strategy, derivatives, liquidity, ATR immediate-entry, risk plan and entry-quality guards mandatory.
+- BTC SELL reduces probe to 15%; BTC STRONG_SELL reduces probe to 10%.
+- New execution source/code: EXCEPTIONAL_STRENGTH_PROBE / BTC_CONFLICT_REDUCED_PROBE.
+- A bearish asset 5m/1h still blocks the probe, so the 22:54 ETH case remains blocked while the 5m is SELL; a later exceptional signal may probe once 5m improves to NEUTRAL/WATCH and other gates pass.
+
+2. Regression tester pipeline diagnostics
+- Includes original BUY/STRONG_BUY candidates even when FinalDecisionService downgraded them to WATCH.
+- Fresh-analysis node shows original -> final decision plus exact Total / Confidence / Trend / Momentum / Volume scores.
+- 1m, 5m and 1h nodes show the latest score snapshot available at that evaluation time.
+- Added an explicit BUY blocker node showing the exact decision_code and decision_explanation.
+- Evidence node now also shows bearish evidence count.
+- Diagnosis includes the technical score snapshot.
+- Added labels for BTC context veto, exceptional probe, exceptional-probe price-quality block and WATCH-only fresh-confirmation block.
+
+3. Dashboard Binance-style candle header
+- Added a fixed OHLC strip above the candlestick chart: Open time, Close time, O, H, L, C.
+- Hovering a candle updates the fixed strip.
+- Clicking a candle also updates the fixed strip.
+- The latest candle is shown by default after refresh.
+- Existing compact B/S execution markers remain unchanged.
+
+Validation
+- dashboard.js: node --check passed.
+- administration.js: node --check passed.
+- Added JUnit regression tests for BTC-conflict exceptional probe and the bearish-5m veto.
+- Maven is not installed in this environment, so Java compilation/tests must run in Jenkins/local Maven.
