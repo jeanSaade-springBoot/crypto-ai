@@ -107,6 +107,9 @@ public class ExecutionIntelligenceService {
     private static final double RETRACEMENT_TARGET_TOLERANCE_ATR = 0.35d;
     private static final double RETRACEMENT_MAX_OVERSHOOT_ATR = 0.75d;
     private static final int RETRACEMENT_POSITION_PERCENT = 20;
+    private static final int RETRACEMENT_MIN_CURRENT_HEALTH = 45;
+    private static final int RETRACEMENT_MIN_CURRENT_ENTRY_QUALITY = 50;
+    private static final double RETRACEMENT_MIN_CURRENT_RR = 1.15d;
 
     // Progressive Position Building. These are portfolio-allocation stages, not
     // confidence shortcuts: a scout requires excellent price quality, confirmation
@@ -795,24 +798,40 @@ public class ExecutionIntelligenceService {
         BigDecimal price = current.getLatestPrice();
         if (price.compareTo(upper) > 0 || price.compareTo(lower) < 0) return null;
 
+        // The retracement route may preserve an old high-quality thesis, but it may not
+        // resurrect an opportunity whose current health/risk economics have already decayed.
+        if (e.opportunityHealth() < RETRACEMENT_MIN_CURRENT_HEALTH) return null;
+        if (current.getStopLoss() == null || current.getTakeProfit() == null
+                || current.getStopLoss().signum() <= 0 || current.getTakeProfit().signum() <= 0) return null;
+        EntryQuality currentQuality = assessEntryQuality(current);
+        if (currentQuality.score() < RETRACEMENT_MIN_CURRENT_ENTRY_QUALITY
+                || currentQuality.rewardRisk() < RETRACEMENT_MIN_CURRENT_RR) return null;
+
         TradeSignal five = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
         if (five == null || isBearish(five.getDecision()) || isBearish(five.getOriginalDecision())) return null;
         if (five.getMomentumScore() < RETRACEMENT_MIN_5M_MOMENTUM
                 || five.getMacdScore() < RETRACEMENT_MIN_5M_MACD_SCORE
                 || five.getRsiScore() < RETRACEMENT_MIN_5M_RSI_SCORE) return null;
 
-        // A pre-existing bearish 1h regime may coexist with an early reversal. It is not
-        // ignored: if the latest 1h is bearish and is actively worsening versus the prior
-        // 1h snapshot, the retracement setup remains blocked. Stable/non-worsening old
-        // bearish context only caps this route to a small probe.
+        // Preserve the distinction between an OLD bearish 1h regime that the reversal is
+        // trying to turn, and a NEW bearish 1h signal that appeared after the origin BUY.
+        // A newly bearish 1h invalidates the pending setup. A pre-existing bearish 1h may
+        // remain only if its severity/score structure is not worsening, and it caps size.
+        TradeSignal originOneHour = latestAtOrBefore(origin, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
         TradeSignal oneHour = latestAtOrBefore(current, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
-        if (oneHour != null && (isBearish(oneHour.getDecision()) || isBearish(oneHour.getOriginalDecision()))
-                && isOneHourBearishWorsening(oneHour, current)) return null;
+        boolean currentOneHourBearish = oneHour != null
+                && (isBearish(oneHour.getDecision()) || isBearish(oneHour.getOriginalDecision()));
+        if (currentOneHourBearish) {
+            boolean bearishWasPresentAtOrigin = originOneHour != null
+                    && (isBearish(originOneHour.getDecision()) || isBearish(originOneHour.getOriginalDecision()));
+            boolean newBearishSnapshotAfterOrigin = oneHour.getGeneratedAt() != null
+                    && oneHour.getGeneratedAt().isAfter(origin.getGeneratedAt());
+            if (!bearishWasPresentAtOrigin || newBearishSnapshotAfterOrigin
+                    || isOneHourBearishWorsening(oneHour, current)) return null;
+        }
 
         if (!current.isStrategyEntryAllowed() || !current.isDerivativesEntryAllowed()
                 || !current.isLiquidityEntryAllowed() || !current.isBtcContextEntryAllowed()) return null;
-        if (current.getStopLoss() == null || current.getTakeProfit() == null
-                || current.getStopLoss().signum() <= 0 || current.getTakeProfit().signum() <= 0) return null;
 
         int percent = RETRACEMENT_POSITION_PERCENT;
         if (oneHour != null && (isBearish(oneHour.getDecision()) || isBearish(oneHour.getOriginalDecision()))) {
@@ -832,7 +851,9 @@ public class ExecutionIntelligenceService {
                         + ", momentum=" + five.getMomentumScore() + ", MACD score=" + five.getMacdScore()
                         + ", RSI score=" + five.getRsiScore() + "). "
                         + (oneHour == null ? "No fresh 1h replay context is available; no bullish 1h state was invented. "
-                        : "1h=" + oneHour.getDecision() + " and is not worsening versus its prior snapshot. ")
+                        : "1h=" + oneHour.getDecision() + " and is a pre-existing, non-worsening context. ")
+                        + "Current opportunity health=" + e.opportunityHealth()
+                        + ", Entry Quality=" + currentQuality.score() + "/100, current R/R=" + format(currentQuality.rewardRisk()) + ". "
                         + "Execute only a reduced " + percent + "% retracement position; normal BUY logic is unchanged.",
                 e);
     }
@@ -861,9 +882,20 @@ public class ExecutionIntelligenceService {
                 .toList();
         TradeSignal previous = hours.isEmpty() ? null : hours.get(0);
         if (previous == null) return false;
-        return latest.getTotalScore() < previous.getTotalScore()
+
+        SignalDecision latestEffective = strongerDecision(latest.getDecision(), latest.getOriginalDecision());
+        SignalDecision previousEffective = strongerDecision(previous.getDecision(), previous.getOriginalDecision());
+        boolean severityWorsened = bearishSeverity(latestEffective) > bearishSeverity(previousEffective);
+        return severityWorsened
+                || latest.getTotalScore() < previous.getTotalScore()
                 || latest.getTrendScore() < previous.getTrendScore()
                 || latest.getMomentumScore() < previous.getMomentumScore();
+    }
+
+    private int bearishSeverity(SignalDecision decision) {
+        if (decision == SignalDecision.STRONG_SELL) return 2;
+        if (decision == SignalDecision.SELL) return 1;
+        return 0;
     }
 
     private ExecutionDecision deferredContinuationDecision(TradeSignal current, Evidence e) {

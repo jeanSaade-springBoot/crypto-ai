@@ -7,8 +7,10 @@ import com.crypto.domain.TradeSignal;
 import com.crypto.domain.TradingStrategy;
 import com.crypto.dto.MultiTimeframeConfluenceResult;
 import com.crypto.repository.TradeSignalRepository;
+import com.crypto.execution.service.ExecutionReplayScope;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -25,6 +27,8 @@ public class MultiTimeframeConfluenceService {
     private static final int STRONG_BEARISH_TREND_MAXIMUM = 6;
 
     private final TradeSignalRepository tradeSignalRepository;
+    @Autowired(required = false)
+    private ExecutionReplayScope replayScope;
 
     /** Generic pre-strategy context evaluation. */
     public MultiTimeframeConfluenceResult evaluate(
@@ -52,10 +56,7 @@ public class MultiTimeframeConfluenceService {
         }
 
         List<TradeSignal> contexts = higherIntervals.stream()
-                .map(higher -> tradeSignalRepository
-                        .findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
-                                symbol, higher, snapshotTime)
-                        .orElse(null))
+                .map(higher -> contextAtOrBefore(symbol, higher, snapshotTime))
                 .filter(signal -> signal != null && isFresh(signal, snapshotTime))
                 .toList();
 
@@ -95,6 +96,16 @@ public class MultiTimeframeConfluenceService {
                 strongestContext.getGeneratedAt(),
                 List.copyOf(reasons)
         );
+    }
+
+    private TradeSignal contextAtOrBefore(String symbol, String interval, Instant snapshotTime) {
+        if (replayScope != null && replayScope.active()) {
+            return replayScope.latestAtOrBefore(symbol, interval, snapshotTime).orElse(null);
+        }
+        return tradeSignalRepository
+                .findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                        symbol, interval, snapshotTime)
+                .orElse(null);
     }
 
     private Evaluation trendFollowing(

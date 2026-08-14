@@ -1,10 +1,12 @@
 package com.crypto.regression.service;
 
+import com.crypto.config.BtcContextProperties;
 import com.crypto.domain.Candle;
 import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
 import com.crypto.dto.IndicatorSnapshot;
 import com.crypto.indicator.service.TechnicalIndicatorService;
+import com.crypto.execution.service.ExecutionReplayScope;
 import com.crypto.service.AnalysisService;
 import com.crypto.repository.CandleRepository;
 import com.crypto.repository.TradeSignalRepository;
@@ -18,6 +20,7 @@ import org.springframework.stereotype.Service;
 import java.sql.Timestamp;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -29,12 +32,21 @@ import java.util.Map;
 @Slf4j
 public class RegressionTestWorker {
 
+    /**
+     * Replay warm-up is context-only. It gives the production analysis/execution services
+     * the same already-closed 1m/5m/1h history they would have had at the requested start
+     * without allowing wallet executions before the requested test window.
+     */
+    private static final Duration REPLAY_CONTEXT_WARMUP = Duration.ofHours(3);
+
     private final JdbcTemplate jdbcTemplate;
     private final CandleRepository candleRepository;
     private final TradeSignalRepository signalRepository;
     private final TechnicalIndicatorService technicalIndicatorService;
     private final AnalysisService analysisService;
     private final ShadowProductionReplayService shadowReplayService;
+    private final ExecutionReplayScope replayScope;
+    private final BtcContextProperties btcContextProperties;
 
     @Async
     public void runAsync(long runId) {
@@ -47,9 +59,20 @@ public class RegressionTestWorker {
 
             updateRun(runId, "RUNNING", 2, "Loading historical candles and signals", null);
 
-            List<Candle> oneMinuteCandles = candles(symbol, "1m", start, end);
-            List<Candle> fiveMinuteCandles = candles(symbol, "5m", start, end);
-            List<Candle> oneHourCandles = candles(symbol, "1h", start, end);
+            Instant contextStart = start.minus(REPLAY_CONTEXT_WARMUP);
+            List<Candle> oneMinuteCandles = candles(symbol, "1m", contextStart, end);
+            List<Candle> fiveMinuteCandles = candles(symbol, "5m", contextStart, end);
+            List<Candle> oneHourCandles = candles(symbol, "1h", contextStart, end);
+            List<Candle> requestedOneMinuteCandles = candlesInExecutionWindow(oneMinuteCandles, "1m", start, end);
+            List<Candle> requestedFiveMinuteCandles = candlesInExecutionWindow(fiveMinuteCandles, "5m", start, end);
+            List<Candle> requestedOneHourCandles = candlesInExecutionWindow(oneHourCandles, "1h", start, end);
+
+            String btcSymbol = btcContextProperties.referenceSymbol();
+            boolean replayBtcContext = btcContextProperties.enabled() && !btcSymbol.equalsIgnoreCase(symbol);
+            List<Candle> btcOneMinuteCandles = replayBtcContext ? candles(btcSymbol, "1m", contextStart, end) : List.of();
+            List<Candle> btcFiveMinuteCandles = replayBtcContext ? candles(btcSymbol, "5m", contextStart, end) : List.of();
+            List<Candle> btcOneHourCandles = replayBtcContext ? candles(btcSymbol, "1h", contextStart, end) : List.of();
+
             List<TradeSignal> sourceSignals = signalRepository
                     .findBySymbolAndGeneratedAtBetweenOrderByGeneratedAtAsc(symbol, start, end);
 
@@ -57,13 +80,15 @@ public class RegressionTestWorker {
                     sourceSignals.size(), runId);
 
             updateRun(runId, "RUNNING", 10, "Replaying event-candle resolution (no production writes)", null);
-            int replay1m = verifyEventResolution(runId, symbol, "1m", oneMinuteCandles, 10, 28);
-            int replay5m = verifyEventResolution(runId, symbol, "5m", fiveMinuteCandles, 28, 38);
-            int replay1h = verifyEventResolution(runId, symbol, "1h", oneHourCandles, 38, 42);
+            int replay1m = verifyEventResolution(runId, symbol, "1m", requestedOneMinuteCandles, 10, 28);
+            int replay5m = verifyEventResolution(runId, symbol, "5m", requestedFiveMinuteCandles, 28, 38);
+            int replay1h = verifyEventResolution(runId, symbol, "1h", requestedOneHourCandles, 38, 42);
 
             updateRun(runId, "RUNNING", 43, "Generating fresh signals from historical candles", null);
             FreshReplayStats fresh = generateFreshSignals(
-                    runId, symbol, oneMinuteCandles, fiveMinuteCandles, oneHourCandles);
+                    runId, symbol, start, end,
+                    oneMinuteCandles, fiveMinuteCandles, oneHourCandles,
+                    btcSymbol, btcOneMinuteCandles, btcFiveMinuteCandles, btcOneHourCandles);
             jdbcTemplate.update("""
                     UPDATE analysis_test_run
                     SET generated_signal_count=?, generated_buy_count=?, generated_watch_count=?,
@@ -72,7 +97,8 @@ public class RegressionTestWorker {
                     """, fresh.total(), fresh.buys(), fresh.watches(), fresh.sells(), fresh.strongSells(), runId);
 
             updateRun(runId, "RUNNING", 74, "Running full shadow-production execution flow", null);
-            ShadowProductionReplayService.ReplayStats shadow = shadowReplayService.replay(runId, symbol, fresh.generatedSignals());
+            ShadowProductionReplayService.ReplayStats shadow = shadowReplayService.replay(
+                    runId, symbol, start, end, fresh.generatedSignals());
 
             updateRun(runId, "RUNNING", 82, "Comparing historical decision authority", null);
             int authorityCorrections = 0;
@@ -160,9 +186,12 @@ public class RegressionTestWorker {
             int historical1m = countSignals(sourceSignals, "1m");
             int historical5m = countSignals(sourceSignals, "5m");
             int historical1h = countSignals(sourceSignals, "1h");
-            boolean cadencePass = replay1m == oneMinuteCandles.size()
-                    && replay5m == fiveMinuteCandles.size()
-                    && replay1h == oneHourCandles.size();
+            int requestedCandles1m = requestedOneMinuteCandles.size();
+            int requestedCandles5m = requestedFiveMinuteCandles.size();
+            int requestedCandles1h = requestedOneHourCandles.size();
+            boolean cadencePass = replay1m == requestedCandles1m
+                    && replay5m == requestedCandles5m
+                    && replay1h == requestedCandles1h;
             boolean authorityPass = sourceSignals.stream().allMatch(s -> {
                 SignalDecision effective = s.getDecision() != null ? s.getDecision() : s.getOriginalDecision();
                 return s.getDecision() == null || effective == s.getDecision();
@@ -172,6 +201,7 @@ public class RegressionTestWorker {
 
             String notes = "Fresh replay signals are generated from historical candles through TechnicalIndicatorService "
                     + "and the production AnalysisService scoring/final-decision path without trade_signal persistence. "
+                    + "A three-hour context-only warm-up seeds 1m/5m/1h state before the requested execution window, and BTC reference signals are freshly replayed as-of each timestamp when BTC context is enabled. "
                     + "Historical signal counts are retained only as the pre-fix reference. "
                     + "Replayable event counts validate that each historical candle can now be resolved as-of its own close. "
                     + "The decision replay validates that originalDecision is audit-only and cannot override a non-null final decision. "
@@ -190,9 +220,9 @@ public class RegressionTestWorker {
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     runId,
-                    oneMinuteCandles.size(), historical1m, replay1m, fresh.oneMinuteSignals(), fresh.oneMinuteBuys(),
-                    fiveMinuteCandles.size(), historical5m, replay5m, fresh.fiveMinuteSignals(), fresh.fiveMinuteBuys(),
-                    oneHourCandles.size(), historical1h, replay1h, fresh.oneHourSignals(), fresh.oneHourBuys(),
+                    requestedCandles1m, historical1m, replay1m, fresh.oneMinuteSignals(), fresh.oneMinuteBuys(),
+                    requestedCandles5m, historical5m, replay5m, fresh.fiveMinuteSignals(), fresh.fiveMinuteBuys(),
+                    requestedCandles1h, historical1h, replay1h, fresh.oneHourSignals(), fresh.oneHourBuys(),
                     fresh.errors(), shadow.trades(), shadow.wins(), shadow.losses(), shadow.realizedPnl(), shadow.finalWallet(),
                     authorityCorrections, oldHardReversals, correctedHardReversals,
                     cadencePass, authorityPass, passed, notes
@@ -250,70 +280,95 @@ public class RegressionTestWorker {
     private FreshReplayStats generateFreshSignals(
             long runId,
             String symbol,
+            Instant executionStart,
+            Instant executionEnd,
             List<Candle> oneMinuteCandles,
             List<Candle> fiveMinuteCandles,
-            List<Candle> oneHourCandles
+            List<Candle> oneHourCandles,
+            String btcSymbol,
+            List<Candle> btcOneMinuteCandles,
+            List<Candle> btcFiveMinuteCandles,
+            List<Candle> btcOneHourCandles
     ) {
         List<ReplayCandle> timeline = new java.util.ArrayList<>();
-        oneMinuteCandles.forEach(c -> timeline.add(new ReplayCandle("1m", c)));
-        fiveMinuteCandles.forEach(c -> timeline.add(new ReplayCandle("5m", c)));
-        oneHourCandles.forEach(c -> timeline.add(new ReplayCandle("1h", c)));
+        oneMinuteCandles.forEach(c -> timeline.add(new ReplayCandle(symbol, "1m", c, true)));
+        fiveMinuteCandles.forEach(c -> timeline.add(new ReplayCandle(symbol, "5m", c, true)));
+        oneHourCandles.forEach(c -> timeline.add(new ReplayCandle(symbol, "1h", c, true)));
+        btcOneMinuteCandles.forEach(c -> timeline.add(new ReplayCandle(btcSymbol, "1m", c, false)));
+        btcFiveMinuteCandles.forEach(c -> timeline.add(new ReplayCandle(btcSymbol, "5m", c, false)));
+        btcOneHourCandles.forEach(c -> timeline.add(new ReplayCandle(btcSymbol, "1h", c, false)));
         timeline.sort(java.util.Comparator
-                .comparing((ReplayCandle rc) -> rc.candle().getOpenTime())
-                .thenComparingInt(rc -> intervalOrder(rc.interval())));
+                .comparing((ReplayCandle rc) -> rc.candle().getOpenTime().plusSeconds(intervalSeconds(rc.interval())))
+                .thenComparingInt(rc -> intervalOrder(rc.interval()))
+                .thenComparingInt(rc -> rc.primary() ? 1 : 0));
 
         int oneMinuteSignals = 0, fiveMinuteSignals = 0, oneHourSignals = 0;
         int oneMinuteBuys = 0, fiveMinuteBuys = 0, oneHourBuys = 0;
         int buys = 0, watches = 0, sells = 0, strongSells = 0, errors = 0;
         java.util.List<TradeSignal> generatedSignals = new java.util.ArrayList<>();
 
+        try (ExecutionReplayScope.Scope ignored = replayScope.open(runId, List.of(), o -> {})) {
         for (int index = 0; index < timeline.size(); index++) {
             ReplayCandle replay = timeline.get(index);
             Candle candle = replay.candle();
+            Instant evaluationTime = candle.getOpenTime().plusSeconds(intervalSeconds(replay.interval()));
+            boolean inRequestedWindow = !evaluationTime.isBefore(executionStart) && !evaluationTime.isAfter(executionEnd);
             try {
                 java.util.Optional<IndicatorSnapshot> snapshot = technicalIndicatorService
-                        .calculateSnapshotForRegression(symbol, replay.interval(), candle.getOpenTime());
+                        .calculateSnapshotForRegression(replay.symbol(), replay.interval(), candle.getOpenTime());
                 if (snapshot.isEmpty()) {
-                    errors++;
-                    saveGenerationError(runId, symbol, replay.interval(), candle,
-                            "Not enough historical candles to calculate the technical snapshot");
+                    if (inRequestedWindow) {
+                        errors++;
+                        saveGenerationError(runId, replay.symbol(), replay.interval(), candle,
+                                "Not enough historical candles to calculate the technical snapshot");
+                    }
                     continue;
                 }
 
-                Instant evaluationTime = candle.getOpenTime().plusSeconds(intervalSeconds(replay.interval()));
+                // Do not generate a signal whose candle would only have closed after the
+                // requested test end. Warm-up rows before executionStart are intentionally
+                // generated for as-of context, but are not counted or displayed as test output.
+                if (evaluationTime.isAfter(executionEnd)) continue;
+
+                replayScope.reference(evaluationTime);
                 TradeSignal generated = analysisService.analyzeForRegression(snapshot.get(), evaluationTime);
+                replayScope.appendSignal(generated);
                 SignalDecision decision = generated.getDecision();
-                generatedSignals.add(generated);
+                if (replay.primary()) generatedSignals.add(generated);
 
-                if ("1m".equals(replay.interval())) { oneMinuteSignals++; if (isBuy(decision)) oneMinuteBuys++; }
-                else if ("5m".equals(replay.interval())) { fiveMinuteSignals++; if (isBuy(decision)) fiveMinuteBuys++; }
-                else if ("1h".equals(replay.interval())) { oneHourSignals++; if (isBuy(decision)) oneHourBuys++; }
+                if (replay.primary() && inRequestedWindow) {
+                    if ("1m".equals(replay.interval())) { oneMinuteSignals++; if (isBuy(decision)) oneMinuteBuys++; }
+                    else if ("5m".equals(replay.interval())) { fiveMinuteSignals++; if (isBuy(decision)) fiveMinuteBuys++; }
+                    else if ("1h".equals(replay.interval())) { oneHourSignals++; if (isBuy(decision)) oneHourBuys++; }
 
-                if (decision == SignalDecision.BUY || decision == SignalDecision.STRONG_BUY) buys++;
-                else if (decision == SignalDecision.WATCH) watches++;
-                else if (decision == SignalDecision.SELL) sells++;
-                else if (decision == SignalDecision.STRONG_SELL) strongSells++;
+                    if (decision == SignalDecision.BUY || decision == SignalDecision.STRONG_BUY) buys++;
+                    else if (decision == SignalDecision.WATCH) watches++;
+                    else if (decision == SignalDecision.SELL) sells++;
+                    else if (decision == SignalDecision.STRONG_SELL) strongSells++;
 
-                jdbcTemplate.update("""
-                        INSERT INTO analysis_test_signal
-                            (test_run_id, source_signal_id, replay_generated, symbol, interval_code, candle_open_time,
-                             generated_at, latest_price, original_decision, final_decision,
-                             execution_effective_decision, total_score, confidence_score, trend_score,
-                             volume_score, momentum_score, decision_authority_corrected, generation_error)
-                        VALUES (?, NULL, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
-                        """,
-                        runId, symbol, replay.interval(), Timestamp.from(candle.getOpenTime()),
-                        Timestamp.from(evaluationTime), generated.getLatestPrice(),
-                        generated.getOriginalDecision() == null ? null : generated.getOriginalDecision().name(),
-                        decision == null ? null : decision.name(),
-                        decision == null ? null : decision.name(),
-                        generated.getTotalScore(), generated.getConfidenceScore(), generated.getTrendScore(),
-                        generated.getVolumeScore(), generated.getMomentumScore());
+                    jdbcTemplate.update("""
+                            INSERT INTO analysis_test_signal
+                                (test_run_id, source_signal_id, replay_generated, symbol, interval_code, candle_open_time,
+                                 generated_at, latest_price, original_decision, final_decision,
+                                 execution_effective_decision, total_score, confidence_score, trend_score,
+                                 volume_score, momentum_score, decision_authority_corrected, generation_error)
+                            VALUES (?, NULL, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+                            """,
+                            runId, replay.symbol(), replay.interval(), Timestamp.from(candle.getOpenTime()),
+                            Timestamp.from(evaluationTime), generated.getLatestPrice(),
+                            generated.getOriginalDecision() == null ? null : generated.getOriginalDecision().name(),
+                            decision == null ? null : decision.name(),
+                            decision == null ? null : decision.name(),
+                            generated.getTotalScore(), generated.getConfidenceScore(), generated.getTrendScore(),
+                            generated.getVolumeScore(), generated.getMomentumScore());
+                }
             } catch (Exception exception) {
-                errors++;
-                saveGenerationError(runId, symbol, replay.interval(), candle, errorDetail(exception, 900));
+                if (replay.primary() && inRequestedWindow) {
+                    errors++;
+                    saveGenerationError(runId, replay.symbol(), replay.interval(), candle, errorDetail(exception, 900));
+                }
                 log.warn("Regression fresh-signal generation failed: run={}, symbol={}, interval={}, candle={}",
-                        runId, symbol, replay.interval(), candle.getOpenTime(), exception);
+                        runId, replay.symbol(), replay.interval(), candle.getOpenTime(), exception);
             }
 
             if (index % 10 == 0 && !timeline.isEmpty()) {
@@ -323,6 +378,7 @@ public class RegressionTestWorker {
             }
         }
 
+        }
         return new FreshReplayStats(oneMinuteSignals, oneMinuteBuys, fiveMinuteSignals, fiveMinuteBuys,
                 oneHourSignals, oneHourBuys, buys, watches, sells, strongSells, errors, generatedSignals);
     }
@@ -359,7 +415,7 @@ public class RegressionTestWorker {
         return decision == SignalDecision.BUY || decision == SignalDecision.STRONG_BUY;
     }
 
-    private record ReplayCandle(String interval, Candle candle) {}
+    private record ReplayCandle(String symbol, String interval, Candle candle, boolean primary) {}
 
     private record FreshReplayStats(
             int oneMinuteSignals, int oneMinuteBuys,
@@ -369,6 +425,15 @@ public class RegressionTestWorker {
             java.util.List<TradeSignal> generatedSignals
     ) {
         int total() { return oneMinuteSignals + fiveMinuteSignals + oneHourSignals; }
+    }
+
+    private List<Candle> candlesInExecutionWindow(List<Candle> candles, String interval, Instant start, Instant end) {
+        return candles.stream()
+                .filter(c -> {
+                    Instant t = c.getOpenTime().plusSeconds(intervalSeconds(interval));
+                    return !t.isBefore(start) && !t.isAfter(end);
+                })
+                .toList();
     }
 
     private int countSignals(List<TradeSignal> signals, String interval) {

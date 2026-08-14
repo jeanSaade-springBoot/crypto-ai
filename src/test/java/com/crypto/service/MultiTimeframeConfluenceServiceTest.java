@@ -6,11 +6,13 @@ import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
 import com.crypto.domain.TradingStrategy;
 import com.crypto.dto.MultiTimeframeConfluenceResult;
+import com.crypto.execution.service.ExecutionReplayScope;
 import com.crypto.repository.TradeSignalRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
 import java.util.Optional;
@@ -152,4 +154,26 @@ class MultiTimeframeConfluenceServiceTest {
                 .generatedAt(generatedAt)
                 .build();
     }
+    @Test
+    void replayScopeUsesFreshReplayHigherTimeframeInsteadOfProductionRepository() {
+        Instant evaluationTime = Instant.parse("2026-08-11T19:31:00Z");
+        MultiTimeframeConfluenceService service = new MultiTimeframeConfluenceService(tradeSignalRepository);
+        ExecutionReplayScope scope = new ExecutionReplayScope();
+        ReflectionTestUtils.setField(service, "replayScope", scope);
+
+        TradeSignal replayHour = higherSignal(
+                "ETHUSDT", "1h", SignalDecision.STRONG_SELL, 0,
+                MarketRegime.WEAK_DOWNTREND, evaluationTime.minusSeconds(1800));
+
+        try (ExecutionReplayScope.Scope ignored = scope.open(1L, java.util.List.of(replayHour), o -> {})) {
+            scope.reference(evaluationTime);
+            MultiTimeframeConfluenceResult result = service.evaluate(
+                    "ETHUSDT", "5m", SignalDecision.BUY,
+                    evaluationTime, TradingStrategy.TREND_FOLLOWING);
+
+            assertEquals(SignalDecision.WATCH, result.finalDecision());
+            assertEquals(ConfluenceStatus.STRONG_CONFLICT, result.status());
+        }
+    }
+
 }

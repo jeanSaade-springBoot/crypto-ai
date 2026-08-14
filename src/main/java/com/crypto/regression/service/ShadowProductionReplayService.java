@@ -34,7 +34,7 @@ public class ShadowProductionReplayService {
     private final PositionExitPolicy exitPolicy;
     private final WalletSettingsRepository walletSettingsRepository;
 
-    public ReplayStats replay(long runId, String symbol, List<TradeSignal> generatedSignals) {
+    public ReplayStats replay(long runId, String symbol, Instant executionStart, Instant executionEnd, List<TradeSignal> generatedSignals) {
         List<TradeSignal> timeline = generatedSignals.stream()
                 .filter(s -> s != null && s.getGeneratedAt() != null)
                 .sorted(Comparator.comparing(TradeSignal::getGeneratedAt)
@@ -50,7 +50,14 @@ public class ShadowProductionReplayService {
         int trades = 0, wins = 0, losses = 0;
 
         try (ExecutionReplayScope.Scope ignored = replayScope.open(runId, timeline,
-                opportunity -> persistProductionOpportunity(runId, opportunity))) {
+                opportunity -> {
+                    TradeSignal latest = opportunity == null ? null : opportunity.getLatestSignal();
+                    if (latest != null && latest.getGeneratedAt() != null
+                            && !latest.getGeneratedAt().isBefore(executionStart)
+                            && !latest.getGeneratedAt().isAfter(executionEnd)) {
+                        persistProductionOpportunity(runId, opportunity);
+                    }
+                })) {
         for (TradeSignal signal : timeline) {
             replayScope.reference(signal.getGeneratedAt());
             if ("1m".equals(signal.getInterval())) latest1m = signal;
@@ -79,7 +86,17 @@ public class ShadowProductionReplayService {
             }
 
             if (!"1m".equals(signal.getInterval())) continue;
-            ExecutionIntelligenceService.ExecutionDecision decision = executionIntelligenceService.evaluateBuy(signal);
+
+            // Warm-up evaluates the SAME production decision service so evidence/opportunity
+            // memory is realistic at executionStart, but it never opens or adds to a wallet
+            // position before the requested test window.
+            boolean inExecutionWindow = !signal.getGeneratedAt().isBefore(executionStart)
+                    && !signal.getGeneratedAt().isAfter(executionEnd);
+            int currentAllocation = open == null ? 0 : open.positionPercent();
+            String currentStage = replayStage(currentAllocation);
+            ExecutionIntelligenceService.ExecutionDecision decision =
+                    executionIntelligenceService.evaluateBuy(signal, currentAllocation, currentStage);
+            if (!inExecutionWindow) continue;
 
             if (open == null && decision.allowed()) {
                 int atrPercent = signal.getAtrRecommendedPositionPercent() <= 0 ? 100 : signal.getAtrRecommendedPositionPercent();
@@ -94,8 +111,22 @@ public class ShadowProductionReplayService {
                     executionIntelligenceService.markExecuted(signal, decision);
                     cash = cash.subtract(budget, MC);
                     open = new ShadowPosition(positionId, signal.getGeneratedAt(), signal.getLatestPrice(), qty, budget,
-                            signal.getStopLoss(), signal.getTakeProfit(), signal.getLatestPrice(), false, null,
+                            effectivePercent, signal.getStopLoss(), signal.getTakeProfit(), signal.getLatestPrice(), false, null,
                             signal.getTotalScore(), signal.getConfidenceScore(), signal.getTrendScore(), signal.getMomentumScore(), signal.getVolumeScore());
+                }
+            } else if (open != null && decision.allowed()) {
+                // Exact production progressive-position semantics: decision.positionPercent()
+                // is the ADD allocation, not a new target allocation, and ATR percentage is
+                // not re-applied to confirmation/trend adds in production.
+                int addPercent = Math.max(1, Math.min(100 - open.positionPercent(), decision.positionPercent()));
+                BigDecimal budget = INITIAL_CAPITAL.multiply(BigDecimal.valueOf(addPercent), MC)
+                        .divide(BigDecimal.valueOf(100), MC).min(cash);
+                if (addPercent > 0 && budget.signum() > 0 && signal.getLatestPrice() != null && signal.getLatestPrice().signum() > 0) {
+                    BigDecimal addedQty = budget.divide(signal.getLatestPrice(), 12, RoundingMode.HALF_UP);
+                    persistBuy(runId, symbol, signal, addedQty, budget, addPercent, decision);
+                    executionIntelligenceService.markExecuted(signal, decision);
+                    cash = cash.subtract(budget, MC);
+                    open = addToPosition(runId, open, signal, addedQty, budget, addPercent);
                 }
             }
         }
@@ -217,6 +248,37 @@ public class ShadowProductionReplayService {
                 p.highest(), p.profitLockActive(), p.profitLockPrice(), explanation);
     }
 
+    private String replayStage(int allocationPercent) {
+        if (allocationPercent <= 0) return "NONE";
+        if (allocationPercent < 50) return "SCOUT_ENTRY";
+        if (allocationPercent < 100) return "CONFIRMATION_ADD";
+        return "TREND_ADD";
+    }
+
+    private ShadowPosition addToPosition(long runId, ShadowPosition open, TradeSignal signal,
+                                         BigDecimal addedQty, BigDecimal addedCost, int addPercent) {
+        BigDecimal newQuantity = open.quantity().add(addedQty, MC);
+        BigDecimal newCost = open.cost().add(addedCost, MC);
+        BigDecimal newEntry = newCost.divide(newQuantity, 12, RoundingMode.HALF_UP);
+        BigDecimal newStop = open.stopLoss();
+        if (signal.getStopLoss() != null && (newStop == null || signal.getStopLoss().compareTo(newStop) > 0)) {
+            newStop = signal.getStopLoss();
+        }
+        BigDecimal newTakeProfit = open.takeProfit();
+        if (signal.getTakeProfit() != null && (newTakeProfit == null || signal.getTakeProfit().compareTo(newTakeProfit) > 0)) {
+            newTakeProfit = signal.getTakeProfit();
+        }
+        int newPercent = Math.min(100, open.positionPercent() + addPercent);
+        jdbcTemplate.update("""
+                UPDATE wallet_position_test
+                SET entry_price=?, quantity=?, total_cost_usdt=?, position_percent=?,
+                    stop_loss_usdt=?, take_profit_usdt=?
+                WHERE id=? AND test_run_id=?
+                """, newEntry, newQuantity, newCost, newPercent, newStop, newTakeProfit,
+                open.positionId(), runId);
+        return open.withAdd(newEntry, newQuantity, newCost, newPercent, newStop, newTakeProfit);
+    }
+
     private void persistProductionOpportunity(long runId, ExecutionOpportunity o) {
         TradeSignal s = o.getLatestSignal();
         if (s == null || s.getGeneratedAt() == null) return;
@@ -299,8 +361,9 @@ public class ShadowProductionReplayService {
         ExitDecision(boolean exit,String reason,String explanation){this(exit,reason,explanation,null);}
         static ExitDecision hold(){return new ExitDecision(false,"HOLD","Position remains open.",null);}
     }
-    private record ShadowPosition(long positionId,Instant entryTime,BigDecimal entryPrice,BigDecimal quantity,BigDecimal cost,BigDecimal stopLoss,BigDecimal takeProfit,BigDecimal highest,boolean profitLockActive,BigDecimal profitLockPrice,int entryScore,int entryConfidence,int entryTrend,int entryMomentum,int entryVolume){
-        ShadowPosition withLock(BigDecimal h,boolean a,BigDecimal l){return new ShadowPosition(positionId,entryTime,entryPrice,quantity,cost,stopLoss,takeProfit,h,a,l,entryScore,entryConfidence,entryTrend,entryMomentum,entryVolume);}
-        ShadowPosition withTakeProfit(BigDecimal tp){return new ShadowPosition(positionId,entryTime,entryPrice,quantity,cost,stopLoss,tp,highest,profitLockActive,profitLockPrice,entryScore,entryConfidence,entryTrend,entryMomentum,entryVolume);}
+    private record ShadowPosition(long positionId,Instant entryTime,BigDecimal entryPrice,BigDecimal quantity,BigDecimal cost,int positionPercent,BigDecimal stopLoss,BigDecimal takeProfit,BigDecimal highest,boolean profitLockActive,BigDecimal profitLockPrice,int entryScore,int entryConfidence,int entryTrend,int entryMomentum,int entryVolume){
+        ShadowPosition withLock(BigDecimal h,boolean a,BigDecimal l){return new ShadowPosition(positionId,entryTime,entryPrice,quantity,cost,positionPercent,stopLoss,takeProfit,h,a,l,entryScore,entryConfidence,entryTrend,entryMomentum,entryVolume);}
+        ShadowPosition withTakeProfit(BigDecimal tp){return new ShadowPosition(positionId,entryTime,entryPrice,quantity,cost,positionPercent,stopLoss,tp,highest,profitLockActive,profitLockPrice,entryScore,entryConfidence,entryTrend,entryMomentum,entryVolume);}
+        ShadowPosition withAdd(BigDecimal newEntry,BigDecimal newQuantity,BigDecimal newCost,int newPercent,BigDecimal newStop,BigDecimal newTakeProfit){return new ShadowPosition(positionId,entryTime,newEntry,newQuantity,newCost,newPercent,newStop,newTakeProfit,highest,profitLockActive,profitLockPrice,entryScore,entryConfidence,entryTrend,entryMomentum,entryVolume);}
     }
 }

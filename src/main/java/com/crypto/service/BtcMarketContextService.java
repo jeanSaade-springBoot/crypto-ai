@@ -9,9 +9,11 @@ import com.crypto.domain.TradeSignal;
 import com.crypto.dto.BtcMarketContextResult;
 import com.crypto.repository.CandleRepository;
 import com.crypto.repository.TradeSignalRepository;
+import com.crypto.execution.service.ExecutionReplayScope;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -32,6 +34,8 @@ public class BtcMarketContextService {
     private final CandleRepository candleRepository;
     private final TradeSignalRepository tradeSignalRepository;
     private final BtcContextProperties properties;
+    @Autowired(required = false)
+    private ExecutionReplayScope replayScope;
 
     @Transactional(readOnly = true)
     public BtcMarketContextResult evaluate(
@@ -58,7 +62,7 @@ public class BtcMarketContextService {
                     "This is the configured BTC reference asset; correlation filtering is not applicable.");
         }
 
-        RelationshipMetrics metrics = relationship(normalizedSymbol, interval);
+        RelationshipMetrics metrics = relationship(normalizedSymbol, interval, evaluatedAt);
         if (metrics.sampleSize() < properties.minimumSamples()) {
             return result(BtcRelationshipType.LEARNING, BtcContextStatus.LEARNING,
                     decisionAfterConfluence, confluenceEntryAllowed, interval, null, null,
@@ -72,10 +76,15 @@ public class BtcMarketContextService {
         boolean stable = metrics.sampleSize() >= properties.minimumSamples()
                 && metrics.correlation() != null;
 
-        TradeSignal btcSignal = tradeSignalRepository
-                .findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
-                        properties.referenceSymbol(), interval, evaluatedAt)
-                .orElse(null);
+        TradeSignal btcSignal;
+        if (replayScope != null && replayScope.active()) {
+            btcSignal = replayScope.latestAtOrBefore(properties.referenceSymbol(), interval, evaluatedAt).orElse(null);
+        } else {
+            btcSignal = tradeSignalRepository
+                    .findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                            properties.referenceSymbol(), interval, evaluatedAt)
+                    .orElse(null);
+        }
 
         if (btcSignal == null) {
             return result(relationshipType, BtcContextStatus.UNAVAILABLE,
@@ -128,10 +137,19 @@ public class BtcMarketContextService {
                 metrics.sampleSize(), influence, stable, evaluatedAt, btcSignal.getGeneratedAt(), explanation);
     }
 
-    private RelationshipMetrics relationship(String symbol, String interval) {
+    private RelationshipMetrics relationship(String symbol, String interval, Instant evaluatedAt) {
         int candleLimit = Math.max(properties.windowSize() + 1, properties.minimumSamples() + 1);
-        List<Candle> assetCandles = candleRepository.findClosedCandles(symbol, interval, PageRequest.of(0, candleLimit));
-        List<Candle> btcCandles = candleRepository.findClosedCandles(properties.referenceSymbol(), interval, PageRequest.of(0, candleLimit));
+        List<Candle> assetCandles;
+        List<Candle> btcCandles;
+        if (replayScope != null && replayScope.active()) {
+            assetCandles = candleRepository.findClosedCandlesClosedAtOrBefore(
+                    symbol, interval, evaluatedAt, PageRequest.of(0, candleLimit));
+            btcCandles = candleRepository.findClosedCandlesClosedAtOrBefore(
+                    properties.referenceSymbol(), interval, evaluatedAt, PageRequest.of(0, candleLimit));
+        } else {
+            assetCandles = candleRepository.findClosedCandles(symbol, interval, PageRequest.of(0, candleLimit));
+            btcCandles = candleRepository.findClosedCandles(properties.referenceSymbol(), interval, PageRequest.of(0, candleLimit));
+        }
 
         Map<Instant, BigDecimal> btcByOpenTime = new HashMap<>();
         for (Candle candle : btcCandles) {
