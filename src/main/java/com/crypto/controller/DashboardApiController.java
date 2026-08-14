@@ -490,6 +490,8 @@ public class DashboardApiController {
     private Map<String, Object> candleDto(Candle candle) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("time", candle.getOpenTime().toEpochMilli());
+        result.put("openTime", candle.getOpenTime().toEpochMilli());
+        result.put("closeTime", candle.getCloseTime() == null ? null : candle.getCloseTime().toEpochMilli());
         result.put("open", candle.getOpenPrice());
         result.put("high", candle.getHighPrice());
         result.put("low", candle.getLowPrice());

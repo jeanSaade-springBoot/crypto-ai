@@ -2064,3 +2064,55 @@ body.position-modal-open{overflow:hidden}
 
 .signal-row-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 .signal-chart-button { text-decoration:none; display:inline-flex; align-items:center; justify-content:center; }
+
+
+/* Compact B/S chart markers and richer candle hover details. */
+.compact-trade-marker {
+    cursor: pointer !important;
+    user-select: none;
+}
+.compact-trade-marker text {
+    font-weight: 900 !important;
+}
+.candle-hover-tooltip {
+    min-width: 245px;
+    padding: 10px 12px;
+    background: #0d1b24;
+    color: #dce9f2;
+    border: 1px solid #294252;
+    border-radius: 8px;
+    box-shadow: 0 8px 22px rgba(0,0,0,.28);
+}
+.candle-hover-time {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 2px 0;
+}
+.candle-hover-time span,
+.candle-hover-ohlc small {
+    color: #8da2b1;
+    font-size: 11px;
+}
+.candle-hover-time strong {
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.candle-hover-ohlc {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 12px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #203342;
+}
+.candle-hover-ohlc span {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+.candle-hover-ohlc b {
+    font-size: 12px;
+}

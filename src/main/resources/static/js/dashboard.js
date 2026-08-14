@@ -719,8 +719,53 @@ function renderIndicators(i) {
     Object.entries(mapping).forEach(([id, v]) => el(id).textContent = v === null || v === undefined ? '—' : (typeof v === 'string' ? v : value(v)));
 }
 
+function candleTooltipTime(value) {
+    if (value === null || value === undefined || value === '') return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '—';
+    return date.toLocaleString(undefined, {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        timeZoneName: 'short'
+    });
+}
+
+function candleTooltipPrice(value) {
+    return Number.isFinite(Number(value))
+        ? Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 8 })
+        : '—';
+}
+
+function candleTooltipHtml(point) {
+    if (!point) return '';
+    const y = Array.isArray(point.y) ? point.y : [];
+    const open = point.open ?? y[0];
+    const high = point.high ?? y[1];
+    const low = point.low ?? y[2];
+    const close = point.close ?? y[3];
+    const openTime = point.openTime ?? point.x;
+    const closeTime = point.closeTime;
+    return `
+        <div class="candle-hover-tooltip">
+            <div class="candle-hover-time"><span>Open time</span><strong>${candleTooltipTime(openTime)}</strong></div>
+            <div class="candle-hover-time"><span>Close time</span><strong>${candleTooltipTime(closeTime)}</strong></div>
+            <div class="candle-hover-ohlc">
+                <span><small>Open</small><b>${candleTooltipPrice(open)}</b></span>
+                <span><small>High</small><b>${candleTooltipPrice(high)}</b></span>
+                <span><small>Low</small><b>${candleTooltipPrice(low)}</b></span>
+                <span><small>Close</small><b>${candleTooltipPrice(close)}</b></span>
+            </div>
+        </div>`;
+}
+
 function renderCharts(candles, executions = []) {
-    const candleSeries = candles.map(c => ({ x: new Date(c.time), y: [Number(c.open), Number(c.high), Number(c.low), Number(c.close)] }));
+    const candleSeries = candles.map(c => ({
+        x: new Date(c.time),
+        y: [Number(c.open), Number(c.high), Number(c.low), Number(c.close)],
+        openTime: c.openTime ?? c.time,
+        closeTime: c.closeTime,
+        open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close)
+    }));
     const volumeSeries = candles.map(c => ({ x: new Date(c.time), y: Number(c.volume) }));
     latestWalletExecutions = new Map((executions || []).map(execution => [String(execution.id), execution]));
     const annotations = (executions || []).map(execution => {
@@ -728,13 +773,13 @@ function renderCharts(candles, executions = []) {
         return {
             x: new Date(execution.executedAt).getTime(),
             y: Number(execution.price),
-            marker: { size: 5, fillColor: isBuy ? '#39d98a' : '#ff6b72', strokeColor: '#071018', strokeWidth: 2, radius: 2 },
+            marker: { size: 3, fillColor: isBuy ? '#39d98a' : '#ff6b72', strokeColor: '#071018', strokeWidth: 1, radius: 2 },
             label: {
                 text: isBuy ? 'B' : 'S',
                 borderColor: isBuy ? '#39d98a' : '#ff6b72',
-                offsetY: isBuy ? 18 : -10,
-                style: { background: isBuy ? '#39d98a' : '#ff6b72', color: '#071018', fontSize: '11px', fontWeight: 800 },
-                cssClass: `wallet-execution-marker execution-marker-${execution.id} ${isBuy ? 'buy-marker' : 'sell-marker'}`
+                offsetY: isBuy ? 13 : -8,
+                style: { background: isBuy ? '#39d98a' : '#ff6b72', color: '#071018', fontSize: '9px', fontWeight: 900, padding: { left: 3, right: 3, top: 1, bottom: 1 } },
+                cssClass: `wallet-execution-marker compact-trade-marker execution-marker-${execution.id} ${isBuy ? 'buy-marker' : 'sell-marker'}`
             }
         };
     });
@@ -743,13 +788,13 @@ function renderCharts(candles, executions = []) {
         annotations.push({
             x: point.time.getTime(),
             y: point.price,
-            marker: { size: 7, fillColor: isBuy ? '#39d98a' : '#ff6b72', strokeColor: '#ffffff', strokeWidth: 2, radius: 2 },
+            marker: { size: 3, fillColor: isBuy ? '#39d98a' : '#ff6b72', strokeColor: '#071018', strokeWidth: 1, radius: 2 },
             label: {
-                text: `${isBuy ? 'TEST BUY' : 'TEST SELL'} · ${point.price}`,
+                text: isBuy ? 'B' : 'S',
                 borderColor: isBuy ? '#39d98a' : '#ff6b72',
-                offsetY: isBuy ? 22 : -14,
-                style: { background: isBuy ? '#39d98a' : '#ff6b72', color: '#071018', fontSize: '11px', fontWeight: 800 },
-                cssClass: `debug-trade-marker debug-trade-marker-${index}`
+                offsetY: isBuy ? 13 : -8,
+                style: { background: isBuy ? '#39d98a' : '#ff6b72', color: '#071018', fontSize: '9px', fontWeight: 900, padding: { left: 3, right: 3, top: 1, bottom: 1 } },
+                cssClass: `debug-trade-marker compact-trade-marker debug-trade-marker-${index}`
             }
         });
     });
@@ -766,7 +811,7 @@ function renderCharts(candles, executions = []) {
     }] : [];
     const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime' }, noData: { text: 'Waiting for closed candles' } };
     if (!candleChart) {
-        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390 }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations }, yaxis: { tooltip: { enabled: true }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
+        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390 }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations }, tooltip: { custom: ({ seriesIndex, dataPointIndex, w }) => candleTooltipHtml(w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex]) }, yaxis: { tooltip: { enabled: true }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
         candleChart.render().then(bindExecutionMarkerClicks);
         volumeChart = new ApexCharts(el('volume-chart'), { ...common, chart: { ...common.chart, type: 'bar', height: 150 }, series: [{ name: 'Volume', data: volumeSeries }], dataLabels: { enabled: false }, yaxis: { labels: { formatter: v => Number(v).toLocaleString(undefined, { notation: 'compact' }) } } });
         volumeChart.render();
