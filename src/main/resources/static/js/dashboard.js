@@ -212,7 +212,8 @@ async function refreshScoreDiagnostics() {
 
 function render(data) {
     const s = data.summary;
-    el('last-updated').textContent = `Updated ${preciseDateTime(data.updatedAt)}`;
+    const lastUpdated = el('last-updated');
+    if (lastUpdated) lastUpdated.textContent = `Updated ${preciseDateTime(data.updatedAt)}`;
     renderHeaderLivePrice(data);
     el('market-subtitle').textContent = `${data.symbol} · ${displayInterval(data.interval)}${data.displayOnlyInterval ? ' · display only' : ''}${debugMoveFocus && data.interval === '5m' ? ' · DEBUG MOVE ZONE' : ''}`;
     renderWalletHeader(data.wallet || {});
@@ -254,6 +255,9 @@ function syncDashboardHeaderOffset() {
 }
 
 function renderTradePerformance(performance) {
+    // This dashboard section may be moved/removed independently of the shared JS.
+    // Never let an optional card break the main dashboard render.
+    if (!el('trade-performance-label')) return;
     const pnl = Number(performance.netPnlUsdt || 0);
     const wins = Number(performance.wins || 0);
     const losses = Number(performance.losses || 0);
@@ -276,6 +280,7 @@ function renderTradePerformance(performance) {
 function renderCoinLeader(elementSuffix, leader, winner) {
     const symbolElement = el(`trade-performance-${elementSuffix}`);
     const pnlElement = el(`trade-performance-${elementSuffix}-pnl`);
+    if (!symbolElement || !pnlElement) return;
     if (!leader || !leader.symbol) {
         symbolElement.textContent = '—';
         pnlElement.textContent = winner ? 'No profit yet' : 'No loss yet';
@@ -616,6 +621,9 @@ function updateAnalysisCard(prefix, score, maximum, status, text) {
 
 
 function renderScoreDiagnostics(diagnostics) {
+    // Score Diagnostics now has its own page. Keep this renderer harmless when
+    // the old dashboard diagnostics section is not present.
+    if (!el('diagnostics-count')) return;
     const score = diagnostics.score || {};
     const count = Number(diagnostics.signalCount || 0);
     el('diagnostics-count').textContent = count.toLocaleString();
