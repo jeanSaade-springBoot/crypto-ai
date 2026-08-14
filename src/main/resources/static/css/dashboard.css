@@ -2135,3 +2135,613 @@ body.position-modal-open{overflow:hidden}
     .candle-fixed-summary { gap: 5px 10px; }
     .candle-fixed-summary span:nth-child(1), .candle-fixed-summary span:nth-child(2) { flex-basis: calc(50% - 6px); }
 }
+
+
+/* v3.6 single-row desktop dashboard header */
+@media (min-width:1001px){
+    main > .topbar{
+        display:flex!important;
+        flex-direction:row!important;
+        align-items:center!important;
+        gap:6px!important;
+        flex-wrap:nowrap!important;
+        width:100%;
+        min-height:46px;
+        padding:5px 0!important;
+        overflow-x:auto;
+        overflow-y:hidden;
+        scrollbar-width:thin;
+    }
+    main > .topbar .topbar-main{
+        display:flex!important;
+        flex:0 0 auto;
+        align-items:center!important;
+        gap:7px!important;
+        min-height:36px;
+    }
+    main > .topbar .monitor-title{display:none!important}
+    main > .topbar .filters{
+        display:flex!important;
+        align-items:center!important;
+        gap:5px!important;
+        flex-wrap:nowrap!important;
+        white-space:nowrap;
+    }
+    main > .topbar .filters label{
+        display:flex!important;
+        align-items:center!important;
+        gap:4px!important;
+        white-space:nowrap;
+    }
+    main > .topbar .filters select,
+    main > .topbar .filters button,
+    main > .topbar .logout-button{
+        height:29px!important;
+        min-height:29px!important;
+        padding:0 7px!important;
+        font-size:10px!important;
+        border-radius:7px!important;
+    }
+    main > .topbar .wallet-status-strip,
+    main > .topbar .ai-performance-header-strip{
+        display:flex!important;
+        flex:0 0 auto;
+        align-items:stretch;
+        gap:1px!important;
+        margin:0!important;
+        width:auto!important;
+        border-radius:8px!important;
+        overflow:hidden;
+    }
+    main > .topbar .wallet-kpi,
+    main > .topbar .ai-header-metric,
+    main > .topbar .ai-performance-title{
+        min-height:34px!important;
+        height:34px!important;
+        padding:3px 7px!important;
+        align-content:center!important;
+    }
+    main > .topbar .wallet-kpi{min-width:74px!important}
+    main > .topbar .live-price-kpi{min-width:92px!important}
+    main > .topbar .active-positions-kpi{min-width:84px!important}
+    main > .topbar .wallet-kpi small,
+    main > .topbar .ai-header-metric span{
+        font-size:6.5px!important;
+        line-height:1!important;
+        white-space:nowrap;
+    }
+    main > .topbar .wallet-kpi strong,
+    main > .topbar .ai-header-metric strong{
+        font-size:10px!important;
+        line-height:1.15!important;
+        white-space:nowrap;
+    }
+    main > .topbar .wallet-kpi span,
+    main > .topbar .wallet-kpi em{display:none!important}
+    main > .topbar .ai-performance-title{
+        min-width:128px!important;
+        display:flex!important;
+        gap:5px!important;
+        align-items:center!important;
+    }
+    main > .topbar .ai-performance-title>span{font-size:7px!important}
+    main > .topbar .ai-performance-title>small{display:none!important}
+    main > .topbar .ai-performance-title select{
+        width:76px!important;
+        min-width:76px!important;
+        max-width:76px!important;
+        height:22px!important;
+        font-size:8px!important;
+        margin-left:0!important;
+    }
+    main > .topbar .ai-header-metric{min-width:62px!important}
+    main > .topbar .ai-header-metric.pnl-metric{min-width:82px!important}
+}
+
+/* v3.7 compact one-row header refinements */
+.visually-hidden{
+    position:absolute!important;
+    width:1px!important;height:1px!important;
+    padding:0!important;margin:-1px!important;
+    overflow:hidden!important;clip:rect(0,0,0,0)!important;
+    white-space:nowrap!important;border:0!important;
+}
+
+@media (min-width:1001px){
+    main > .topbar{
+        overflow:visible!important;
+        scrollbar-width:none!important;
+        gap:5px!important;
+    }
+    main > .topbar::-webkit-scrollbar{display:none!important}
+    main > .topbar .topbar-main{flex:0 0 auto!important}
+    main > .topbar .header-market-controls{gap:5px!important}
+    main > .topbar .symbol-control{font-size:0!important}
+    main > .topbar .filters select{
+        height:32px!important;
+        min-height:32px!important;
+        padding:0 9px!important;
+        font-size:11px!important;
+    }
+    main > .topbar .wallet-kpi,
+    main > .topbar .ai-header-metric,
+    main > .topbar .ai-performance-title{
+        min-height:38px!important;
+        height:38px!important;
+        padding:4px 8px!important;
+    }
+    main > .topbar .wallet-kpi{min-width:78px!important}
+    main > .topbar .live-price-kpi{min-width:96px!important}
+    main > .topbar .active-positions-kpi{min-width:88px!important}
+    main > .topbar .wallet-kpi small,
+    main > .topbar .ai-header-metric span{
+        font-size:7px!important;
+    }
+    main > .topbar .wallet-kpi strong,
+    main > .topbar .ai-header-metric strong{
+        font-size:11px!important;
+    }
+    main > .topbar .ai-performance-title{min-width:132px!important}
+    main > .topbar .ai-performance-title>span{font-size:7.5px!important}
+    main > .topbar .ai-performance-title select{
+        width:78px!important;min-width:78px!important;max-width:78px!important;
+        height:24px!important;font-size:8.5px!important;
+    }
+    main > .topbar .ai-header-metric{min-width:64px!important}
+    main > .topbar .ai-header-metric.pnl-metric{min-width:86px!important}
+    main > .topbar .topbar-actions{
+        margin-left:auto!important;
+        flex:0 0 auto;
+        display:flex;
+        align-items:center;
+        gap:5px;
+    }
+    main > .topbar .topbar-actions button{
+        height:32px!important;
+        min-height:32px!important;
+        padding:0 10px!important;
+        border-radius:8px!important;
+        font-size:11px!important;
+        font-weight:700;
+        cursor:pointer;
+    }
+    main > .topbar .topbar-actions #refresh-button{
+        border:0;
+        background:var(--accent);
+        color:#062017;
+    }
+    main > .topbar .topbar-actions .logout-form{margin:0!important}
+    main > .topbar .topbar-actions .logout-button{
+        border:1px solid var(--border)!important;
+        background:var(--surface)!important;
+        color:var(--text)!important;
+    }
+}
+
+/* Trade history: fit the table in the page instead of showing a horizontal scrollbar. */
+#trade-history .table-wrap{
+    overflow-x:visible!important;
+    overflow-y:visible!important;
+}
+#trade-history table{
+    width:100%!important;
+    table-layout:auto;
+    white-space:normal!important;
+}
+#trade-history th,
+#trade-history td{
+    white-space:normal!important;
+    overflow-wrap:anywhere;
+    word-break:normal;
+    padding-left:7px;
+    padding-right:7px;
+}
+#trade-history td:last-child{min-width:0!important}
+
+
+/* v3.8 dynamic single-row header: fluid sizing with no desktop horizontal scroll. */
+@media (min-width:1001px){
+    main > .topbar{
+        --header-gap:clamp(2px,.28vw,6px);
+        --header-pad-x:clamp(4px,.45vw,9px);
+        --header-label-size:clamp(6px,.43vw,8px);
+        --header-value-size:clamp(9px,.62vw,12px);
+        display:flex!important;
+        flex-wrap:nowrap!important;
+        gap:var(--header-gap)!important;
+        overflow:hidden!important;
+        width:100%!important;
+    }
+    main > .topbar .topbar-main{
+        flex:0 1 auto!important;
+        min-width:0!important;
+    }
+    main > .topbar .header-market-controls{
+        flex:0 1 auto!important;
+        min-width:0!important;
+        gap:var(--header-gap)!important;
+    }
+    main > .topbar .header-market-controls label{
+        min-width:0!important;
+        font-size:0!important;
+    }
+    main > .topbar .filters select{
+        width:clamp(52px,4.8vw,88px)!important;
+        min-width:0!important;
+        max-width:none!important;
+        height:clamp(28px,2.1vw,34px)!important;
+        padding:0 clamp(5px,.42vw,9px)!important;
+        font-size:clamp(9px,.58vw,11px)!important;
+    }
+    main > .topbar .wallet-status-strip,
+    main > .topbar .ai-performance-header-strip{
+        flex:1 1 auto!important;
+        min-width:0!important;
+        overflow:visible!important;
+    }
+    main > .topbar .wallet-status-strip > *,
+    main > .topbar .ai-performance-header-strip > *{
+        flex:1 1 0!important;
+        min-width:0!important;
+        width:auto!important;
+        padding:4px var(--header-pad-x)!important;
+    }
+    main > .topbar .live-price-kpi,
+    main > .topbar .active-positions-kpi{
+        min-width:0!important;
+    }
+    main > .topbar .wallet-kpi small,
+    main > .topbar .ai-header-metric span{
+        font-size:var(--header-label-size)!important;
+        overflow:hidden;
+        text-overflow:ellipsis;
+        white-space:nowrap;
+    }
+    main > .topbar .wallet-kpi strong,
+    main > .topbar .ai-header-metric strong{
+        font-size:var(--header-value-size)!important;
+        overflow:hidden;
+        text-overflow:ellipsis;
+        white-space:nowrap;
+    }
+    main > .topbar .ai-performance-title{
+        flex:0.9 1 0!important;
+        min-width:0!important;
+        padding:4px clamp(4px,.35vw,7px)!important;
+    }
+    main > .topbar .ai-performance-title select{
+        width:100%!important;
+        min-width:0!important;
+        max-width:none!important;
+        height:clamp(22px,1.7vw,26px)!important;
+        font-size:clamp(7px,.48vw,9px)!important;
+    }
+    main > .topbar .topbar-actions{
+        flex:0 0 auto!important;
+        gap:var(--header-gap)!important;
+    }
+    main > .topbar .topbar-actions button{
+        height:clamp(28px,2.1vw,34px)!important;
+        min-height:0!important;
+        padding:0 clamp(6px,.55vw,11px)!important;
+        font-size:clamp(9px,.58vw,11px)!important;
+    }
+}
+
+/* On narrower desktop widths, preserve the single row by compacting labels first. */
+@media (min-width:1001px) and (max-width:1280px){
+    main > .topbar{--header-pad-x:4px;--header-label-size:6px;--header-value-size:9px}
+    main > .topbar .filters select{width:55px!important;padding:0 5px!important}
+    main > .topbar .topbar-actions button{padding:0 6px!important}
+}
+
+
+/* v3.9 adaptive dashboard header: reserve action space and keep every value <= 3 decimals. */
+@media (min-width:1001px){
+    main > .topbar{
+        display:grid!important;
+        grid-template-columns:auto minmax(0,1.05fr) minmax(0,1.25fr) auto!important;
+        align-items:stretch!important;
+        column-gap:clamp(2px,.25vw,5px)!important;
+        overflow:visible!important;
+        min-width:0!important;
+    }
+    main > .topbar .topbar-main,
+    main > .topbar .wallet-status-strip,
+    main > .topbar .ai-performance-header-strip,
+    main > .topbar .topbar-actions{
+        min-width:0!important;
+        width:auto!important;
+        margin:0!important;
+    }
+    main > .topbar .topbar-main{
+        display:flex!important;
+        align-items:center!important;
+    }
+    main > .topbar .header-market-controls{
+        display:grid!important;
+        grid-template-columns:repeat(2,minmax(44px,1fr))!important;
+        width:clamp(92px,8vw,150px)!important;
+        gap:clamp(2px,.2vw,4px)!important;
+    }
+    main > .topbar .filters select{
+        width:100%!important;
+        max-width:100%!important;
+        min-width:0!important;
+        height:clamp(27px,2vw,32px)!important;
+        padding:0 clamp(3px,.3vw,7px)!important;
+        font-size:clamp(8px,.55vw,10px)!important;
+    }
+    main > .topbar .wallet-status-strip{
+        display:grid!important;
+        grid-template-columns:1.08fr repeat(6,minmax(0,1fr))!important;
+        gap:1px!important;
+        overflow:hidden!important;
+    }
+    main > .topbar .ai-performance-header-strip{
+        display:grid!important;
+        grid-template-columns:.95fr repeat(8,minmax(0,1fr))!important;
+        gap:1px!important;
+        overflow:hidden!important;
+    }
+    main > .topbar .wallet-status-strip > *,
+    main > .topbar .ai-performance-header-strip > *{
+        min-width:0!important;
+        width:auto!important;
+        padding:3px clamp(2px,.28vw,6px)!important;
+    }
+    main > .topbar .wallet-kpi small,
+    main > .topbar .ai-header-metric span{
+        font-size:clamp(5.5px,.4vw,7.5px)!important;
+        line-height:1.05!important;
+        white-space:nowrap!important;
+        overflow:hidden!important;
+        text-overflow:ellipsis!important;
+    }
+    main > .topbar .wallet-kpi strong,
+    main > .topbar .ai-header-metric strong{
+        font-size:clamp(8px,.58vw,11px)!important;
+        line-height:1.05!important;
+        white-space:nowrap!important;
+        overflow:hidden!important;
+        text-overflow:ellipsis!important;
+    }
+    main > .topbar .ai-performance-title{
+        display:flex!important;
+        align-items:center!important;
+        min-width:0!important;
+        padding:3px!important;
+    }
+    main > .topbar .ai-performance-title small{display:none!important}
+    main > .topbar .ai-performance-title select{
+        width:100%!important;
+        min-width:0!important;
+        max-width:100%!important;
+        height:clamp(22px,1.65vw,26px)!important;
+        font-size:clamp(7px,.47vw,9px)!important;
+        padding:0 2px!important;
+    }
+    main > .topbar .topbar-actions{
+        display:flex!important;
+        flex-wrap:nowrap!important;
+        align-items:center!important;
+        justify-content:flex-end!important;
+        gap:clamp(2px,.2vw,4px)!important;
+        flex-shrink:0!important;
+        position:relative!important;
+        z-index:2!important;
+    }
+    main > .topbar .topbar-actions button{
+        height:clamp(27px,2vw,32px)!important;
+        min-width:0!important;
+        padding:0 clamp(5px,.42vw,9px)!important;
+        font-size:clamp(8px,.52vw,10px)!important;
+        white-space:nowrap!important;
+    }
+}
+
+@media (min-width:1001px) and (max-width:1360px){
+    main > .topbar{
+        grid-template-columns:auto minmax(0,.95fr) minmax(0,1.2fr) auto!important;
+    }
+    main > .topbar .header-market-controls{width:90px!important}
+    main > .topbar .wallet-status-strip > *,
+    main > .topbar .ai-performance-header-strip > *{padding-left:2px!important;padding-right:2px!important}
+    main > .topbar .wallet-kpi small,
+    main > .topbar .ai-header-metric span{font-size:5.5px!important}
+    main > .topbar .wallet-kpi strong,
+    main > .topbar .ai-header-metric strong{font-size:8px!important}
+    main > .topbar .topbar-actions button{padding-left:5px!important;padding-right:5px!important;font-size:8px!important}
+}
+
+@media (min-width:1001px) and (max-width:1160px){
+    main > .topbar .wallet-kpi small,
+    main > .topbar .ai-header-metric span{display:none!important}
+    main > .topbar .wallet-kpi,
+    main > .topbar .ai-header-metric{display:flex!important;align-items:center!important;justify-content:center!important}
+    main > .topbar .wallet-kpi strong,
+    main > .topbar .ai-header-metric strong{font-size:8px!important}
+}
+
+/* v4.0 resilient adaptive terminal header.
+   Actions always remain visible; lower-priority metrics progressively collapse
+   instead of pushing Refresh / Logout outside the viewport. */
+@media (min-width:761px){
+    main > .topbar{
+        display:grid!important;
+        grid-template-columns:max-content minmax(0,1fr) minmax(0,1fr) max-content!important;
+        align-items:center!important;
+        gap:clamp(3px,.35vw,7px)!important;
+        left:240px!important;
+        right:0!important;
+        width:auto!important;
+        max-width:none!important;
+        min-width:0!important;
+        height:auto!important;
+        min-height:48px!important;
+        padding:6px 10px!important;
+        overflow:hidden!important;
+    }
+    body.sidebar-collapsed main > .topbar{left:76px!important}
+    body:not(.sidebar-collapsed) main > .topbar{left:240px!important}
+
+    main > .topbar .topbar-main,
+    main > .topbar .wallet-status-strip,
+    main > .topbar .ai-performance-header-strip,
+    main > .topbar .topbar-actions{
+        min-width:0!important;
+        max-width:100%!important;
+        margin:0!important;
+    }
+
+    main > .topbar .topbar-main{
+        display:flex!important;
+        align-items:center!important;
+        flex-direction:row!important;
+    }
+    main > .topbar .header-market-controls{
+        display:flex!important;
+        flex-wrap:nowrap!important;
+        width:auto!important;
+        min-width:0!important;
+        gap:3px!important;
+    }
+    main > .topbar .header-market-controls label{min-width:0!important}
+    main > .topbar .filters select{
+        width:clamp(52px,4.3vw,78px)!important;
+        min-width:0!important;
+        max-width:78px!important;
+        height:32px!important;
+        padding:0 5px!important;
+        font-size:10px!important;
+    }
+
+    main > .topbar .wallet-status-strip,
+    main > .topbar .ai-performance-header-strip{
+        display:flex!important;
+        flex-wrap:nowrap!important;
+        align-items:stretch!important;
+        gap:1px!important;
+        width:100%!important;
+        overflow:hidden!important;
+        border-radius:8px!important;
+    }
+    main > .topbar .wallet-status-strip > *,
+    main > .topbar .ai-performance-header-strip > *{
+        flex:1 1 0!important;
+        min-width:0!important;
+        width:auto!important;
+        height:38px!important;
+        min-height:38px!important;
+        padding:4px clamp(3px,.3vw,6px)!important;
+        overflow:hidden!important;
+    }
+    main > .topbar .wallet-kpi small,
+    main > .topbar .ai-header-metric span{
+        display:block!important;
+        font-size:clamp(5.5px,.4vw,7px)!important;
+        line-height:1.05!important;
+        white-space:nowrap!important;
+        overflow:hidden!important;
+        text-overflow:ellipsis!important;
+    }
+    main > .topbar .wallet-kpi strong,
+    main > .topbar .ai-header-metric strong{
+        font-size:clamp(8px,.6vw,11px)!important;
+        line-height:1.15!important;
+        white-space:nowrap!important;
+        overflow:hidden!important;
+        text-overflow:ellipsis!important;
+    }
+    main > .topbar .wallet-kpi span,
+    main > .topbar .wallet-kpi em{display:none!important}
+
+    main > .topbar .ai-performance-title{
+        flex:.9 1 0!important;
+        min-width:0!important;
+        display:flex!important;
+        align-items:center!important;
+        padding:4px!important;
+    }
+    main > .topbar .ai-performance-title small{display:none!important}
+    main > .topbar .ai-performance-title select{
+        width:100%!important;
+        min-width:0!important;
+        max-width:100%!important;
+        height:26px!important;
+        padding:0 3px!important;
+        font-size:8px!important;
+    }
+
+    /* This column owns permanent space at the right edge. */
+    main > .topbar .topbar-actions{
+        display:flex!important;
+        flex-wrap:nowrap!important;
+        align-items:center!important;
+        justify-content:flex-end!important;
+        gap:5px!important;
+        width:max-content!important;
+        min-width:max-content!important;
+        flex:none!important;
+        position:relative!important;
+        right:auto!important;
+        z-index:20!important;
+        background:rgba(7,16,24,.985)!important;
+    }
+    main > .topbar .topbar-actions .logout-form{display:block!important;margin:0!important}
+    main > .topbar .topbar-actions button{
+        display:inline-flex!important;
+        align-items:center!important;
+        justify-content:center!important;
+        visibility:visible!important;
+        opacity:1!important;
+        width:auto!important;
+        min-width:58px!important;
+        height:32px!important;
+        padding:0 9px!important;
+        font-size:10px!important;
+        line-height:1!important;
+        white-space:nowrap!important;
+    }
+}
+
+/* 1500px and below: keep the most decision-useful AI metrics. */
+@media (min-width:761px) and (max-width:1500px){
+    main > .topbar .ai-performance-header-strip > .ai-header-metric:nth-of-type(2),
+    main > .topbar .ai-performance-header-strip > .ai-header-metric:nth-of-type(3),
+    main > .topbar .ai-performance-header-strip > .ai-header-metric:nth-of-type(4){display:none!important}
+}
+
+/* 1320px and below: remove secondary wallet occupancy before shrinking actions. */
+@media (min-width:761px) and (max-width:1320px){
+    main > .topbar{grid-template-columns:max-content minmax(0,1.15fr) minmax(0,.95fr) max-content!important}
+    main > .topbar .wallet-status-strip > :nth-child(4),
+    main > .topbar .wallet-status-strip > :nth-child(5){display:none!important}
+    main > .topbar .wallet-kpi small,
+    main > .topbar .ai-header-metric span{font-size:5.5px!important}
+    main > .topbar .wallet-kpi strong,
+    main > .topbar .ai-header-metric strong{font-size:8.5px!important}
+}
+
+/* 1120px and below: preserve one useful dashboard row plus controls/actions. */
+@media (min-width:761px) and (max-width:1120px){
+    main > .topbar{grid-template-columns:max-content minmax(0,1.2fr) minmax(0,.9fr) max-content!important;padding-left:6px!important;padding-right:6px!important}
+    main > .topbar .wallet-status-strip > :nth-child(1){display:none!important}
+    main > .topbar .ai-performance-title,
+    main > .topbar .ai-performance-header-strip > .ai-header-metric:nth-of-type(1){display:none!important}
+    main > .topbar .wallet-kpi small,
+    main > .topbar .ai-header-metric span{display:none!important}
+    main > .topbar .wallet-kpi,
+    main > .topbar .ai-header-metric{display:flex!important;align-items:center!important;justify-content:center!important}
+    main > .topbar .topbar-actions button{min-width:54px!important;padding:0 7px!important;font-size:9px!important}
+}
+
+/* Narrow tablet: keep only core wallet + live AI state; never sacrifice actions. */
+@media (min-width:761px) and (max-width:920px){
+    main > .topbar{grid-template-columns:max-content minmax(0,1fr) minmax(0,.8fr) max-content!important;gap:2px!important}
+    main > .topbar .wallet-status-strip > :nth-child(6),
+    main > .topbar .wallet-status-strip > :nth-child(7){display:none!important}
+    main > .topbar .ai-performance-header-strip > .ai-header-metric:nth-of-type(7),
+    main > .topbar .ai-performance-header-strip > .ai-header-metric:nth-of-type(8){display:none!important}
+    main > .topbar .filters select{width:46px!important;font-size:8px!important;padding:0 2px!important}
+}

@@ -11,6 +11,27 @@ function qualityClass(q){return q==='GOOD_EXIT'?'good':q==='EARLY_EXIT'?'early':
 function qualityLabel(q){return (q||'NEUTRAL_EXIT').replaceAll('_',' ')}
 function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 
+function tradeChartUrl(t){
+ const opened=new Date(t.openedAt);
+ const closed=new Date(t.closedAt);
+ if(Number.isNaN(opened.getTime())||Number.isNaN(closed.getTime())||closed<=opened)return '#';
+ const pnl=Number(t.realizedPnlPercent??t.realizedPnl??0);
+ const params=new URLSearchParams({
+  symbol:String(t.symbol||'ETHUSDT').toUpperCase(),
+  interval:'5m',
+  focusStart:opened.toISOString(),
+  focusEnd:closed.toISOString(),
+  focusDirection:pnl>=0?'UP':'DOWN',
+  debugTrade:'1',
+  debugTradeLabel:t.tradeHistoryId==null?'Inspected trade':`Trade #${t.tradeHistoryId}`,
+  debugEntryTime:opened.toISOString(),
+  debugEntryPrice:String(t.entryPrice??''),
+  debugExitTime:closed.toISOString(),
+  debugExitPrice:String(t.exitPrice??'')
+ });
+ return `/dashboard?${params.toString()}#market`;
+}
+
 function renderSummary(s){
   $('summary-net').textContent=money(s.netPnl);$('summary-net').className=cls(s.netPnl);
   $('summary-count').textContent=`${s.trades} closed trades`;
@@ -29,7 +50,10 @@ function tradeCard(t){
  return `<article class="inspector-card">
   <div class="inspector-card-head">
    <div class="inspector-symbol"><strong>${esc(t.symbol)}</strong>${t.tradeHistoryId==null?'':`<span class="trade-reference">Trade #${esc(t.tradeHistoryId)}</span>`}<span class="badge buy">BUY ↑</span><span class="trade-action-arrow">→</span><span class="badge sell">SELL ↓</span><span class="quality ${qualityClass(t.exitQuality)}">${qualityLabel(t.exitQuality)}</span></div>
-   <div class="inspector-result"><strong class="${resultClass}">${money(t.realizedPnl)} · ${pct(t.realizedPnlPercent)}</strong><small>${duration(t.holdingMinutes)} holding time · ${esc(t.closeReason||t.status)}</small></div>
+   <div class="inspector-head-actions">
+    <a class="trade-chart-link" href="${esc(tradeChartUrl(t))}" title="Open this trade on the dashboard chart"><span>↗</span> View on chart</a>
+    <div class="inspector-result"><strong class="${resultClass}">${money(t.realizedPnl)} · ${pct(t.realizedPnlPercent)}</strong><small>${duration(t.holdingMinutes)} holding time · ${esc(t.closeReason||t.status)}</small></div>
+   </div>
   </div>
   <div class="inspector-card-body">
    <section class="inspector-block"><h3>Entry</h3><div class="inspector-kv">

@@ -31,6 +31,13 @@ const moneyFormatter = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2
 const el = id => document.getElementById(id);
 const value = v => v === null || v === undefined || v === '' ? '—' : numberFormatter.format(Number(v));
 const money = v => v === null || v === undefined ? '—' : '$' + moneyFormatter.format(Number(v));
+const headerNumber = v => {
+    if (v === null || v === undefined || v === '') return '—';
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '—';
+    return new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 3 }).format(n);
+};
+const headerMoney = v => v === null || v === undefined ? '—' : '$' + headerNumber(v);
 const dateTime = v => v ? new Date(v).toLocaleString() : '—';
 const preciseDateTime = v => v ? new Date(v).toLocaleString(undefined, {year:'numeric', month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit'}) : '—';
 const openSignalAnalysisIds = new Set();
@@ -240,7 +247,7 @@ function render(data) {
 function renderHeaderLivePrice(data) {
     const livePrice = data.livePrice ?? data.summary?.latestPrice;
     el('header-live-symbol').textContent = data.symbol || '—';
-    el('header-live-price').textContent = money(livePrice);
+    el('header-live-price').textContent = headerMoney(livePrice);
     el('header-live-timeframe').textContent = `1m market feed · view ${displayInterval(data.interval)}`;
 }
 
@@ -308,11 +315,23 @@ function renderWalletHeader(wallet) {
         node.textContent = signed ? `${amount >= 0 ? '+' : ''}${money(amount)}` : money(amount);
         if (signed) node.className = amount >= 0 ? 'positive' : 'negative';
     };
-    setMoney('header-wallet-value', portfolio);
-    setMoney('header-wallet-available', available);
-    setMoney('header-wallet-invested', invested);
-    setMoney('header-today-pnl', todayPnl, true);
-    setMoney('header-overall-pnl', totalPnl, true);
+    const setPnlMoney = (id, amount) => {
+        const node = el(id);
+        if (!node) return;
+        const value = Number(amount);
+        node.textContent = `${value >= 0 ? '+' : ''}$${headerNumber(value)}`;
+        node.className = value >= 0 ? 'positive' : 'negative';
+    };
+    const setHeaderMoney = (id, amount) => {
+        const node = el(id);
+        if (!node) return;
+        node.textContent = headerMoney(amount);
+    };
+    setHeaderMoney('header-wallet-value', portfolio);
+    setHeaderMoney('header-wallet-available', available);
+    setHeaderMoney('header-wallet-invested', invested);
+    setPnlMoney('header-today-pnl', todayPnl);
+    setPnlMoney('header-overall-pnl', totalPnl);
     if (el('header-active-positions')) el('header-active-positions').textContent = active;
     if (el('nav-position-count')) el('nav-position-count').textContent = active;
 }
@@ -371,8 +390,8 @@ function renderExecutionIntelligence(summary = {}, opportunities = []) {
         'ai-coins-analyzed': summary.coinsScanned || 0
     };
     Object.entries(values).forEach(([id, value]) => { const node = el(id); if (node) node.textContent = value; });
-    if (el('ai-win-rate')) el('ai-win-rate').textContent = `${Number(summary.winRatePercent || 0).toFixed(1)}%`;
-    if (el('ai-profit-factor')) el('ai-profit-factor').textContent = summary.profitFactor == null ? (Number(summary.wins || 0) > 0 ? '∞' : '—') : Number(summary.profitFactor).toFixed(2);
+    if (el('ai-win-rate')) el('ai-win-rate').textContent = `${headerNumber(summary.winRatePercent || 0)}%`;
+    if (el('ai-profit-factor')) el('ai-profit-factor').textContent = summary.profitFactor == null ? (Number(summary.wins || 0) > 0 ? '∞' : '—') : headerNumber(summary.profitFactor);
     const realized = Number(summary.realizedPnlUsdt || 0);
     if (el('ai-realized-pnl')) { el('ai-realized-pnl').textContent = `${realized >= 0 ? '+' : ''}${money(realized)}`; el('ai-realized-pnl').className = realized >= 0 ? 'positive' : 'negative'; }
     const periodLabels = {ALL_TIME:'All Time', TODAY:'Today', LAST_24_HOURS:'Last 24 Hours', LAST_7_DAYS:'Last 7 Days', LAST_30_DAYS:'Last 30 Days'};

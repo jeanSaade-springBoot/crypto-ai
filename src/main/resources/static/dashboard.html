@@ -43,15 +43,9 @@
         <header class="topbar">
             <div class="topbar-main">
                 <div class="monitor-title"><p class="eyebrow">AUTOMATIC TRADING MONITOR</p></div>
-                <div class="filters">
-                <a class="header-link" href="/trade-inspector">Trade Inspector</a>
-                <a class="header-link" href="/administration">Administration</a>
-                <label>Symbol<select id="symbol-select"><option>BTCUSDT</option></select></label>
-                <label>Interval<select id="interval-select"><option value="1m">1m</option><option value="5m">5m</option><option value="1h">1h</option><option value="4h">4h</option><option value="1d">1D</option></select></label>
-                <button id="refresh-button" type="button">Refresh</button>
-                <form class="logout-form" action="/logout" method="post">
-                    <button class="logout-button" type="submit">Logout</button>
-                </form>
+                <div class="filters header-market-controls">
+                    <label class="symbol-control"><span class="visually-hidden">Symbol</span><select id="symbol-select" aria-label="Symbol"><option>BTCUSDT</option></select></label>
+                    <label class="interval-control"><span class="visually-hidden">Interval</span><select id="interval-select" aria-label="Interval"><option value="1m">1m</option><option value="5m">5m</option><option value="1h">1h</option><option value="4h">4h</option><option value="1d">1D</option></select></label>
                 </div>
             </div>
             <section id="wallet-status-strip" class="wallet-status-strip" aria-label="Live wallet status">
@@ -67,7 +61,6 @@
             </section>
             <section class="ai-performance-header-strip" aria-label="Global AI performance">
                 <div class="ai-performance-title">
-                    <span>AI PERFORMANCE</span>
                     <small>ALL COINS</small>
                     <select id="ai-period-select" aria-label="AI performance period">
                         <option value="ALL_TIME" selected>All Time</option>
@@ -85,8 +78,13 @@
                 <div class="ai-header-metric"><span>Coins analyzed</span><strong id="ai-coins-analyzed">0</strong></div>
                 <div class="ai-header-metric"><span>Win rate</span><strong id="ai-win-rate">0%</strong></div>
                 <div class="ai-header-metric"><span>PF</span><strong id="ai-profit-factor">—</strong></div>
-                <div class="ai-header-metric pnl-metric"><span>Realized P/L</span><strong id="ai-realized-pnl">—</strong></div>
             </section>
+            <div class="topbar-actions">
+                <button id="refresh-button" type="button">Refresh</button>
+                <form class="logout-form" action="/logout" method="post">
+                    <button class="logout-button" type="submit">Logout</button>
+                </form>
+            </div>
         </header>
 
 
