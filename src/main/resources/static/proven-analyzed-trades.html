@@ -62,9 +62,21 @@
                     <div><p class="eyebrow">MANUALLY PROVEN SUCCESS TRADES</p><h3>All proven trades on one graph</h3></div>
                     <label class="proven-symbol-picker">Symbol<select id="proven-chart-symbol"><option value="">No proven trades yet</option></select></label>
                 </div>
-                <p class="form-note">BUY and SELL are dot annotations. Hover the chart/x-axis to see browser-local date/time. The chart displays only trades you manually marked Success.</p>
+                <p class="form-note">BUY and SELL are dot annotations. Hover the chart/x-axis to see browser-local date/time. Only manually proven trades are shown.</p>
                 <div id="proven-trades-chart" class="proven-trades-chart"></div>
-                <div id="proven-trades-empty" class="empty hidden">Mark a trade Success to add it to this graph.</div>
+                <div id="proven-trades-empty" class="empty hidden">Check a closed shadow trade to add it to this graph.</div>
+                <div class="proven-saved-grid">
+                    <div class="section-heading proven-grid-heading">
+                        <div><p class="eyebrow">PERSISTENT MANUAL REVIEW</p><h3>Proven trades</h3></div>
+                        <span id="proven-trades-count" class="muted">0 trades</span>
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead><tr><th>#</th><th>Symbol</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>P/L %</th><th>Marked</th><th>Dashboard</th></tr></thead>
+                            <tbody id="proven-saved-trades-body"><tr><td colspan="9">No proven trades yet.</td></tr></tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
             <form id="regression-test-form" class="regression-test-form">
                 <label>Test name<input id="regression-test-name" type="text" value="BNB Rally 09-Aug" maxlength="150" required></label>
@@ -153,9 +165,9 @@
 
             <div id="regression-trades" class="regression-detail hidden">
                 <h3>Shadow trades · exact BUY / SELL points</h3>
-                <p class="form-note">Mark a closed trade as <strong>Success</strong> after your manual review. Proven trades are stored as snapshots and stay available even if regression test data is reset.</p>
+                <p class="form-note">Check a closed trade after your manual review. Checked trades are copied to the persistent Proven trades table and the combined graph; unchecking removes them from both.</p>
                 <div class="table-wrap"><table>
-                    <thead><tr><th>Success</th><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr></thead>
+                    <thead><tr><th title="Add/remove from Proven trades">✓</th><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr></thead>
                     <tbody id="regression-trades-body"><tr><td colspan="10">Run a full replay to see simulated trades.</td></tr></tbody>
                 </table></div>
             </div>

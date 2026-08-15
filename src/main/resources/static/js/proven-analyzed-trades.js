@@ -550,7 +550,7 @@ async function loadRegressionDetail(runId, includeTables = true) {
         tradePanel.classList.remove('hidden');
         document.getElementById('regression-trades-body').innerHTML = trades.map((trade, index) => `
             <tr>
-                <td><label class="proven-success-check" title="Mark this trade as manually proven successful"><input type="checkbox" data-proven-trade-id="${trade.id}" data-proven-run-id="${runId}" ${regressionBool(trade.proven_success) ? 'checked' : ''}><span>Success</span></label></td>
+                <td><label class="proven-success-check" title="Add or remove this trade from Proven trades"><input type="checkbox" aria-label="Add or remove trade ${index + 1} from Proven trades" data-proven-trade-id="${trade.id}" data-proven-run-id="${runId}" ${regressionBool(trade.proven_success) ? 'checked' : ''}></label></td>
                 <td>${index + 1}</td>
                 <td>${formatMoveTime(trade.entry_time)}</td>
                 <td>${formatMovePrice(trade.entry_price)}</td>
@@ -675,8 +675,35 @@ if (regressionPipelineFilter) regressionPipelineFilter.addEventListener('change'
 
 
 let provenTradesChart = null;
+function provenDashboardUrl(trade, index = 0) {
+    return regressionTradeChartUrl(trade?.symbol || 'BNBUSDT', {
+        entry_time: trade?.entry_time, entry_price: trade?.entry_price,
+        exit_time: trade?.exit_time, exit_price: trade?.exit_price,
+        realized_pnl_percent: trade?.realized_pnl_percent
+    }, index);
+}
+function renderProvenTradesGrid(all) {
+    const body = document.getElementById('proven-saved-trades-body');
+    const count = document.getElementById('proven-trades-count');
+    const rows = all || [];
+    if (count) count.textContent = `${rows.length} trade${rows.length === 1 ? '' : 's'}`;
+    if (!body) return;
+    body.innerHTML = rows.length ? rows.map((trade, index) => `
+        <tr>
+            <td>${index + 1}</td>
+            <td>${escapeHtml(String(trade.symbol || '—').toUpperCase())}</td>
+            <td>${formatMoveTime(trade.entry_time)}</td>
+            <td>${formatMovePrice(trade.entry_price)}</td>
+            <td>${trade.exit_time ? formatMoveTime(trade.exit_time) : 'OPEN'}</td>
+            <td>${trade.exit_price == null ? '—' : formatMovePrice(trade.exit_price)}</td>
+            <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>
+            <td>${formatMoveTime(trade.marked_at)}</td>
+            <td><a class="secondary-button regression-chart-link" href="${provenDashboardUrl(trade, index)}">View</a></td>
+        </tr>`).join('') : '<tr><td colspan="9">No proven trades yet.</td></tr>';
+}
 async function loadProvenTradesGraph(preferredSymbol = null) {
     const all = await api('/api/administration/regression-tests/proven-trades');
+    renderProvenTradesGrid(all);
     const selector = document.getElementById('proven-chart-symbol');
     const symbols = [...new Set((all || []).map(t => String(t.symbol || '').toUpperCase()).filter(Boolean))];
     if (selector) {
@@ -742,7 +769,7 @@ if (provenTradesBody) provenTradesBody.addEventListener('change', async event =>
         const url=`/api/administration/regression-tests/proven-trades/${encodeURIComponent(cb.dataset.provenRunId)}/${encodeURIComponent(cb.dataset.provenTradeId)}`;
         await api(url,{method:cb.checked?'POST':'DELETE'});
         await loadProvenTradesGraph();
-        showAdminMessage(cb.checked?'Trade marked as proven success.':'Trade removed from proven success graph.');
+        showAdminMessage(cb.checked?'Trade added to Proven trades.':'Trade removed from Proven trades.');
     } catch(error){ cb.checked=!cb.checked; showAdminMessage(error.message,true); }
     finally{cb.disabled=false;}
 });
