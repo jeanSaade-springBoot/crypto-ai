@@ -105,7 +105,7 @@ async function loadRegressionRuns() {
         const resetButton = document.getElementById('regression-reset');
         if (resetButton) {
             resetButton.disabled = Boolean(active);
-            resetButton.title = active ? `Test #${active.id} is still ${active.status}. Wait for it to finish before resetting.` : 'Clear all isolated regression/shadow test data';
+            resetButton.title = active ? `Test #${active.id} is still ${active.status}. Wait for it to finish before clearing data.` : 'Archive completed current test runs, then clear only active regression/shadow test data';
         }
         return runs;
     } catch (error) {
@@ -710,7 +710,7 @@ if (regressionArchivesBody) regressionArchivesBody.addEventListener('click', asy
 
 const regressionReset = document.getElementById('regression-reset');
 if (regressionReset) regressionReset.addEventListener('click', async () => {
-    const confirmed = window.confirm('Archive every completed regression run, then clear active shadow/test data? Proven trades and production data are never deleted.');
+    const confirmed = window.confirm('Clear current test data? Completed current runs will be archived first. Proven trades, Archived runs, and production data will NOT be deleted.');
     if (!confirmed) return;
     regressionReset.disabled = true;
     try {
@@ -725,7 +725,7 @@ if (regressionReset) regressionReset.addEventListener('click', async () => {
         setRegressionRunButtonRunning(false);
         await loadRegressionRuns();
         await loadRegressionArchives();
-        showAdminMessage(`Completed runs archived safely. Test data reset. Runs ${deleted.runs || 0}, signals ${deleted.signals || 0}, opportunities ${deleted.opportunities || 0}, positions ${deleted.positions || 0}, executions ${deleted.executions || 0} removed.`);
+        showAdminMessage(`Current test data cleared safely after archive. Archived and Proven data preserved. Runs ${deleted.runs || 0}, signals ${deleted.signals || 0}, opportunities ${deleted.opportunities || 0}, positions ${deleted.positions || 0}, executions ${deleted.executions || 0} removed.`);
     } catch (error) {
         showAdminMessage(error.message, true);
     } finally {
