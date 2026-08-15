@@ -854,4 +854,49 @@ class ExecutionIntelligenceServiceTest {
         assertThat(decision.source()).isNotEqualTo("REVERSAL_RETRACEMENT");
     }
 
+
+    @Test
+    void balancedEarlyBlocksImmediatelyAfterFreshFiveMinuteSellWhenRecoveryIsWeak() {
+        TradeSignal current = signal(900L, "ETHUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY, now, 75, 67);
+        TradeSignal recoveredWatch = signal(901L, "ETHUSDT", "5m", SignalDecision.WATCH, SignalDecision.WATCH, now, 61, 67);
+        TradeSignal recentSell = signal(902L, "ETHUSDT", "5m", SignalDecision.SELL, SignalDecision.SELL, now.minusSeconds(300), 37, 67);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("ETHUSDT", "5m"))
+                .thenReturn(List.of(recoveredWatch, recentSell));
+
+        var evidence = new ExecutionIntelligenceService.Evidence(20, 1, 0, 15, 4, 0, 38, 0, 0, 60, 67,
+                SignalDecision.WATCH, SignalDecision.WATCH, now.minusSeconds(180), List.of(900L));
+        var quality = new ExecutionIntelligenceService.EntryQuality(70, "GOOD_ENTRY", 0.1, 0.5, 1.5, 1);
+        var validation = TradeExecutionValidationService.ValidationResult.allow(50, "BALANCED_EARLY", "both WATCH");
+
+        ExecutionIntelligenceService.ExecutionDecision decision = ReflectionTestUtils.invokeMethod(
+                service, "balancedEarlyPostBearishGuard", current, evidence, quality, validation);
+
+        assertThat(decision).isNotNull();
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.code()).isEqualTo("BALANCED_EARLY_POST_BEARISH_RECOVERY_REQUIRED");
+    }
+
+    @Test
+    void balancedEarlyCanRecoverAfterTwoFiveMinuteConfirmationsButCapsInitialRisk() {
+        TradeSignal current = signal(910L, "ETHUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY, now, 82, 74);
+        TradeSignal watch2 = signal(911L, "ETHUSDT", "5m", SignalDecision.WATCH, SignalDecision.WATCH, now, 68, 70);
+        TradeSignal watch1 = signal(912L, "ETHUSDT", "5m", SignalDecision.WATCH, SignalDecision.WATCH, now.minusSeconds(300), 66, 70);
+        TradeSignal recentSell = signal(913L, "ETHUSDT", "5m", SignalDecision.SELL, SignalDecision.SELL, now.minusSeconds(600), 38, 68);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("ETHUSDT", "5m"))
+                .thenReturn(List.of(watch2, watch1, recentSell));
+
+        var evidence = new ExecutionIntelligenceService.Evidence(20, 3, 4, 9, 4, 6, 67, 8, 7, 72, 70,
+                SignalDecision.WATCH, SignalDecision.WATCH, now.minusSeconds(600), List.of(910L));
+        var quality = new ExecutionIntelligenceService.EntryQuality(72, "GOOD_ENTRY", 0.1, 0.5, 1.6, 5);
+        var validation = TradeExecutionValidationService.ValidationResult.allow(50, "BALANCED_EARLY", "both WATCH");
+
+        ExecutionIntelligenceService.ExecutionDecision decision = ReflectionTestUtils.invokeMethod(
+                service, "balancedEarlyPostBearishGuard", current, evidence, quality, validation);
+
+        assertThat(decision).isNotNull();
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.code()).isEqualTo("BALANCED_EARLY_POST_BEARISH_RECOVERED");
+        assertThat(decision.positionPercent()).isEqualTo(25);
+    }
+
 }

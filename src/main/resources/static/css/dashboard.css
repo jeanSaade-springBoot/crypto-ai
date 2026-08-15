@@ -2745,3 +2745,4 @@ body.position-modal-open{overflow:hidden}
     main > .topbar .ai-performance-header-strip > .ai-header-metric:nth-of-type(8){display:none!important}
     main > .topbar .filters select{width:46px!important;font-size:8px!important;padding:0 2px!important}
 }
+.debug-trade-dot{pointer-events:auto!important;cursor:crosshair}

@@ -99,11 +99,9 @@ public class RegressionTestService {
 
         jdbcTemplate.execute("ALTER TABLE wallet_execution_test AUTO_INCREMENT = 1");
         jdbcTemplate.execute("ALTER TABLE position_management_test AUTO_INCREMENT = 1");
-        jdbcTemplate.execute("ALTER TABLE wallet_position_test AUTO_INCREMENT = 1");
         jdbcTemplate.execute("ALTER TABLE execution_opportunity_test AUTO_INCREMENT = 1");
         jdbcTemplate.execute("ALTER TABLE analysis_test_signal AUTO_INCREMENT = 1");
         jdbcTemplate.execute("ALTER TABLE analysis_test_result AUTO_INCREMENT = 1");
-        jdbcTemplate.execute("ALTER TABLE analysis_test_run AUTO_INCREMENT = 1");
 
         return Map.of(
                 "runs", runs,
@@ -172,8 +170,9 @@ public class RegressionTestService {
     @Transactional(readOnly = true)
     public List<Map<String, Object>> trades(long runId) {
         return jdbcTemplate.queryForList("""
-                SELECT entry_time, entry_price, exit_time, exit_price, exit_reason,
-                       realized_pnl_usdt, realized_pnl_percent, position_percent, status
+                SELECT id, entry_time, entry_price, exit_time, exit_price, exit_reason,
+                       realized_pnl_usdt, realized_pnl_percent, position_percent, status,
+                       EXISTS (SELECT 1 FROM proven_analyzed_trade p WHERE p.source_test_run_id = wallet_position_test.test_run_id AND p.source_trade_id = wallet_position_test.id) AS proven_success
                 FROM wallet_position_test
                 WHERE test_run_id = ?
                 ORDER BY entry_time ASC
@@ -191,6 +190,79 @@ public class RegressionTestService {
                 ORDER BY generated_at ASC, id ASC
                 LIMIT 5000
                 """, runId);
+    }
+
+
+    @Transactional
+    public Map<String, Object> markProvenSuccess(long runId, long tradeId) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
+                SELECT id, test_run_id, symbol, entry_time, entry_price, exit_time, exit_price, exit_reason,
+                       realized_pnl_usdt, realized_pnl_percent, position_percent
+                FROM wallet_position_test
+                WHERE test_run_id = ? AND id = ? AND status = 'CLOSED'
+                """, runId, tradeId);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Shadow trade not found.");
+        Map<String, Object> t = rows.get(0);
+        jdbcTemplate.update("""
+                INSERT INTO proven_analyzed_trade
+                    (source_test_run_id, source_trade_id, symbol, entry_time, entry_price, exit_time, exit_price,
+                     exit_reason, realized_pnl_usdt, realized_pnl_percent, position_percent)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE symbol=VALUES(symbol), entry_time=VALUES(entry_time), entry_price=VALUES(entry_price),
+                    exit_time=VALUES(exit_time), exit_price=VALUES(exit_price), exit_reason=VALUES(exit_reason),
+                    realized_pnl_usdt=VALUES(realized_pnl_usdt), realized_pnl_percent=VALUES(realized_pnl_percent),
+                    position_percent=VALUES(position_percent), marked_at=CURRENT_TIMESTAMP(6)
+                """,
+                runId, tradeId, t.get("symbol"), t.get("entry_time"), t.get("entry_price"), t.get("exit_time"),
+                t.get("exit_price"), t.get("exit_reason"), t.get("realized_pnl_usdt"), t.get("realized_pnl_percent"),
+                t.get("position_percent"));
+        return Map.of("saved", true, "runId", runId, "tradeId", tradeId);
+    }
+
+    @Transactional
+    public Map<String, Object> unmarkProvenSuccess(long runId, long tradeId) {
+        int deleted = jdbcTemplate.update("DELETE FROM proven_analyzed_trade WHERE source_test_run_id=? AND source_trade_id=?", runId, tradeId);
+        return Map.of("saved", false, "deleted", deleted, "runId", runId, "tradeId", tradeId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> provenTrades() {
+        return jdbcTemplate.queryForList("""
+                SELECT id, source_test_run_id, source_trade_id, symbol, entry_time, entry_price, exit_time, exit_price,
+                       exit_reason, realized_pnl_usdt, realized_pnl_percent, position_percent, marked_at
+                FROM proven_analyzed_trade
+                ORDER BY entry_time ASC
+                LIMIT 1000
+                """);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> provenTradeChart(String symbol) {
+        String normalized = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        List<Map<String, Object>> trades = jdbcTemplate.queryForList("""
+                SELECT id, source_test_run_id, source_trade_id, symbol, entry_time, entry_price, exit_time, exit_price,
+                       exit_reason, realized_pnl_usdt, realized_pnl_percent, position_percent, marked_at
+                FROM proven_analyzed_trade
+                WHERE symbol = ?
+                ORDER BY entry_time ASC
+                LIMIT 250
+                """, normalized);
+        java.util.LinkedHashMap<String, Map<String, Object>> candles = new java.util.LinkedHashMap<>();
+        for (Map<String, Object> trade : trades) {
+            Timestamp entry = (Timestamp) trade.get("entry_time");
+            Timestamp exit = (Timestamp) trade.get("exit_time");
+            if (entry == null) continue;
+            Instant from = entry.toInstant().minus(java.time.Duration.ofMinutes(30));
+            Instant to = (exit == null ? entry.toInstant().plus(java.time.Duration.ofHours(1)) : exit.toInstant()).plus(java.time.Duration.ofMinutes(30));
+            List<Map<String, Object>> segment = jdbcTemplate.queryForList("""
+                    SELECT open_time, open_price, high_price, low_price, close_price, volume
+                    FROM candle
+                    WHERE symbol=? AND interval_code='5m' AND closed=1 AND open_time BETWEEN ? AND ?
+                    ORDER BY open_time ASC
+                    """, normalized, Timestamp.from(from), Timestamp.from(to));
+            for (Map<String, Object> c : segment) candles.put(String.valueOf(c.get("open_time")), c);
+        }
+        return Map.of("symbol", normalized, "trades", trades, "candles", new java.util.ArrayList<>(candles.values()));
     }
 
     @Transactional(readOnly = true)

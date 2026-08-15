@@ -107,6 +107,14 @@ public class ExecutionIntelligenceService {
     private static final double RETRACEMENT_TARGET_TOLERANCE_ATR = 0.35d;
     private static final double RETRACEMENT_MAX_OVERSHOOT_ATR = 0.75d;
     private static final int RETRACEMENT_POSITION_PERCENT = 20;
+    // Post-bearish guard for BALANCED_EARLY only. Normal BUY paths are untouched.
+    // A single 5m WATCH immediately after a fresh 5m SELL is not enough to re-open risk.
+    private static final Duration BALANCED_EARLY_BEARISH_LOOKBACK = Duration.ofMinutes(20);
+    private static final int BALANCED_EARLY_POST_BEARISH_MIN_HEALTH = 60;
+    private static final int BALANCED_EARLY_POST_BEARISH_MIN_EVIDENCE = 4;
+    private static final int BALANCED_EARLY_POST_BEARISH_MIN_ENTRY_QUALITY = 60;
+    private static final int BALANCED_EARLY_POST_BEARISH_REQUIRED_5M_RECOVERY = 2;
+    private static final int BALANCED_EARLY_POST_BEARISH_MAX_POSITION = 25;
     private static final int RETRACEMENT_MIN_CURRENT_HEALTH = 45;
     private static final int RETRACEMENT_MIN_CURRENT_ENTRY_QUALITY = 50;
     private static final double RETRACEMENT_MIN_CURRENT_RR = 1.15d;
@@ -319,6 +327,15 @@ public class ExecutionIntelligenceService {
         if (isDirectBuyCandidate(signal)) {
             TradeExecutionValidationService.ValidationResult validation = validationService.validateBuy(signal);
             if (validation.allowed()) {
+                ExecutionDecision postBearishGuard = balancedEarlyPostBearishGuard(signal, evidence, entryQuality, validation);
+                if (postBearishGuard != null) {
+                    saveOpportunity(signal, evidence,
+                            postBearishGuard.allowed() ? "CONFIRMED" : postBearishGuard.state(),
+                            postBearishGuard.source(), postBearishGuard.positionPercent(),
+                            postBearishGuard.code(), postBearishGuard.explanation());
+                    return postBearishGuard;
+                }
+
                 ExecutionDecision guarded = applyInitialEntryQualityGuard(
                         ExecutionDecision.allow(
                                 "IMMEDIATE_VALIDATION",
@@ -1046,6 +1063,75 @@ public class ExecutionIntelligenceService {
                         + ". No second trade signal was generated.",
                 e
         );
+    }
+
+
+    /**
+     * BALANCED_EARLY deliberately bypasses accumulated evidence in normal conditions.
+     * After a fresh 5m SELL/STRONG_SELL, however, it must prove that the bearish phase
+     * actually recovered before that shortcut is available again. This guard changes
+     * only BALANCED_EARLY; accumulated evidence, normal BUY, retracement, transition,
+     * ATR and SELL logic remain unchanged.
+     */
+    private ExecutionDecision balancedEarlyPostBearishGuard(
+            TradeSignal current, Evidence evidence, EntryQuality entryQuality,
+            TradeExecutionValidationService.ValidationResult validation) {
+        if (validation == null || !validation.allowed() || !"BALANCED_EARLY".equals(validation.code())) return null;
+        if (current == null || current.getGeneratedAt() == null) return null;
+
+        List<TradeSignal> fiveMinuteHistory = recentSignals(current.getSymbol(), CONFIRMATION_INTERVAL, current.getGeneratedAt()).stream()
+                .filter(s -> s != null && s.getGeneratedAt() != null && !s.getGeneratedAt().isAfter(current.getGeneratedAt()))
+                .sorted(java.util.Comparator.comparing(TradeSignal::getGeneratedAt).reversed())
+                .toList();
+
+        Instant cutoff = current.getGeneratedAt().minus(BALANCED_EARLY_BEARISH_LOOKBACK);
+        TradeSignal lastBearishFive = fiveMinuteHistory.stream()
+                .filter(s -> !s.getGeneratedAt().isBefore(cutoff))
+                .filter(s -> isBearish(strongerDecision(s.getDecision(), s.getOriginalDecision())))
+                .findFirst()
+                .orElse(null);
+        if (lastBearishFive == null) return null; // existing BALANCED_EARLY behavior stays untouched
+
+        int consecutiveRecoveredFive = 0;
+        for (TradeSignal five : fiveMinuteHistory) {
+            if (!five.getGeneratedAt().isAfter(lastBearishFive.getGeneratedAt())) break;
+            SignalDecision decision = strongerDecision(five.getDecision(), five.getOriginalDecision());
+            if (decision == SignalDecision.WATCH || isBullish(decision)) consecutiveRecoveredFive++;
+            else break;
+        }
+
+        boolean healthOk = evidence.opportunityHealth() >= BALANCED_EARLY_POST_BEARISH_MIN_HEALTH;
+        boolean evidenceOk = evidence.evidenceScore() >= BALANCED_EARLY_POST_BEARISH_MIN_EVIDENCE;
+        boolean recoveryOk = consecutiveRecoveredFive >= BALANCED_EARLY_POST_BEARISH_REQUIRED_5M_RECOVERY;
+        boolean qualityOk = entryQuality != null && entryQuality.score() >= BALANCED_EARLY_POST_BEARISH_MIN_ENTRY_QUALITY;
+
+        if (!healthOk || !evidenceOk || !recoveryOk || !qualityOk) {
+            return ExecutionDecision.building(
+                    "BALANCED_EARLY_POST_BEARISH_RECOVERY_REQUIRED",
+                    "BALANCED_EARLY is paused after a fresh 5m bearish confirmation. "
+                            + "Require health>=" + BALANCED_EARLY_POST_BEARISH_MIN_HEALTH
+                            + ", evidence>=" + BALANCED_EARLY_POST_BEARISH_MIN_EVIDENCE
+                            + ", " + BALANCED_EARLY_POST_BEARISH_REQUIRED_5M_RECOVERY
+                            + " consecutive recovered 5m WATCH/BUY states, and Entry Quality>="
+                            + BALANCED_EARLY_POST_BEARISH_MIN_ENTRY_QUALITY
+                            + ". Actual health=" + evidence.opportunityHealth()
+                            + ", evidence=" + evidence.evidenceScore()
+                            + ", recovered5m=" + consecutiveRecoveredFive
+                            + ", entryQuality=" + (entryQuality == null ? 0 : entryQuality.score()) + ".",
+                    evidence);
+        }
+
+        int reduced = Math.min(validation.positionPercent(), BALANCED_EARLY_POST_BEARISH_MAX_POSITION);
+        return ExecutionDecision.allow(
+                "IMMEDIATE_VALIDATION",
+                "BALANCED_EARLY_POST_BEARISH_RECOVERED",
+                reduced,
+                "BALANCED_EARLY recovered safely after recent 5m bearish context: health="
+                        + evidence.opportunityHealth() + ", evidence=" + evidence.evidenceScore()
+                        + ", recovered5m=" + consecutiveRecoveredFive + ", Entry Quality="
+                        + entryQuality.score() + ". Initial exposure capped at " + reduced
+                        + "% so normal progressive confirmation can add later.",
+                evidence);
     }
 
     private boolean isDirectBuyCandidate(TradeSignal signal) {

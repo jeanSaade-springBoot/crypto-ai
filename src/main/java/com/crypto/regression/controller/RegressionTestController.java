@@ -57,4 +57,21 @@ public class RegressionTestController {
     public List<Map<String, Object>> opportunities(@PathVariable long id) {
         return service.opportunities(id);
     }
+
+    @PostMapping("/proven-trades/{runId}/{tradeId}")
+    public Map<String, Object> markProven(@PathVariable long runId, @PathVariable long tradeId) {
+        return service.markProvenSuccess(runId, tradeId);
+    }
+
+    @DeleteMapping("/proven-trades/{runId}/{tradeId}")
+    public Map<String, Object> unmarkProven(@PathVariable long runId, @PathVariable long tradeId) {
+        return service.unmarkProvenSuccess(runId, tradeId);
+    }
+
+    @GetMapping("/proven-trades")
+    public List<Map<String, Object>> provenTrades() { return service.provenTrades(); }
+
+    @GetMapping("/proven-trades/chart")
+    public Map<String, Object> provenTradeChart(@RequestParam String symbol) { return service.provenTradeChart(symbol); }
+
 }

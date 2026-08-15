@@ -32,6 +32,7 @@
                 <a href="/trade-inspector" title="Trade Inspector"><span class="nav-icon">⌕</span><span class="nav-text">Trade Inspector</span></a>
                 <a href="/score-diagnostics" title="Score Diagnostics"><span class="nav-icon">◎</span><span class="nav-text">Score Diagnostics</span></a>
                 <a href="/crypto-fundamentals" title="Crypto Fundamentals"><span class="nav-icon">ƒ</span><span class="nav-text">Crypto Fundamentals</span></a>
+                <a href="/proven-analyzed-trades" title="Proven Analyzed Trades"><span class="nav-icon">✓</span><span class="nav-text">Proven Analyzed Trades</span></a>
             </div>
             <div class="nav-group"><span class="nav-group-label">SYSTEM</span>
                 <a class="active" href="/administration" title="Administration"><span class="nav-icon">⚙</span><span class="nav-text">Administration</span></a>
@@ -201,115 +202,6 @@
                 <thead><tr><th>Symbol</th><th>Type</th><th>Status</th><th>Actions</th></tr></thead>
                 <tbody id="coin-body"><tr><td colspan="4">Loading coins…</td></tr></tbody>
             </table></div>
-        </section>
-
-        <section id="ai-regression-tests" class="panel regression-test-panel">
-            <div class="section-heading">
-                <div>
-                    <p class="eyebrow">SAFE REPLAY · NO LIVE WRITES</p>
-                    <h2>AI Regression Tests</h2>
-                </div>
-                <div class="section-actions">
-                    <button id="regression-refresh" type="button" class="secondary-button">Refresh Runs</button>
-                    <button id="regression-reset" type="button" class="danger-button">Reset Test Data</button>
-                </div>
-            </div>
-            <p class="debug-isolation-note"><strong>Administration-triggered regression only.</strong> This test reads historical candles/signals and writes only to isolated regression tables including <code>analysis_test_*</code>, <code>execution_opportunity_test</code> and <code>position_management_test</code>. It never calls wallet execution, live position management, <code>trade_signal</code> writes or production <code>execution_opportunity</code> writes.</p>
-
-            <form id="regression-test-form" class="regression-test-form">
-                <label>Test name<input id="regression-test-name" type="text" value="BNB Rally 09-Aug" maxlength="150" required></label>
-                <label>Symbol
-                    <select id="regression-symbol" required>
-                        <option value="">Loading configured coins…</option>
-                    </select>
-                </label>
-                <label>From (browser local time)<input id="regression-start" type="datetime-local" value="2026-08-09T07:00" required></label>
-                <label>To (browser local time)<input id="regression-end" type="datetime-local" value="2026-08-09T16:00" required></label><small id="regression-browser-zone" class="muted">Times display in your browser time zone.</small>
-                <button id="regression-run" type="submit">Run Full Production Replay</button>
-            </form>
-            <p id="regression-window-note" class="form-note">Select the exact historical From/To window. The replay simulates production decisions and trades without touching the real wallet.</p>
-
-            <div id="regression-active" class="regression-active hidden">
-                <div class="regression-progress-heading">
-                    <strong id="regression-active-title">Regression run</strong>
-                    <span id="regression-active-status" class="status-pill">PENDING</span>
-                </div>
-                <div class="regression-progress-track"><div id="regression-progress-bar" class="regression-progress-bar"></div></div>
-                <div class="regression-progress-meta"><span id="regression-progress-percent">0%</span><span id="regression-current-step">Queued</span></div>
-            </div>
-
-            <div id="regression-result" class="regression-result hidden">
-                <div class="regression-result-grid">
-                    <article><span>1m event path</span><strong id="regression-1m">—</strong><small id="regression-1m-historical">—</small></article>
-                    <article><span>5m event path</span><strong id="regression-5m">—</strong><small id="regression-5m-historical">—</small></article>
-                    <article><span>1h event path</span><strong id="regression-1h">—</strong><small id="regression-1h-historical">—</small></article>
-                    <article><span>Fresh BUY signals</span><strong id="regression-generated-buys">—</strong><small id="regression-generated-total">Generated from historical candles</small></article>
-                    <article><span>Generation errors</span><strong id="regression-generation-errors">—</strong><small>Must be 0 for PASS</small></article>
-                    <article><span>Shadow trades</span><strong id="regression-shadow-trades">—</strong><small>Simulated BUY→SELL cycles</small></article>
-                    <article><span>Shadow P/L</span><strong id="regression-shadow-pnl">—</strong><small id="regression-shadow-wallet">Final wallet —</small></article>
-                    <article><span>Decision corrections</span><strong id="regression-corrections">—</strong><small>Original bearish → final non-bearish</small></article>
-                    <article><span>Old hard reversals</span><strong id="regression-old-reversals">—</strong><small>Pre-fix interpretation</small></article>
-                    <article><span>Corrected hard reversals</span><strong id="regression-new-reversals">—</strong><small>Final decision authority</small></article>
-                </div>
-                <p id="regression-notes" class="form-note"></p>
-            </div>
-
-            <div id="regression-failure" class="regression-failure hidden">
-                <div class="section-heading">
-                    <div><p class="eyebrow">TEST EXCEPTION</p><h3>Failure details</h3></div>
-                </div>
-                <div class="regression-failure-grid">
-                    <div><span>Run</span><strong id="regression-failure-run">—</strong></div>
-                    <div><span>Failed phase</span><strong id="regression-failure-step">—</strong></div>
-                    <div><span>Exception</span><strong id="regression-failure-exception">—</strong></div>
-                </div>
-                <p id="regression-failure-message" class="regression-failure-message"></p>
-                <p id="regression-failure-root" class="regression-failure-root"></p>
-                <details class="regression-stack-details">
-                    <summary>Show full stack trace</summary>
-                    <pre id="regression-failure-stack">No stack trace recorded.</pre>
-                </details>
-            </div>
-
-            <div id="regression-pipeline" class="regression-pipeline hidden">
-                <div class="section-heading regression-pipeline-heading">
-                    <div><p class="eyebrow">WHY DID IT BUY / WHY DID IT STOP?</p><h3>Visual execution pipeline</h3></div>
-                    <div class="regression-pipeline-filter-wrap">
-                        <label for="regression-pipeline-filter">Show</label>
-                        <select id="regression-pipeline-filter" aria-label="Filter visual execution pipeline">
-                            <option value="ALL">All pipeline events</option>
-                            <option value="EXECUTED">Executed BUY / SELL trades</option>
-                            <option value="BUY_CANDIDATES">BUY candidates not executed</option>
-                            <option value="BLOCKED_CONTEXT">Blocked by 5m / 1h context</option>
-                            <option value="BLOCKED_ATR">Blocked by ATR / chase protection</option>
-                            <option value="BLOCKED_BTC">Blocked by BTC context</option>
-                            <option value="BUILDING">Building / recovering / weakening</option>
-                            <option value="BEARISH_REVERSAL">Bearish reversal / cancelled</option>
-                        </select>
-                        <span id="regression-pipeline-filter-count">Showing all</span>
-                    </div>
-                </div>
-                <p class="form-note">A BUY candidate is not an execution. Only an evaluation whose Execution node is EXECUTED is linked to a Shadow Wallet BUY and its eventual SELL. Use the filter to isolate executed trades, blocked higher-timeframe context, ATR/BTC vetoes, or opportunity-building states. Green = passed, amber = waiting/supportive, red = blocked.</p>
-                <div id="regression-pipeline-body" class="regression-pipeline-body"></div>
-            </div>
-
-            <h3>Recent test runs</h3>
-            <div class="table-wrap">
-                <table>
-                    <thead><tr><th>ID</th><th>Test</th><th>Symbol</th><th>Window</th><th>Status</th><th>Progress</th><th>Action</th></tr></thead>
-                    <tbody id="regression-runs-body"><tr><td colspan="7">Loading test runs…</td></tr></tbody>
-                </table>
-            </div>
-
-            <div id="regression-trades" class="regression-detail hidden">
-                <h3>Shadow trades · exact BUY / SELL points</h3>
-                <div class="table-wrap"><table>
-                    <thead><tr><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr></thead>
-                    <tbody id="regression-trades-body"><tr><td colspan="9">Run a full replay to see simulated trades.</td></tr></tbody>
-                </table></div>
-            </div>
-
-
         </section>
 
         <section id="price-move-monitor" class="panel debug-monitor-panel">

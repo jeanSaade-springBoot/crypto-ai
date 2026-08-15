@@ -25,4 +25,9 @@ public class DashboardController {
     public String cryptoFundamentals() {
         return "forward:/crypto-fundamentals.html";
     }
+
+    @GetMapping("/proven-analyzed-trades")
+    public String provenAnalyzedTrades() {
+        return "forward:/proven-analyzed-trades.html";
+    }
 }

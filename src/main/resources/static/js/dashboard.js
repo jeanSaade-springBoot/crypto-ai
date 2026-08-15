@@ -832,13 +832,12 @@ function renderCharts(candles, executions = []) {
         annotations.push({
             x: point.time.getTime(),
             y: point.price,
-            marker: { size: 3, fillColor: isBuy ? '#39d98a' : '#ff6b72', strokeColor: '#071018', strokeWidth: 1, radius: 2 },
+            marker: { size: 6, fillColor: isBuy ? '#39d98a' : '#ff6b72', strokeColor: '#071018', strokeWidth: 2, radius: 6 },
             label: {
-                text: isBuy ? 'B' : 'S',
-                borderColor: isBuy ? '#39d98a' : '#ff6b72',
-                offsetY: isBuy ? 13 : -8,
-                style: { background: isBuy ? '#39d98a' : '#ff6b72', color: '#071018', fontSize: '9px', fontWeight: 900, padding: { left: 3, right: 3, top: 1, bottom: 1 } },
-                cssClass: `debug-trade-marker compact-trade-marker debug-trade-marker-${index}`
+                text: '',
+                borderColor: 'transparent',
+                style: { background: 'transparent', color: 'transparent', fontSize: '1px', padding: { left: 0, right: 0, top: 0, bottom: 0 } },
+                cssClass: `debug-trade-marker debug-trade-dot debug-trade-marker-${index}`
             }
         });
     });
@@ -864,17 +863,26 @@ function renderCharts(candles, executions = []) {
             if (Number.isInteger(index) && index >= 0 && candleSeries[index]) updateFixedCandleSummary(candleSeries[index]);
         }
     };
-    const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime', labels: { datetimeUTC: false } }, noData: { text: 'Waiting for closed candles' } };
+    const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime', labels: { datetimeUTC: false }, tooltip: { enabled: true, formatter: value => { const d = new Date(Number(value)); return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(); } } }, noData: { text: 'Waiting for closed candles' } };
     if (!candleChart) {
         candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390, events: candleEvents }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations }, tooltip: { custom: ({ seriesIndex, dataPointIndex, w }) => candleTooltipHtml(w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex]) }, yaxis: { tooltip: { enabled: true }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
-        candleChart.render().then(bindExecutionMarkerClicks);
+        candleChart.render().then(() => { bindExecutionMarkerClicks(); bindDebugTradeDotTitles(); });
         volumeChart = new ApexCharts(el('volume-chart'), { ...common, chart: { ...common.chart, type: 'bar', height: 150 }, series: [{ name: 'Volume', data: volumeSeries }], dataLabels: { enabled: false }, yaxis: { labels: { formatter: v => Number(v).toLocaleString(undefined, { notation: 'compact' }) } } });
         volumeChart.render();
     } else {
         candleChart.updateSeries([{ name: 'Price', data: candleSeries }], false);
-        candleChart.updateOptions({ chart: { events: candleEvents }, annotations: { points: annotations, xaxis: debugZoneAnnotations } }, false, true, false).then(bindExecutionMarkerClicks);
+        candleChart.updateOptions({ chart: { events: candleEvents }, annotations: { points: annotations, xaxis: debugZoneAnnotations } }, false, true, false).then(() => { bindExecutionMarkerClicks(); bindDebugTradeDotTitles(); });
         volumeChart.updateSeries([{ name: 'Volume', data: volumeSeries }], false);
     }
+}
+
+function bindDebugTradeDotTitles() {
+    debugTradePoints.forEach((point, index) => {
+        const label = document.querySelector(`.debug-trade-marker-${index}`);
+        const target = label?.parentElement?.querySelector('circle') || label;
+        if (!target) return;
+        target.setAttribute('title', `${point.side} ${Number(point.price).toLocaleString(undefined,{maximumFractionDigits:8})} · ${point.time.toLocaleString()}`);
+    });
 }
 
 function bindExecutionMarkerClicks() {
