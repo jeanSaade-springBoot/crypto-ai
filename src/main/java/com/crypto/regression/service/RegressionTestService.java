@@ -89,6 +89,12 @@ public class RegressionTestService {
                     "A regression test is still running. Wait for it to finish before resetting test data.");
         }
 
+        // Proven trades are intentionally NOT test data. proven_analyzed_trade is a
+        // standalone immutable snapshot table with no FK to analysis_test_run, so deleting
+        // or resetting replay runs must never erase manually reviewed success trades.
+        Integer provenTradesPreserved = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM proven_analyzed_trade", Integer.class);
+
         int executions = jdbcTemplate.update("DELETE FROM wallet_execution_test");
         int positions = jdbcTemplate.update("DELETE FROM wallet_position_test");
         int management = jdbcTemplate.update("DELETE FROM position_management_test");
@@ -110,7 +116,8 @@ public class RegressionTestService {
                 "opportunities", opportunities,
                 "management", management,
                 "positions", positions,
-                "executions", executions
+                "executions", executions,
+                "provenTradesPreserved", provenTradesPreserved == null ? 0 : provenTradesPreserved
         );
     }
 

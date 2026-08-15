@@ -2,8 +2,10 @@ package com.crypto.execution.service;
 
 import com.crypto.config.TradingProperties;
 import com.crypto.domain.LiquidityContextStatus;
+import com.crypto.domain.MarketRegime;
 import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
+import com.crypto.domain.TradingStrategy;
 import com.crypto.execution.domain.ExecutionOpportunity;
 import com.crypto.execution.repository.ExecutionOpportunityRepository;
 import com.crypto.repository.TradeSignalRepository;
@@ -125,6 +127,36 @@ public class ExecutionIntelligenceService {
     private static final int RETRACEMENT_MIN_CURRENT_HEALTH = 45;
     private static final int RETRACEMENT_MIN_CURRENT_ENTRY_QUALITY = 50;
     private static final double RETRACEMENT_MIN_CURRENT_RR = 1.15d;
+
+    // Breakout -> retracement handoff. Historical regression reason:
+    // ETHUSDT 2026-08-11 11:54-12:00 KSA. The engine correctly detected a
+    // BREAKOUT at 1880.20 with strong volume and ATR correctly refused to chase,
+    // requesting a retracement near 1879.22. Price then reached that zone, ATR
+    // returned to STANDARD_ENTRY, trend was 24/30 and momentum 15/15, but the
+    // ordinary TREND_FOLLOWING score fell to WATCH because pullback-candle volume
+    // cooled to 6/20. That forgot the volume confirmation already proven by the
+    // breakout. Preserve the breakout thesis for a short window and revalidate the
+    // retracement instead of requiring a second volume explosion. If this route
+    // conflicts with another proven scenario, compare that scenario against this
+    // exact regression before weakening these guards. Normal BUY scoring, ATR, MTF
+    // and SELL logic remain unchanged.
+    private static final Duration BREAKOUT_RETRACEMENT_LOOKBACK = Duration.ofMinutes(12);
+    private static final int BREAKOUT_RETRACEMENT_MIN_ORIGIN_SCORE = 70;
+    private static final int BREAKOUT_RETRACEMENT_MIN_ORIGIN_TREND = 15;
+    private static final int BREAKOUT_RETRACEMENT_MIN_ORIGIN_VOLUME = 15;
+    private static final int BREAKOUT_RETRACEMENT_MIN_ORIGIN_MOMENTUM = 10;
+    private static final int BREAKOUT_RETRACEMENT_MIN_CURRENT_SCORE = 60;
+    private static final int BREAKOUT_RETRACEMENT_MIN_CURRENT_CONFIDENCE = 65;
+    private static final int BREAKOUT_RETRACEMENT_MIN_CURRENT_TREND = 18;
+    private static final int BREAKOUT_RETRACEMENT_MIN_CURRENT_MOMENTUM = 13;
+    private static final int BREAKOUT_RETRACEMENT_MIN_HEALTH = 60;
+    private static final int BREAKOUT_RETRACEMENT_MIN_5M_MOMENTUM = 13;
+    private static final int BREAKOUT_RETRACEMENT_MIN_ENTRY_QUALITY = 50;
+    private static final double BREAKOUT_RETRACEMENT_MIN_RR = 1.15d;
+    private static final double BREAKOUT_RETRACEMENT_TARGET_TOLERANCE_ATR = 0.40d;
+    private static final double BREAKOUT_RETRACEMENT_MAX_OVERSHOOT_ATR = 0.80d;
+    private static final int BREAKOUT_RETRACEMENT_POSITION_PERCENT = 30;
+    private static final int BREAKOUT_RETRACEMENT_BEARISH_1H_POSITION_PERCENT = 20;
 
     // Progressive Position Building. These are portfolio-allocation stages, not
     // confidence shortcuts: a scout requires excellent price quality, confirmation
@@ -261,6 +293,19 @@ public class ExecutionIntelligenceService {
                     "An open position already exists at " + currentAllocationPercent
                             + "% allocation. No additional stage qualified on this signal.",
                     evidence);
+        }
+
+        // Breakout retracement handoff runs before the generic reversal retracement route.
+        // It remembers a recent BREAKOUT/WAIT_FOR_RETRACEMENT setup, so the pullback
+        // candle does not have to recreate the breakout's volume spike. Production and
+        // replay both reach this exact method through the shared evaluateBuy path.
+        ExecutionDecision breakoutRetracement = breakoutRetracementDecision(signal, evidence);
+        if (breakoutRetracement != null) {
+            saveOpportunity(signal, evidence,
+                    breakoutRetracement.allowed() ? "CONFIRMED" : breakoutRetracement.state(),
+                    breakoutRetracement.source(), breakoutRetracement.positionPercent(),
+                    breakoutRetracement.code(), breakoutRetracement.explanation());
+            return breakoutRetracement;
         }
 
         // ATR retracement handoff: preserve a recent, high-quality BUY that ATR refused
@@ -805,6 +850,98 @@ public class ExecutionIntelligenceService {
                         + "a false late-stage chase classification.",
                 e
         );
+    }
+
+    private ExecutionDecision breakoutRetracementDecision(TradeSignal current, Evidence e) {
+        if (current == null || current.getGeneratedAt() == null || current.getLatestPrice() == null) return null;
+        if (isBearish(current.getDecision()) || isBearish(current.getOriginalDecision())) return null;
+        if (!current.isAtrImmediateEntryAllowed() || !current.isFinalEntryAllowed()) return null;
+        if (current.getTotalScore() < BREAKOUT_RETRACEMENT_MIN_CURRENT_SCORE
+                || current.getConfidenceScore() < BREAKOUT_RETRACEMENT_MIN_CURRENT_CONFIDENCE
+                || current.getTrendScore() < BREAKOUT_RETRACEMENT_MIN_CURRENT_TREND
+                || current.getMomentumScore() < BREAKOUT_RETRACEMENT_MIN_CURRENT_MOMENTUM) return null;
+        if (e.opportunityHealth() < BREAKOUT_RETRACEMENT_MIN_HEALTH) return null;
+
+        TradeSignal origin = recentBreakoutRetracementOrigin(current);
+        if (origin == null || origin.getAtrRetracementEntryPrice() == null
+                || origin.getAtrAtSignal() == null || origin.getAtrAtSignal().signum() <= 0) return null;
+
+        BigDecimal target = origin.getAtrRetracementEntryPrice();
+        BigDecimal atr = origin.getAtrAtSignal();
+        BigDecimal upper = target.add(atr.multiply(BigDecimal.valueOf(BREAKOUT_RETRACEMENT_TARGET_TOLERANCE_ATR)));
+        BigDecimal lower = target.subtract(atr.multiply(BigDecimal.valueOf(BREAKOUT_RETRACEMENT_MAX_OVERSHOOT_ATR)));
+        BigDecimal price = current.getLatestPrice();
+        if (price.compareTo(upper) > 0 || price.compareTo(lower) < 0) return null;
+
+        EntryQuality currentQuality = assessEntryQuality(current);
+        if (currentQuality.score() < BREAKOUT_RETRACEMENT_MIN_ENTRY_QUALITY
+                || currentQuality.rewardRisk() < BREAKOUT_RETRACEMENT_MIN_RR) return null;
+
+        TradeSignal five = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
+        if (five == null || isBearish(five.getDecision()) || isBearish(five.getOriginalDecision())) return null;
+        if (!(five.getDecision() == SignalDecision.WATCH || isBullish(five.getDecision())
+                || five.getOriginalDecision() == SignalDecision.WATCH || isBullish(five.getOriginalDecision()))) return null;
+        if (five.getMomentumScore() < BREAKOUT_RETRACEMENT_MIN_5M_MOMENTUM) return null;
+
+        // A bearish 1h may be the old trend the breakout is trying to reverse. It is
+        // allowed only when it already existed at the breakout origin and has not been
+        // replaced by a fresh/worsening bearish snapshot after that origin.
+        TradeSignal originOneHour = latestAtOrBefore(origin, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
+        TradeSignal oneHour = latestAtOrBefore(current, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
+        boolean oneHourBearish = oneHour != null
+                && (isBearish(oneHour.getDecision()) || isBearish(oneHour.getOriginalDecision()));
+        if (oneHourBearish) {
+            boolean bearishAtOrigin = originOneHour != null
+                    && (isBearish(originOneHour.getDecision()) || isBearish(originOneHour.getOriginalDecision()));
+            boolean freshBearishAfterOrigin = oneHour.getGeneratedAt() != null
+                    && oneHour.getGeneratedAt().isAfter(origin.getGeneratedAt());
+            if (!bearishAtOrigin || freshBearishAfterOrigin || isOneHourBearishWorsening(oneHour, current)) return null;
+        }
+
+        int percent = oneHourBearish
+                ? BREAKOUT_RETRACEMENT_BEARISH_1H_POSITION_PERCENT
+                : BREAKOUT_RETRACEMENT_POSITION_PERCENT;
+
+        return ExecutionDecision.allow(
+                "BREAKOUT_RETRACEMENT",
+                "BREAKOUT_RETRACEMENT_ENTRY",
+                percent,
+                "A recent BREAKOUT was deliberately deferred by ATR instead of being chased, and price has now "
+                        + "returned to the requested retracement zone. origin=" + origin.getLatestPrice()
+                        + ", target=" + target + ", current=" + price
+                        + ". Breakout confirmation remains valid (score=" + origin.getTotalScore()
+                        + ", trend=" + origin.getTrendScore() + ", momentum=" + origin.getMomentumScore()
+                        + ", volume=" + origin.getVolumeScore() + "). Current pullback quality remains supportive "
+                        + "(score=" + current.getTotalScore() + ", confidence=" + current.getConfidenceScore()
+                        + ", trend=" + current.getTrendScore() + ", momentum=" + current.getMomentumScore()
+                        + ", health=" + e.opportunityHealth() + ", 5m=" + five.getDecision()
+                        + ", 5m momentum=" + five.getMomentumScore() + ", Entry Quality=" + currentQuality.score()
+                        + "/100, R/R=" + format(currentQuality.rewardRisk()) + "). Current-candle volume is not "
+                        + "required to repeat the breakout spike; the original breakout already supplied that evidence. "
+                        + "Execute only a reduced " + percent + "% position; normal BUY and SELL logic are unchanged.",
+                e);
+    }
+
+    private TradeSignal recentBreakoutRetracementOrigin(TradeSignal current) {
+        Instant cutoff = current.getGeneratedAt().minus(BREAKOUT_RETRACEMENT_LOOKBACK);
+        return recentSignals(current.getSymbol(), EXECUTION_INTERVAL, current.getGeneratedAt()).stream()
+                .filter(s -> s != null && s.getGeneratedAt() != null)
+                .filter(s -> s.getGeneratedAt().isBefore(current.getGeneratedAt())
+                        && !s.getGeneratedAt().isBefore(cutoff))
+                .filter(s -> s.getSelectedStrategy() == TradingStrategy.BREAKOUT
+                        && s.getMarketRegime() == MarketRegime.BREAKOUT)
+                .filter(s -> "WAIT_FOR_RETRACEMENT".equals(s.getAtrEntryType()))
+                .filter(s -> !s.isAtrImmediateEntryAllowed())
+                .filter(s -> s.getAtrRetracementEntryPrice() != null
+                        && s.getAtrAtSignal() != null && s.getAtrAtSignal().signum() > 0)
+                .filter(s -> s.getTotalScore() >= BREAKOUT_RETRACEMENT_MIN_ORIGIN_SCORE
+                        && s.getTrendScore() >= BREAKOUT_RETRACEMENT_MIN_ORIGIN_TREND
+                        && s.getVolumeScore() >= BREAKOUT_RETRACEMENT_MIN_ORIGIN_VOLUME
+                        && s.getMomentumScore() >= BREAKOUT_RETRACEMENT_MIN_ORIGIN_MOMENTUM)
+                .filter(s -> s.isStrategyEntryAllowed() && s.isBtcContextEntryAllowed()
+                        && s.isDerivativesEntryAllowed() && s.isLiquidityEntryAllowed())
+                .max(java.util.Comparator.comparing(TradeSignal::getGeneratedAt))
+                .orElse(null);
     }
 
     private ExecutionDecision reversalRetracementDecision(TradeSignal current, Evidence e) {

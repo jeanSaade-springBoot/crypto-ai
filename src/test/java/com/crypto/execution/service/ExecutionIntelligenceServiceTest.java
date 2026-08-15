@@ -1,8 +1,10 @@
 package com.crypto.execution.service;
 
 import com.crypto.config.TradingProperties;
+import com.crypto.domain.MarketRegime;
 import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
+import com.crypto.domain.TradingStrategy;
 import com.crypto.execution.repository.ExecutionOpportunityRepository;
 import com.crypto.repository.TradeSignalRepository;
 import com.crypto.service.OpportunityConsolidationService;
@@ -854,6 +856,169 @@ class ExecutionIntelligenceServiceTest {
         assertThat(decision.source()).isNotEqualTo("REVERSAL_RETRACEMENT");
     }
 
+
+    @Test
+    void breakoutRetracementUsesRememberedBreakoutVolumeInsteadOfDemandingSecondVolumeSpike() {
+        TradeSignal current = signal(920L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 66, 68);
+        current.setLatestPrice(new BigDecimal("1878.93"));
+        current.setTrendScore(20);
+        current.setMomentumScore(15);
+        current.setVolumeScore(6); // pullback volume cooled; this must not erase prior breakout confirmation
+        current.setAtrAtSignal(new BigDecimal("0.47982283513"));
+        current.setStopLoss(new BigDecimal("1877.50"));
+        current.setTakeProfit(new BigDecimal("1881.20"));
+        current.setAtrImmediateEntryAllowed(true);
+        current.setFinalEntryAllowed(true);
+        current.setSelectedStrategy(TradingStrategy.TREND_FOLLOWING);
+        current.setMarketRegime(MarketRegime.WEAK_UPTREND);
+
+        TradeSignal origin = signal(921L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(360), 71, 72);
+        origin.setLatestPrice(new BigDecimal("1880.20"));
+        origin.setTrendScore(17);
+        origin.setMomentumScore(11);
+        origin.setVolumeScore(16);
+        origin.setSelectedStrategy(TradingStrategy.BREAKOUT);
+        origin.setMarketRegime(MarketRegime.BREAKOUT);
+        origin.setAtrEntryType("WAIT_FOR_RETRACEMENT");
+        origin.setAtrAtSignal(new BigDecimal("0.53234294964"));
+        origin.setAtrRetracementEntryPrice(new BigDecimal("1879.218357"));
+        origin.setAtrImmediateEntryAllowed(false);
+
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("ETHUSDT", "1m"))
+                .thenReturn(List.of(current, origin));
+
+        TradeSignal five = signal(922L, "ETHUSDT", "5m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(120), 67, 74);
+        five.setMomentumScore(15);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "ETHUSDT", "5m", now)).thenReturn(Optional.of(five));
+
+        TradeSignal one = signal(923L, "ETHUSDT", "1h", SignalDecision.SELL, SignalDecision.SELL,
+                now.minusSeconds(3300), 36, 68);
+        one.setTrendScore(6);
+        one.setMomentumScore(9);
+        TradeSignal priorOne = signal(924L, "ETHUSDT", "1h", SignalDecision.SELL, SignalDecision.SELL,
+                now.minusSeconds(6900), 31, 65);
+        priorOne.setTrendScore(3);
+        priorOne.setMomentumScore(9);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "ETHUSDT", "1h", origin.getGeneratedAt())).thenReturn(Optional.of(one));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "ETHUSDT", "1h", now)).thenReturn(Optional.of(one));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("ETHUSDT", "1h"))
+                .thenReturn(List.of(one, priorOne));
+
+        var evidence = new ExecutionIntelligenceService.Evidence(20, 2, 12, 1, 5, 8, 72, 4, 3, 70, 68,
+                SignalDecision.WATCH, SignalDecision.SELL, now.minusSeconds(600), List.of(920L, 921L));
+
+        ExecutionIntelligenceService.ExecutionDecision decision = ReflectionTestUtils.invokeMethod(
+                service, "breakoutRetracementDecision", current, evidence);
+
+        assertThat(decision).isNotNull();
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.source()).isEqualTo("BREAKOUT_RETRACEMENT");
+        assertThat(decision.code()).isEqualTo("BREAKOUT_RETRACEMENT_ENTRY");
+        assertThat(decision.positionPercent()).isEqualTo(20);
+        assertThat(decision.explanation()).contains("Current-candle volume is not required to repeat the breakout spike");
+    }
+
+    @Test
+    void breakoutRetracementDoesNotBypassBearishFiveMinuteContext() {
+        TradeSignal current = signal(930L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 66, 68);
+        current.setLatestPrice(new BigDecimal("1878.93"));
+        current.setTrendScore(20);
+        current.setMomentumScore(15);
+        current.setAtrAtSignal(new BigDecimal("0.47982283513"));
+        current.setStopLoss(new BigDecimal("1877.50"));
+        current.setTakeProfit(new BigDecimal("1881.20"));
+
+        TradeSignal origin = signal(931L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(360), 71, 72);
+        origin.setLatestPrice(new BigDecimal("1880.20"));
+        origin.setTrendScore(17);
+        origin.setMomentumScore(11);
+        origin.setVolumeScore(16);
+        origin.setSelectedStrategy(TradingStrategy.BREAKOUT);
+        origin.setMarketRegime(MarketRegime.BREAKOUT);
+        origin.setAtrEntryType("WAIT_FOR_RETRACEMENT");
+        origin.setAtrAtSignal(new BigDecimal("0.53234294964"));
+        origin.setAtrRetracementEntryPrice(new BigDecimal("1879.218357"));
+        origin.setAtrImmediateEntryAllowed(false);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("ETHUSDT", "1m"))
+                .thenReturn(List.of(current, origin));
+
+        TradeSignal five = signal(932L, "ETHUSDT", "5m", SignalDecision.SELL, SignalDecision.SELL,
+                now.minusSeconds(120), 38, 70);
+        five.setMomentumScore(4);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "ETHUSDT", "5m", now)).thenReturn(Optional.of(five));
+
+        var evidence = new ExecutionIntelligenceService.Evidence(20, 2, 12, 1, 5, 8, 72, 4, 3, 70, 68,
+                SignalDecision.SELL, SignalDecision.WATCH, now.minusSeconds(600), List.of(930L, 931L));
+
+        ExecutionIntelligenceService.ExecutionDecision decision = ReflectionTestUtils.invokeMethod(
+                service, "breakoutRetracementDecision", current, evidence);
+        assertThat(decision).isNull();
+    }
+
+    @Test
+    void replayUsesSameSharedBreakoutRetracementPathAsProduction() {
+        ExecutionReplayScope scope = new ExecutionReplayScope();
+        ReflectionTestUtils.setField(service, "replayScope", scope);
+
+        TradeSignal origin = signal(940L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(360), 71, 72);
+        origin.setLatestPrice(new BigDecimal("1880.20"));
+        origin.setTrendScore(17);
+        origin.setMomentumScore(11);
+        origin.setVolumeScore(16);
+        origin.setSelectedStrategy(TradingStrategy.BREAKOUT);
+        origin.setMarketRegime(MarketRegime.BREAKOUT);
+        origin.setAtrEntryType("WAIT_FOR_RETRACEMENT");
+        origin.setAtrAtSignal(new BigDecimal("0.53234294964"));
+        origin.setAtrRetracementEntryPrice(new BigDecimal("1879.218357"));
+        origin.setAtrImmediateEntryAllowed(false);
+
+        TradeSignal five = signal(941L, "ETHUSDT", "5m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(120), 67, 74);
+        five.setMomentumScore(15);
+        TradeSignal one = signal(942L, "ETHUSDT", "1h", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(1200), 60, 70);
+
+        TradeSignal current = signal(943L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 66, 68);
+        current.setLatestPrice(new BigDecimal("1878.93"));
+        current.setTrendScore(20);
+        current.setMomentumScore(15);
+        current.setVolumeScore(6);
+        current.setAtrAtSignal(new BigDecimal("0.47982283513"));
+        current.setStopLoss(new BigDecimal("1877.50"));
+        current.setTakeProfit(new BigDecimal("1881.20"));
+        current.setAtrImmediateEntryAllowed(true);
+        current.setFinalEntryAllowed(true);
+
+        // Enough supportive replay history to keep opportunity health above the new
+        // breakout-retracement minimum while still using the exact production service.
+        TradeSignal w1 = signal(944L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH, now.minusSeconds(60), 68, 70);
+        TradeSignal w2 = signal(945L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH, now.minusSeconds(120), 69, 70);
+        TradeSignal w3 = signal(946L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH, now.minusSeconds(180), 70, 70);
+        TradeSignal w4 = signal(947L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH, now.minusSeconds(240), 70, 70);
+        w1.setLatestPrice(new BigDecimal("1879.10"));
+        w2.setLatestPrice(new BigDecimal("1879.20"));
+        w3.setLatestPrice(new BigDecimal("1879.30"));
+        w4.setLatestPrice(new BigDecimal("1879.40"));
+
+        try (ExecutionReplayScope.Scope ignored = scope.open(1L, List.of(one, origin, w4, w3, w2, w1, five, current), o -> {})) {
+            scope.reference(now);
+            var decision = service.evaluateBuy(current);
+            assertThat(decision.allowed()).isTrue();
+            assertThat(decision.source()).isEqualTo("BREAKOUT_RETRACEMENT");
+            assertThat(decision.code()).isEqualTo("BREAKOUT_RETRACEMENT_ENTRY");
+        }
+    }
 
     @Test
     void balancedEarlyBlocksImmediatelyAfterFreshFiveMinuteSellWhenRecoveryIsWeak() {
