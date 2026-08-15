@@ -255,3 +255,7 @@
 .proven-success-check{justify-content:center;min-width:22px}
 .proven-success-check input{margin:0}
 #proven-saved-trades-body .regression-chart-link{white-space:nowrap}
+
+/* Proven analyzed trades: keep symbol + interval controls compact and responsive. */
+.proven-chart-controls{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
+.proven-chart-controls .proven-symbol-picker{min-width:120px}

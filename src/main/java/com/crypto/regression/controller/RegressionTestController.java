@@ -72,6 +72,9 @@ public class RegressionTestController {
     public List<Map<String, Object>> provenTrades() { return service.provenTrades(); }
 
     @GetMapping("/proven-trades/chart")
-    public Map<String, Object> provenTradeChart(@RequestParam String symbol) { return service.provenTradeChart(symbol); }
+    public Map<String, Object> provenTradeChart(@RequestParam String symbol,
+                                                 @RequestParam(defaultValue = "5m") String interval) {
+        return service.provenTradeChart(symbol, interval);
+    }
 
 }

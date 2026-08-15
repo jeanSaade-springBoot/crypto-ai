@@ -237,8 +237,12 @@ public class RegressionTestService {
     }
 
     @Transactional(readOnly = true)
-    public Map<String, Object> provenTradeChart(String symbol) {
+    public Map<String, Object> provenTradeChart(String symbol, String interval) {
         String normalized = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        String normalizedInterval = switch (interval == null ? "5m" : interval.trim().toLowerCase(Locale.ROOT)) {
+            case "1m", "5m", "1h", "4h" -> interval.trim().toLowerCase(Locale.ROOT);
+            default -> "5m";
+        };
         List<Map<String, Object>> trades = jdbcTemplate.queryForList("""
                 SELECT id, source_test_run_id, source_trade_id, symbol, entry_time, entry_price, exit_time, exit_price,
                        exit_reason, realized_pnl_usdt, realized_pnl_percent, position_percent, marked_at
@@ -257,12 +261,13 @@ public class RegressionTestService {
             List<Map<String, Object>> segment = jdbcTemplate.queryForList("""
                     SELECT open_time, open_price, high_price, low_price, close_price, volume
                     FROM candle
-                    WHERE symbol=? AND interval_code='5m' AND closed=1 AND open_time BETWEEN ? AND ?
+                    WHERE symbol=? AND interval_code=? AND closed=1 AND open_time BETWEEN ? AND ?
                     ORDER BY open_time ASC
-                    """, normalized, Timestamp.from(from), Timestamp.from(to));
+                    """, normalized, normalizedInterval, Timestamp.from(from), Timestamp.from(to));
             for (Map<String, Object> c : segment) candles.put(String.valueOf(c.get("open_time")), c);
         }
-        return Map.of("symbol", normalized, "trades", trades, "candles", new java.util.ArrayList<>(candles.values()));
+        return Map.of("symbol", normalized, "interval", normalizedInterval, "trades", trades,
+                "candles", new java.util.ArrayList<>(candles.values()));
     }
 
     @Transactional(readOnly = true)

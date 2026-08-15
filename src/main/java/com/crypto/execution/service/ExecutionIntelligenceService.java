@@ -108,6 +108,13 @@ public class ExecutionIntelligenceService {
     private static final double RETRACEMENT_MAX_OVERSHOOT_ATR = 0.75d;
     private static final int RETRACEMENT_POSITION_PERCENT = 20;
     // Post-bearish guard for BALANCED_EARLY only. Normal BUY paths are untouched.
+    // Historical regression reason: ETHUSDT Trade #2 on 2026-08-11 17:15 KSA
+    // entered at 1889.56 through BALANCED_EARLY only minutes after 5m SELL context,
+    // while opportunity health was 38/100 and evidence was 0/7. The position exited
+    // five minutes later at 1887.74. Keep health/evidence as hard shortcut-quality
+    // requirements so future scenarios cannot silently reintroduce this failure mode.
+    // If this guard conflicts with another proven scenario, compare that replay against
+    // this regression case before weakening or removing these thresholds.
     // A single 5m WATCH immediately after a fresh 5m SELL is not enough to re-open risk.
     private static final Duration BALANCED_EARLY_BEARISH_LOOKBACK = Duration.ofMinutes(20);
     private static final int BALANCED_EARLY_POST_BEARISH_MIN_HEALTH = 60;

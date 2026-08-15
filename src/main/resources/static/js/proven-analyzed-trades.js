@@ -675,13 +675,7 @@ if (regressionPipelineFilter) regressionPipelineFilter.addEventListener('change'
 
 
 let provenTradesChart = null;
-function provenDashboardUrl(trade, index = 0) {
-    return regressionTradeChartUrl(trade?.symbol || 'BNBUSDT', {
-        entry_time: trade?.entry_time, entry_price: trade?.entry_price,
-        exit_time: trade?.exit_time, exit_price: trade?.exit_price,
-        realized_pnl_percent: trade?.realized_pnl_percent
-    }, index);
-}
+let provenTradeFocus = null;
 function renderProvenTradesGrid(all) {
     const body = document.getElementById('proven-saved-trades-body');
     const count = document.getElementById('proven-trades-count');
@@ -698,7 +692,7 @@ function renderProvenTradesGrid(all) {
             <td>${trade.exit_price == null ? '—' : formatMovePrice(trade.exit_price)}</td>
             <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>
             <td>${formatMoveTime(trade.marked_at)}</td>
-            <td><a class="secondary-button regression-chart-link" href="${provenDashboardUrl(trade, index)}">View</a></td>
+            <td><button type="button" class="secondary-button regression-chart-link" data-proven-view-index="${index}">View</button></td>
         </tr>`).join('') : '<tr><td colspan="9">No proven trades yet.</td></tr>';
 }
 async function loadProvenTradesGraph(preferredSymbol = null) {
@@ -712,6 +706,8 @@ async function loadProvenTradesGraph(preferredSymbol = null) {
         if (symbols.includes(current)) selector.value = current;
     }
     const symbol = selector?.value || symbols[0] || '';
+    const intervalSelector = document.getElementById('proven-chart-interval');
+    const interval = intervalSelector?.value || '5m';
     const empty = document.getElementById('proven-trades-empty');
     if (!symbol) {
         empty?.classList.remove('hidden');
@@ -719,7 +715,7 @@ async function loadProvenTradesGraph(preferredSymbol = null) {
         return;
     }
     empty?.classList.add('hidden');
-    const data = await api(`/api/administration/regression-tests/proven-trades/chart?symbol=${encodeURIComponent(symbol)}`);
+    const data = await api(`/api/administration/regression-tests/proven-trades/chart?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`);
     const candles = (data.candles || []).map(c => ({
         x: window.CryptoTime.parseUtc(c.open_time),
         y: [Number(c.open_price), Number(c.high_price), Number(c.low_price), Number(c.close_price)]
@@ -731,6 +727,7 @@ async function loadProvenTradesGraph(preferredSymbol = null) {
     });
     const options = {
         chart: { type:'candlestick', height:420, background:'transparent', foreColor:'#8da2b1', toolbar:{show:true}, animations:{enabled:false} },
+        title: { text: `${symbol} · ${interval}`, align:'left', style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'} },
         series: [{name:'Price', data:candles}],
         xaxis: { type:'datetime', labels:{datetimeUTC:false}, tooltip:{enabled:true, formatter:value => {
             const d = new Date(Number(value)); return Number.isNaN(d.getTime()) ? '' : d.toLocaleString();
@@ -747,6 +744,15 @@ async function loadProvenTradesGraph(preferredSymbol = null) {
     provenTradesChart = new ApexCharts(host, options);
     await provenTradesChart.render();
     bindProvenDotTitles(data.trades || []);
+    if (provenTradeFocus && String(provenTradeFocus.symbol || '').toUpperCase() === symbol) {
+        const entry = window.CryptoTime.parseUtc(provenTradeFocus.entry_time);
+        const exit = provenTradeFocus.exit_time ? window.CryptoTime.parseUtc(provenTradeFocus.exit_time) : null;
+        if (entry && !Number.isNaN(entry.getTime())) {
+            const from = entry.getTime() - 30 * 60 * 1000;
+            const to = (exit && !Number.isNaN(exit.getTime()) ? exit.getTime() : entry.getTime() + 60 * 60 * 1000) + 30 * 60 * 1000;
+            provenTradesChart.zoomX(from, to);
+        }
+    }
 }
 function provenPoint(time, price, side, index) {
     const isBuy=side==='BUY';
@@ -773,7 +779,28 @@ if (provenTradesBody) provenTradesBody.addEventListener('change', async event =>
     } catch(error){ cb.checked=!cb.checked; showAdminMessage(error.message,true); }
     finally{cb.disabled=false;}
 });
-document.getElementById('proven-chart-symbol')?.addEventListener('change',()=>loadProvenTradesGraph().catch(e=>showAdminMessage(e.message,true)));
+document.getElementById('proven-saved-trades-body')?.addEventListener('click', async event => {
+    const button = event.target.closest('button[data-proven-view-index]');
+    if (!button) return;
+    try {
+        const all = await api('/api/administration/regression-tests/proven-trades');
+        const trade = all?.[Number(button.dataset.provenViewIndex)];
+        if (!trade) throw new Error('Proven trade not found.');
+        provenTradeFocus = trade;
+        const selector = document.getElementById('proven-chart-symbol');
+        const symbol = String(trade.symbol || '').toUpperCase();
+        if (selector && symbol) selector.value = symbol;
+        await loadProvenTradesGraph(symbol);
+        document.querySelector('.proven-trades-chart-panel')?.scrollIntoView({behavior:'smooth', block:'start'});
+    } catch (error) {
+        showAdminMessage(error.message, true);
+    }
+});
+document.getElementById('proven-chart-symbol')?.addEventListener('change',()=>{
+    provenTradeFocus = null;
+    loadProvenTradesGraph().catch(e=>showAdminMessage(e.message,true));
+});
+document.getElementById('proven-chart-interval')?.addEventListener('change',()=>loadProvenTradesGraph().catch(e=>showAdminMessage(e.message,true)));
 
 (async function initializeRegressionUi() {
     await loadRegressionSymbols();

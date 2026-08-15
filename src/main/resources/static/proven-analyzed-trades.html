@@ -60,7 +60,15 @@
             <div class="proven-trades-chart-panel">
                 <div class="section-heading">
                     <div><p class="eyebrow">MANUALLY PROVEN SUCCESS TRADES</p><h3>All proven trades on one graph</h3></div>
-                    <label class="proven-symbol-picker">Symbol<select id="proven-chart-symbol"><option value="">No proven trades yet</option></select></label>
+                    <div class="proven-chart-controls">
+                        <label class="proven-symbol-picker">Symbol<select id="proven-chart-symbol"><option value="">No proven trades yet</option></select></label>
+                        <label class="proven-symbol-picker">Interval<select id="proven-chart-interval">
+                            <option value="1m">1 min</option>
+                            <option value="5m" selected>5 min</option>
+                            <option value="1h">1 hour</option>
+                            <option value="4h">4 hours</option>
+                        </select></label>
+                    </div>
                 </div>
                 <p class="form-note">BUY and SELL are dot annotations. Hover the chart/x-axis to see browser-local date/time. Only manually proven trades are shown.</p>
                 <div id="proven-trades-chart" class="proven-trades-chart"></div>
@@ -72,7 +80,7 @@
                     </div>
                     <div class="table-wrap">
                         <table>
-                            <thead><tr><th>#</th><th>Symbol</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>P/L %</th><th>Marked</th><th>Dashboard</th></tr></thead>
+                            <thead><tr><th>#</th><th>Symbol</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>P/L %</th><th>Marked</th><th>Graph</th></tr></thead>
                             <tbody id="proven-saved-trades-body"><tr><td colspan="9">No proven trades yet.</td></tr></tbody>
                         </table>
                     </div>
@@ -133,6 +141,24 @@
                 </details>
             </div>
 
+            <h3>Recent test runs</h3>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>ID</th><th>Test</th><th>Symbol</th><th>Window</th><th>Status</th><th>Progress</th><th>Action</th></tr></thead>
+                    <tbody id="regression-runs-body"><tr><td colspan="7">Loading test runs…</td></tr></tbody>
+                </table>
+            </div>
+
+            <div id="regression-trades" class="regression-detail hidden">
+                <h3>Shadow trades · exact BUY / SELL points</h3>
+                <p class="form-note">Check a closed trade after your manual review. Checked trades are copied to the persistent Proven trades table and the combined graph; unchecking removes them from both.</p>
+                <div class="table-wrap"><table>
+                    <thead><tr><th title="Add/remove from Proven trades">✓</th><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr></thead>
+                    <tbody id="regression-trades-body"><tr><td colspan="10">Run a full replay to see simulated trades.</td></tr></tbody>
+                </table></div>
+            </div>
+
+
             <div id="regression-pipeline" class="regression-pipeline hidden">
                 <div class="section-heading regression-pipeline-heading">
                     <div><p class="eyebrow">WHY DID IT BUY / WHY DID IT STOP?</p><h3>Visual execution pipeline</h3></div>
@@ -153,23 +179,6 @@
                 </div>
                 <p class="form-note">A BUY candidate is not an execution. Only an evaluation whose Execution node is EXECUTED is linked to a Shadow Wallet BUY and its eventual SELL. Use the filter to isolate executed trades, blocked higher-timeframe context, ATR/BTC vetoes, or opportunity-building states. Green = passed, amber = waiting/supportive, red = blocked.</p>
                 <div id="regression-pipeline-body" class="regression-pipeline-body"></div>
-            </div>
-
-            <h3>Recent test runs</h3>
-            <div class="table-wrap">
-                <table>
-                    <thead><tr><th>ID</th><th>Test</th><th>Symbol</th><th>Window</th><th>Status</th><th>Progress</th><th>Action</th></tr></thead>
-                    <tbody id="regression-runs-body"><tr><td colspan="7">Loading test runs…</td></tr></tbody>
-                </table>
-            </div>
-
-            <div id="regression-trades" class="regression-detail hidden">
-                <h3>Shadow trades · exact BUY / SELL points</h3>
-                <p class="form-note">Check a closed trade after your manual review. Checked trades are copied to the persistent Proven trades table and the combined graph; unchecking removes them from both.</p>
-                <div class="table-wrap"><table>
-                    <thead><tr><th title="Add/remove from Proven trades">✓</th><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr></thead>
-                    <tbody id="regression-trades-body"><tr><td colspan="10">Run a full replay to see simulated trades.</td></tr></tbody>
-                </table></div>
             </div>
 
 
