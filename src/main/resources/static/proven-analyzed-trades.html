@@ -150,10 +150,10 @@
                 </table>
             </div>
 
-            <h3>Archived test runs</h3>
+            <h3>Archived</h3>
             <div class="table-wrap">
                 <table>
-                    <thead><tr><th>Archive</th><th>Source run</th><th>Test</th><th>Symbol</th><th>Window</th><th>Archived</th><th>Action</th></tr></thead>
+                    <thead><tr><th>ID</th><th>Source run</th><th>Test</th><th>Symbol</th><th>Window</th><th>Archived</th><th>Action</th></tr></thead>
                     <tbody id="regression-archives-body"><tr><td colspan="7">Loading archived runs…</td></tr></tbody>
                 </table>
             </div>
@@ -168,6 +168,11 @@
             </div>
 
 
+            <div id="regression-pipeline-section" class="regression-pipeline-section hidden">
+                <div class="section-heading regression-pipeline-toggle-heading">
+                    <div><p class="eyebrow">WHY DID IT BUY / WHY DID IT STOP?</p><h3>Visual execution pipeline</h3></div>
+                    <button id="regression-pipeline-toggle" type="button" class="secondary-button" aria-expanded="false">Expand pipeline</button>
+                </div>
             <div id="regression-pipeline" class="regression-pipeline hidden">
                 <div class="section-heading regression-pipeline-heading">
                     <div><p class="eyebrow">WHY DID IT BUY / WHY DID IT STOP?</p><h3>Visual execution pipeline</h3></div>
@@ -188,6 +193,7 @@
                 </div>
                 <p class="form-note">A BUY candidate is not an execution. Only an evaluation whose Execution node is EXECUTED is linked to a Shadow Wallet BUY and its eventual SELL. Use the filter to isolate executed trades, blocked higher-timeframe context, ATR/BTC vetoes, or opportunity-building states. Green = passed, amber = waiting/supportive, red = blocked.</p>
                 <div id="regression-pipeline-body" class="regression-pipeline-body"></div>
+            </div>
             </div>
 
 

@@ -122,7 +122,7 @@ async function loadRegressionArchives() {
         body.innerHTML = rows.map(a => `<tr>
             <td>#${a.archive_batch_id}</td><td>#${a.source_test_run_id}</td><td><strong>${escapeHtml(a.test_name)}</strong></td>
             <td>${escapeHtml(a.symbol)}</td><td>${formatMoveTime(a.start_time)} → ${formatMoveTime(a.end_time)}</td>
-            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}">View read-only</button></td>
+            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}">View</button></td>
         </tr>`).join('') || '<tr><td colspan="7">No archived test runs yet.</td></tr>';
         return rows;
     } catch (error) { body.innerHTML = `<tr><td colspan="7">${escapeHtml(error.message)}</td></tr>`; return []; }
@@ -151,6 +151,7 @@ function regressionPipelineNode(label, value, state, detail = '', time = '') {
 
 
 let regressionPipelineCache = null;
+let regressionDetailRequestToken = 0;
 
 function regressionOpportunityStagePriority(stage) {
     const value = String(stage || '').toUpperCase();
@@ -493,13 +494,23 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
 }
 
 async function loadRegressionDetail(runId, includeTables = true, archived = false) {
+    // View and Archived View share the detail area. A request token prevents a slower
+    // previous click from rendering after a newer selection and visually overlapping it.
+    const requestToken = ++regressionDetailRequestToken;
+    const pipelineSection = document.getElementById('regression-pipeline-section');
+    const pipelinePanel = document.getElementById('regression-pipeline');
+    const pipelineToggle = document.getElementById('regression-pipeline-toggle');
+    pipelinePanel?.classList.add('hidden');
+    pipelineSection?.classList.add('hidden');
+    if (pipelineToggle) { pipelineToggle.textContent = 'Expand pipeline'; pipelineToggle.setAttribute('aria-expanded', 'false'); }
+    document.getElementById('regression-trades')?.classList.add('hidden');
     const base = archived ? `/api/administration/regression-tests/archives/${runId}` : `/api/administration/regression-tests/runs/${runId}`;
     const run = await api(base);
     if (!archived) activeRegressionRunId = runId;
 
     const active = document.getElementById('regression-active');
     active.classList.remove('hidden');
-    document.getElementById('regression-active-title').textContent = `${archived ? 'ARCHIVE · ' : ''}#${run.id} ${run.test_name} · ${run.symbol}`;
+    document.getElementById('regression-active-title').textContent = `${archived ? 'Archived · ' : ''}#${run.id} ${run.test_name} · ${run.symbol}`;
     document.getElementById('regression-active-status').textContent = run.status;
     document.getElementById('regression-active-status').className = `status-pill ${regressionStatusClass(run.status)}`;
     const progress = Math.max(0, Math.min(100, Number(run.progress_percent || 0)));
@@ -557,15 +568,46 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
             api(`${base}/trades`),
             api(`${base}/position-management`)
         ]);
-        // Raw generated-signal/opportunity tables were intentionally removed from Administration.
-        // The visual pipeline below remains the single explainability surface.
-        renderRegressionPipeline(signals, opportunities, trades, management, run.symbol);
+        // Active runs keep the explainability pipeline. Archived runs are deliberately simpler:
+        // they preserve historical replay data for later trade-by-trade analysis without showing
+        // pipeline controls or mutable Proven/Success checkboxes.
+        if (requestToken !== regressionDetailRequestToken) return finished;
+        const pipelinePanel = document.getElementById('regression-pipeline');
+        const pipelineSection = document.getElementById('regression-pipeline-section');
+        const pipelineToggle = document.getElementById('regression-pipeline-toggle');
+        if (archived) {
+            pipelineSection?.classList.add('hidden');
+            pipelinePanel?.classList.add('hidden');
+            const pipelineBody = document.getElementById('regression-pipeline-body');
+            if (pipelineBody) pipelineBody.innerHTML = '';
+            regressionPipelineCache = null;
+        } else {
+            // Active run details are open/clear immediately. Only the large visual pipeline
+            // starts collapsed and is expanded explicitly by the user.
+            renderRegressionPipeline(signals, opportunities, trades, management, run.symbol);
+            pipelineSection?.classList.remove('hidden');
+            pipelinePanel?.classList.add('hidden');
+            if (pipelineToggle) { pipelineToggle.textContent = 'Expand pipeline'; pipelineToggle.setAttribute('aria-expanded', 'false'); }
+        }
 
         const tradePanel = document.getElementById('regression-trades');
         tradePanel.classList.remove('hidden');
+        const tradeTable = tradePanel.querySelector('table');
+        const tradeHead = tradeTable?.querySelector('thead');
+        if (tradeHead) {
+            tradeHead.innerHTML = archived
+                ? '<tr><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr>'
+                : '<tr><th title="Add/remove from Proven trades">✓</th><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr>';
+        }
+        const tradeNote = tradePanel.querySelector('.form-note');
+        if (tradeNote) {
+            tradeNote.textContent = archived
+                ? 'Archived replay snapshot. Read-only historical trades preserved for analysis.'
+                : 'Check a closed trade after your manual review. Checked trades are copied to the persistent Proven trades table and the combined graph; unchecking removes them from both.';
+        }
         document.getElementById('regression-trades-body').innerHTML = trades.map((trade, index) => `
             <tr>
-                <td><label class="proven-success-check" title="Add or remove this trade from Proven trades"><input type="checkbox" aria-label="Add or remove trade ${index + 1} from Proven trades" data-proven-trade-id="${trade.id}" data-proven-run-id="${run.id}" ${regressionBool(trade.proven_success) ? 'checked' : ''} ${archived ? 'disabled title="Archived replay is read-only"' : ''}></label></td>
+                ${archived ? '' : `<td><label class="proven-success-check" title="Add or remove this trade from Proven trades"><input type="checkbox" aria-label="Add or remove trade ${index + 1} from Proven trades" data-proven-trade-id="${trade.id}" data-proven-run-id="${run.id}" ${regressionBool(trade.proven_success) ? 'checked' : ''}></label></td>`}
                 <td>${index + 1}</td>
                 <td>${formatMoveTime(trade.entry_time)}</td>
                 <td>${formatMovePrice(trade.entry_price)}</td>
@@ -575,7 +617,7 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
                 <td>${trade.realized_pnl_usdt == null ? '—' : Number(trade.realized_pnl_usdt).toFixed(4)}</td>
                 <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>
                 <td><a class="secondary-button regression-chart-link" href="${regressionTradeChartUrl(run.symbol, trade, index)}">View Chart</a></td>
-            </tr>`).join('') || '<tr><td colspan="10">NO BUY EXECUTED in this replay window.</td></tr>';
+            </tr>`).join('') || `<tr><td colspan="${archived ? 9 : 10}">NO BUY EXECUTED in this replay window.</td></tr>`;
     }
 
     return finished;
@@ -650,6 +692,7 @@ if (regressionRunsBody) {
         if (!button) return;
         try {
             const finished = await loadRegressionDetail(button.dataset.regressionRunId, true);
+            document.getElementById('regression-active')?.scrollIntoView({behavior: 'smooth', block: 'start'});
             if (!finished) pollRegressionRun(button.dataset.regressionRunId);
         } catch (error) {
             showAdminMessage(error.message, true);
@@ -661,7 +704,7 @@ const regressionArchivesBody = document.getElementById('regression-archives-body
 if (regressionArchivesBody) regressionArchivesBody.addEventListener('click', async event => {
     const button = event.target.closest('button[data-regression-archive-view]');
     if (!button) return;
-    try { await loadRegressionDetail(button.dataset.regressionArchiveView, true, true); }
+    try { await loadRegressionDetail(button.dataset.regressionArchiveView, true, true); document.getElementById('regression-active')?.scrollIntoView({behavior: 'smooth', block: 'start'}); }
     catch (error) { showAdminMessage(error.message, true); }
 });
 
@@ -698,6 +741,16 @@ if (regressionRefresh) regressionRefresh.addEventListener('click', async () => {
         await loadRegressionDetail(active.id, false);
         pollRegressionRun(active.id);
     }
+});
+
+const regressionPipelineToggle = document.getElementById('regression-pipeline-toggle');
+if (regressionPipelineToggle) regressionPipelineToggle.addEventListener('click', () => {
+    const panel = document.getElementById('regression-pipeline');
+    if (!panel) return;
+    const opening = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', !opening);
+    regressionPipelineToggle.textContent = opening ? 'Collapse pipeline' : 'Expand pipeline';
+    regressionPipelineToggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
 });
 
 const regressionPipelineFilter = document.getElementById('regression-pipeline-filter');
