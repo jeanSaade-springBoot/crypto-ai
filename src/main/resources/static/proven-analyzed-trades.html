@@ -51,7 +51,6 @@
                 </div>
                 <div class="section-actions">
                     <button id="regression-refresh" type="button" class="secondary-button">Refresh Runs</button>
-                    <button id="regression-reset" type="button" class="danger-button" title="Archive completed current test runs, then clear only active test data">Clear Data</button>
                 </div>
             </div>
             <p class="debug-isolation-note"><strong>Administration-triggered regression only.</strong> This test reads historical candles/signals and writes only to isolated regression tables including <code>analysis_test_*</code>, <code>execution_opportunity_test</code> and <code>position_management_test</code>. It never calls wallet execution, live position management, <code>trade_signal</code> writes or production <code>execution_opportunity</code> writes.</p>
@@ -141,8 +140,14 @@
                 </details>
             </div>
 
-            <h3>Recent test runs</h3>
-            <p class="form-note">Archive preserves the complete replay trace before you rerun changed logic. Clear Data safely archives completed current test runs first, then clears only active test data. Proven and Archived data are preserved.</p>
+            <div class="section-heading regression-current-runs-heading">
+                <div>
+                    <p class="eyebrow">CURRENT TEST DATA</p>
+                    <h3>Recent test runs</h3>
+                </div>
+                <button id="regression-reset" type="button" class="danger-button">Clear Data</button>
+            </div>
+            <p class="form-note">Clear Data first archives every completed run, then clears only active replay/test tables. Proven trades, archived runs and production data are preserved.</p>
             <div class="table-wrap">
                 <table>
                     <thead><tr><th>ID</th><th>Test</th><th>Symbol</th><th>Window</th><th>Status</th><th>Progress</th><th>Action</th></tr></thead>
@@ -156,6 +161,16 @@
                     <thead><tr><th>ID</th><th>Source run</th><th>Test</th><th>Symbol</th><th>Window</th><th>Archived</th><th>Action</th></tr></thead>
                     <tbody id="regression-archives-body"><tr><td colspan="7">Loading archived runs…</td></tr></tbody>
                 </table>
+            </div>
+            <div id="regression-archive-detail" class="regression-detail hidden">
+                <div class="section-heading">
+                    <div><p class="eyebrow">READ-ONLY ARCHIVE</p><h3 id="regression-archive-title">Archived run</h3></div>
+                </div>
+                <p id="regression-archive-note" class="form-note">Archived replay snapshot.</p>
+                <div class="table-wrap"><table>
+                    <thead><tr><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr></thead>
+                    <tbody id="regression-archive-trades-body"><tr><td colspan="9">Select an archived run to view its trades.</td></tr></tbody>
+                </table></div>
             </div>
 
             <div id="regression-trades" class="regression-detail hidden">

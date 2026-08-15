@@ -105,7 +105,7 @@ async function loadRegressionRuns() {
         const resetButton = document.getElementById('regression-reset');
         if (resetButton) {
             resetButton.disabled = Boolean(active);
-            resetButton.title = active ? `Test #${active.id} is still ${active.status}. Wait for it to finish before clearing data.` : 'Archive completed current test runs, then clear only active regression/shadow test data';
+            resetButton.title = active ? `Test #${active.id} is still ${active.status}. Wait for it to finish before resetting.` : 'Clear all isolated regression/shadow test data';
         }
         return runs;
     } catch (error) {
@@ -504,13 +504,13 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
     pipelineSection?.classList.add('hidden');
     if (pipelineToggle) { pipelineToggle.textContent = 'Expand pipeline'; pipelineToggle.setAttribute('aria-expanded', 'false'); }
     document.getElementById('regression-trades')?.classList.add('hidden');
-    const base = archived ? `/api/administration/regression-tests/archives/${runId}` : `/api/administration/regression-tests/runs/${runId}`;
+    const base = `/api/administration/regression-tests/runs/${runId}`;
     const run = await api(base);
     if (!archived) activeRegressionRunId = runId;
 
     const active = document.getElementById('regression-active');
     active.classList.remove('hidden');
-    document.getElementById('regression-active-title').textContent = `${archived ? 'Archived · ' : ''}#${run.id} ${run.test_name} · ${run.symbol}`;
+    document.getElementById('regression-active-title').textContent = `#${run.id} ${run.test_name} · ${run.symbol}`;
     document.getElementById('regression-active-status').textContent = run.status;
     document.getElementById('regression-active-status').className = `status-pill ${regressionStatusClass(run.status)}`;
     const progress = Math.max(0, Math.min(100, Number(run.progress_percent || 0)));
@@ -562,52 +562,43 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
     }
 
     if (finished && includeTables) {
-        const [signals, opportunities, trades, management] = await Promise.all([
+        const detailResults = await Promise.allSettled([
             api(`${base}/signals`),
             api(`${base}/opportunities`),
             api(`${base}/trades`),
             api(`${base}/position-management`)
         ]);
-        // Active runs keep the explainability pipeline. Archived runs are deliberately simpler:
-        // they preserve historical replay data for later trade-by-trade analysis without showing
-        // pipeline controls or mutable Proven/Success checkboxes.
         if (requestToken !== regressionDetailRequestToken) return finished;
+        const signals = detailResults[0].status === 'fulfilled' ? detailResults[0].value : [];
+        const opportunities = detailResults[1].status === 'fulfilled' ? detailResults[1].value : [];
+        const trades = detailResults[2].status === 'fulfilled' ? detailResults[2].value : [];
+        const management = detailResults[3].status === 'fulfilled' ? detailResults[3].value : [];
+
+        // Active test pipeline is always available for a completed run. A missing auxiliary
+        // endpoint must not make the entire pipeline section disappear; render the available
+        // trace and keep the panel collapsed until the user explicitly expands it.
         const pipelinePanel = document.getElementById('regression-pipeline');
         const pipelineSection = document.getElementById('regression-pipeline-section');
         const pipelineToggle = document.getElementById('regression-pipeline-toggle');
-        if (archived) {
-            pipelineSection?.classList.add('hidden');
-            pipelinePanel?.classList.add('hidden');
-            const pipelineBody = document.getElementById('regression-pipeline-body');
-            if (pipelineBody) pipelineBody.innerHTML = '';
-            regressionPipelineCache = null;
-        } else {
-            // Active run details are open/clear immediately. Only the large visual pipeline
-            // starts collapsed and is expanded explicitly by the user.
-            renderRegressionPipeline(signals, opportunities, trades, management, run.symbol);
-            pipelineSection?.classList.remove('hidden');
-            pipelinePanel?.classList.add('hidden');
-            if (pipelineToggle) { pipelineToggle.textContent = 'Expand pipeline'; pipelineToggle.setAttribute('aria-expanded', 'false'); }
-        }
+        renderRegressionPipeline(signals, opportunities, trades, management, run.symbol);
+        pipelineSection?.classList.remove('hidden');
+        pipelinePanel?.classList.add('hidden');
+        if (pipelineToggle) { pipelineToggle.textContent = 'Expand pipeline'; pipelineToggle.setAttribute('aria-expanded', 'false'); }
 
         const tradePanel = document.getElementById('regression-trades');
         tradePanel.classList.remove('hidden');
         const tradeTable = tradePanel.querySelector('table');
         const tradeHead = tradeTable?.querySelector('thead');
         if (tradeHead) {
-            tradeHead.innerHTML = archived
-                ? '<tr><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr>'
-                : '<tr><th title="Add/remove from Proven trades">✓</th><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr>';
+            tradeHead.innerHTML = '<tr><th title="Add/remove from Proven trades">✓</th><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr>';
         }
         const tradeNote = tradePanel.querySelector('.form-note');
         if (tradeNote) {
-            tradeNote.textContent = archived
-                ? 'Archived replay snapshot. Read-only historical trades preserved for analysis.'
-                : 'Check a closed trade after your manual review. Checked trades are copied to the persistent Proven trades table and the combined graph; unchecking removes them from both.';
+            tradeNote.textContent = 'Check a closed trade after your manual review. Checked trades are copied to the persistent Proven trades table and the combined graph; unchecking removes them from both.';
         }
         document.getElementById('regression-trades-body').innerHTML = trades.map((trade, index) => `
             <tr>
-                ${archived ? '' : `<td><label class="proven-success-check" title="Add or remove this trade from Proven trades"><input type="checkbox" aria-label="Add or remove trade ${index + 1} from Proven trades" data-proven-trade-id="${trade.id}" data-proven-run-id="${run.id}" ${regressionBool(trade.proven_success) ? 'checked' : ''}></label></td>`}
+                <td><label class="proven-success-check" title="Add or remove this trade from Proven trades"><input type="checkbox" aria-label="Add or remove trade ${index + 1} from Proven trades" data-proven-trade-id="${trade.id}" data-proven-run-id="${run.id}" ${regressionBool(trade.proven_success) ? 'checked' : ''}></label></td>
                 <td>${index + 1}</td>
                 <td>${formatMoveTime(trade.entry_time)}</td>
                 <td>${formatMovePrice(trade.entry_price)}</td>
@@ -617,10 +608,34 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
                 <td>${trade.realized_pnl_usdt == null ? '—' : Number(trade.realized_pnl_usdt).toFixed(4)}</td>
                 <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>
                 <td><a class="secondary-button regression-chart-link" href="${regressionTradeChartUrl(run.symbol, trade, index)}">View Chart</a></td>
-            </tr>`).join('') || `<tr><td colspan="${archived ? 9 : 10}">NO BUY EXECUTED in this replay window.</td></tr>`;
+            </tr>`).join('') || '<tr><td colspan="10">NO BUY EXECUTED in this replay window.</td></tr>';
     }
 
     return finished;
+}
+
+async function loadRegressionArchiveDetail(archiveBatchId) {
+    const base = `/api/administration/regression-tests/archives/${archiveBatchId}`;
+    const [run, trades] = await Promise.all([api(base), api(`${base}/trades`)]);
+    const panel = document.getElementById('regression-archive-detail');
+    const body = document.getElementById('regression-archive-trades-body');
+    if (!panel || !body) return;
+    document.getElementById('regression-archive-title').textContent = `#${run.id} ${run.test_name} · ${run.symbol}`;
+    document.getElementById('regression-archive-note').textContent = `Archived replay snapshot · ${formatMoveTime(run.start_time)} → ${formatMoveTime(run.end_time)} · read-only`;
+    body.innerHTML = trades.map((trade, index) => `
+        <tr>
+            <td>${index + 1}</td>
+            <td>${formatMoveTime(trade.entry_time)}</td>
+            <td>${formatMovePrice(trade.entry_price)}</td>
+            <td>${trade.exit_time ? formatMoveTime(trade.exit_time) : 'OPEN'}</td>
+            <td>${trade.exit_price ? formatMovePrice(trade.exit_price) : '—'}</td>
+            <td>${escapeHtml(trade.exit_reason || 'OPEN')}</td>
+            <td>${trade.realized_pnl_usdt == null ? '—' : Number(trade.realized_pnl_usdt).toFixed(4)}</td>
+            <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>
+            <td><a class="secondary-button regression-chart-link" href="${regressionTradeChartUrl(run.symbol, trade, index)}">View Chart</a></td>
+        </tr>`).join('') || '<tr><td colspan="9">NO BUY EXECUTED in this archived replay window.</td></tr>';
+    panel.classList.remove('hidden');
+    panel.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
 function pollRegressionRun(runId) {
@@ -653,6 +668,7 @@ if (regressionForm) {
         document.getElementById('regression-detail')?.classList.add('hidden');
         document.getElementById('regression-result').classList.add('hidden');
         document.getElementById('regression-pipeline')?.classList.add('hidden');
+        document.getElementById('regression-pipeline-section')?.classList.add('hidden');
         try {
             const created = await api('/api/administration/regression-tests/runs', {
                 method: 'POST',
@@ -704,13 +720,13 @@ const regressionArchivesBody = document.getElementById('regression-archives-body
 if (regressionArchivesBody) regressionArchivesBody.addEventListener('click', async event => {
     const button = event.target.closest('button[data-regression-archive-view]');
     if (!button) return;
-    try { await loadRegressionDetail(button.dataset.regressionArchiveView, true, true); document.getElementById('regression-active')?.scrollIntoView({behavior: 'smooth', block: 'start'}); }
+    try { await loadRegressionArchiveDetail(button.dataset.regressionArchiveView); }
     catch (error) { showAdminMessage(error.message, true); }
 });
 
 const regressionReset = document.getElementById('regression-reset');
 if (regressionReset) regressionReset.addEventListener('click', async () => {
-    const confirmed = window.confirm('Clear current test data? Completed current runs will be archived first. Proven trades, Archived runs, and production data will NOT be deleted.');
+    const confirmed = window.confirm('Archive every completed regression run, then clear active shadow/test data? Proven trades and production data are never deleted.');
     if (!confirmed) return;
     regressionReset.disabled = true;
     try {
@@ -725,7 +741,7 @@ if (regressionReset) regressionReset.addEventListener('click', async () => {
         setRegressionRunButtonRunning(false);
         await loadRegressionRuns();
         await loadRegressionArchives();
-        showAdminMessage(`Current test data cleared safely after archive. Archived and Proven data preserved. Runs ${deleted.runs || 0}, signals ${deleted.signals || 0}, opportunities ${deleted.opportunities || 0}, positions ${deleted.positions || 0}, executions ${deleted.executions || 0} removed.`);
+        showAdminMessage(`Completed runs archived safely. Test data reset. Runs ${deleted.runs || 0}, signals ${deleted.signals || 0}, opportunities ${deleted.opportunities || 0}, positions ${deleted.positions || 0}, executions ${deleted.executions || 0} removed.`);
     } catch (error) {
         showAdminMessage(error.message, true);
     } finally {
