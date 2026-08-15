@@ -97,7 +97,7 @@ async function loadRegressionRuns() {
                 <td>${formatMoveTime(run.start_time)} → ${formatMoveTime(run.end_time)}</td>
                 <td><span class="status-pill ${regressionStatusClass(run.status)}">${escapeHtml(run.status)}</span></td>
                 <td>${Number(run.progress_percent || 0)}%</td>
-                <td><button type="button" class="secondary-button" data-regression-run-id="${run.id}">View</button></td>
+                <td><button type="button" class="secondary-button" data-regression-run-id="${run.id}">View</button> <button type="button" class="secondary-button" data-regression-archive-id="${run.id}" ${['PENDING','RUNNING'].includes(String(run.status)) ? 'disabled' : ''}>Archive</button></td>
             </tr>
         `).join('') || '<tr><td colspan="7">No regression tests have been run yet.</td></tr>';
         const active = runs.find(run => ['PENDING', 'RUNNING'].includes(String(run.status)));
@@ -113,6 +113,20 @@ async function loadRegressionRuns() {
     }
 }
 
+
+async function loadRegressionArchives() {
+    const body = document.getElementById('regression-archives-body');
+    if (!body) return [];
+    try {
+        const rows = await api('/api/administration/regression-tests/archives');
+        body.innerHTML = rows.map(a => `<tr>
+            <td>#${a.archive_batch_id}</td><td>#${a.source_test_run_id}</td><td><strong>${escapeHtml(a.test_name)}</strong></td>
+            <td>${escapeHtml(a.symbol)}</td><td>${formatMoveTime(a.start_time)} → ${formatMoveTime(a.end_time)}</td>
+            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}">View read-only</button></td>
+        </tr>`).join('') || '<tr><td colspan="7">No archived test runs yet.</td></tr>';
+        return rows;
+    } catch (error) { body.innerHTML = `<tr><td colspan="7">${escapeHtml(error.message)}</td></tr>`; return []; }
+}
 
 function regressionPipelineState(value, kind = 'decision') {
     const normalized = String(value || '').toUpperCase();
@@ -478,13 +492,14 @@ function renderRegressionPipeline(signals, opportunities, trades, management = [
     }).join('');
 }
 
-async function loadRegressionDetail(runId, includeTables = true) {
-    const run = await api(`/api/administration/regression-tests/runs/${runId}`);
-    activeRegressionRunId = runId;
+async function loadRegressionDetail(runId, includeTables = true, archived = false) {
+    const base = archived ? `/api/administration/regression-tests/archives/${runId}` : `/api/administration/regression-tests/runs/${runId}`;
+    const run = await api(base);
+    if (!archived) activeRegressionRunId = runId;
 
     const active = document.getElementById('regression-active');
     active.classList.remove('hidden');
-    document.getElementById('regression-active-title').textContent = `#${run.id} ${run.test_name} · ${run.symbol}`;
+    document.getElementById('regression-active-title').textContent = `${archived ? 'ARCHIVE · ' : ''}#${run.id} ${run.test_name} · ${run.symbol}`;
     document.getElementById('regression-active-status').textContent = run.status;
     document.getElementById('regression-active-status').className = `status-pill ${regressionStatusClass(run.status)}`;
     const progress = Math.max(0, Math.min(100, Number(run.progress_percent || 0)));
@@ -537,10 +552,10 @@ async function loadRegressionDetail(runId, includeTables = true) {
 
     if (finished && includeTables) {
         const [signals, opportunities, trades, management] = await Promise.all([
-            api(`/api/administration/regression-tests/runs/${runId}/signals`),
-            api(`/api/administration/regression-tests/runs/${runId}/opportunities`),
-            api(`/api/administration/regression-tests/runs/${runId}/trades`),
-            api(`/api/administration/regression-tests/runs/${runId}/position-management`)
+            api(`${base}/signals`),
+            api(`${base}/opportunities`),
+            api(`${base}/trades`),
+            api(`${base}/position-management`)
         ]);
         // Raw generated-signal/opportunity tables were intentionally removed from Administration.
         // The visual pipeline below remains the single explainability surface.
@@ -550,7 +565,7 @@ async function loadRegressionDetail(runId, includeTables = true) {
         tradePanel.classList.remove('hidden');
         document.getElementById('regression-trades-body').innerHTML = trades.map((trade, index) => `
             <tr>
-                <td><label class="proven-success-check" title="Add or remove this trade from Proven trades"><input type="checkbox" aria-label="Add or remove trade ${index + 1} from Proven trades" data-proven-trade-id="${trade.id}" data-proven-run-id="${runId}" ${regressionBool(trade.proven_success) ? 'checked' : ''}></label></td>
+                <td><label class="proven-success-check" title="Add or remove this trade from Proven trades"><input type="checkbox" aria-label="Add or remove trade ${index + 1} from Proven trades" data-proven-trade-id="${trade.id}" data-proven-run-id="${run.id}" ${regressionBool(trade.proven_success) ? 'checked' : ''} ${archived ? 'disabled title="Archived replay is read-only"' : ''}></label></td>
                 <td>${index + 1}</td>
                 <td>${formatMoveTime(trade.entry_time)}</td>
                 <td>${formatMovePrice(trade.entry_price)}</td>
@@ -621,6 +636,16 @@ if (regressionForm) {
 const regressionRunsBody = document.getElementById('regression-runs-body');
 if (regressionRunsBody) {
     regressionRunsBody.addEventListener('click', async event => {
+        const archiveButton = event.target.closest('button[data-regression-archive-id]');
+        if (archiveButton) {
+            try {
+                archiveButton.disabled = true;
+                const saved = await api(`/api/administration/regression-tests/runs/${archiveButton.dataset.regressionArchiveId}/archive`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason:'Manual archive before logic comparison'})});
+                showAdminMessage(saved.alreadyArchived ? `Test #${archiveButton.dataset.regressionArchiveId} was already archived.` : `Test #${archiveButton.dataset.regressionArchiveId} archived safely as batch #${saved.archiveBatchId}.`);
+                await loadRegressionArchives();
+            } catch (error) { showAdminMessage(error.message, true); } finally { archiveButton.disabled = false; }
+            return;
+        }
         const button = event.target.closest('button[data-regression-run-id]');
         if (!button) return;
         try {
@@ -632,9 +657,17 @@ if (regressionRunsBody) {
     });
 }
 
+const regressionArchivesBody = document.getElementById('regression-archives-body');
+if (regressionArchivesBody) regressionArchivesBody.addEventListener('click', async event => {
+    const button = event.target.closest('button[data-regression-archive-view]');
+    if (!button) return;
+    try { await loadRegressionDetail(button.dataset.regressionArchiveView, true, true); }
+    catch (error) { showAdminMessage(error.message, true); }
+});
+
 const regressionReset = document.getElementById('regression-reset');
 if (regressionReset) regressionReset.addEventListener('click', async () => {
-    const confirmed = window.confirm('Clear ALL regression/shadow test data? This does not touch live signals, opportunities, positions, wallet or trades.');
+    const confirmed = window.confirm('Archive every completed regression run, then clear active shadow/test data? Proven trades and production data are never deleted.');
     if (!confirmed) return;
     regressionReset.disabled = true;
     try {
@@ -648,7 +681,8 @@ if (regressionReset) regressionReset.addEventListener('click', async () => {
         document.getElementById('regression-pipeline')?.classList.add('hidden');
         setRegressionRunButtonRunning(false);
         await loadRegressionRuns();
-        showAdminMessage(`Test data reset. Runs ${deleted.runs || 0}, signals ${deleted.signals || 0}, opportunities ${deleted.opportunities || 0}, positions ${deleted.positions || 0}, executions ${deleted.executions || 0} removed.`);
+        await loadRegressionArchives();
+        showAdminMessage(`Completed runs archived safely. Test data reset. Runs ${deleted.runs || 0}, signals ${deleted.signals || 0}, opportunities ${deleted.opportunities || 0}, positions ${deleted.positions || 0}, executions ${deleted.executions || 0} removed.`);
     } catch (error) {
         showAdminMessage(error.message, true);
     } finally {
@@ -815,3 +849,5 @@ document.getElementById('proven-chart-interval')?.addEventListener('change',()=>
 
 const regressionZoneEl = document.getElementById('regression-browser-zone');
 if (regressionZoneEl) regressionZoneEl.textContent = `Displayed in ${window.CryptoTime.browserZone()} (${window.CryptoTime.browserOffsetLabel()}). Inputs are converted to UTC for the replay engine.`;
+
+loadRegressionArchives();

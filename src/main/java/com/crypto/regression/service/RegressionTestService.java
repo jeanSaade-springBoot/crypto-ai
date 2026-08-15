@@ -79,6 +79,64 @@ public class RegressionTestService {
         return id;
     }
 
+
+    /**
+     * Archives one complete replay run before it can be cleared from the active test tables.
+     *
+     * IMPORTANT regression-history rule (introduced after the ETHUSDT Trade #2 investigation,
+     * Aug-2026): test rows are evidence. We must be able to rerun changed production logic without
+     * destroying the old pipeline/evidence/health/trade trace that still needs manual analysis.
+     * Proven trades remain separate in proven_analyzed_trade and are never moved or deleted here.
+     */
+    @Transactional
+    public synchronized Map<String, Object> archiveRun(long runId, String reason) {
+        Integer active = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM analysis_test_run WHERE id=? AND status IN ('PENDING','RUNNING')", Integer.class, runId);
+        if (active != null && active > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Test #" + runId + " is still running and cannot be archived.");
+        }
+        List<Map<String,Object>> rows = jdbcTemplate.queryForList("SELECT id,test_name,symbol,start_time,end_time,status FROM analysis_test_run WHERE id=?", runId);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Regression test #" + runId + " not found.");
+        List<Map<String,Object>> existing = jdbcTemplate.queryForList("SELECT id FROM regression_test_archive_batch WHERE source_test_run_id=?", runId);
+        if (!existing.isEmpty()) return Map.of("archiveBatchId", existing.get(0).get("id"), "sourceTestRunId", runId, "alreadyArchived", true);
+        Map<String,Object> r = rows.get(0);
+        KeyHolder kh = new GeneratedKeyHolder();
+        jdbcTemplate.update(c -> {
+            PreparedStatement ps = c.prepareStatement("INSERT INTO regression_test_archive_batch(source_test_run_id,test_name,symbol,start_time,end_time,source_status,archive_reason) VALUES (?,?,?,?,?,?,?)", Statement.RETURN_GENERATED_KEYS);
+            ps.setLong(1, runId); ps.setString(2, String.valueOf(r.get("test_name"))); ps.setString(3, String.valueOf(r.get("symbol")));
+            ps.setTimestamp(4, (Timestamp) r.get("start_time")); ps.setTimestamp(5, (Timestamp) r.get("end_time"));
+            ps.setString(6, String.valueOf(r.get("status"))); ps.setString(7, reason == null || reason.isBlank() ? "Archived before replay reset" : reason.trim());
+            return ps;
+        }, kh);
+        long batchId = kh.getKey().longValue();
+        int runs = jdbcTemplate.update("INSERT INTO analysis_test_run_archive SELECT ?, r.* FROM analysis_test_run r WHERE r.id=?", batchId, runId);
+        int signals = jdbcTemplate.update("INSERT INTO analysis_test_signal_archive SELECT ?, r.* FROM analysis_test_signal r WHERE r.test_run_id=?", batchId, runId);
+        int opportunities = jdbcTemplate.update("INSERT INTO execution_opportunity_test_archive SELECT ?, r.* FROM execution_opportunity_test r WHERE r.test_run_id=?", batchId, runId);
+        int results = jdbcTemplate.update("INSERT INTO analysis_test_result_archive SELECT ?, r.* FROM analysis_test_result r WHERE r.test_run_id=?", batchId, runId);
+        int executions = jdbcTemplate.update("INSERT INTO wallet_execution_test_archive SELECT ?, r.* FROM wallet_execution_test r WHERE r.test_run_id=?", batchId, runId);
+        int positions = jdbcTemplate.update("INSERT INTO wallet_position_test_archive SELECT ?, r.* FROM wallet_position_test r WHERE r.test_run_id=?", batchId, runId);
+        int management = jdbcTemplate.update("INSERT INTO position_management_test_archive SELECT ?, r.* FROM position_management_test r WHERE r.test_run_id=?", batchId, runId);
+        return Map.of("archiveBatchId", batchId, "sourceTestRunId", runId, "alreadyArchived", false,
+                "runs", runs, "signals", signals, "opportunities", opportunities, "results", results,
+                "executions", executions, "positions", positions, "management", management);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String,Object>> archivedRuns() {
+        return jdbcTemplate.queryForList("SELECT id AS archive_batch_id,source_test_run_id,test_name,symbol,start_time,end_time,source_status,archive_reason,archived_at FROM regression_test_archive_batch ORDER BY id DESC LIMIT 100");
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String,Object> archivedRun(long batchId) {
+        Map<String,Object> run = jdbcTemplate.queryForMap("SELECT r.* FROM analysis_test_run_archive r WHERE r.archive_batch_id=?", batchId);
+        List<Map<String,Object>> result = jdbcTemplate.queryForList("SELECT r.* FROM analysis_test_result_archive r WHERE r.archive_batch_id=?", batchId);
+        run.put("result", result.isEmpty() ? null : result.get(0)); run.put("archived", true); run.put("archive_batch_id", batchId); return run;
+    }
+    @Transactional(readOnly = true) public List<Map<String,Object>> archivedSignals(long batchId) { return jdbcTemplate.queryForList("SELECT generated_at,interval_code,latest_price,original_decision,final_decision,execution_effective_decision,total_score,confidence_score,trend_score,volume_score,momentum_score,decision_authority_corrected,replay_generated,generation_error FROM analysis_test_signal_archive WHERE archive_batch_id=? ORDER BY generated_at ASC, FIELD(interval_code,'1h','5m','1m') LIMIT 1500", batchId); }
+    @Transactional(readOnly = true) public List<Map<String,Object>> archivedTrades(long batchId) { return jdbcTemplate.queryForList("SELECT id,entry_time,entry_price,exit_time,exit_price,exit_reason,realized_pnl_usdt,realized_pnl_percent,position_percent,status, EXISTS(SELECT 1 FROM proven_analyzed_trade p WHERE p.source_test_run_id=wallet_position_test_archive.test_run_id AND p.source_trade_id=wallet_position_test_archive.id) AS proven_success FROM wallet_position_test_archive WHERE archive_batch_id=? ORDER BY entry_time ASC LIMIT 500", batchId); }
+    @Transactional(readOnly = true) public List<Map<String,Object>> archivedPositionManagement(long batchId) { return jdbcTemplate.queryForList("SELECT generated_at,action_code,current_price,old_take_profit,new_take_profit,highest_price,profit_lock_active,profit_lock_price,explanation FROM position_management_test_archive WHERE archive_batch_id=? ORDER BY generated_at ASC LIMIT 3000", batchId); }
+    @Transactional(readOnly = true) public List<Map<String,Object>> archivedOpportunities(long batchId) { return jdbcTemplate.queryForList("SELECT generated_at,replay_stage,current_original_decision,current_final_decision,five_minute_decision,one_hour_decision,evidence_count,buy_count,watch_count,neutral_count,bearish_count,evidence_score,opportunity_health,recommended_position_percent,decision_code,decision_explanation FROM execution_opportunity_test_archive WHERE archive_batch_id=? AND replay_stage IS NOT NULL ORDER BY generated_at ASC LIMIT 3000", batchId); }
+
+    @Transactional
     public synchronized Map<String, Object> resetAllTestData() {
         Integer activeRuns = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM analysis_test_run
@@ -88,6 +146,15 @@ public class RegressionTestService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "A regression test is still running. Wait for it to finish before resetting test data.");
         }
+
+        // Safety-first reset: archive every completed active run before deleting shadow data.
+        // If any archive copy fails, the transaction rolls back and reset does not proceed.
+        List<Long> unarchivedRunIds = jdbcTemplate.queryForList("""
+                SELECT r.id FROM analysis_test_run r
+                LEFT JOIN regression_test_archive_batch a ON a.source_test_run_id=r.id
+                WHERE a.id IS NULL ORDER BY r.id
+                """, Long.class);
+        for (Long runId : unarchivedRunIds) archiveRun(runId, "Automatic archive before Reset Test Data");
 
         // Proven trades are intentionally NOT test data. proven_analyzed_trade is a
         // standalone immutable snapshot table with no FK to analysis_test_run, so deleting

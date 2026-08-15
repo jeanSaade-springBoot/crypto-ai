@@ -51,7 +51,7 @@
                 </div>
                 <div class="section-actions">
                     <button id="regression-refresh" type="button" class="secondary-button">Refresh Runs</button>
-                    <button id="regression-reset" type="button" class="danger-button">Reset Test Data</button>
+                    <button id="regression-reset" type="button" class="danger-button">Archive & Reset Test Data</button>
                 </div>
             </div>
             <p class="debug-isolation-note"><strong>Administration-triggered regression only.</strong> This test reads historical candles/signals and writes only to isolated regression tables including <code>analysis_test_*</code>, <code>execution_opportunity_test</code> and <code>position_management_test</code>. It never calls wallet execution, live position management, <code>trade_signal</code> writes or production <code>execution_opportunity</code> writes.</p>
@@ -142,10 +142,19 @@
             </div>
 
             <h3>Recent test runs</h3>
+            <p class="form-note">Archive preserves the complete replay trace before you rerun changed logic. Reset automatically archives every completed run that has not already been archived.</p>
             <div class="table-wrap">
                 <table>
                     <thead><tr><th>ID</th><th>Test</th><th>Symbol</th><th>Window</th><th>Status</th><th>Progress</th><th>Action</th></tr></thead>
                     <tbody id="regression-runs-body"><tr><td colspan="7">Loading test runs…</td></tr></tbody>
+                </table>
+            </div>
+
+            <h3>Archived test runs</h3>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Archive</th><th>Source run</th><th>Test</th><th>Symbol</th><th>Window</th><th>Archived</th><th>Action</th></tr></thead>
+                    <tbody id="regression-archives-body"><tr><td colspan="7">Loading archived runs…</td></tr></tbody>
                 </table>
             </div>
 
