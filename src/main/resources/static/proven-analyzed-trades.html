@@ -155,24 +155,6 @@
                 </table>
             </div>
 
-            <h3>Archived</h3>
-            <div class="table-wrap">
-                <table>
-                    <thead><tr><th>ID</th><th>Source run</th><th>Test</th><th>Symbol</th><th>Window</th><th>Archived</th><th>Action</th></tr></thead>
-                    <tbody id="regression-archives-body"><tr><td colspan="7">Loading archived runs…</td></tr></tbody>
-                </table>
-            </div>
-            <div id="regression-archive-detail" class="regression-detail hidden">
-                <div class="section-heading">
-                    <div><p class="eyebrow">READ-ONLY ARCHIVE</p><h3 id="regression-archive-title">Archived run</h3></div>
-                </div>
-                <p id="regression-archive-note" class="form-note">Archived replay snapshot.</p>
-                <div class="table-wrap"><table>
-                    <thead><tr><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr></thead>
-                    <tbody id="regression-archive-trades-body"><tr><td colspan="9">Select an archived run to view its trades.</td></tr></tbody>
-                </table></div>
-            </div>
-
             <div id="regression-trades" class="regression-detail hidden">
                 <h3>Shadow trades · exact BUY / SELL points</h3>
                 <p class="form-note">Check a closed trade after your manual review. Checked trades are copied to the persistent Proven trades table and the combined graph; unchecking removes them from both.</p>
@@ -182,6 +164,17 @@
                 </table></div>
             </div>
 
+
+            <div id="regression-trade-chart-panel" class="proven-trades-chart-panel hidden">
+                <div class="section-heading">
+                    <div><p class="eyebrow">TEST TRADE CHART</p><h3 id="regression-trade-chart-title">Replay trade</h3></div>
+                    <label class="proven-symbol-picker">Interval<select id="regression-trade-chart-interval">
+                        <option value="1m">1 min</option><option value="5m" selected>5 min</option><option value="1h">1 hour</option><option value="4h">4 hours</option>
+                    </select></label>
+                </div>
+                <p class="form-note">BUY and SELL are shown directly here. View Chart never leaves Proven Analyzed Trades.</p>
+                <div id="regression-trade-chart" class="proven-trades-chart"></div>
+            </div>
 
             <div id="regression-pipeline-section" class="regression-pipeline-section hidden">
                 <div class="section-heading regression-pipeline-toggle-heading">
@@ -209,6 +202,27 @@
                 <p class="form-note">A BUY candidate is not an execution. Only an evaluation whose Execution node is EXECUTED is linked to a Shadow Wallet BUY and its eventual SELL. Use the filter to isolate executed trades, blocked higher-timeframe context, ATR/BTC vetoes, or opportunity-building states. Green = passed, amber = waiting/supportive, red = blocked.</p>
                 <div id="regression-pipeline-body" class="regression-pipeline-body"></div>
             </div>
+            </div>
+
+            <div id="regression-archive-section" class="regression-archive-section">
+            <h3>Archived</h3>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>ID</th><th>Source run</th><th>Test</th><th>Symbol</th><th>Window</th><th>Archived</th><th>Action</th></tr></thead>
+                    <tbody id="regression-archives-body"><tr><td colspan="7">Loading archived runs…</td></tr></tbody>
+                </table>
+            </div>
+            <div id="regression-archive-detail" class="regression-detail hidden">
+                <div class="section-heading">
+                    <div><p class="eyebrow">READ-ONLY ARCHIVE</p><h3 id="regression-archive-title">Archived run</h3></div>
+                </div>
+                <p id="regression-archive-note" class="form-note">Archived replay snapshot.</p>
+                <div class="table-wrap"><table>
+                    <thead><tr><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr></thead>
+                    <tbody id="regression-archive-trades-body"><tr><td colspan="9">Select an archived run to view its trades.</td></tr></tbody>
+                </table></div>
+            </div>
+
             </div>
 
 

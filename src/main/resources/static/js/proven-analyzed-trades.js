@@ -607,7 +607,7 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
                 <td>${escapeHtml(trade.exit_reason || 'OPEN')}</td>
                 <td>${trade.realized_pnl_usdt == null ? '—' : Number(trade.realized_pnl_usdt).toFixed(4)}</td>
                 <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>
-                <td><a class="secondary-button regression-chart-link" href="${regressionTradeChartUrl(run.symbol, trade, index)}">View Chart</a></td>
+                <td><button type="button" class="secondary-button regression-chart-link" data-replay-chart="1" data-chart-symbol="${escapeHtml(run.symbol)}" data-chart-index="${index}" data-chart-entry-time="${escapeHtml(trade.entry_time || '')}" data-chart-entry-price="${escapeHtml(trade.entry_price ?? '')}" data-chart-exit-time="${escapeHtml(trade.exit_time || '')}" data-chart-exit-price="${escapeHtml(trade.exit_price ?? '')}">View Chart</button></td>
             </tr>`).join('') || '<tr><td colspan="10">NO BUY EXECUTED in this replay window.</td></tr>';
     }
 
@@ -632,7 +632,7 @@ async function loadRegressionArchiveDetail(archiveBatchId) {
             <td>${escapeHtml(trade.exit_reason || 'OPEN')}</td>
             <td>${trade.realized_pnl_usdt == null ? '—' : Number(trade.realized_pnl_usdt).toFixed(4)}</td>
             <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>
-            <td><a class="secondary-button regression-chart-link" href="${regressionTradeChartUrl(run.symbol, trade, index)}">View Chart</a></td>
+            <td><button type="button" class="secondary-button regression-chart-link" data-replay-chart="1" data-chart-symbol="${escapeHtml(run.symbol)}" data-chart-index="${index}" data-chart-entry-time="${escapeHtml(trade.entry_time || '')}" data-chart-entry-price="${escapeHtml(trade.entry_price ?? '')}" data-chart-exit-time="${escapeHtml(trade.exit_time || '')}" data-chart-exit-price="${escapeHtml(trade.exit_price ?? '')}">View Chart</button></td>
         </tr>`).join('') || '<tr><td colspan="9">NO BUY EXECUTED in this archived replay window.</td></tr>';
     panel.classList.remove('hidden');
     panel.scrollIntoView({behavior: 'smooth', block: 'start'});
@@ -776,6 +776,55 @@ if (regressionPipelineFilter) regressionPipelineFilter.addEventListener('change'
     renderRegressionPipeline(signals, opportunities, trades, management, runSymbol);
 });
 
+
+let regressionTradeChart = null;
+let regressionTradeChartFocus = null;
+
+async function showRegressionTradeChart(button) {
+    const entry = window.CryptoTime.parseUtc(button.dataset.chartEntryTime);
+    if (!entry || Number.isNaN(entry.getTime())) return;
+    const exit = button.dataset.chartExitTime ? window.CryptoTime.parseUtc(button.dataset.chartExitTime) : null;
+    regressionTradeChartFocus = {
+        symbol: String(button.dataset.chartSymbol || '').toUpperCase(),
+        index: Number(button.dataset.chartIndex || 0),
+        entryTime: entry,
+        entryPrice: Number(button.dataset.chartEntryPrice),
+        exitTime: exit && !Number.isNaN(exit.getTime()) ? exit : null,
+        exitPrice: button.dataset.chartExitPrice ? Number(button.dataset.chartExitPrice) : null
+    };
+    await renderRegressionTradeChart();
+}
+
+async function renderRegressionTradeChart() {
+    const f = regressionTradeChartFocus;
+    if (!f) return;
+    const interval = document.getElementById('regression-trade-chart-interval')?.value || '5m';
+    const from = new Date(f.entryTime.getTime() - 30 * 60 * 1000);
+    const tradeEnd = f.exitTime || new Date(f.entryTime.getTime() + 60 * 60 * 1000);
+    const to = new Date(tradeEnd.getTime() + 30 * 60 * 1000);
+    const data = await api(`/api/administration/regression-tests/trade-chart?symbol=${encodeURIComponent(f.symbol)}&interval=${encodeURIComponent(interval)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`);
+    const candles = (data.candles || []).map(c => ({x:window.CryptoTime.parseUtc(c.open_time), y:[Number(c.open_price),Number(c.high_price),Number(c.low_price),Number(c.close_price)]}));
+    const points = [provenPoint(f.entryTime.toISOString(), f.entryPrice, 'BUY', 0)];
+    if (f.exitTime && Number.isFinite(f.exitPrice)) points.push(provenPoint(f.exitTime.toISOString(), f.exitPrice, 'SELL', 0));
+    const options = {
+        chart:{type:'candlestick',height:420,background:'transparent',foreColor:'#8da2b1',toolbar:{show:true},animations:{enabled:false}},
+        title:{text:`${f.symbol} · Trade #${f.index+1} · ${interval}`,align:'left',style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'}},
+        series:[{name:'Price',data:candles}], xaxis:{type:'datetime',labels:{datetimeUTC:false}}, yaxis:{tooltip:{enabled:true},decimalsInFloat:4},
+        grid:{borderColor:'#203342'},theme:{mode:'dark'},plotOptions:{candlestick:{colors:{upward:'#39d98a',downward:'#ff6b72'}}},annotations:{points},tooltip:{shared:false}
+    };
+    const host=document.getElementById('regression-trade-chart');
+    if (regressionTradeChart) regressionTradeChart.destroy();
+    regressionTradeChart=new ApexCharts(host,options); await regressionTradeChart.render();
+    const panel=document.getElementById('regression-trade-chart-panel'); panel?.classList.remove('hidden');
+    document.getElementById('regression-trade-chart-title').textContent=`${f.symbol} · Trade #${f.index+1}`;
+    panel?.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+document.addEventListener('click', event => {
+    const button=event.target.closest('button[data-replay-chart]');
+    if (button) showRegressionTradeChart(button).catch(error => showAdminMessage(error.message,true));
+});
+document.getElementById('regression-trade-chart-interval')?.addEventListener('change',()=>renderRegressionTradeChart().catch(error=>showAdminMessage(error.message,true)));
 
 let provenTradesChart = null;
 let provenTradeFocus = null;

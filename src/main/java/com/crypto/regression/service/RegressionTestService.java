@@ -357,3 +357,22 @@ public class RegressionTestService {
                 LIMIT 3000
                 """, runId);
     }}
+    @Transactional(readOnly = true)
+    public Map<String, Object> replayTradeChart(String symbol, String interval, Instant from, Instant to) {
+        String normalized = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        String normalizedInterval = switch (interval == null ? "5m" : interval.trim().toLowerCase(Locale.ROOT)) {
+            case "1m", "5m", "1h", "4h" -> interval.trim().toLowerCase(Locale.ROOT);
+            default -> "5m";
+        };
+        if (normalized.isBlank() || from == null || to == null || !to.isAfter(from)) {
+            throw new IllegalArgumentException("Symbol and a valid chart window are required.");
+        }
+        List<Map<String, Object>> candles = jdbcTemplate.queryForList("""
+                SELECT open_time, open_price, high_price, low_price, close_price, volume
+                FROM candle
+                WHERE symbol=? AND interval_code=? AND closed=1 AND open_time BETWEEN ? AND ?
+                ORDER BY open_time ASC
+                """, normalized, normalizedInterval, Timestamp.from(from), Timestamp.from(to));
+        return Map.of("symbol", normalized, "interval", normalizedInterval, "candles", candles);
+    }
+

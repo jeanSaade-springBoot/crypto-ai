@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -94,6 +95,14 @@ public class RegressionTestController {
     public Map<String, Object> provenTradeChart(@RequestParam String symbol,
                                                  @RequestParam(defaultValue = "5m") String interval) {
         return service.provenTradeChart(symbol, interval);
+    }
+
+    @GetMapping("/trade-chart")
+    public Map<String, Object> replayTradeChart(@RequestParam String symbol,
+                                                 @RequestParam(defaultValue = "5m") String interval,
+                                                 @RequestParam Instant from,
+                                                 @RequestParam Instant to) {
+        return service.replayTradeChart(symbol, interval, from, to);
     }
 
 }
