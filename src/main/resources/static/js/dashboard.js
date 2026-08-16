@@ -12,6 +12,8 @@ let candleChart;
 let volumeChart;
 let dashboardRefreshTimer;
 let dashboardRefreshInFlight = false;
+let dashboardOverviewAbortController = null;
+let dashboardSelectionRequestId = 0;
 let cachedDashboardWallet = {};
 let cachedSentimentOverview = {};
 let cachedSentimentProviders = [];
@@ -124,7 +126,9 @@ function applyConfiguredDashboardIntervals(settings) {
 }
 
 async function refreshDashboard() {
-    if (dashboardRefreshInFlight) return;
+    const requestId = ++dashboardSelectionRequestId;
+    if (dashboardOverviewAbortController) dashboardOverviewAbortController.abort();
+    dashboardOverviewAbortController = new AbortController();
     dashboardRefreshInFlight = true;
 
     const symbol = el('symbol-select').value;
@@ -136,10 +140,11 @@ async function refreshDashboard() {
             overviewParams.set('focusStart', debugMoveFocus.start.toISOString());
             overviewParams.set('focusEnd', debugMoveFocus.end.toISOString());
         }
-        const response = await fetch(`/api/dashboard/overview?${overviewParams.toString()}`);
+        const response = await fetch(`/api/dashboard/overview?${overviewParams.toString()}`, {signal: dashboardOverviewAbortController.signal});
         if (!response.ok) throw new Error(`Dashboard API returned ${response.status}`);
 
         const data = await response.json();
+        if (requestId !== dashboardSelectionRequestId) return;
         data.sentiment = cachedSentimentOverview;
         data.sentimentProviderStatuses = cachedSentimentProviders;
         data.sentimentSystemStatus = cachedSentimentSystemStatus;
@@ -156,13 +161,57 @@ async function refreshDashboard() {
         void refreshSentimentMetadata(symbol);
         void refreshExecutionIntelligence();
     } catch (error) {
+        if (error?.name === 'AbortError') return;
         updateConnection(false);
         el('error-banner').textContent = error.message;
         el('error-banner').classList.remove('hidden');
     } finally {
-        dashboardRefreshInFlight = false;
-        el('refresh-button').disabled = false;
+        if (requestId === dashboardSelectionRequestId) {
+            dashboardRefreshInFlight = false;
+            dashboardOverviewAbortController = null;
+            el('refresh-button').disabled = false;
+        }
     }
+}
+
+async function refreshDashboardForSelection() {
+    const symbol = el('symbol-select').value;
+    const interval = el('interval-select').value;
+    const requestId = dashboardSelectionRequestId + 1;
+
+    // Render the chart from a deliberately small endpoint first. The full
+    // overview contains many independent diagnostics and wallet queries and
+    // continues in the background after the market chart is already visible.
+    try {
+        const params = new URLSearchParams({symbol, interval});
+        if (debugMoveFocus && interval === '5m') {
+            params.set('focusStart', debugMoveFocus.start.toISOString());
+            params.set('focusEnd', debugMoveFocus.end.toISOString());
+        }
+        const response = await fetch(`/api/dashboard/chart?${params.toString()}`);
+        if (response.ok && symbol === el('symbol-select').value && interval === el('interval-select').value) {
+            const data = await response.json();
+            renderFastMarket(data);
+        }
+    } catch (_) {
+        // The full overview below remains the fallback if the fast chart call fails.
+    }
+
+    // Do not await this from the select change handler: chart interaction stays responsive.
+    void refreshDashboard();
+}
+
+function renderFastMarket(data) {
+    if (!data) return;
+    const lastUpdated = el('last-updated');
+    if (lastUpdated) lastUpdated.textContent = `Updated ${preciseDateTime(data.updatedAt)}`;
+    el('market-subtitle').textContent = `${data.symbol} · ${displayInterval(data.interval)}${data.displayOnlyInterval ? ' · display only' : ''}${debugMoveFocus && data.interval === '5m' ? ' · DEBUG MOVE ZONE' : ''}`;
+    const latestPrice = data.livePrice ?? data.candles?.at(-1)?.close;
+    el('header-live-symbol').textContent = data.symbol || '—';
+    el('header-live-price').textContent = headerMoney(latestPrice);
+    // Avoid showing execution markers from the previously selected symbol while
+    // the full dashboard payload is still loading.
+    renderCharts(data.candles || [], []);
 }
 
 async function refreshDashboardWallet() {
@@ -1989,8 +2038,8 @@ if (aiPeriodSelect) {
     });
 }
 
-el('symbol-select').addEventListener('change', refreshDashboard);
-el('interval-select').addEventListener('change', refreshDashboard);
+el('symbol-select').addEventListener('change', refreshDashboardForSelection);
+el('interval-select').addEventListener('change', refreshDashboardForSelection);
 setupCollapsibleSections();
 setupSidebar();
 (async () => {

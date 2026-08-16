@@ -93,6 +93,40 @@ public class DashboardApiController {
         return scheduleConfigurationService.dashboardSchedule();
     }
 
+
+    /**
+     * Lightweight market payload used when the user changes symbol/timeframe.
+     * It intentionally avoids signals history, positions, wallet executions,
+     * pipeline, counts and timeframe snapshots so the candlestick chart can
+     * update immediately while the full dashboard continues loading in the
+     * background. This is presentation-only and does not affect trading logic.
+     */
+    @GetMapping("/chart")
+    @Transactional(readOnly = true)
+    public Map<String, Object> chart(
+            @RequestParam(defaultValue = "BTCUSDT") String symbol,
+            @RequestParam(defaultValue = "1m") String interval,
+            @RequestParam(required = false) Instant focusStart,
+            @RequestParam(required = false) Instant focusEnd
+    ) {
+        String normalizedSymbol = symbol.trim().toUpperCase();
+        String normalizedInterval = interval.trim().toLowerCase();
+        boolean displayOnlyInterval = isDisplayOnlyInterval(normalizedInterval);
+
+        List<Candle> candles = displayOnlyInterval
+                ? loadAggregatedCandles(normalizedSymbol, normalizedInterval, 120)
+                : loadDashboardCandles(normalizedSymbol, normalizedInterval, focusStart, focusEnd);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("symbol", normalizedSymbol);
+        response.put("interval", normalizedInterval);
+        response.put("displayOnlyInterval", displayOnlyInterval);
+        response.put("updatedAt", Instant.now());
+        response.put("candles", candles.stream().map(this::candleDto).toList());
+        response.put("livePrice", currentLatestPrice(candles));
+        return response;
+    }
+
     @GetMapping("/overview")
     @Transactional(readOnly = true)
     public Map<String, Object> overview(
