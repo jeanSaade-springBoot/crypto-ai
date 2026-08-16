@@ -16,6 +16,7 @@ public interface ExecutionOpportunityRepository extends JpaRepository<ExecutionO
     List<ExecutionOpportunity> findTop50ByOrderByUpdatedAtDesc();
 
     List<ExecutionOpportunity> findTop50ByStatusInOrderByUpdatedAtDesc(Collection<String> statuses);
+    Optional<ExecutionOpportunity> findTopByLatestSignalIdOrderByUpdatedAtDesc(Long latestSignalId);
     long countByStartedAtGreaterThanEqual(Instant startedAt);
     long countByStatusIn(Collection<String> statuses);
     long countByStatusInAndUpdatedAtGreaterThanEqual(Collection<String> statuses, Instant updatedAt);

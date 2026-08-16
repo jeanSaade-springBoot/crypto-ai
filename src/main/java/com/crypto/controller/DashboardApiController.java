@@ -6,6 +6,8 @@ import com.crypto.domain.PaperPosition;
 import com.crypto.domain.PositionStatus;
 import com.crypto.domain.TechnicalIndicator;
 import com.crypto.domain.TradeSignal;
+import com.crypto.execution.domain.ExecutionOpportunity;
+import com.crypto.execution.repository.ExecutionOpportunityRepository;
 import com.crypto.service.ScheduleConfigurationService;
 import com.crypto.service.ScoreDiagnosticsService;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -50,6 +52,7 @@ public class DashboardApiController {
     private final CoinConfigurationService coinConfigurationService;
     private final WalletTradeRepository walletTradeRepository;
     private final WalletManagedPositionRepository walletManagedPositionRepository;
+    private final ExecutionOpportunityRepository executionOpportunityRepository;
     private final Map<String, AggregatedCandleCacheEntry> aggregatedCandleCache = new ConcurrentHashMap<>();
 
     public DashboardApiController(
@@ -62,7 +65,8 @@ public class DashboardApiController {
             ScoreDiagnosticsService scoreDiagnosticsService,
             CoinConfigurationService coinConfigurationService,
             WalletTradeRepository walletTradeRepository,
-            WalletManagedPositionRepository walletManagedPositionRepository
+            WalletManagedPositionRepository walletManagedPositionRepository,
+            ExecutionOpportunityRepository executionOpportunityRepository
     ) {
         this.candleRepository = candleRepository;
         this.technicalIndicatorRepository = technicalIndicatorRepository;
@@ -74,6 +78,7 @@ public class DashboardApiController {
         this.coinConfigurationService = coinConfigurationService;
         this.walletTradeRepository = walletTradeRepository;
         this.walletManagedPositionRepository = walletManagedPositionRepository;
+        this.executionOpportunityRepository = executionOpportunityRepository;
     }
 
     @GetMapping("/symbols")
@@ -202,6 +207,43 @@ public class DashboardApiController {
         response.put("closedPositions", positionDtos.stream()
                 .filter(position -> !"OPEN".equals(position.get("status")))
                 .toList());
+        return response;
+    }
+
+
+    /**
+     * Lazy drill-down for Dashboard "View analysis".
+     *
+     * The signal row already carries the immutable analysis snapshot. This endpoint
+     * adds the execution layers introduced later in the system (opportunity evidence,
+     * health/momentum, execution decision, progressive position state and profit
+     * protection) only when the user explicitly opens the analysis. Keeping this
+     * separate avoids making normal dashboard/symbol/timeframe refreshes slower.
+     */
+    @GetMapping("/signal-analysis-details")
+    @Transactional(readOnly = true)
+    public Map<String, Object> signalAnalysisDetails(@RequestParam Long signalId) {
+        TradeSignal signal = tradeSignalRepository.findById(signalId).orElse(null);
+        if (signal == null) {
+            return Map.of("signalId", signalId, "found", false);
+        }
+
+        ExecutionOpportunity opportunity = executionOpportunityRepository
+                .findTopByLatestSignalIdOrderByUpdatedAtDesc(signalId)
+                .orElse(null);
+        WalletTrade execution = walletTradeRepository
+                .findTopBySignalIdAndStatusOrderByExecutedAtDesc(signalId, "EXECUTED")
+                .orElse(null);
+        WalletManagedPosition position = walletManagedPositionRepository
+                .findTopByEntrySignalIdOrderByOpenedAtDesc(signalId)
+                .orElse(null);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("signalId", signalId);
+        response.put("found", true);
+        response.put("opportunity", opportunity == null ? null : executionOpportunityDto(opportunity));
+        response.put("execution", execution == null ? null : walletExecutionDto(execution));
+        response.put("position", position == null ? null : managedPositionAnalysisDto(position));
         return response;
     }
 
@@ -502,6 +544,66 @@ public class DashboardApiController {
 
     private BigDecimal currentLatestPrice(List<Candle> candles) {
         return candles.isEmpty() ? null : candles.get(candles.size() - 1).getClosePrice();
+    }
+
+    private Map<String, Object> executionOpportunityDto(ExecutionOpportunity opportunity) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", opportunity.getId());
+        result.put("symbol", opportunity.getSymbol());
+        result.put("direction", opportunity.getDirection());
+        result.put("status", opportunity.getStatus());
+        result.put("startedAt", opportunity.getStartedAt());
+        result.put("lastEvidenceAt", opportunity.getLastEvidenceAt());
+        result.put("evidenceCount", opportunity.getEvidenceCount());
+        result.put("buyCount", opportunity.getBuyCount());
+        result.put("watchCount", opportunity.getWatchCount());
+        result.put("neutralCount", opportunity.getNeutralCount());
+        result.put("bearishCount", opportunity.getBearishCount());
+        result.put("evidenceScore", opportunity.getEvidenceScore());
+        result.put("opportunityHealth", opportunity.getOpportunityHealth());
+        result.put("healthMomentum", opportunity.getHealthMomentum());
+        result.put("evidenceMomentum", opportunity.getEvidenceMomentum());
+        result.put("lastBearishAt", opportunity.getLastBearishAt());
+        result.put("averageSignalScore", opportunity.getAverageSignalScore());
+        result.put("averageConfidence", opportunity.getAverageConfidence());
+        result.put("fiveMinuteDecision", opportunity.getFiveMinuteDecision());
+        result.put("oneHourDecision", opportunity.getOneHourDecision());
+        result.put("executionSource", opportunity.getExecutionSource());
+        result.put("recommendedPositionPercent", opportunity.getRecommendedPositionPercent());
+        result.put("decisionCode", opportunity.getDecisionCode());
+        result.put("decisionExplanation", opportunity.getDecisionExplanation());
+        result.put("executedAt", opportunity.getExecutedAt());
+        result.put("updatedAt", opportunity.getUpdatedAt());
+        return result;
+    }
+
+    private Map<String, Object> managedPositionAnalysisDto(WalletManagedPosition position) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", position.getId());
+        result.put("symbol", position.getSymbol());
+        result.put("status", position.getStatus());
+        result.put("openedAt", position.getOpenedAt());
+        result.put("updatedAt", position.getUpdatedAt());
+        result.put("averageEntryPrice", position.getAverageEntryPriceUsdt());
+        result.put("quantity", position.getQuantity());
+        result.put("entryStage", position.getEntryStage());
+        result.put("allocatedPositionPercent", position.getAllocatedPositionPercent());
+        result.put("entryQualityScore", position.getEntryQualityScore());
+        result.put("entryConfidence", position.getEntryConfidence());
+        result.put("entryTotalScore", position.getEntryTotalScore());
+        result.put("entryTrendScore", position.getEntryTrendScore());
+        result.put("entryStructureScore", position.getEntryStructureScore());
+        result.put("entryMomentumScore", position.getEntryMomentumScore());
+        result.put("entryVolumeScore", position.getEntryVolumeScore());
+        result.put("stopLoss", position.getStopLossUsdt());
+        result.put("takeProfit", position.getTakeProfitUsdt());
+        result.put("highestPrice", position.getHighestPriceUsdt());
+        result.put("profitLockActive", position.isProfitLockActive());
+        result.put("profitLockPrice", position.getProfitLockPriceUsdt());
+        result.put("profitLockProgressPercent", position.getProfitLockProgressPercent());
+        result.put("profitLockActivatedAt", position.getProfitLockActivatedAt());
+        result.put("lastScaleInAt", position.getLastScaleInAt());
+        return result;
     }
 
     private Map<String, Object> walletExecutionDto(WalletTrade trade) {

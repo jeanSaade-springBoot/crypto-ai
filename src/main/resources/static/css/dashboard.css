@@ -2747,3 +2747,45 @@ body.position-modal-open{overflow:hidden}
     main > .topbar .filters select{width:46px!important;font-size:8px!important;padding:0 2px!important}
 }
 .debug-trade-dot{pointer-events:auto!important;cursor:crosshair}
+
+/* View Analysis: newer execution-intelligence layers are loaded lazily so the
+   dashboard stays fast while still exposing the full production path on demand. */
+.signal-runtime-analysis { margin: 16px 15px 15px; }
+.runtime-analysis-heading { margin: 8px 0 12px; padding: 0 2px; }
+.runtime-analysis-heading > span { display: block; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; opacity: .66; }
+.runtime-analysis-heading h3 { margin: 3px 0 4px; }
+.runtime-analysis-heading p { margin: 0; opacity: .78; }
+.runtime-analysis-card {
+    margin-top: 12px;
+    padding: 14px;
+    border: 1px solid rgba(148, 163, 184, .2);
+    border-radius: 12px;
+    background: rgba(15, 23, 42, .36);
+}
+.runtime-analysis-card.bullish { border-color: rgba(34, 197, 94, .34); }
+.runtime-analysis-card.warning { border-color: rgba(245, 158, 11, .38); }
+.runtime-analysis-card.bearish { border-color: rgba(239, 68, 68, .38); }
+.runtime-analysis-card.loading { opacity: .86; }
+.runtime-analysis-grid,
+.runtime-analysis-preview {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+    gap: 9px;
+    margin-top: 12px;
+}
+.runtime-analysis-grid > div,
+.runtime-analysis-preview > div {
+    padding: 10px;
+    border-radius: 9px;
+    background: rgba(15, 23, 42, .52);
+    border: 1px solid rgba(148, 163, 184, .13);
+}
+.runtime-analysis-grid span,
+.runtime-analysis-preview span,
+.runtime-decision-code > span { display: block; font-size: .72rem; opacity: .68; text-transform: uppercase; letter-spacing: .04em; }
+.runtime-analysis-grid strong,
+.runtime-analysis-preview strong { display: block; margin-top: 3px; overflow-wrap: anywhere; }
+.runtime-analysis-grid small { display: block; margin-top: 3px; opacity: .66; }
+.runtime-decision-code { margin-top: 12px; padding: 11px 12px; border-radius: 9px; background: rgba(2, 6, 23, .35); }
+.runtime-decision-code strong { display: block; margin-top: 3px; }
+.runtime-decision-code p { margin: 6px 0 0; opacity: .8; }

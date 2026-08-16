@@ -43,6 +43,7 @@ const headerMoney = v => v === null || v === undefined ? '—' : '$' + headerNum
 const dateTime = v => window.CryptoTime.formatLocal(v);
 const preciseDateTime = v => window.CryptoTime.formatLocal(v, {year:'numeric', month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit'});
 const openSignalAnalysisIds = new Set();
+const signalAnalysisDetailCache = new Map();
 let pinnedSignalId = localStorage.getItem('cryptoPinnedSignalId');
 let aiPerformancePeriod = localStorage.getItem('cryptoAiPerformancePeriod') || 'ALL_TIME';
 
@@ -1175,6 +1176,9 @@ function renderSignals(signals, displayOnlyInterval = false, timeframeSnapshot =
                             <div><span>Wallet entry</span><strong>${execution ? money(execution.price) : 'Not executed'}</strong></div>
                         </section>
                         ${scoreBreakdownHtml(s)}
+                        <div id="signal-runtime-${signalId}" class="signal-runtime-analysis" data-signal-id="${signalId}">
+                            ${signalRuntimeSummaryPlaceholderHtml(execution, position)}
+                        </div>
                     </div>
                 </td>
             </tr>`;
@@ -1186,7 +1190,12 @@ function renderSignals(signals, displayOnlyInterval = false, timeframeSnapshot =
             const detail = document.getElementById(button.dataset.detailId);
             const opening = detail.classList.contains('hidden');
             detail.classList.toggle('hidden');
-            if (opening) openSignalAnalysisIds.add(signalId); else openSignalAnalysisIds.delete(signalId);
+            if (opening) {
+                openSignalAnalysisIds.add(signalId);
+                loadSignalRuntimeAnalysis(signalId);
+            } else {
+                openSignalAnalysisIds.delete(signalId);
+            }
             button.textContent = opening ? 'Hide analysis' : 'View analysis';
         });
     });
@@ -1208,6 +1217,131 @@ function renderSignals(signals, displayOnlyInterval = false, timeframeSnapshot =
             renderSignals(signals, displayOnlyInterval, timeframeSnapshot, executions, openPositions, closedPositions);
         });
     });
+
+    // View analysis is intentionally lazy: execution-opportunity/position details are
+    // fetched only for rows the user opens, so recent execution-intelligence additions
+    // do not slow normal dashboard symbol/timeframe refreshes.
+    body.querySelectorAll('.signal-detail-row:not(.hidden) .signal-runtime-analysis').forEach(container => {
+        loadSignalRuntimeAnalysis(container.dataset.signalId);
+    });
+}
+
+function signalRuntimeSummaryPlaceholderHtml(execution, position) {
+    const executionText = execution
+        ? `${escapeHtml(String(execution.side || 'EXECUTED'))} ${money(execution.price)} · ${dateTime(execution.executedAt)}`
+        : 'No wallet execution linked to this signal';
+    const positionText = position
+        ? `${escapeHtml(String(position.status || 'POSITION'))} · entry ${money(position.entryPrice ?? position.averageEntryPrice)} `
+        : 'No managed position linked to this entry signal';
+    return `<section class="runtime-analysis-card loading">
+        <div class="confluence-heading"><div><span>Execution layers added after signal creation</span><h3>Execution Intelligence & Position Lifecycle</h3></div><span class="confirmation-badge neutral">LOADING</span></div>
+        <div class="runtime-analysis-preview"><div><span>Wallet</span><strong>${executionText}</strong></div><div><span>Position</span><strong>${positionText}</strong></div></div>
+        <p>Loading opportunity health, accumulated evidence, execution decision, entry quality and position protection on demand…</p>
+    </section>`;
+}
+
+async function loadSignalRuntimeAnalysis(signalId) {
+    if (!signalId) return;
+    const container = document.getElementById(`signal-runtime-${signalId}`);
+    if (!container) return;
+
+    const cached = signalAnalysisDetailCache.get(String(signalId));
+    if (cached) {
+        container.innerHTML = signalRuntimeAnalysisHtml(cached);
+        return;
+    }
+    if (container.dataset.loading === 'true') return;
+    container.dataset.loading = 'true';
+    try {
+        const response = await fetch(`/api/dashboard/signal-analysis-details?signalId=${encodeURIComponent(signalId)}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        signalAnalysisDetailCache.set(String(signalId), data);
+        if (document.getElementById(`signal-runtime-${signalId}`)) {
+            document.getElementById(`signal-runtime-${signalId}`).innerHTML = signalRuntimeAnalysisHtml(data);
+        }
+    } catch (error) {
+        const current = document.getElementById(`signal-runtime-${signalId}`);
+        if (current) current.innerHTML = `<section class="runtime-analysis-card warning"><div class="confluence-heading"><div><span>Execution drill-down</span><h3>Execution Intelligence & Position Lifecycle</h3></div><span class="confirmation-badge warning">UNAVAILABLE</span></div><p>Could not load the newer execution layers for this signal. The immutable signal analysis above is still valid.</p></section>`;
+    } finally {
+        const current = document.getElementById(`signal-runtime-${signalId}`);
+        if (current) current.dataset.loading = 'false';
+    }
+}
+
+function signalRuntimeAnalysisHtml(data) {
+    if (!data?.found) {
+        return `<section class="runtime-analysis-card warning"><div class="confluence-heading"><div><span>Execution drill-down</span><h3>Execution Intelligence & Position Lifecycle</h3></div><span class="confirmation-badge warning">NO SIGNAL</span></div><p>The persisted signal could not be loaded.</p></section>`;
+    }
+
+    const o = data.opportunity;
+    const x = data.execution;
+    const p = data.position;
+    const healthTone = !o ? 'neutral' : Number(o.opportunityHealth || 0) >= 60 ? 'bullish' : Number(o.opportunityHealth || 0) >= 40 ? 'warning' : 'bearish';
+    const opportunityHtml = o ? `
+        <section class="runtime-analysis-card ${healthTone}">
+            <div class="confluence-heading">
+                <div><span>Accumulated execution evidence</span><h3>Execution Opportunity</h3></div>
+                <span class="confirmation-badge ${healthTone}">${escapeHtml(String(o.status || 'UNKNOWN').replaceAll('_',' '))}</span>
+            </div>
+            <div class="runtime-analysis-grid">
+                <div><span>Health</span><strong>${o.opportunityHealth ?? 0}/100</strong><small>momentum ${signedNumber(o.healthMomentum)}</small></div>
+                <div><span>Evidence score</span><strong>${o.evidenceScore ?? 0}</strong><small>momentum ${signedNumber(o.evidenceMomentum)}</small></div>
+                <div><span>Evidence count</span><strong>${o.evidenceCount ?? 0}</strong><small>BUY ${o.buyCount ?? 0} · WATCH ${o.watchCount ?? 0}</small></div>
+                <div><span>Bearish evidence</span><strong>${o.bearishCount ?? 0}</strong><small>Neutral ${o.neutralCount ?? 0}</small></div>
+                <div><span>5m / 1h</span><strong>${escapeHtml(String(o.fiveMinuteDecision || '—'))} / ${escapeHtml(String(o.oneHourDecision || '—'))}</strong></div>
+                <div><span>Avg score / confidence</span><strong>${o.averageSignalScore ?? 0} / ${o.averageConfidence ?? 0}</strong></div>
+                <div><span>Execution source</span><strong>${escapeHtml(String(o.executionSource || '—').replaceAll('_',' '))}</strong></div>
+                <div><span>Recommended size</span><strong>${o.recommendedPositionPercent ?? 0}%</strong></div>
+                <div><span>Started</span><strong>${dateTime(o.startedAt)}</strong></div>
+                <div><span>Last evidence</span><strong>${dateTime(o.lastEvidenceAt)}</strong></div>
+            </div>
+            <div class="runtime-decision-code"><span>Decision code</span><strong>${escapeHtml(String(o.decisionCode || '—').replaceAll('_',' '))}</strong><p>${escapeHtml(o.decisionExplanation || 'No execution-opportunity explanation was persisted.')}</p></div>
+        </section>` : `
+        <section class="runtime-analysis-card neutral">
+            <div class="confluence-heading"><div><span>Accumulated execution evidence</span><h3>Execution Opportunity</h3></div><span class="confirmation-badge neutral">NO EXACT SNAPSHOT</span></div>
+            <p>No execution_opportunity row currently points to this exact signal. This is normal for older signals or opportunities whose latest evidence later moved to another signal.</p>
+        </section>`;
+
+    const executionHtml = x ? `
+        <section class="runtime-analysis-card bullish">
+            <div class="confluence-heading"><div><span>Actual financial action</span><h3>Wallet Execution</h3></div><span class="confirmation-badge bullish">${escapeHtml(String(x.side || 'EXECUTED'))}</span></div>
+            <div class="runtime-analysis-grid">
+                <div><span>Execution time</span><strong>${dateTime(x.executedAt)}</strong></div>
+                <div><span>Execution price</span><strong>${money(x.price)}</strong></div>
+                <div><span>Quantity</span><strong>${value(x.quantity)}</strong></div>
+                <div><span>Net amount</span><strong>${money(x.amountUsdt)}</strong></div>
+                <div><span>Execution type</span><strong>${escapeHtml(String(x.executionType || '—').replaceAll('_',' '))}</strong></div>
+                <div><span>Execution reason</span><strong>${escapeHtml(String(x.executionReason || '—').replaceAll('_',' '))}</strong></div>
+            </div>
+        </section>` : `
+        <section class="runtime-analysis-card neutral"><div class="confluence-heading"><div><span>Actual financial action</span><h3>Wallet Execution</h3></div><span class="confirmation-badge neutral">NOT EXECUTED</span></div><p>This signal has no direct executed wallet_trade row.</p></section>`;
+
+    const positionTone = p?.profitLockActive ? 'bullish' : p ? 'warning' : 'neutral';
+    const positionHtml = p ? `
+        <section class="runtime-analysis-card ${positionTone}">
+            <div class="confluence-heading"><div><span>Progressive entry + protection</span><h3>Managed Position</h3></div><span class="confirmation-badge ${positionTone}">${escapeHtml(String(p.status || 'UNKNOWN'))}</span></div>
+            <div class="runtime-analysis-grid">
+                <div><span>Entry stage</span><strong>${escapeHtml(String(p.entryStage || '—').replaceAll('_',' '))}</strong></div>
+                <div><span>Allocated</span><strong>${p.allocatedPositionPercent ?? 0}%</strong></div>
+                <div><span>Entry quality</span><strong>${p.entryQualityScore ?? 0}/100</strong></div>
+                <div><span>Average entry</span><strong>${money(p.averageEntryPrice)}</strong></div>
+                <div><span>Stop / Target</span><strong>${money(p.stopLoss)} / ${money(p.takeProfit)}</strong></div>
+                <div><span>Highest price</span><strong>${money(p.highestPrice)}</strong></div>
+                <div><span>Profit lock</span><strong>${p.profitLockActive ? 'ACTIVE' : 'INACTIVE'}</strong><small>${p.profitLockPrice == null ? '—' : money(p.profitLockPrice)}</small></div>
+                <div><span>Profit-lock progress</span><strong>${p.profitLockProgressPercent == null ? '—' : `${Number(p.profitLockProgressPercent).toFixed(2)}%`}</strong></div>
+                <div><span>Last scale-in</span><strong>${p.lastScaleInAt ? dateTime(p.lastScaleInAt) : '—'}</strong></div>
+                <div><span>Opened</span><strong>${dateTime(p.openedAt)}</strong></div>
+            </div>
+        </section>` : `
+        <section class="runtime-analysis-card neutral"><div class="confluence-heading"><div><span>Progressive entry + protection</span><h3>Managed Position</h3></div><span class="confirmation-badge neutral">NO POSITION</span></div><p>No wallet-managed position was opened directly from this signal.</p></section>`;
+
+    return `<div class="runtime-analysis-heading"><span>Current execution architecture</span><h3>Post-analysis layers</h3><p>This section reflects the newer opportunity health/evidence, execution decision, progressive sizing, entry quality and Dynamic Profit Lock layers without rewriting the original signal snapshot.</p></div>${opportunityHtml}${executionHtml}${positionHtml}`;
+}
+
+function signedNumber(v) {
+    const n = Number(v ?? 0);
+    return `${n > 0 ? '+' : ''}${Number.isFinite(n) ? n : 0}`;
 }
 
 function scoreBreakdownHtml(signal) {
