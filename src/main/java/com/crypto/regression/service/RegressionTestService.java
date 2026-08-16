@@ -330,8 +330,11 @@ public class RegressionTestService {
             Timestamp entry = (Timestamp) trade.get("entry_time");
             Timestamp exit = (Timestamp) trade.get("exit_time");
             if (entry == null) continue;
-            Instant from = entry.toInstant().minus(java.time.Duration.ofMinutes(30));
-            Instant to = (exit == null ? entry.toInstant().plus(java.time.Duration.ofHours(1)) : exit.toInstant()).plus(java.time.Duration.ofMinutes(30));
+            // Proven-analysis charts intentionally use real historical candles with a wide context window.
+            // Keep seven hours before the BUY and seven hours after the SELL so manual review can
+            // detect late entries and premature exits instead of judging only the replay window.
+            Instant from = entry.toInstant().minus(java.time.Duration.ofHours(7));
+            Instant to = (exit == null ? entry.toInstant() : exit.toInstant()).plus(java.time.Duration.ofHours(7));
             List<Map<String, Object>> segment = jdbcTemplate.queryForList("""
                     SELECT open_time, open_price, high_price, low_price, close_price, volume
                     FROM candle

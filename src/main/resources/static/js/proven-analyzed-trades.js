@@ -777,66 +777,36 @@ if (regressionPipelineFilter) regressionPipelineFilter.addEventListener('change'
 });
 
 
-let regressionTradeChart = null;
-let regressionTradeChartFocus = null;
-
+// Current-test and archived View Chart actions reuse the single Proven chart.
+// The selected trade is only the focus/annotation; candles always come from the real historical candle table.
 async function showRegressionTradeChart(button) {
     const entry = window.CryptoTime.parseUtc(button.dataset.chartEntryTime);
     if (!entry || Number.isNaN(entry.getTime())) return;
     const exit = button.dataset.chartExitTime ? window.CryptoTime.parseUtc(button.dataset.chartExitTime) : null;
-    regressionTradeChartFocus = {
+    provenTradeFocus = {
         symbol: String(button.dataset.chartSymbol || '').toUpperCase(),
-        index: Number(button.dataset.chartIndex || 0),
-        entryTime: entry,
-        entryPrice: Number(button.dataset.chartEntryPrice),
-        exitTime: exit && !Number.isNaN(exit.getTime()) ? exit : null,
-        exitPrice: button.dataset.chartExitPrice ? Number(button.dataset.chartExitPrice) : null
+        entry_time: entry.toISOString(),
+        entry_price: Number(button.dataset.chartEntryPrice),
+        exit_time: exit && !Number.isNaN(exit.getTime()) ? exit.toISOString() : null,
+        exit_price: button.dataset.chartExitPrice ? Number(button.dataset.chartExitPrice) : null,
+        _singleTradeView: true,
+        _label: `Trade #${Number(button.dataset.chartIndex || 0) + 1}`
     };
-    await renderRegressionTradeChart();
-}
-
-async function renderRegressionTradeChart() {
-    const f = regressionTradeChartFocus;
-    if (!f) return;
-    const interval = document.getElementById('regression-trade-chart-interval')?.value || '5m';
-    const from = new Date(f.entryTime.getTime() - 30 * 60 * 1000);
-    const tradeEnd = f.exitTime || new Date(f.entryTime.getTime() + 60 * 60 * 1000);
-    const to = new Date(tradeEnd.getTime() + 30 * 60 * 1000);
-    const data = await api(`/api/administration/regression-tests/trade-chart?symbol=${encodeURIComponent(f.symbol)}&interval=${encodeURIComponent(interval)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`);
-    const candles = (data.candles || []).map(c => ({x:window.CryptoTime.parseUtc(c.open_time), y:[Number(c.open_price),Number(c.high_price),Number(c.low_price),Number(c.close_price)]}));
-    const points = [provenPoint(f.entryTime.toISOString(), f.entryPrice, 'BUY', 0)];
-    if (f.exitTime && Number.isFinite(f.exitPrice)) points.push(provenPoint(f.exitTime.toISOString(), f.exitPrice, 'SELL', 0));
-    const tradePath = (f.exitTime && Number.isFinite(f.exitPrice)) ? [{
-        name:'Trade Path',
-        type:'line',
-        data:[
-            {x:f.entryTime.getTime(),y:Number(f.entryPrice)},
-            {x:f.exitTime.getTime(),y:Number(f.exitPrice)}
-        ]
-    }] : [];
-    const options = {
-        chart:{type:'line',height:420,background:'transparent',foreColor:'#8da2b1',toolbar:{show:true},animations:{enabled:false}},
-        title:{text:`${f.symbol} · Trade #${f.index+1} · ${interval}`,align:'left',style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'}},
-        series:[{name:'Price',type:'candlestick',data:candles},...tradePath],
-        stroke:{width:[1,3],curve:'straight'},
-        markers:{size:[0,4]},
-        dataLabels:{enabled:false},
-        xaxis:{type:'datetime',labels:{datetimeUTC:false}}, yaxis:{tooltip:{enabled:true},decimalsInFloat:4},
-        grid:{borderColor:'#203342'},theme:{mode:'dark'},plotOptions:{candlestick:{colors:{upward:'#39d98a',downward:'#ff6b72'}}},annotations:{points},tooltip:{shared:false}
-    };
-    const host=document.getElementById('regression-trade-chart');
-    if (regressionTradeChart) regressionTradeChart.destroy();
-    regressionTradeChart=new ApexCharts(host,options); await regressionTradeChart.render();
-    const panel=document.getElementById('regression-trade-chart-panel'); panel?.classList.remove('hidden');
-    document.getElementById('regression-trade-chart-title').textContent=`${f.symbol} · Trade #${f.index+1}`;
-    panel?.scrollIntoView({behavior:'smooth',block:'start'});
+    const selector = document.getElementById('proven-chart-symbol');
+    if (selector && provenTradeFocus.symbol) {
+        if (![...selector.options].some(o => o.value === provenTradeFocus.symbol)) {
+            selector.add(new Option(provenTradeFocus.symbol, provenTradeFocus.symbol));
+        }
+        selector.value = provenTradeFocus.symbol;
+    }
+    await loadProvenTradesGraph(provenTradeFocus.symbol);
+    document.querySelector('.proven-trades-chart-panel')?.scrollIntoView({behavior:'smooth', block:'start'});
 }
 
 document.addEventListener('click', event => {
     const button=event.target.closest('button[data-replay-chart]');
     if (button) showRegressionTradeChart(button).catch(error => showAdminMessage(error.message,true));
 });
-document.getElementById('regression-trade-chart-interval')?.addEventListener('change',()=>renderRegressionTradeChart().catch(error=>showAdminMessage(error.message,true)));
 
 let provenTradesChart = null;
 let provenTradeFocus = null;
@@ -864,14 +834,15 @@ async function loadProvenTradesGraph(preferredSymbol = null) {
     renderProvenTradesGrid(all);
     const selector = document.getElementById('proven-chart-symbol');
     const symbols = [...new Set((all || []).map(t => String(t.symbol || '').toUpperCase()).filter(Boolean))];
+    const focusSymbol = String(provenTradeFocus?.symbol || '').toUpperCase();
+    if (focusSymbol && !symbols.includes(focusSymbol)) symbols.push(focusSymbol);
     if (selector) {
-        const current = preferredSymbol || selector.value || symbols[0] || '';
+        const current = preferredSymbol || focusSymbol || selector.value || symbols[0] || '';
         selector.innerHTML = symbols.length ? symbols.map(s => `<option value="${escapeHtml(s)}" ${s===current?'selected':''}>${escapeHtml(s)}</option>`).join('') : '<option value="">No proven trades yet</option>';
         if (symbols.includes(current)) selector.value = current;
     }
     const symbol = selector?.value || symbols[0] || '';
-    const intervalSelector = document.getElementById('proven-chart-interval');
-    const interval = intervalSelector?.value || '5m';
+    const interval = document.getElementById('proven-chart-interval')?.value || '5m';
     const empty = document.getElementById('proven-trades-empty');
     if (!symbol) {
         empty?.classList.remove('hidden');
@@ -879,63 +850,62 @@ async function loadProvenTradesGraph(preferredSymbol = null) {
         return;
     }
     empty?.classList.add('hidden');
-    const data = await api(`/api/administration/regression-tests/proven-trades/chart?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`);
+
+    let data;
+    let chartTrades;
+    const single = provenTradeFocus?._singleTradeView && focusSymbol === symbol;
+    if (single) {
+        const entry = window.CryptoTime.parseUtc(provenTradeFocus.entry_time);
+        const exit = provenTradeFocus.exit_time ? window.CryptoTime.parseUtc(provenTradeFocus.exit_time) : null;
+        // Analysis context: exactly 7 hours before the actual BUY and 7 hours after the actual SELL.
+        const from = new Date(entry.getTime() - 7 * 60 * 60 * 1000);
+        const tradeEnd = exit && !Number.isNaN(exit.getTime()) ? exit : entry;
+        const to = new Date(tradeEnd.getTime() + 7 * 60 * 60 * 1000);
+        data = await api(`/api/administration/regression-tests/trade-chart?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`);
+        chartTrades = [provenTradeFocus];
+    } else {
+        data = await api(`/api/administration/regression-tests/proven-trades/chart?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`);
+        chartTrades = data.trades || [];
+    }
+
     const candles = (data.candles || []).map(c => ({
         x: window.CryptoTime.parseUtc(c.open_time),
         y: [Number(c.open_price), Number(c.high_price), Number(c.low_price), Number(c.close_price)]
     }));
     const points = [];
     const tradePaths = [];
-    (data.trades || []).forEach((t, i) => {
+    (chartTrades || []).forEach((t, i) => {
         if (t.entry_time && t.entry_price != null) points.push(provenPoint(t.entry_time, t.entry_price, 'BUY', i));
         if (t.exit_time && t.exit_price != null) points.push(provenPoint(t.exit_time, t.exit_price, 'SELL', i));
         const entryTime = t.entry_time ? window.CryptoTime.parseUtc(t.entry_time) : null;
         const exitTime = t.exit_time ? window.CryptoTime.parseUtc(t.exit_time) : null;
         if (entryTime && exitTime && !Number.isNaN(entryTime.getTime()) && !Number.isNaN(exitTime.getTime()) && t.entry_price != null && t.exit_price != null) {
-            const move = Number(t.exit_price) - Number(t.entry_price);
             const pct = Number(t.realized_pnl_percent);
             tradePaths.push({
-                name:`Trade #${i+1} Path${Number.isFinite(pct) ? ` · ${pct >= 0 ? '+' : ''}${pct.toFixed(3)}%` : ''}`,
+                name:`${t._label || `Trade #${i+1}`} Path${Number.isFinite(pct) ? ` · ${pct >= 0 ? '+' : ''}${pct.toFixed(3)}%` : ''}`,
                 type:'line',
-                data:[
-                    {x:entryTime.getTime(),y:Number(t.entry_price)},
-                    {x:exitTime.getTime(),y:Number(t.exit_price)}
-                ],
-                _capturedMove: move
+                data:[{x:entryTime.getTime(),y:Number(t.entry_price)},{x:exitTime.getTime(),y:Number(t.exit_price)}]
             });
         }
     });
     const options = {
         chart: { type:'line', height:420, background:'transparent', foreColor:'#8da2b1', toolbar:{show:true}, animations:{enabled:false} },
-        title: { text: `${symbol} · ${interval}`, align:'left', style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'} },
-        series: [{name:'Price', type:'candlestick', data:candles}, ...tradePaths.map(({_capturedMove,...series})=>series)],
+        title: { text: `${symbol} · ${interval}${single ? ' · 7h before/after trade' : ''}`, align:'left', style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'} },
+        series: [{name:'Price', type:'candlestick', data:candles}, ...tradePaths],
         stroke:{width:[1,...tradePaths.map(()=>3)],curve:'straight'},
         markers:{size:[0,...tradePaths.map(()=>3)]},
         dataLabels:{enabled:false},
-        xaxis: { type:'datetime', labels:{datetimeUTC:false}, tooltip:{enabled:true, formatter:value => {
-            const d = new Date(Number(value)); return Number.isNaN(d.getTime()) ? '' : d.toLocaleString();
-        }}},
+        xaxis: { type:'datetime', labels:{datetimeUTC:false}, tooltip:{enabled:true, formatter:value => { const d=new Date(Number(value)); return Number.isNaN(d.getTime())?'':d.toLocaleString(); }}},
         yaxis: { tooltip:{enabled:true}, decimalsInFloat:4 },
-        grid:{borderColor:'#203342'},
-        theme:{mode:'dark'},
+        grid:{borderColor:'#203342'}, theme:{mode:'dark'},
         plotOptions:{candlestick:{colors:{upward:'#39d98a',downward:'#ff6b72'}}},
-        annotations:{points},
-        tooltip:{shared:false}
+        annotations:{points}, tooltip:{shared:false}
     };
     const host=document.getElementById('proven-trades-chart');
     if (provenTradesChart) provenTradesChart.destroy();
     provenTradesChart = new ApexCharts(host, options);
     await provenTradesChart.render();
-    bindProvenDotTitles(data.trades || []);
-    if (provenTradeFocus && String(provenTradeFocus.symbol || '').toUpperCase() === symbol) {
-        const entry = window.CryptoTime.parseUtc(provenTradeFocus.entry_time);
-        const exit = provenTradeFocus.exit_time ? window.CryptoTime.parseUtc(provenTradeFocus.exit_time) : null;
-        if (entry && !Number.isNaN(entry.getTime())) {
-            const from = entry.getTime() - 30 * 60 * 1000;
-            const to = (exit && !Number.isNaN(exit.getTime()) ? exit.getTime() : entry.getTime() + 60 * 60 * 1000) + 30 * 60 * 1000;
-            provenTradesChart.zoomX(from, to);
-        }
-    }
+    bindProvenDotTitles(chartTrades || []);
 }
 function provenPoint(time, price, side, index) {
     const isBuy=side==='BUY';

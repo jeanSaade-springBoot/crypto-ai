@@ -69,7 +69,7 @@
                         </select></label>
                     </div>
                 </div>
-                <p class="form-note">BUY and SELL are dot annotations. Hover the chart/x-axis to see browser-local date/time. Only manually proven trades are shown.</p>
+                <p class="form-note">One chart for Proven, Current Test and Archived views. Candles come from the real historical candle table. When viewing one trade, the chart shows 7 hours before BUY through 7 hours after SELL, with only actual BUY/SELL execution dots and the Trade Path.</p>
                 <div id="proven-trades-chart" class="proven-trades-chart"></div>
                 <div id="proven-trades-empty" class="empty hidden">Check a closed shadow trade to add it to this graph.</div>
                 <div class="proven-saved-grid">
@@ -164,17 +164,6 @@
                 </table></div>
             </div>
 
-
-            <div id="regression-trade-chart-panel" class="proven-trades-chart-panel hidden">
-                <div class="section-heading">
-                    <div><p class="eyebrow">TEST TRADE CHART</p><h3 id="regression-trade-chart-title">Replay trade</h3></div>
-                    <label class="proven-symbol-picker">Interval<select id="regression-trade-chart-interval">
-                        <option value="1m">1 min</option><option value="5m" selected>5 min</option><option value="1h">1 hour</option><option value="4h">4 hours</option>
-                    </select></label>
-                </div>
-                <p class="form-note">BUY and SELL are shown directly here. View Chart never leaves Proven Analyzed Trades.</p>
-                <div id="regression-trade-chart" class="proven-trades-chart"></div>
-            </div>
 
             <div id="regression-pipeline-section" class="regression-pipeline-section hidden">
                 <div class="section-heading regression-pipeline-toggle-heading">
