@@ -28,6 +28,12 @@ public class PriceMoveMonitorController {
         return service.activeTracker(symbol);
     }
 
+    @GetMapping("/blame-count")
+    public Map<String, Long> blameCount() { return Map.of("count", service.outstandingBlameCount()); }
+
+    @GetMapping("/{id}/chart")
+    public Map<String, Object> chart(@PathVariable Long id) { return service.eventChart(id); }
+
     @GetMapping("/settings")
     public PriceMoveMonitorSettings settings() {
         return service.currentSettings();

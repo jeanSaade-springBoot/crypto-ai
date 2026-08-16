@@ -8,6 +8,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 public interface PriceMoveEventRepository extends JpaRepository<PriceMoveEvent, Long> {
     List<PriceMoveEvent> findTop250ByOrderByEndTimeDesc();
@@ -17,4 +18,7 @@ public interface PriceMoveEventRepository extends JpaRepository<PriceMoveEvent, 
     @Modifying
     @Query("delete from PriceMoveEvent e where e.endTime < :cutoff")
     int deleteOlderThan(@Param("cutoff") Instant cutoff);
+
+    long countByBlameRequiredTrueAndBlameReviewedFalse();
+    Optional<PriceMoveEvent> findBySymbolAndBlockStartTimeAndDirection(String symbol, Instant blockStartTime, String direction);
 }

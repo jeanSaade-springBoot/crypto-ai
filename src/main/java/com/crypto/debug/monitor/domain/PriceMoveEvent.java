@@ -20,6 +20,12 @@ public class PriceMoveEvent {
     @Column(nullable = false, length = 10)
     private String direction;
 
+    @Column(name = "block_start_time")
+    private Instant blockStartTime;
+
+    @Column(name = "block_end_time")
+    private Instant blockEndTime;
+
     @Column(name = "start_time", nullable = false)
     private Instant startTime;
 
@@ -38,8 +44,38 @@ public class PriceMoveEvent {
     @Column(name = "duration_seconds", nullable = false)
     private long durationSeconds;
 
+    @Column(name = "detection_window", length = 10)
+    private String detectionWindow;
+
     @Column(name = "importance_level", nullable = false, length = 10)
     private String importanceLevel;
+
+    @Column(name = "outcome_status", nullable = false, length = 40)
+    private String outcomeStatus;
+
+    @Column(name = "blame_required", nullable = false)
+    private boolean blameRequired;
+
+    @Column(name = "blame_reviewed", nullable = false)
+    private boolean blameReviewed;
+
+    @Column(name = "blame_code", length = 100)
+    private String blameCode;
+
+    @Column(name = "blame_explanation", length = 2000)
+    private String blameExplanation;
+
+    @Column(name = "best_signal_id")
+    private Long bestSignalId;
+
+    @Column(name = "best_signal_decision", length = 30)
+    private String bestSignalDecision;
+
+    @Column(name = "best_signal_score")
+    private Integer bestSignalScore;
+
+    @Column(name = "trade_id")
+    private Long tradeId;
 
     @Column(name = "review_status", nullable = false, length = 20)
     private String reviewStatus;

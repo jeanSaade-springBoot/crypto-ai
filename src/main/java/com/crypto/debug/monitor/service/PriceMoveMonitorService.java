@@ -5,6 +5,12 @@ import com.crypto.debug.monitor.domain.PriceMoveMonitorSettings;
 import com.crypto.debug.monitor.dto.PriceMoveMonitorSettingsRequest;
 import com.crypto.debug.monitor.repository.PriceMoveEventRepository;
 import com.crypto.debug.monitor.repository.PriceMoveMonitorSettingsRepository;
+import com.crypto.domain.SignalDecision;
+import com.crypto.domain.TradeSignal;
+import com.crypto.repository.TradeSignalRepository;
+import com.crypto.repository.CandleRepository;
+import com.crypto.wallet.domain.WalletTrade;
+import com.crypto.wallet.repository.WalletTradeRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,442 +19,244 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * DEBUG-ONLY market-move tracker.
+ * PRICE-ONLY market catcher.
  *
- * This service is deliberately a one-way observer of live prices. It never calls
- * AnalysisService, FinalDecisionService, ExecutionIntelligenceService, wallet,
- * position management, Profit Lock, stop-loss or take-profit logic.
- *
- * One row represents one completed rally/drop, not one websocket threshold tick.
+ * IMPORTANT: detection never calls analysis, signal or execution services. It only observes price.
+ * After an 8-hour UTC block is finished, a separate retrospective blame step compares the already
+ * proven market move with immutable signals/trades that existed during that block.
  */
 @Service
 @RequiredArgsConstructor
 public class PriceMoveMonitorService {
-
     private static final long SETTINGS_CACHE_MILLIS = 10_000L;
+    private static final int BLOCK_HOURS = 8;
+    private static final int HISTORY_DAYS = 3650; // caught moves are evidence; keep them long-term.
 
-    // Debug-review significance only. These values never affect trading logic.
-    private static final BigDecimal MEDIUM_MOVE_PERCENT = new BigDecimal("0.750000");
-    private static final BigDecimal HIGH_MOVE_PERCENT = new BigDecimal("1.500000");
-    private static final long MIN_SIGNIFICANT_DURATION_SECONDS = 6L * 60L;
+    private static final List<WindowRule> RULES = List.of(
+            new WindowRule("30m", 30, bd("1.0"), bd("2.0"), bd("3.0")),
+            new WindowRule("1h", 60, bd("1.5"), bd("2.5"), bd("4.0")),
+            new WindowRule("2h", 120, bd("2.0"), bd("3.5"), bd("5.0")),
+            new WindowRule("4h", 240, bd("3.0"), bd("5.0"), bd("7.0"))
+    );
 
     private final PriceMoveMonitorSettingsRepository settingsRepository;
     private final PriceMoveEventRepository eventRepository;
+    private final TradeSignalRepository signalRepository;
+    private final CandleRepository candleRepository;
+    private final WalletTradeRepository walletTradeRepository;
 
-    private final Map<String, SymbolTracker> trackers = new ConcurrentHashMap<>();
+    private final Map<String, BlockTracker> trackers = new ConcurrentHashMap<>();
     private volatile PriceMoveMonitorSettings cachedSettings;
     private volatile long cachedSettingsAt;
 
-    /**
-     * Observe one live price. Recording is debug-only and has no path back into
-     * trading decisions.
-     */
     @Transactional
     public void onPrice(String rawSymbol, BigDecimal price, Instant observedAt) {
         if (rawSymbol == null || price == null || price.signum() <= 0 || observedAt == null) return;
-
         PriceMoveMonitorSettings settings = settings();
         if (!settings.isEnabled()) return;
-
         String symbol = rawSymbol.trim().toUpperCase(Locale.ROOT);
         if (!selectedSymbols(settings).contains(symbol)) return;
-        SymbolTracker tracker = trackers.computeIfAbsent(symbol, ignored -> new SymbolTracker());
 
+        Instant blockStart = blockStart(observedAt);
+        BlockTracker tracker = trackers.computeIfAbsent(symbol, ignored -> new BlockTracker(blockStart));
         synchronized (tracker) {
-            tracker.lastPrice = price;
-            tracker.lastObservedAt = observedAt;
-            if (tracker.cooldownUntil != null) {
-                if (observedAt.isBefore(tracker.cooldownUntil)) return;
-                tracker.resetWaiting(price, observedAt);
+            if (!tracker.blockStart.equals(blockStart)) {
+                finalizeBlock(symbol, tracker);
+                tracker.reset(blockStart);
             }
+            tracker.observe(price, observedAt);
+            evaluateWindows(tracker);
+            // Persist/update the same row as the move grows. Blame stays PENDING until the block closes.
+            syncLiveCatch(symbol, tracker, "UP", tracker.up);
+            syncLiveCatch(symbol, tracker, "DOWN", tracker.down);
+        }
+    }
 
-            if (tracker.phase == Phase.WAITING) {
-                observeWaiting(tracker, price, observedAt, settings);
-                return;
+    private void evaluateWindows(BlockTracker tracker) {
+        if (tracker.points.isEmpty()) return;
+        PricePoint now = tracker.points.peekLast();
+        for (WindowRule rule : RULES) {
+            Instant cutoff = now.time.minus(rule.minutes, ChronoUnit.MINUTES);
+            PricePoint low = null, high = null;
+            for (PricePoint point : tracker.points) {
+                if (point.time.isBefore(cutoff)) continue;
+                if (low == null || point.price.compareTo(low.price) < 0) low = point;
+                if (high == null || point.price.compareTo(high.price) > 0) high = point;
             }
-
-            if (tracker.phase == Phase.TRACKING_UP) {
-                observeUp(tracker, symbol, price, observedAt, settings);
-                return;
+            if (low != null && low.time.isBefore(now.time)) {
+                BigDecimal up = pct(low.price, now.price);
+                tracker.up.consider(low, now, up, rule);
             }
-
-            if (tracker.phase == Phase.TRACKING_DOWN) {
-                observeDown(tracker, symbol, price, observedAt, settings);
+            if (high != null && high.time.isBefore(now.time)) {
+                BigDecimal down = pct(high.price, now.price); // negative
+                tracker.down.consider(high, now, down, rule);
             }
         }
     }
 
-    private void observeWaiting(
-            SymbolTracker tracker,
-            BigDecimal price,
-            Instant observedAt,
-            PriceMoveMonitorSettings settings
-    ) {
-        if (tracker.lowPrice == null) {
-            tracker.resetWaiting(price, observedAt);
-            return;
-        }
-
-        if (price.compareTo(tracker.lowPrice) < 0) {
-            tracker.lowPrice = price;
-            tracker.lowTime = observedAt;
-        }
-        if (price.compareTo(tracker.highPrice) > 0) {
-            tracker.highPrice = price;
-            tracker.highTime = observedAt;
-        }
-
-        BigDecimal upMove = percentChange(tracker.lowPrice, price);
-        BigDecimal downMove = percentChange(tracker.highPrice, price).abs();
-        BigDecimal threshold = settings.getMinimumMovePercent();
-
-        boolean upTriggered = upMove.compareTo(threshold) >= 0;
-        boolean downTriggered = downMove.compareTo(threshold) >= 0;
-
-        if (upTriggered && (!downTriggered || upMove.compareTo(downMove) >= 0)) {
-            tracker.startUp(tracker.lowPrice, tracker.lowTime, price, observedAt);
-        } else if (downTriggered) {
-            tracker.startDown(tracker.highPrice, tracker.highTime, price, observedAt);
-        }
+    /** One row per direction per 8h block; NORMAL -> HIGH -> EXTREME upgrades never create duplicates. */
+    private void finalizeBlock(String symbol, BlockTracker tracker) {
+        finalizeCatch(symbol, tracker, "UP", tracker.up);
+        finalizeCatch(symbol, tracker, "DOWN", tracker.down);
     }
 
-    private void observeUp(
-            SymbolTracker tracker,
-            String symbol,
-            BigDecimal price,
-            Instant observedAt,
-            PriceMoveMonitorSettings settings
-    ) {
-        if (price.compareTo(tracker.extremePrice) > 0) {
-            tracker.extremePrice = price;
-            tracker.extremeTime = observedAt;
-        }
-
-        BigDecimal fullMove = tracker.extremePrice.subtract(tracker.startPrice);
-        if (fullMove.signum() <= 0) return;
-
-        BigDecimal retraced = tracker.extremePrice.subtract(price).max(BigDecimal.ZERO);
-        BigDecimal retracementPercent = retraced
-                .divide(fullMove, 12, RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(100));
-
-        if (canClose(tracker, observedAt, retracementPercent, settings)) {
-            saveCompletedMove(symbol, "UP", tracker);
-            tracker.startCooldown(price, observedAt, settings.getCooldownMinutes());
-        }
-    }
-
-    private void observeDown(
-            SymbolTracker tracker,
-            String symbol,
-            BigDecimal price,
-            Instant observedAt,
-            PriceMoveMonitorSettings settings
-    ) {
-        if (price.compareTo(tracker.extremePrice) < 0) {
-            tracker.extremePrice = price;
-            tracker.extremeTime = observedAt;
-        }
-
-        BigDecimal fullMove = tracker.startPrice.subtract(tracker.extremePrice);
-        if (fullMove.signum() <= 0) return;
-
-        BigDecimal retraced = price.subtract(tracker.extremePrice).max(BigDecimal.ZERO);
-        BigDecimal retracementPercent = retraced
-                .divide(fullMove, 12, RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(100));
-
-        if (canClose(tracker, observedAt, retracementPercent, settings)) {
-            saveCompletedMove(symbol, "DOWN", tracker);
-            tracker.startCooldown(price, observedAt, settings.getCooldownMinutes());
-        }
-    }
-
-    private boolean canClose(
-            SymbolTracker tracker,
-            Instant observedAt,
-            BigDecimal retracementPercent,
-            PriceMoveMonitorSettings settings
-    ) {
-        long ageSeconds = Math.max(0L, Duration.between(tracker.startTime, observedAt).getSeconds());
-        long minimumSeconds = settings.getMinimumDurationMinutes() * 60L;
-        return ageSeconds >= minimumSeconds
-                && retracementPercent.compareTo(settings.getRetracementClosePercent()) >= 0;
-    }
-
-    private void saveCompletedMove(String symbol, String direction, SymbolTracker tracker) {
-        BigDecimal changePercent = percentChange(tracker.startPrice, tracker.extremePrice)
-                .setScale(8, RoundingMode.HALF_UP);
-        long durationSeconds = Math.max(0L, Duration.between(tracker.startTime, tracker.extremeTime).getSeconds());
-        BigDecimal absoluteMove = changePercent.abs();
-
-        // The standalone review queue intentionally ignores 1-5 minute moves and
-        // LOW moves. We still start observing early so a later meaningful swing
-        // retains its real start price, but only MEDIUM/HIGH completed moves persist.
-        if (durationSeconds < MIN_SIGNIFICANT_DURATION_SECONDS
-                || absoluteMove.compareTo(MEDIUM_MOVE_PERCENT) < 0) {
-            return;
-        }
-
-        String importanceLevel = absoluteMove.compareTo(HIGH_MOVE_PERCENT) >= 0
-                ? "HIGH"
-                : "MEDIUM";
-
-        eventRepository.save(PriceMoveEvent.builder()
-                .symbol(symbol)
-                .direction(direction)
-                .startTime(tracker.startTime)
-                .endTime(tracker.extremeTime)
-                .startPrice(tracker.startPrice)
-                .endPrice(tracker.extremePrice)
-                .changePercent(changePercent)
-                .durationSeconds(durationSeconds)
-                .importanceLevel(importanceLevel)
-                .reviewStatus("NEW")
+    private void syncLiveCatch(String symbol, BlockTracker tracker, String direction, Candidate candidate) {
+        if (!candidate.caught()) return;
+        PriceMoveEvent event = eventRepository.findBySymbolAndBlockStartTimeAndDirection(symbol, tracker.blockStart, direction).orElseGet(() -> PriceMoveEvent.builder()
+                .symbol(symbol).direction(direction)
+                .blockStartTime(tracker.blockStart).blockEndTime(tracker.blockStart.plus(BLOCK_HOURS, ChronoUnit.HOURS))
+                .startTime(candidate.start.time).endTime(candidate.end.time)
+                .startPrice(candidate.start.price).endPrice(candidate.end.price)
+                .changePercent(candidate.change.setScale(8, RoundingMode.HALF_UP))
+                .durationSeconds(Math.max(0, Duration.between(candidate.start.time, candidate.end.time).getSeconds()))
+                .detectionWindow(candidate.window).importanceLevel(candidate.level)
+                .outcomeStatus("PENDING").blameRequired(false).blameReviewed(false).reviewStatus("NEW")
                 .build());
+        event.setStartTime(candidate.start.time); event.setEndTime(candidate.end.time); event.setStartPrice(candidate.start.price); event.setEndPrice(candidate.end.price);
+        event.setChangePercent(candidate.change.setScale(8,RoundingMode.HALF_UP)); event.setDurationSeconds(Math.max(0,Duration.between(candidate.start.time,candidate.end.time).getSeconds()));
+        event.setDetectionWindow(candidate.window); event.setImportanceLevel(candidate.level);
+        eventRepository.save(event);
     }
 
-    private BigDecimal percentChange(BigDecimal from, BigDecimal to) {
-        if (from == null || to == null || from.signum() == 0) return BigDecimal.ZERO;
-        return to.subtract(from)
-                .divide(from, 12, RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(100));
+    private void finalizeCatch(String symbol, BlockTracker tracker, String direction, Candidate candidate) {
+        if (!candidate.caught()) return;
+        syncLiveCatch(symbol, tracker, direction, candidate);
+        PriceMoveEvent event=eventRepository.findBySymbolAndBlockStartTimeAndDirection(symbol,tracker.blockStart,direction).orElseThrow();
+        applyBlame(event); eventRepository.save(event);
+    }
+
+    /** Retrospective only: never feeds results back into trading. */
+    private void applyBlame(PriceMoveEvent event) {
+        boolean up = "UP".equals(event.getDirection());
+        String wantedSide = up ? "BUY" : "SELL";
+        List<WalletTrade> trades = walletTradeRepository.findTop100BySymbolAndStatusOrderByExecutedAtDesc(event.getSymbol(), "EXECUTED")
+                .stream().filter(t -> wantedSide.equalsIgnoreCase(t.getSide()))
+                .filter(t -> !t.getExecutedAt().isBefore(event.getStartTime()) && !t.getExecutedAt().isAfter(event.getEndTime()))
+                .toList();
+        if (!trades.isEmpty()) {
+            event.setTradeId(trades.get(trades.size() - 1).getId());
+            event.setOutcomeStatus("CAPTURED");
+            event.setBlameRequired(false);
+            event.setBlameExplanation("A matching " + wantedSide + " trade executed during the caught move.");
+            return;
+        }
+
+        List<TradeSignal> signals = signalRepository.findBySymbolAndGeneratedAtBetweenOrderByGeneratedAtAsc(
+                event.getSymbol(), event.getStartTime(), event.getEndTime());
+        TradeSignal best = up ? signals.stream().max(Comparator.comparingInt(TradeSignal::getTotalScore)).orElse(null)
+                : signals.stream().min(Comparator.comparingInt(TradeSignal::getTotalScore)).orElse(null);
+        if (best == null) {
+            event.setOutcomeStatus("NOT_TRADABLE_EARLY");
+            event.setBlameRequired(false);
+            event.setBlameCode("NO_EARLY_SIGNAL_EVIDENCE");
+            event.setBlameExplanation("The price move was caught, but no analysis snapshot existed inside the move window. Do not blame the strategy without evidence available at the time.");
+            return;
+        }
+        event.setBestSignalId(best.getId());
+        event.setBestSignalDecision(best.getDecision().name());
+        event.setBestSignalScore(best.getTotalScore());
+
+        boolean matchingSignal = up
+                ? best.getDecision() == SignalDecision.BUY || best.getDecision() == SignalDecision.STRONG_BUY
+                : best.getDecision() == SignalDecision.SELL || best.getDecision() == SignalDecision.STRONG_SELL;
+        if (matchingSignal) {
+            event.setOutcomeStatus("SIGNALLED_NOT_TRADED");
+            event.setBlameRequired(true);
+            event.setBlameCode("EXECUTION_NOT_COMPLETED");
+            event.setBlameExplanation("A matching " + best.getDecision() + " signal existed, but no matching wallet execution occurred. Final decision: " + safe(best.getFinalDecisionExplanation()));
+            return;
+        }
+
+        event.setOutcomeStatus("MISSED_SIGNAL");
+        event.setBlameRequired(true);
+        event.setBlameCode(primaryBlocker(best, up));
+        event.setBlameExplanation("Best historical signal was " + best.getDecision() + " (score " + best.getTotalScore() + "). " + blockerExplanation(best));
+    }
+
+    private String primaryBlocker(TradeSignal s, boolean up) {
+        if (!s.isFinalEntryAllowed()) return "FINAL_ENTRY_BLOCKED";
+        if (!s.isStrategyEntryAllowed()) return "STRATEGY_ENTRY_BLOCKED";
+        if (!s.isConfluenceEntryAllowed()) return "MULTI_TIMEFRAME_BLOCKED";
+        if (!s.isBtcContextEntryAllowed()) return "BTC_CONTEXT_BLOCKED";
+        if (!s.isDerivativesEntryAllowed()) return "DERIVATIVES_BLOCKED";
+        if (!s.isLiquidityEntryAllowed()) return "LIQUIDITY_BLOCKED";
+        return up ? "BUY_THRESHOLD_NOT_REACHED" : "SELL_THRESHOLD_NOT_REACHED";
+    }
+    private String blockerExplanation(TradeSignal s) {
+        if (!s.isFinalEntryAllowed()) return "Final entry was blocked: " + safe(s.getFinalDecisionExplanation());
+        if (!s.isStrategyEntryAllowed()) return "Strategy blocked entry: " + safe(s.getStrategyExplanation());
+        if (!s.isConfluenceEntryAllowed()) return "Multi-timeframe confluence blocked entry: " + safe(s.getConfluenceExplanation());
+        if (!s.isBtcContextEntryAllowed()) return "BTC context blocked entry: " + safe(s.getBtcContextExplanation());
+        if (!s.isDerivativesEntryAllowed()) return "Derivatives positioning blocked entry: " + safe(s.getDerivativesExplanation());
+        if (!s.isLiquidityEntryAllowed()) return "Liquidity/order-book context blocked entry: " + safe(s.getLiquidityExplanation());
+        return "The directional score did not reach the required trading decision threshold.";
     }
 
     @Transactional(readOnly = true)
     public List<PriceMoveEvent> recentEvents(String rawSymbol) {
-        if (rawSymbol == null || rawSymbol.isBlank()) {
-            return eventRepository.findTop250ByOrderByEndTimeDesc();
-        }
-        String symbol = rawSymbol.trim().toUpperCase(Locale.ROOT);
-        return eventRepository.findTop250BySymbolOrderByEndTimeDesc(symbol);
+        return rawSymbol == null || rawSymbol.isBlank() ? eventRepository.findTop250ByOrderByEndTimeDesc()
+                : eventRepository.findTop250BySymbolOrderByEndTimeDesc(rawSymbol.trim().toUpperCase(Locale.ROOT));
     }
-
-    /**
-     * In-memory debug snapshot for one selected symbol. This is intentionally
-     * read-only and never feeds back into trading logic.
-     */
-    public Map<String, Object> activeTracker(String rawSymbol) {
-        if (rawSymbol == null || rawSymbol.isBlank()) {
-            throw new IllegalArgumentException("Symbol is required");
-        }
-        String symbol = rawSymbol.trim().toUpperCase(Locale.ROOT);
-        SymbolTracker tracker = trackers.get(symbol);
-        if (tracker == null) {
-            return Map.of(
-                    "symbol", symbol,
-                    "phase", "WAITING_FOR_PRICE",
-                    "tracking", false
-            );
-        }
-
-        synchronized (tracker) {
-            boolean tracking = tracker.phase == Phase.TRACKING_UP || tracker.phase == Phase.TRACKING_DOWN;
-            String direction = tracker.phase == Phase.TRACKING_UP ? "UP"
-                    : tracker.phase == Phase.TRACKING_DOWN ? "DOWN" : null;
-            BigDecimal change = tracking && tracker.startPrice != null && tracker.extremePrice != null
-                    ? percentChange(tracker.startPrice, tracker.extremePrice).setScale(8, RoundingMode.HALF_UP)
-                    : BigDecimal.ZERO;
-            long duration = tracking && tracker.startTime != null && tracker.lastObservedAt != null
-                    ? Math.max(0L, Duration.between(tracker.startTime, tracker.lastObservedAt).getSeconds())
-                    : 0L;
-            String importance = change.abs().compareTo(HIGH_MOVE_PERCENT) >= 0 ? "HIGH"
-                    : change.abs().compareTo(MEDIUM_MOVE_PERCENT) >= 0 ? "MEDIUM" : "LOW";
-
-            Map<String, Object> result = new java.util.LinkedHashMap<>();
-            result.put("symbol", symbol);
-            result.put("phase", tracker.phase.name());
-            result.put("tracking", tracking);
-            result.put("direction", direction);
-            result.put("startTime", tracker.startTime);
-            result.put("startPrice", tracker.startPrice);
-            result.put("extremeTime", tracker.extremeTime);
-            result.put("extremePrice", tracker.extremePrice);
-            result.put("lastObservedAt", tracker.lastObservedAt);
-            result.put("lastPrice", tracker.lastPrice);
-            result.put("changePercent", change);
-            result.put("durationSeconds", duration);
-            result.put("importanceLevel", importance);
-            result.put("cooldownUntil", tracker.cooldownUntil);
-            return result;
-        }
-    }
+    public long outstandingBlameCount() { return eventRepository.countByBlameRequiredTrueAndBlameReviewedFalse(); }
 
     @Transactional(readOnly = true)
-    public PriceMoveMonitorSettings currentSettings() {
-        return settingsRepository.findById(1L).orElseGet(this::defaults);
-    }
-
-    @Transactional
-    public PriceMoveMonitorSettings updateSettings(PriceMoveMonitorSettingsRequest request) {
-        if (request.minimumMovePercent() == null || request.minimumMovePercent().signum() <= 0) {
-            throw new IllegalArgumentException("Minimum market move must be greater than 0%");
-        }
-        if (request.minimumDurationMinutes() < 6 || request.minimumDurationMinutes() > 1440) {
-            throw new IllegalArgumentException("Minimum duration must be between 6 and 1440 minutes");
-        }
-        if (request.retracementClosePercent() == null
-                || request.retracementClosePercent().compareTo(BigDecimal.ONE) < 0
-                || request.retracementClosePercent().compareTo(BigDecimal.valueOf(100)) > 0) {
-            throw new IllegalArgumentException("Retracement to close must be between 1% and 100%");
-        }
-        if (request.cooldownMinutes() < 0 || request.cooldownMinutes() > 1440) {
-            throw new IllegalArgumentException("Cooldown must be between 0 and 1440 minutes");
-        }
-        if (request.retentionDays() < 1 || request.retentionDays() > 365) {
-            throw new IllegalArgumentException("History retention must be between 1 and 365 days");
-        }
-
-        PriceMoveMonitorSettings settings = settingsRepository.findById(1L).orElseGet(this::defaults);
-        settings.setId(1L);
-        settings.setEnabled(request.enabled());
-        settings.setMinimumMovePercent(request.minimumMovePercent().setScale(6, RoundingMode.HALF_UP));
-        settings.setMinimumDurationMinutes(request.minimumDurationMinutes());
-        settings.setRetracementClosePercent(request.retracementClosePercent().setScale(6, RoundingMode.HALF_UP));
-        settings.setCooldownMinutes(request.cooldownMinutes());
-        settings.setRetentionDays(request.retentionDays());
-        settings.setSelectedSymbols(normalizeSelectedSymbols(request.symbols()));
-
-        // V47 compatibility only. The tracker no longer uses this value.
-        if (settings.getWindowMinutes() <= 0) settings.setWindowMinutes(30);
-
-        PriceMoveMonitorSettings saved = settingsRepository.save(settings);
-        cachedSettings = saved;
-        cachedSettingsAt = System.currentTimeMillis();
-
-        // Changing debug settings starts fresh tracking state. It does not touch AI/trading state.
-        trackers.clear();
-        eventRepository.deleteOlderThan(Instant.now().minus(Duration.ofDays(saved.getRetentionDays())));
-        return saved;
+    public Map<String,Object> eventChart(Long id) {
+        PriceMoveEvent e=eventRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Market move event was not found"));
+        Instant from=e.getBlockStartTime()!=null?e.getBlockStartTime():e.getStartTime().minus(2,ChronoUnit.HOURS);
+        Instant to=e.getBlockEndTime()!=null?e.getBlockEndTime():e.getEndTime().plus(2,ChronoUnit.HOURS);
+        Map<String,Object> out=new LinkedHashMap<>(); out.put("event",e);
+        out.put("candles",candleRepository.findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(e.getSymbol(),"1m",from,to));
+        out.put("signals",signalRepository.findBySymbolAndGeneratedAtBetweenOrderByGeneratedAtAsc(e.getSymbol(),from,to));
+        out.put("trades",walletTradeRepository.findTop100BySymbolAndStatusOrderByExecutedAtDesc(e.getSymbol(),"EXECUTED").stream().filter(t->!t.getExecutedAt().isBefore(from)&&!t.getExecutedAt().isAfter(to)).toList());
+        return out;
     }
 
     @Transactional
     public PriceMoveEvent updateReviewStatus(Long id, String rawStatus) {
         String status = rawStatus == null ? "" : rawStatus.trim().toUpperCase(Locale.ROOT);
-        if (!List.of("NEW", "REVIEWED", "IGNORED").contains(status)) {
-            throw new IllegalArgumentException("Review status must be NEW, REVIEWED or IGNORED");
-        }
-        PriceMoveEvent event = eventRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Market move event was not found"));
+        if (!List.of("NEW", "REVIEWED", "IGNORED").contains(status)) throw new IllegalArgumentException("Review status must be NEW, REVIEWED or IGNORED");
+        PriceMoveEvent event = eventRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Market move event was not found"));
         event.setReviewStatus(status);
+        if (event.isBlameRequired() && !"NEW".equals(status)) event.setBlameReviewed(true);
         return eventRepository.save(event);
     }
 
-    @Transactional
-    public int cleanupExpired() {
-        PriceMoveMonitorSettings settings = settings();
-        return eventRepository.deleteOlderThan(Instant.now().minus(Duration.ofDays(settings.getRetentionDays())));
-    }
-
-    private PriceMoveMonitorSettings settings() {
-        long now = System.currentTimeMillis();
-        PriceMoveMonitorSettings local = cachedSettings;
-        if (local == null || now - cachedSettingsAt > SETTINGS_CACHE_MILLIS) {
-            local = settingsRepository.findById(1L).orElseGet(this::defaults);
-            cachedSettings = local;
-            cachedSettingsAt = now;
-        }
-        return local;
-    }
-
-    private String normalizeSelectedSymbols(List<String> rawSymbols) {
-        if (rawSymbols == null || rawSymbols.isEmpty()) return "";
-        return rawSymbols.stream()
-                .filter(Objects::nonNull)
-                .map(value -> value.trim().toUpperCase(Locale.ROOT))
-                .filter(value -> !value.isBlank())
-                .filter(value -> value.matches("[A-Z0-9_-]{2,30}"))
-                .distinct()
-                .limit(50)
-                .collect(java.util.stream.Collectors.joining(","));
-    }
-
-    private Set<String> selectedSymbols(PriceMoveMonitorSettings settings) {
-        if (settings == null || settings.getSelectedSymbols() == null
-                || settings.getSelectedSymbols().isBlank()) return Set.of();
-        return Arrays.stream(settings.getSelectedSymbols().split(","))
-                .map(String::trim)
-                .filter(value -> !value.isBlank())
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
-    }
-
-    private PriceMoveMonitorSettings defaults() {
-        return PriceMoveMonitorSettings.builder()
-                .id(1L)
-                .enabled(true)
-                .minimumMovePercent(new BigDecimal("0.300000"))
-                .windowMinutes(30) // legacy V47 column; intentionally unused
-                .minimumDurationMinutes(6)
-                .retracementClosePercent(new BigDecimal("30.000000"))
-                .cooldownMinutes(10)
-                .retentionDays(7)
-                .selectedSymbols("BNBUSDT")
-                .build();
-    }
-
-    private enum Phase {
-        WAITING,
-        TRACKING_UP,
-        TRACKING_DOWN
-    }
-
-    private static final class SymbolTracker {
-        private Phase phase = Phase.WAITING;
-        private BigDecimal lowPrice;
-        private Instant lowTime;
-        private BigDecimal highPrice;
-        private Instant highTime;
-        private BigDecimal startPrice;
-        private Instant startTime;
-        private BigDecimal extremePrice;
-        private Instant extremeTime;
-        private Instant cooldownUntil;
-        private BigDecimal lastPrice;
-        private Instant lastObservedAt;
-
-        private void resetWaiting(BigDecimal price, Instant time) {
-            phase = Phase.WAITING;
-            lowPrice = price;
-            lowTime = time;
-            highPrice = price;
-            highTime = time;
-            startPrice = null;
-            startTime = null;
-            extremePrice = null;
-            extremeTime = null;
-            cooldownUntil = null;
-            lastPrice = price;
-            lastObservedAt = time;
-        }
-
-        private void startUp(BigDecimal basePrice, Instant baseTime, BigDecimal price, Instant time) {
-            phase = Phase.TRACKING_UP;
-            startPrice = basePrice;
-            startTime = baseTime;
-            extremePrice = price;
-            extremeTime = time;
-        }
-
-        private void startDown(BigDecimal basePrice, Instant baseTime, BigDecimal price, Instant time) {
-            phase = Phase.TRACKING_DOWN;
-            startPrice = basePrice;
-            startTime = baseTime;
-            extremePrice = price;
-            extremeTime = time;
-        }
-
-        private void startCooldown(BigDecimal price, Instant time, int cooldownMinutes) {
-            resetWaiting(price, time);
-            cooldownUntil = time.plus(Duration.ofMinutes(Math.max(0, cooldownMinutes)));
+    public Map<String,Object> activeTracker(String rawSymbol) {
+        String symbol = rawSymbol == null ? "" : rawSymbol.trim().toUpperCase(Locale.ROOT);
+        BlockTracker t = trackers.get(symbol);
+        if (t == null) return Map.of("symbol", symbol, "phase", "WAITING_FOR_PRICE", "tracking", false);
+        synchronized (t) {
+            Map<String,Object> m = new LinkedHashMap<>();
+            m.put("symbol",symbol); m.put("phase","8H_BLOCK"); m.put("tracking",true); m.put("blockStart",t.blockStart); m.put("blockEnd",t.blockStart.plus(8,ChronoUnit.HOURS));
+            m.put("lastPrice",t.points.isEmpty()?null:t.points.peekLast().price); m.put("up",t.up.asMap()); m.put("down",t.down.asMap()); return m;
         }
     }
+
+    @Transactional(readOnly = true) public PriceMoveMonitorSettings currentSettings() { return settingsRepository.findById(1L).orElseGet(this::defaults); }
+    @Transactional public PriceMoveMonitorSettings updateSettings(PriceMoveMonitorSettingsRequest request) {
+        PriceMoveMonitorSettings s=settingsRepository.findById(1L).orElseGet(this::defaults); s.setId(1L); s.setEnabled(request.enabled()); s.setSelectedSymbols(normalizeSelectedSymbols(request.symbols()));
+        // Legacy columns stay populated for schema compatibility but are no longer user-configurable or used by detection.
+        if(s.getMinimumMovePercent()==null)s.setMinimumMovePercent(bd("1")); if(s.getWindowMinutes()<=0)s.setWindowMinutes(30); if(s.getMinimumDurationMinutes()<=0)s.setMinimumDurationMinutes(30);
+        if(s.getRetracementClosePercent()==null)s.setRetracementClosePercent(bd("30")); if(s.getRetentionDays()<=0)s.setRetentionDays(HISTORY_DAYS);
+        PriceMoveMonitorSettings saved=settingsRepository.save(s); cachedSettings=saved; cachedSettingsAt=System.currentTimeMillis(); trackers.clear(); return saved;
+    }
+    @Transactional public int cleanupExpired(){ return eventRepository.deleteOlderThan(Instant.now().minus(Duration.ofDays(HISTORY_DAYS))); }
+
+    private PriceMoveMonitorSettings settings(){ long n=System.currentTimeMillis(); if(cachedSettings==null||n-cachedSettingsAt>SETTINGS_CACHE_MILLIS){cachedSettings=settingsRepository.findById(1L).orElseGet(this::defaults);cachedSettingsAt=n;} return cachedSettings; }
+    private Set<String> selectedSymbols(PriceMoveMonitorSettings s){ if(s==null||s.getSelectedSymbols()==null||s.getSelectedSymbols().isBlank())return Set.of(); return Set.copyOf(Arrays.asList(s.getSelectedSymbols().split(","))); }
+    private String normalizeSelectedSymbols(List<String> xs){ if(xs==null)return ""; return xs.stream().filter(Objects::nonNull).map(x->x.trim().toUpperCase(Locale.ROOT)).filter(x->x.matches("[A-Z0-9_-]{2,30}")).distinct().limit(100).collect(java.util.stream.Collectors.joining(",")); }
+    private PriceMoveMonitorSettings defaults(){ return PriceMoveMonitorSettings.builder().id(1L).enabled(true).minimumMovePercent(bd("1")).windowMinutes(30).minimumDurationMinutes(30).retracementClosePercent(bd("30")).cooldownMinutes(0).retentionDays(HISTORY_DAYS).selectedSymbols("BNBUSDT").build(); }
+    private static Instant blockStart(Instant t){ long epoch=t.getEpochSecond(); long size=BLOCK_HOURS*3600L; return Instant.ofEpochSecond((epoch/size)*size); }
+    private static BigDecimal pct(BigDecimal a,BigDecimal b){ if(a==null||b==null||a.signum()==0)return BigDecimal.ZERO; return b.subtract(a).divide(a,12,RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100)); }
+    private static BigDecimal bd(String v){return new BigDecimal(v);} private static String safe(String s){return s==null?"No detailed explanation persisted.":s;}
+
+    private record WindowRule(String name,int minutes,BigDecimal normal,BigDecimal high,BigDecimal extreme){ String level(BigDecimal abs){return abs.compareTo(extreme)>=0?"EXTREME":abs.compareTo(high)>=0?"HIGH":abs.compareTo(normal)>=0?"NORMAL":null;} }
+    private record PricePoint(Instant time,BigDecimal price){}
+    private static final class Candidate { PricePoint start,end; BigDecimal change=BigDecimal.ZERO; String level,window; boolean caught(){return level!=null;} void consider(PricePoint s,PricePoint e,BigDecimal c,WindowRule r){String l=r.level(c.abs());if(l==null)return;if(!caught()||rank(l)>rank(level)||c.abs().compareTo(change.abs())>0){start=s;end=e;change=c;level=l;window=r.name;}} Map<String,Object> asMap(){Map<String,Object>m=new LinkedHashMap<>();m.put("caught",caught());m.put("level",level);m.put("window",window);m.put("changePercent",change);m.put("startTime",start==null?null:start.time);m.put("startPrice",start==null?null:start.price);m.put("endTime",end==null?null:end.time);m.put("endPrice",end==null?null:end.price);return m;} static int rank(String x){return "EXTREME".equals(x)?3:"HIGH".equals(x)?2:"NORMAL".equals(x)?1:0;} }
+    private static final class BlockTracker { Instant blockStart; final Deque<PricePoint> points=new ArrayDeque<>(); final Candidate up=new Candidate(),down=new Candidate(); BlockTracker(Instant s){blockStart=s;} void reset(Instant s){blockStart=s;points.clear();up.start=up.end=down.start=down.end=null;up.level=up.window=down.level=down.window=null;up.change=down.change=BigDecimal.ZERO;} void observe(BigDecimal p,Instant t){ if(!points.isEmpty()&&points.peekLast().time.truncatedTo(ChronoUnit.MINUTES).equals(t.truncatedTo(ChronoUnit.MINUTES))) points.removeLast(); points.addLast(new PricePoint(t,p)); Instant cutoff=t.minus(4,ChronoUnit.HOURS); while(!points.isEmpty()&&points.peekFirst().time.isBefore(cutoff))points.removeFirst(); } }
 }
