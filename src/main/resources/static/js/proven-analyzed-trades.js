@@ -590,7 +590,7 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
         const tradeTable = tradePanel.querySelector('table');
         const tradeHead = tradeTable?.querySelector('thead');
         if (tradeHead) {
-            tradeHead.innerHTML = '<tr><th title="Add/remove from Proven trades">✓</th><th>#</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr>';
+            tradeHead.innerHTML = '<tr><th title="Add/remove from Proven trades">✓</th><th>#</th><th>Symbol</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr>';
         }
         const tradeNote = tradePanel.querySelector('.form-note');
         if (tradeNote) {
@@ -600,6 +600,7 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
             <tr>
                 <td><label class="proven-success-check" title="Add or remove this trade from Proven trades"><input type="checkbox" aria-label="Add or remove trade ${index + 1} from Proven trades" data-proven-trade-id="${trade.id}" data-proven-run-id="${run.id}" ${regressionBool(trade.proven_success) ? 'checked' : ''}></label></td>
                 <td>${index + 1}</td>
+                <td><strong>${escapeHtml(String(trade.symbol || run.symbol || '—').toUpperCase())}</strong></td>
                 <td>${formatMoveTime(trade.entry_time)}</td>
                 <td>${formatMovePrice(trade.entry_price)}</td>
                 <td>${trade.exit_time ? formatMoveTime(trade.exit_time) : 'OPEN'}</td>
@@ -608,7 +609,7 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
                 <td>${trade.realized_pnl_usdt == null ? '—' : Number(trade.realized_pnl_usdt).toFixed(4)}</td>
                 <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>
                 <td><button type="button" class="secondary-button regression-chart-link" data-replay-chart="1" data-chart-symbol="${escapeHtml(run.symbol)}" data-chart-index="${index}" data-chart-entry-time="${escapeHtml(trade.entry_time || '')}" data-chart-entry-price="${escapeHtml(trade.entry_price ?? '')}" data-chart-exit-time="${escapeHtml(trade.exit_time || '')}" data-chart-exit-price="${escapeHtml(trade.exit_price ?? '')}">View Chart</button></td>
-            </tr>`).join('') || '<tr><td colspan="10">NO BUY EXECUTED in this replay window.</td></tr>';
+            </tr>`).join('') || '<tr><td colspan="11">NO BUY EXECUTED in this replay window.</td></tr>';
     }
 
     return finished;
@@ -625,6 +626,7 @@ async function loadRegressionArchiveDetail(archiveBatchId) {
     body.innerHTML = trades.map((trade, index) => `
         <tr>
             <td>${index + 1}</td>
+            <td><strong>${escapeHtml(String(trade.symbol || run.symbol || '—').toUpperCase())}</strong></td>
             <td>${formatMoveTime(trade.entry_time)}</td>
             <td>${formatMovePrice(trade.entry_price)}</td>
             <td>${trade.exit_time ? formatMoveTime(trade.exit_time) : 'OPEN'}</td>
@@ -633,7 +635,7 @@ async function loadRegressionArchiveDetail(archiveBatchId) {
             <td>${trade.realized_pnl_usdt == null ? '—' : Number(trade.realized_pnl_usdt).toFixed(4)}</td>
             <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>
             <td><button type="button" class="secondary-button regression-chart-link" data-replay-chart="1" data-chart-symbol="${escapeHtml(run.symbol)}" data-chart-index="${index}" data-chart-entry-time="${escapeHtml(trade.entry_time || '')}" data-chart-entry-price="${escapeHtml(trade.entry_price ?? '')}" data-chart-exit-time="${escapeHtml(trade.exit_time || '')}" data-chart-exit-price="${escapeHtml(trade.exit_price ?? '')}">View Chart</button></td>
-        </tr>`).join('') || '<tr><td colspan="9">NO BUY EXECUTED in this archived replay window.</td></tr>';
+        </tr>`).join('') || '<tr><td colspan="10">NO BUY EXECUTED in this archived replay window.</td></tr>';
     panel.classList.remove('hidden');
     panel.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
