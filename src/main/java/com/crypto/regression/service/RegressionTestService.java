@@ -356,7 +356,8 @@ public class RegressionTestService {
                 ORDER BY generated_at ASC
                 LIMIT 3000
                 """, runId);
-    }}
+    }
+
     @Transactional(readOnly = true)
     public Map<String, Object> replayTradeChart(String symbol, String interval, Instant from, Instant to) {
         String normalized = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
@@ -376,3 +377,4 @@ public class RegressionTestService {
         return Map.of("symbol", normalized, "interval", normalizedInterval, "candles", candles);
     }
 
+}
