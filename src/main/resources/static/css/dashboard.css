@@ -2076,6 +2076,7 @@ body.position-modal-open{overflow:hidden}
 }
 .candle-hover-tooltip {
     min-width: 245px;
+    pointer-events: none;
     padding: 10px 12px;
     background: #0d1b24;
     color: #dce9f2;

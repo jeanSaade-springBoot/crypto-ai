@@ -806,10 +806,22 @@ async function renderRegressionTradeChart() {
     const candles = (data.candles || []).map(c => ({x:window.CryptoTime.parseUtc(c.open_time), y:[Number(c.open_price),Number(c.high_price),Number(c.low_price),Number(c.close_price)]}));
     const points = [provenPoint(f.entryTime.toISOString(), f.entryPrice, 'BUY', 0)];
     if (f.exitTime && Number.isFinite(f.exitPrice)) points.push(provenPoint(f.exitTime.toISOString(), f.exitPrice, 'SELL', 0));
+    const tradePath = (f.exitTime && Number.isFinite(f.exitPrice)) ? [{
+        name:'Trade Path',
+        type:'line',
+        data:[
+            {x:f.entryTime.getTime(),y:Number(f.entryPrice)},
+            {x:f.exitTime.getTime(),y:Number(f.exitPrice)}
+        ]
+    }] : [];
     const options = {
-        chart:{type:'candlestick',height:420,background:'transparent',foreColor:'#8da2b1',toolbar:{show:true},animations:{enabled:false}},
+        chart:{type:'line',height:420,background:'transparent',foreColor:'#8da2b1',toolbar:{show:true},animations:{enabled:false}},
         title:{text:`${f.symbol} · Trade #${f.index+1} · ${interval}`,align:'left',style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'}},
-        series:[{name:'Price',data:candles}], xaxis:{type:'datetime',labels:{datetimeUTC:false}}, yaxis:{tooltip:{enabled:true},decimalsInFloat:4},
+        series:[{name:'Price',type:'candlestick',data:candles},...tradePath],
+        stroke:{width:[1,3],curve:'straight'},
+        markers:{size:[0,4]},
+        dataLabels:{enabled:false},
+        xaxis:{type:'datetime',labels:{datetimeUTC:false}}, yaxis:{tooltip:{enabled:true},decimalsInFloat:4},
         grid:{borderColor:'#203342'},theme:{mode:'dark'},plotOptions:{candlestick:{colors:{upward:'#39d98a',downward:'#ff6b72'}}},annotations:{points},tooltip:{shared:false}
     };
     const host=document.getElementById('regression-trade-chart');
@@ -873,14 +885,33 @@ async function loadProvenTradesGraph(preferredSymbol = null) {
         y: [Number(c.open_price), Number(c.high_price), Number(c.low_price), Number(c.close_price)]
     }));
     const points = [];
+    const tradePaths = [];
     (data.trades || []).forEach((t, i) => {
         if (t.entry_time && t.entry_price != null) points.push(provenPoint(t.entry_time, t.entry_price, 'BUY', i));
         if (t.exit_time && t.exit_price != null) points.push(provenPoint(t.exit_time, t.exit_price, 'SELL', i));
+        const entryTime = t.entry_time ? window.CryptoTime.parseUtc(t.entry_time) : null;
+        const exitTime = t.exit_time ? window.CryptoTime.parseUtc(t.exit_time) : null;
+        if (entryTime && exitTime && !Number.isNaN(entryTime.getTime()) && !Number.isNaN(exitTime.getTime()) && t.entry_price != null && t.exit_price != null) {
+            const move = Number(t.exit_price) - Number(t.entry_price);
+            const pct = Number(t.realized_pnl_percent);
+            tradePaths.push({
+                name:`Trade #${i+1} Path${Number.isFinite(pct) ? ` · ${pct >= 0 ? '+' : ''}${pct.toFixed(3)}%` : ''}`,
+                type:'line',
+                data:[
+                    {x:entryTime.getTime(),y:Number(t.entry_price)},
+                    {x:exitTime.getTime(),y:Number(t.exit_price)}
+                ],
+                _capturedMove: move
+            });
+        }
     });
     const options = {
-        chart: { type:'candlestick', height:420, background:'transparent', foreColor:'#8da2b1', toolbar:{show:true}, animations:{enabled:false} },
+        chart: { type:'line', height:420, background:'transparent', foreColor:'#8da2b1', toolbar:{show:true}, animations:{enabled:false} },
         title: { text: `${symbol} · ${interval}`, align:'left', style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'} },
-        series: [{name:'Price', data:candles}],
+        series: [{name:'Price', type:'candlestick', data:candles}, ...tradePaths.map(({_capturedMove,...series})=>series)],
+        stroke:{width:[1,...tradePaths.map(()=>3)],curve:'straight'},
+        markers:{size:[0,...tradePaths.map(()=>3)]},
+        dataLabels:{enabled:false},
         xaxis: { type:'datetime', labels:{datetimeUTC:false}, tooltip:{enabled:true, formatter:value => {
             const d = new Date(Number(value)); return Number.isNaN(d.getTime()) ? '' : d.toLocaleString();
         }}},
