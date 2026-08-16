@@ -48,55 +48,6 @@ document.getElementById('add-coin-form').addEventListener('submit', async event 
     }
 });
 
-async function loadAdministrationSystemHealth() {
-    const target = document.getElementById('admin-schedule-groups');
-    if (!target) return;
-    try {
-        const schedule = await api('/api/dashboard/runtime-configuration');
-        const groups = schedule?.groups || [];
-        target.innerHTML = groups.length ? groups.map(group => `
-            <article class="schedule-group">
-                <h3>${escapeHtml(group.name || 'Schedule')}</h3>
-                <div class="schedule-entry-list">
-                    ${(group.entries || []).map(item => `
-                        <div class="schedule-entry">
-                            <div class="schedule-entry-heading"><strong>${escapeHtml(item.name || '—')}</strong><span class="badge ${item.enabled ? 'buy' : 'reject'}">${item.enabled ? 'ENABLED' : 'DISABLED'}</span></div>
-                            <span class="schedule-cadence">${escapeHtml(item.cadence || '—')}</span><small>${escapeHtml(item.detail || '')}</small>${item.delayMs == null ? '' : `<code>${Number(item.delayMs).toLocaleString()} ms</code>`}
-                        </div>`).join('')}
-                </div>
-            </article>`).join('') : '<div class="empty">No runtime schedule configuration was returned.</div>';
-    } catch (error) { target.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`; }
-}
-
-async function loadAdministrationAiOperations() {
-    const period = document.getElementById('admin-ai-period')?.value || 'ALL_TIME';
-    try {
-        const [summary, opportunities] = await Promise.all([
-            api(`/api/execution-intelligence/summary?period=${encodeURIComponent(period)}`),
-            api('/api/execution-intelligence/opportunities/active')
-        ]);
-        const rows = Array.isArray(opportunities) ? opportunities : [];
-        const building = rows.filter(o => String(o.status || '').toUpperCase() === 'BUILDING').length;
-        const recovering = rows.filter(o => String(o.status || '').toUpperCase() === 'WEAKENING' && Number(o.healthMomentum || 0) > 0).length;
-        const weakening = rows.filter(o => String(o.status || '').toUpperCase() === 'WEAKENING' && Number(o.healthMomentum || 0) <= 0).length;
-        const ready = rows.filter(o => String(o.status || '').toUpperCase() === 'CONFIRMED').length;
-        const values = {
-            'admin-pipeline-coins-scanned': summary.coinsScanned || 0,
-            'admin-pipeline-opportunities-found': summary.opportunitiesFound || 0,
-            'admin-pipeline-building': summary.buildingNow ?? building,
-            'admin-pipeline-weakening': summary.weakeningNow ?? weakening,
-            'admin-pipeline-recovering': summary.recoveringNow ?? recovering,
-            'admin-pipeline-ready': summary.readyNow ?? ready,
-            'admin-pipeline-blocked-rejected': summary.blockedRejected || 0,
-            'admin-pipeline-executed': summary.executed || 0,
-            'admin-pipeline-managed': summary.activePositions || 0,
-            'admin-pipeline-closed': summary.closedTrades || 0
-        };
-        Object.entries(values).forEach(([id,value]) => { const node=document.getElementById(id); if(node) node.textContent=value; });
-        const updated=document.getElementById('admin-ai-updated'); if(updated) updated.textContent = summary.updatedAt ? window.CryptoTime.formatLocal(summary.updatedAt) : 'Live';
-    } catch (error) { const updated=document.getElementById('admin-ai-updated'); if(updated) updated.textContent=error.message; }
-}
-
 function initializeAdministrationSidebar() {
     const sidebar = document.getElementById('administration-sidebar');
     const toggle = document.getElementById('sidebar-toggle');
@@ -114,9 +65,6 @@ function initializeAdministrationSidebar() {
 }
 
 initializeAdministrationSidebar();
-loadAdministrationSystemHealth();
-loadAdministrationAiOperations();
-document.getElementById('admin-ai-period')?.addEventListener('change', loadAdministrationAiOperations);
 
 coinBody.addEventListener('click', async event => {
     const button = event.target.closest('button[data-action]');

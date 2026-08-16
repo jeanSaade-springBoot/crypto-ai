@@ -30,4 +30,9 @@ public class DashboardController {
     public String provenAnalyzedTrades() {
         return "forward:/proven-analyzed-trades.html";
     }
+
+    @GetMapping("/system-health")
+    public String systemHealth() {
+        return "forward:/system-health.html";
+    }
 }
