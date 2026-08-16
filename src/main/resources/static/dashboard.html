@@ -20,15 +20,15 @@
                 <a class="active" href="#overview" title="Dashboard"><span class="nav-icon">⌂</span><span class="nav-text">Dashboard</span></a>
             </div>
             <div class="nav-group"><span class="nav-group-label">MARKET</span>
-                <a href="#market" title="Market Monitor"><span class="nav-icon">⌁</span><span class="nav-text">Market Monitor</span></a>
+                <a href="/catching-market" title="Catching Market"><span class="nav-icon">⌁</span><span class="nav-text">Catching Market</span></a>
             </div>
             <div class="nav-group"><span class="nav-group-label">EXECUTION</span>
                 <a href="/opportunity-center" title="AI Opportunity Center"><span class="nav-icon">⚡</span><span class="nav-text">Opportunity Center</span><span id="nav-opportunity-count" class="nav-badge">0</span></a>
             </div>
             <div class="nav-group"><span class="nav-group-label">ANALYSIS</span>
-                <a href="#trade-history" title="Trade History"><span class="nav-icon">≡</span><span class="nav-text">Trade History</span></a>
+                
                 <a href="/trade-inspector" title="Trade Inspector"><span class="nav-icon">⌕</span><span class="nav-text">Trade Inspector</span></a>
-                <a href="/score-diagnostics" title="Score Diagnostics"><span class="nav-icon">◎</span><span class="nav-text">Score Diagnostics</span></a>
+                
                 <a href="/crypto-fundamentals" title="Crypto Fundamentals"><span class="nav-icon">ƒ</span><span class="nav-text">Crypto Fundamentals</span></a>
                 <a href="/proven-analyzed-trades" title="Proven Analyzed Trades"><span class="nav-icon">✓</span><span class="nav-text">Proven Analyzed Trades</span></a>
             </div>
@@ -185,7 +185,22 @@
         </section>
 
         <section id="signals" class="panel">
-            <div class="section-heading"><div><p class="eyebrow">RECENT SIGNAL EVIDENCE</p><h2>BUY and SELL signals</h2></div><span>Historical evidence; live execution state is shown in the AI Opportunity Center</span></div>
+            <div class="section-heading signal-evidence-heading">
+                <div><p class="eyebrow">RECENT SIGNAL EVIDENCE</p><h2>BUY and SELL signals</h2></div>
+                <div class="signal-evidence-controls">
+                    <label>Period
+                        <select id="signal-evidence-period">
+                            <option value="TODAY" selected>Today</option>
+                            <option value="3D">Last 3 days</option>
+                            <option value="7D">Last 7 days</option>
+                            <option value="30D">Last 30 days</option>
+                            <option value="ALL">All history</option>
+                        </select>
+                    </label>
+                    <button id="signal-evidence-refresh" type="button" class="secondary-button">Load</button>
+                    <span id="signal-evidence-status">Today · actionable signals only</span>
+                </div>
+            </div>
             <div class="table-wrap signal-board-wrap"><table class="signal-board-table"><thead><tr><th>Signal</th><th>3-frame decision</th><th>Planned trade</th><th>Execution</th><th>Status</th><th>Details</th></tr></thead><tbody id="signals-body"></tbody></table></div>
         </section>
 

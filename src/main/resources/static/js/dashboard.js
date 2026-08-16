@@ -46,6 +46,8 @@ const openSignalAnalysisIds = new Set();
 const signalAnalysisDetailCache = new Map();
 let pinnedSignalId = localStorage.getItem('cryptoPinnedSignalId');
 let aiPerformancePeriod = localStorage.getItem('cryptoAiPerformancePeriod') || 'ALL_TIME';
+let signalEvidenceAbortController = null;
+let latestSignalEvidenceContext = null;
 
 // Debug-only deep link from Administration > Market Move Tracker.
 // This only controls dashboard navigation/chart rendering and never feeds back into trading logic.
@@ -281,6 +283,15 @@ function render(data) {
     renderSchedules(data.schedule || {});
     applyDashboardRefreshSchedule(data.schedule || {});
     renderCharts(data.candles || [], data.executions || []);
+    latestSignalEvidenceContext = {
+        symbol: data.symbol,
+        interval: data.interval,
+        displayOnlyInterval: Boolean(data.displayOnlyInterval),
+        timeframeSnapshot: data.timeframeSnapshot || {},
+        executions: data.executions || [],
+        openPositions: data.openPositions || [],
+        closedPositions: data.closedPositions || []
+    };
     renderSignals(
         data.signals || [],
         data.displayOnlyInterval,
@@ -289,8 +300,54 @@ function render(data) {
         data.openPositions || [],
         data.closedPositions || []
     );
+    // Replace the generic Top-20 overview rows with period-filtered actionable evidence.
+    // This fixes cases where recent NEUTRAL/WATCH rows hid valid BUY/SELL signals.
+    void refreshSignalEvidence(false);
     renderTradeHistory(data.closedPositions || []);
     window.requestAnimationFrame(syncDashboardHeaderOffset);
+}
+
+
+async function refreshSignalEvidence(showLoading = true) {
+    const context = latestSignalEvidenceContext;
+    const periodSelect = el('signal-evidence-period');
+    const status = el('signal-evidence-status');
+    const body = el('signals-body');
+    if (!context || !periodSelect || !body) return;
+
+    if (context.displayOnlyInterval) {
+        renderSignals([], true, context.timeframeSnapshot, context.executions, context.openPositions, context.closedPositions);
+        if (status) status.textContent = 'Trading signals are generated only on 1m / 5m / 1h';
+        return;
+    }
+
+    if (signalEvidenceAbortController) signalEvidenceAbortController.abort();
+    signalEvidenceAbortController = new AbortController();
+    const requestedSymbol = context.symbol;
+    const requestedInterval = context.interval;
+    const period = periodSelect.value || 'TODAY';
+    if (showLoading) body.innerHTML = '<tr><td colspan="6" class="empty">Loading BUY/SELL evidence…</td></tr>';
+    if (status) status.textContent = 'Loading…';
+
+    try {
+        const params = new URLSearchParams({symbol: requestedSymbol, interval: requestedInterval, period, limit: '100'});
+        const response = await fetch(`/api/dashboard/signals?${params.toString()}`, {signal: signalEvidenceAbortController.signal});
+        if (!response.ok) throw new Error(`Signal evidence API returned ${response.status}`);
+        const result = await response.json();
+        const current = latestSignalEvidenceContext;
+        if (!current || current.symbol !== requestedSymbol || current.interval !== requestedInterval) return;
+        renderSignals(result.signals || [], false, current.timeframeSnapshot, current.executions, current.openPositions, current.closedPositions);
+        if (status) {
+            const labels = {TODAY:'Today', '3D':'Last 3 days', '7D':'Last 7 days', '30D':'Last 30 days', ALL:'All history'};
+            status.textContent = `${labels[period] || 'Today'} · ${Number(result.count || 0)} BUY/SELL signal${Number(result.count || 0) === 1 ? '' : 's'}`;
+        }
+    } catch (error) {
+        if (error?.name === 'AbortError') return;
+        if (status) status.textContent = 'Could not load signal evidence';
+        body.innerHTML = `<tr><td colspan="6" class="empty">${escapeHtml(error.message)}</td></tr>`;
+    } finally {
+        signalEvidenceAbortController = null;
+    }
 }
 
 
@@ -2156,6 +2213,11 @@ function setupSidebar() {
         sync();
     }
 }
+
+const signalEvidencePeriod = el('signal-evidence-period');
+if (signalEvidencePeriod) signalEvidencePeriod.addEventListener('change', () => refreshSignalEvidence(true));
+const signalEvidenceRefresh = el('signal-evidence-refresh');
+if (signalEvidenceRefresh) signalEvidenceRefresh.addEventListener('click', () => refreshSignalEvidence(true));
 
 el('refresh-button').addEventListener('click', refreshDashboard);
 el('analyze-sentiment-button').addEventListener('click', analyzeSentiment);

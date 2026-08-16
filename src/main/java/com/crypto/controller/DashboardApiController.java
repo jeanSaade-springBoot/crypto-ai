@@ -3,6 +3,7 @@ package com.crypto.controller;
 import com.crypto.administration.service.CoinConfigurationService;
 import com.crypto.domain.Candle;
 import com.crypto.domain.PaperPosition;
+import com.crypto.domain.SignalDecision;
 import com.crypto.domain.PositionStatus;
 import com.crypto.domain.TechnicalIndicator;
 import com.crypto.domain.TradeSignal;
@@ -30,6 +31,8 @@ import org.springframework.web.bind.annotation.RestController;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.Duration;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -85,6 +88,60 @@ public class DashboardApiController {
     public List<String> symbols() {
         List<String> symbols = coinConfigurationService.enabledSymbols();
         return symbols.isEmpty() ? List.of("BTCUSDT") : symbols;
+    }
+
+
+    /**
+     * Actionable signal evidence is loaded separately from the heavy dashboard overview.
+     * The default TODAY window is based on Riyadh local day, while persisted timestamps remain UTC.
+     * This avoids the old Top-20 problem where recent NEUTRAL/WATCH rows could hide older BUY/SELL
+     * evidence and also keeps historical evidence on-demand.
+     */
+    @GetMapping("/signals")
+    @Transactional(readOnly = true)
+    public Map<String, Object> signals(
+            @RequestParam(defaultValue = "BTCUSDT") String symbol,
+            @RequestParam(defaultValue = "1m") String interval,
+            @RequestParam(defaultValue = "TODAY") String period,
+            @RequestParam(defaultValue = "50") int limit
+    ) {
+        String normalizedSymbol = symbol.trim().toUpperCase();
+        String normalizedInterval = interval.trim().toLowerCase();
+        String normalizedPeriod = period == null ? "TODAY" : period.trim().toUpperCase();
+        int safeLimit = Math.max(1, Math.min(limit, 250));
+        List<SignalDecision> actionable = List.of(
+                SignalDecision.BUY, SignalDecision.STRONG_BUY,
+                SignalDecision.SELL, SignalDecision.STRONG_SELL
+        );
+
+        Instant from = signalEvidenceFrom(normalizedPeriod);
+        List<TradeSignal> rows = from == null
+                ? tradeSignalRepository.findBySymbolAndIntervalAndDecisionInOrderByGeneratedAtDesc(
+                        normalizedSymbol, normalizedInterval, actionable, PageRequest.of(0, safeLimit))
+                : tradeSignalRepository.findBySymbolAndIntervalAndDecisionInAndGeneratedAtGreaterThanEqualOrderByGeneratedAtDesc(
+                        normalizedSymbol, normalizedInterval, actionable, from, PageRequest.of(0, safeLimit));
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("symbol", normalizedSymbol);
+        response.put("interval", normalizedInterval);
+        response.put("period", normalizedPeriod);
+        response.put("from", from);
+        response.put("count", rows.size());
+        response.put("signals", rows.stream().map(this::signalDto).toList());
+        return response;
+    }
+
+    private Instant signalEvidenceFrom(String period) {
+        ZoneId riyadh = ZoneId.of("Asia/Riyadh");
+        ZonedDateTime now = ZonedDateTime.now(riyadh);
+        return switch (period) {
+            case "TODAY" -> now.toLocalDate().atStartOfDay(riyadh).toInstant();
+            case "3D" -> now.minusDays(3).toInstant();
+            case "7D" -> now.minusDays(7).toInstant();
+            case "30D" -> now.minusDays(30).toInstant();
+            case "ALL" -> null;
+            default -> now.toLocalDate().atStartOfDay(riyadh).toInstant();
+        };
     }
 
     @GetMapping("/score-diagnostics")

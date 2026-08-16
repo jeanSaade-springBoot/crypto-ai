@@ -2789,3 +2789,10 @@ body.position-modal-open{overflow:hidden}
 .runtime-decision-code { margin-top: 12px; padding: 11px 12px; border-radius: 9px; background: rgba(2, 6, 23, .35); }
 .runtime-decision-code strong { display: block; margin-top: 3px; }
 .runtime-decision-code p { margin: 6px 0 0; opacity: .8; }
+
+/* Recent signal evidence: default to today's actionable BUY/SELL rows; older history loads on demand. */
+.signal-evidence-controls{display:flex;align-items:flex-end;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+.signal-evidence-controls label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted,#8b93a7);font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.signal-evidence-controls select{min-width:135px;padding:8px 10px;border-radius:8px}
+.signal-evidence-controls #signal-evidence-status{align-self:center;white-space:nowrap}
+@media(max-width:760px){.signal-evidence-heading{align-items:flex-start}.signal-evidence-controls{justify-content:flex-start;width:100%}}

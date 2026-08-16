@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Catching Market</title><link rel="stylesheet" href="/css/dashboard.css"><link rel="stylesheet" href="/css/administration.css"></head>
+<body><div class="app-shell"><aside class="sidebar" id="catching-market-sidebar">
+        <div class="brand"><span class="brand-mark">CT</span><div class="sidebar-label"><strong>Crypto Trader</strong><small>AI trading command center</small></div><button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Collapse navigation" title="Collapse navigation">‹</button></div>
+        <nav class="sidebar-nav">
+            <div class="nav-group"><span class="nav-group-label">OVERVIEW</span><a href="/dashboard" title="Dashboard"><span class="nav-icon">⌂</span><span class="nav-text">Dashboard</span></a></div>
+            <div class="nav-group"><span class="nav-group-label">MARKET</span><a class="active" href="/catching-market" title="Catching Market"><span class="nav-icon">⌁</span><span class="nav-text">Catching Market</span></a></div>
+            <div class="nav-group"><span class="nav-group-label">EXECUTION</span><a href="/opportunity-center" title="AI Opportunity Center"><span class="nav-icon">⚡</span><span class="nav-text">Opportunity Center</span></a></div>
+            <div class="nav-group"><span class="nav-group-label">ANALYSIS</span><a href="/trade-inspector" title="Trade Inspector"><span class="nav-icon">⌕</span><span class="nav-text">Trade Inspector</span></a><a href="/crypto-fundamentals" title="Crypto Fundamentals"><span class="nav-icon">ƒ</span><span class="nav-text">Crypto Fundamentals</span></a><a href="/proven-analyzed-trades" title="Proven Analyzed Trades"><span class="nav-icon">✓</span><span class="nav-text">Proven Analyzed Trades</span></a></div>
+            <div class="nav-group"><span class="nav-group-label">SYSTEM</span><a href="/administration" title="Administration"><span class="nav-icon">⚙</span><span class="nav-text">Administration</span></a><a href="/system-health" title="System Health"><span class="nav-icon">♥</span><span class="nav-text">System Health</span></a></div>
+        </nav>
+        <div class="connection"><span class="online"></span><div class="sidebar-label"><strong>Catching Market</strong><small>Move detection & review</small></div></div>
+    </aside><main>
+<header class="topbar"><div><p class="eyebrow">MARKET OBSERVATION</p><h1>Catching Market</h1></div><div class="topbar-actions"><a class="dashboard-button" href="/dashboard">← Dashboard</a></div></header>
+<section id="message" class="error-banner hidden" role="status" aria-live="polite"></section>
+        <section id="price-move-monitor" class="panel debug-monitor-panel">
+            <div class="section-heading">
+                <div>
+                    <p class="eyebrow">MARKET CATCHER · STANDALONE MONITOR</p>
+                    <h2>Market Move Tracker</h2>
+                </div>
+                <div class="debug-symbol-actions">
+                    <div class="debug-symbol-picker">
+                        <span>Symbols</span>
+                        <div id="price-move-symbols" class="debug-symbol-checks">Loading configured coins…</div>
+                    </div>
+                    <button id="price-move-select-all" type="button" class="secondary-button">Select All</button>
+                    <button id="price-move-clear-symbols" type="button" class="secondary-button">Clear</button>
+                    <button id="price-move-refresh" type="button" class="secondary-button">Refresh Moves</button>
+                </div>
+            </div>
+            <p class="debug-isolation-note"><strong>Monitoring only.</strong> This module groups live prices into meaningful UP and DOWN rallies/drops for manual review. Only MEDIUM/HIGH completed moves lasting more than 5 minutes create a row. MEDIUM = 0.75% to &lt;1.50%; HIGH = 1.50%+. It does not affect AI analysis, signals, Execution Intelligence, wallet execution, position management, Profit Lock, stop loss or take profit.</p>
+
+            <form id="price-move-settings-form" class="price-move-settings">
+                <label class="toggle-row"><input id="price-move-enabled" type="checkbox" checked> Enable debug market-move tracking</label>
+                <label>Early tracking trigger %<input id="price-move-threshold" type="number" min="0.01" max="100" step="0.01" value="0.30" required></label>
+                <label>Minimum duration (minutes)<input id="price-move-min-duration" type="number" min="6" max="1440" step="1" value="6" required></label>
+                <label>Retracement to close %<input id="price-move-retracement" type="number" min="1" max="100" step="1" value="30" required></label>
+                <label>Cooldown (minutes)<input id="price-move-cooldown" type="number" min="0" max="1440" step="1" value="10" required></label>
+                <label>Keep history (days)<input id="price-move-retention" type="number" min="1" max="365" step="1" value="7" required></label>
+                <button type="submit">Save Tracker Settings</button>
+            </form>
+
+            <div class="price-move-summary">
+                <span><strong id="price-move-new-count">0</strong> new</span>
+                <span><strong id="price-move-medium-count">0</strong> medium</span>
+                <span><strong id="price-move-high-count">0</strong> high</span>
+            </div>
+
+            <div id="price-move-active-list" class="price-move-active-list"></div>
+
+            <div class="table-wrap">
+                <table class="price-move-table">
+                    <thead>
+                    <tr>
+                        <th>Symbol</th><th>Move</th><th>Start time</th><th>End time</th>
+                        <th>Start price</th><th>End price</th><th>Change</th><th>Duration</th><th>Priority</th><th>Status</th><th>Review</th>
+                    </tr>
+                    </thead>
+                    <tbody id="price-move-body"><tr><td colspan="11">Loading price moves…</td></tr></tbody>
+                </table>
+            </div>
+        </section>
+
+
+</main></div><script src="/js/time-utils.js"></script><script src="/js/catching-market.js"></script></body></html>

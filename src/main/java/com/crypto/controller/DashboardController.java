@@ -11,6 +11,12 @@ public class DashboardController {
         return "forward:/dashboard.html";
     }
 
+
+    @GetMapping("/catching-market")
+    public String catchingMarket() {
+        return "forward:/catching-market.html";
+    }
+
     @GetMapping("/opportunity-center")
     public String opportunityCenter() {
         return "forward:/opportunity-center.html";
