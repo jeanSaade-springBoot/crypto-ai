@@ -145,7 +145,7 @@ public class AnalysisService {
                 + (sentimentAvailable ? MAX_SENTIMENT_SCORE : 0);
 
         AtrRiskAssessment atrRisk = atrRiskService.assess(i);
-        MarketRegimeAssessment regimeAssessment = marketRegimeService.assess(i);
+        MarketRegimeAssessment regimeAssessment = marketRegimeService.assess(i, trendStructure);
         MarketRegime marketRegime = regimeAssessment.regime();
         MarketContextSnapshot marketContext = marketContextService.build(
                 i, atrRisk, sentimentOverview, sentimentEnabled, signalGeneratedAt, historicalReplay);
@@ -161,8 +161,9 @@ public class AnalysisService {
                 sentimentAvailable,
                 fundamentalAvailable
         );
+        strategyScore = marketStrategyService.constrainBreakoutCandidate(regimeAssessment, strategyScore);
         strategyScore = marketStrategyService.promoteEarlyBreakout(
-                strategyProfile, strategyScore, marketContext, atrRisk);
+                strategyProfile, strategyScore, marketContext, atrRisk, regimeAssessment, trendStructure);
 
         int rawTotal = strategyScore.rawScore();
         int maximumAvailableScore = strategyScore.maximumScore();
@@ -1008,6 +1009,9 @@ public class AnalysisService {
         detail.put("pullbackQualityScore", result.pullbackQualityScore());
         detail.put("ema20RespectScore", result.ema20RespectScore());
         detail.put("breakoutPreparationScore", result.breakoutPreparationScore());
+        detail.put("compressionDetected", result.compressionDetected());
+        detail.put("bullishExpansionConfirmed", result.bullishExpansionConfirmed());
+        detail.put("continuationSupported", result.continuationSupported());
         detail.put("continuationScore", result.continuationScore());
         detail.put("evidence", result.evidence());
         return detail;

@@ -37,6 +37,11 @@ public class DashboardController {
         return "forward:/proven-analyzed-trades.html";
     }
 
+    @GetMapping("/fix-registry")
+    public String fixRegistry() {
+        return "forward:/fix-registry.html";
+    }
+
     @GetMapping("/system-health")
     public String systemHealth() {
         return "forward:/system-health.html";

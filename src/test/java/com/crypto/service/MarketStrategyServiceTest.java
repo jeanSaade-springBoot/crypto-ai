@@ -1,8 +1,10 @@
 package com.crypto.service;
 
 import com.crypto.config.DynamicStrategyProperties;
+import com.crypto.domain.MarketRegime;
 import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradingStrategy;
+import com.crypto.dto.MarketRegimeAssessment;
 import com.crypto.dto.StrategyProfile;
 import com.crypto.dto.StrategyScoreResult;
 import org.junit.jupiter.api.Test;
@@ -64,4 +66,18 @@ class MarketStrategyServiceTest {
         assertThat(result.normalizedScore()).isBetween(65, 79);
         assertThat(result.decision()).isEqualTo(SignalDecision.WATCH);
     }
+
+    @Test
+    void capsUnconfirmedBreakoutCandidateBuyToWatchBeforePromotion() {
+        StrategyScoreResult buy83 = new StrategyScoreResult(
+                14, 24, 20, 0, 0, 58, 70, 83, SignalDecision.BUY);
+        MarketRegimeAssessment candidate = new MarketRegimeAssessment(
+                MarketRegime.BREAKOUT_CANDIDATE, 73, java.util.List.of("test"));
+
+        StrategyScoreResult constrained = service.constrainBreakoutCandidate(candidate, buy83);
+
+        assertThat(constrained.normalizedScore()).isEqualTo(83);
+        assertThat(constrained.decision()).isEqualTo(SignalDecision.WATCH);
+    }
+
 }

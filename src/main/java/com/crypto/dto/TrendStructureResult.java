@@ -14,6 +14,7 @@ public record TrendStructureResult(
         boolean healthyPullback,
         boolean ema20Respected,
         boolean compressionDetected,
+        boolean bullishExpansionConfirmed,
         boolean continuationSupported,
         String explanation,
         List<String> evidence
@@ -21,7 +22,7 @@ public record TrendStructureResult(
     public static TrendStructureResult unavailable(String reason) {
         return new TrendStructureResult(
                 0, 0, 0, 0, 0, 0,
-                false, false, false, false, false, false,
+                false, false, false, false, false, false, false,
                 reason, List.of(reason)
         );
     }

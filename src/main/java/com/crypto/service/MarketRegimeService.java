@@ -3,6 +3,7 @@ package com.crypto.service;
 import com.crypto.domain.MarketRegime;
 import com.crypto.dto.IndicatorSnapshot;
 import com.crypto.dto.MarketRegimeAssessment;
+import com.crypto.dto.TrendStructureResult;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -23,7 +24,22 @@ public class MarketRegimeService {
         return assess(indicator).regime();
     }
 
+    /**
+     * Backward-compatible assessment for callers that do not yet provide price structure.
+     * Production analysis uses the overload with TrendStructureResult so a volatility-band
+     * event cannot receive full BREAKOUT authority without structural confirmation.
+     */
     public MarketRegimeAssessment assess(IndicatorSnapshot indicator) {
+        return assessInternal(indicator, null, false);
+    }
+
+    public MarketRegimeAssessment assess(IndicatorSnapshot indicator, TrendStructureResult trendStructure) {
+        return assessInternal(indicator, trendStructure, true);
+    }
+
+    private MarketRegimeAssessment assessInternal(IndicatorSnapshot indicator,
+                                                   TrendStructureResult trendStructure,
+                                                   boolean requireStructuralConfirmation) {
         if (!valid(indicator)) {
             return new MarketRegimeAssessment(MarketRegime.UNKNOWN, 0,
                     List.of("Required indicator values are unavailable"));
@@ -53,8 +69,26 @@ public class MarketRegimeService {
         boolean volumeExpansion = relativeVolume.compareTo(BREAKOUT_VOLUME) >= 0;
 
         if ((aboveUpper || belowLower) && volumeExpansion) {
-            evidence.add(aboveUpper ? "Price broke above the upper Bollinger band" : "Price broke below the lower Bollinger band");
+            evidence.add(aboveUpper ? "Price reached or crossed the upper Bollinger band" : "Price reached or crossed the lower Bollinger band");
             evidence.add("Relative volume confirms expansion at " + relativeVolume.setScale(2, RoundingMode.HALF_UP) + "x");
+
+            // FIX SHIBUSDT trade #166 / signal #81358:
+            // Bollinger + RVOL is an early volatility breakout candidate, not proof that
+            // market structure has actually broken. Full BREAKOUT authority is granted
+            // only when TrendStructureService confirms bullish expansion. Bearish-band
+            // expansion remains on the legacy path until an equivalent bearish structure
+            // confirmation model exists.
+            if (requireStructuralConfirmation && aboveUpper) {
+                boolean structurallyConfirmed = trendStructure != null
+                        && trendStructure.bullishExpansionConfirmed();
+                if (!structurallyConfirmed) {
+                    evidence.add("Structural bullish expansion is not confirmed; treating the move as an early breakout candidate");
+                    return new MarketRegimeAssessment(MarketRegime.BREAKOUT_CANDIDATE,
+                            confidence(70, emaGap, atrPercent, relativeVolume), evidence);
+                }
+                evidence.add("Trend structure confirms a close through prior structure with bullish momentum and volume");
+            }
+
             return new MarketRegimeAssessment(MarketRegime.BREAKOUT,
                     confidence(70, emaGap, atrPercent, relativeVolume), evidence);
         }

@@ -5,6 +5,7 @@ public enum MarketRegime {
     WEAK_UPTREND,
     RANGE,
     BREAKOUT,
+    BREAKOUT_CANDIDATE,
     WEAK_DOWNTREND,
     STRONG_DOWNTREND,
     HIGH_VOLATILITY,

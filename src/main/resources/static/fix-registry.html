@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Fix Registry - Crypto Trader</title>
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <link rel="stylesheet" href="/css/fix-registry.css">
+</head>
+<body>
+<div class="app-shell">
+    <aside class="sidebar" id="fix-registry-sidebar">
+        <div class="brand">
+            <span class="brand-mark">CT</span>
+            <div class="sidebar-label"><strong>Crypto Trader</strong><small>AI trading command center</small></div>
+        </div>
+        <nav class="sidebar-nav">
+            <div class="nav-group"><span class="nav-group-label">OVERVIEW</span>
+                <a href="/dashboard" title="Dashboard"><span class="nav-icon">⌂</span><span class="nav-text">Dashboard</span></a>
+            </div>
+            <div class="nav-group"><span class="nav-group-label">MARKET</span>
+                <a href="/catching-market" title="Catching Market"><span class="nav-icon">⌁</span><span class="nav-text">Catching Market</span></a>
+            </div>
+            <div class="nav-group"><span class="nav-group-label">EXECUTION</span>
+                <a href="/opportunity-center" title="AI Opportunity Center"><span class="nav-icon">⚡</span><span class="nav-text">Opportunity Center</span></a>
+            </div>
+            <div class="nav-group"><span class="nav-group-label">ANALYSIS</span>
+                <a href="/trade-inspector" title="Trade Inspector"><span class="nav-icon">⌕</span><span class="nav-text">Trade Inspector</span></a>
+                <a href="/crypto-fundamentals" title="Crypto Fundamentals"><span class="nav-icon">ƒ</span><span class="nav-text">Crypto Fundamentals</span></a>
+                <a href="/proven-analyzed-trades" title="Proven Analyzed Trades"><span class="nav-icon">✓</span><span class="nav-text">Proven Analyzed Trades</span></a>
+            </div>
+            <div class="nav-group"><span class="nav-group-label">SYSTEM</span>
+                <a href="/administration" title="Administration"><span class="nav-icon">⚙</span><span class="nav-text">Administration</span></a>
+                <a class="active" href="/fix-registry" title="Fix Registry"><span class="nav-icon">•</span><span class="nav-text">Fix Registry</span></a>
+                <a href="/system-health" title="System Health"><span class="nav-icon">♥</span><span class="nav-text">System Health</span></a>
+            </div>
+        </nav>
+    </aside>
+
+    <main>
+        <header class="topbar fix-registry-topbar">
+            <div class="topbar-main">
+                <div>
+                    <p class="eyebrow">PROTECTED CHANGE HISTORY</p>
+                    <h1>Trading Fix Registry</h1>
+                    <p class="registry-subtitle">Scenario-specific fixes kept as separate records so future corrections do not overwrite earlier trading decisions.</p>
+                </div>
+            </div>
+            <div class="topbar-actions">
+                <button id="copy-fixes-button" type="button" class="secondary-button">Copy all fixes</button>
+                <span id="copy-fixes-status" class="copy-status" aria-live="polite"></span>
+            </div>
+        </header>
+
+        <section class="panel registry-summary">
+            <div class="section-heading">
+                <div><p class="eyebrow">FIX HISTORY</p><h2>Implemented scenario fixes</h2></div>
+                <span id="fix-count">0 fixes</span>
+            </div>
+            <p class="muted">Each bullet documents the original trade scenario, root cause, exact code location and solution. Add future fixes as new records instead of editing old scenarios.</p>
+        </section>
+
+        <section class="panel registry-panel">
+            <ul id="fix-registry-list" class="fix-registry-list" aria-live="polite"></ul>
+        </section>
+    </main>
+</div>
+<script src="/js/fix-registry.js"></script>
+</body>
+</html>

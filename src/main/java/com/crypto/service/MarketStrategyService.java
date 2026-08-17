@@ -73,7 +73,9 @@ public class MarketStrategyService {
             case RANGE -> profile(TradingStrategy.RANGE_MEAN_REVERSION, properties.getRangeMeanReversion(), true,
                     "Range conditions selected the mean-reversion profile");
             case BREAKOUT -> profile(TradingStrategy.BREAKOUT, properties.getBreakout(), true,
-                    "Price expansion and volume selected the breakout profile");
+                    "Price expansion, volume and structural confirmation selected the breakout profile");
+            case BREAKOUT_CANDIDATE -> profile(TradingStrategy.BREAKOUT, properties.getBreakout(), true,
+                    "Price expansion and volume detected an early breakout candidate; structural confirmation is still pending");
             case HIGH_VOLATILITY, LOW_LIQUIDITY -> profile(TradingStrategy.DEFENSIVE, properties.getDefensive(), true,
                     "Risk conditions selected the defensive profile");
             case UNKNOWN -> profile(TradingStrategy.NO_TRADE, properties.getDefensive(), false,
@@ -110,6 +112,29 @@ public class MarketStrategyService {
                 raw, maximum, normalized, decision);
     }
 
+
+    /**
+     * A BREAKOUT_CANDIDATE may use breakout weights for diagnostics, but it cannot
+     * become an ordinary full BUY solely through score normalization. It must first
+     * pass the existing early-breakout promotion path.
+     */
+    public StrategyScoreResult constrainBreakoutCandidate(
+            MarketRegimeAssessment assessment,
+            StrategyScoreResult score
+    ) {
+        if (assessment == null || score == null
+                || assessment.regime() != MarketRegime.BREAKOUT_CANDIDATE) {
+            return score;
+        }
+        if (score.decision() != SignalDecision.BUY && score.decision() != SignalDecision.STRONG_BUY) {
+            return score;
+        }
+        return new StrategyScoreResult(
+                score.trendScore(), score.volumeScore(), score.momentumScore(),
+                score.sentimentScore(), score.fundamentalScore(), score.rawScore(),
+                score.maximumScore(), score.normalizedScore(), SignalDecision.WATCH);
+    }
+
     /**
      * Promotes only a technically strong early BREAKOUT WATCH. The normal BUY threshold stays
      * untouched (80 by configuration). ATR and higher-timeframe context are required here so
@@ -119,7 +144,9 @@ public class MarketStrategyService {
             StrategyProfile profile,
             StrategyScoreResult score,
             MarketContextSnapshot context,
-            com.crypto.dto.AtrRiskAssessment atrRisk
+            com.crypto.dto.AtrRiskAssessment atrRisk,
+            MarketRegimeAssessment regimeAssessment,
+            com.crypto.dto.TrendStructureResult trendStructure
     ) {
         if (profile == null || score == null || profile.strategy() != TradingStrategy.BREAKOUT
                 || score.decision() != SignalDecision.WATCH) {
@@ -131,6 +158,17 @@ public class MarketStrategyService {
                 && context.higherTimeframeStatus() != com.crypto.domain.ConfluenceStatus.CONFLICT
                 && context.higherTimeframeStatus() != com.crypto.domain.ConfluenceStatus.STRONG_CONFLICT;
         boolean atrAllowsEntry = atrRisk != null && atrRisk.immediateEntryAllowed();
+
+        // An unconfirmed candidate needs at least genuine breakout preparation
+        // (compression or equivalent structure evidence) before the early-probe
+        // promotion is allowed. This specifically prevents a tiny Bollinger poke
+        // plus RVOL from jumping directly to BUY.
+        if (regimeAssessment != null
+                && regimeAssessment.regime() == MarketRegime.BREAKOUT_CANDIDATE
+                && (trendStructure == null || trendStructure.breakoutPreparationScore() <= 0)) {
+            return score;
+        }
+
         return promoteEarlyBreakout(profile, score, higherTimeframeSafe, atrAllowsEntry);
     }
 

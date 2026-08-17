@@ -122,6 +122,7 @@ public class TrendStructureService {
                 pullback.qualityScore() == 2,
                 ema20Respected,
                 compression,
+                bullishExpansion,
                 continuation,
                 explanation,
                 List.copyOf(evidence)
