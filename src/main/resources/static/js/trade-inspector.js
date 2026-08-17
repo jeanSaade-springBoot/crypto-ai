@@ -118,7 +118,7 @@ async function loadInspectedTradeChart(){
   const opened=window.CryptoTime.parseUtc(t.openedAt),closed=window.CryptoTime.parseUtc(t.closedAt);
   if(!opened||!closed||Number.isNaN(opened.getTime())||Number.isNaN(closed.getTime()))return;
   const interval=$('inspected-trade-interval')?.value||'5m';
-  const from=new Date(opened.getTime()-7*60*60*1000),to=new Date(closed.getTime()+7*60*60*1000);
+  const from=new Date(opened.getTime()-24*60*60*1000),to=new Date(closed.getTime()+24*60*60*1000);
   const params=new URLSearchParams({symbol:String(t.symbol||'').toUpperCase(),interval,from:from.toISOString(),to:to.toISOString()});
   const r=await fetch(`/api/trade-inspector/chart?${params.toString()}`,{cache:'no-store'});
   if(!r.ok)throw new Error(`Chart HTTP ${r.status}`);
