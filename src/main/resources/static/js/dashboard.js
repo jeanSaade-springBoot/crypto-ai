@@ -49,6 +49,16 @@ let aiPerformancePeriod = localStorage.getItem('cryptoAiPerformancePeriod') || '
 let signalEvidenceAbortController = null;
 let latestSignalEvidenceContext = null;
 
+// Dashboard chart navigation is deliberately presentation-only. It never feeds
+// historical candles back into analysis, signal generation or execution.
+let chartHistoryActive = false;
+let chartHistoryLoading = false;
+let chartNavigationBound = false;
+let chartLoadedCandles = [];
+let chartLoadedExecutions = [];
+let chartViewport = { min: null, max: null };
+let chartDragState = null;
+
 // Debug-only deep link from Administration > Market Move Tracker.
 // This only controls dashboard navigation/chart rendering and never feeds back into trading logic.
 const dashboardUrlParams = new URLSearchParams(window.location.search);
@@ -178,6 +188,9 @@ async function refreshDashboard() {
 }
 
 async function refreshDashboardForSelection() {
+    // A symbol/timeframe change starts from the latest market view. Historical
+    // panning is local to the currently selected symbol/timeframe.
+    resetChartHistoryNavigation();
     const symbol = el('symbol-select').value;
     const interval = el('interval-select').value;
     const requestId = dashboardSelectionRequestId + 1;
@@ -909,17 +922,201 @@ function candleTooltipHtml(point) {
         </div>`;
 }
 
-function renderCharts(candles, executions = []) {
-    const candleSeries = candles.map(c => ({
+function normalizeChartCandle(c) {
+    return {
+        ...c,
+        time: c.time,
+        openTime: c.openTime ?? c.time,
+        closeTime: c.closeTime
+    };
+}
+
+function mergeChartCandles(existing, incoming) {
+    const byTime = new Map();
+    [...(existing || []), ...(incoming || [])].forEach(candle => {
+        const key = window.CryptoTime.parseUtc(candle.time ?? candle.openTime)?.getTime();
+        if (Number.isFinite(key)) byTime.set(key, normalizeChartCandle(candle));
+    });
+    return [...byTime.values()].sort((a, b) =>
+        window.CryptoTime.parseUtc(a.time ?? a.openTime).getTime() - window.CryptoTime.parseUtc(b.time ?? b.openTime).getTime());
+}
+
+function updateChartLatestButton() {
+    const button = el('chart-go-latest');
+    if (!button) return;
+    button.classList.toggle('hidden', !chartHistoryActive);
+}
+
+function resetChartHistoryNavigation() {
+    chartHistoryActive = false;
+    chartHistoryLoading = false;
+    chartLoadedCandles = [];
+    chartLoadedExecutions = [];
+    chartViewport = { min: null, max: null };
+    chartDragState = null;
+    updateChartLatestButton();
+}
+
+function chartCandleBounds() {
+    if (!chartLoadedCandles.length) return null;
+    const first = window.CryptoTime.parseUtc(chartLoadedCandles[0].time ?? chartLoadedCandles[0].openTime).getTime();
+    const last = window.CryptoTime.parseUtc(chartLoadedCandles.at(-1).time ?? chartLoadedCandles.at(-1).openTime).getTime();
+    return Number.isFinite(first) && Number.isFinite(last) ? { first, last } : null;
+}
+
+async function loadOlderChartCandles(beforeMillis) {
+    if (chartHistoryLoading || !Number.isFinite(beforeMillis)) return false;
+    chartHistoryLoading = true;
+    const symbol = el('symbol-select').value;
+    const interval = el('interval-select').value;
+    try {
+        const params = new URLSearchParams({
+            symbol,
+            interval,
+            before: new Date(beforeMillis).toISOString(),
+            limit: '180'
+        });
+        const response = await fetch(`/api/dashboard/chart-history?${params.toString()}`);
+        if (!response.ok) throw new Error(`Historical chart API returned ${response.status}`);
+        const data = await response.json();
+        if (symbol !== el('symbol-select').value || interval !== el('interval-select').value) return false;
+        const older = data.candles || [];
+        if (!older.length) return false;
+        chartLoadedCandles = mergeChartCandles(chartLoadedCandles, older);
+        renderCharts(chartLoadedCandles, chartLoadedExecutions, { force: true, preserveViewport: true });
+        return true;
+    } catch (error) {
+        console.warn('Unable to load older dashboard candles', error);
+        return false;
+    } finally {
+        chartHistoryLoading = false;
+    }
+}
+
+async function applyChartViewport(min, max) {
+    const bounds = chartCandleBounds();
+    if (!bounds || !Number.isFinite(min) || !Number.isFinite(max) || max <= min) return;
+
+    const latest = bounds.last;
+    const span = max - min;
+    if (max > latest) {
+        max = latest;
+        min = max - span;
+    }
+
+    // Fetch history only when the requested viewport moves beyond what is
+    // already in the browser. This keeps the initial dashboard payload small.
+    if (min < bounds.first) {
+        await loadOlderChartCandles(bounds.first - 1);
+    }
+
+    const refreshed = chartCandleBounds();
+    if (!refreshed) return;
+    min = Math.max(min, refreshed.first);
+    max = Math.min(max, refreshed.last);
+    if (max <= min) return;
+
+    chartHistoryActive = max < refreshed.last - Math.max(1000, span * 0.01) || min > refreshed.first;
+    chartViewport = { min, max };
+    updateChartLatestButton();
+    if (candleChart) candleChart.zoomX(min, max);
+    if (volumeChart) volumeChart.zoomX(min, max);
+}
+
+function goToLatestChart() {
+    // Return to live mode and request a fresh lightweight market payload so the
+    // newest candle is current even after the user spent time browsing history.
+    resetChartHistoryNavigation();
+    void refreshDashboardForSelection();
+}
+
+function bindChartNavigation() {
+    if (chartNavigationBound) return;
+    const host = el('candlestick-chart');
+    if (!host) return;
+    chartNavigationBound = true;
+
+    host.addEventListener('pointerdown', event => {
+        if (event.button !== 0) return;
+        const bounds = chartCandleBounds();
+        if (!bounds) return;
+        const min = Number.isFinite(chartViewport.min) ? chartViewport.min : bounds.first;
+        const max = Number.isFinite(chartViewport.max) ? chartViewport.max : bounds.last;
+        chartDragState = { pointerId: event.pointerId, startX: event.clientX, min, max, moved: false };
+        host.setPointerCapture?.(event.pointerId);
+    });
+
+    host.addEventListener('pointermove', event => {
+        if (!chartDragState || chartDragState.pointerId !== event.pointerId) return;
+        const dx = event.clientX - chartDragState.startX;
+        if (Math.abs(dx) < 4) return;
+        chartDragState.moved = true;
+        host.classList.add('is-panning');
+        event.preventDefault();
+    });
+
+    const finishDrag = async event => {
+        if (!chartDragState || chartDragState.pointerId !== event.pointerId) return;
+        const state = chartDragState;
+        chartDragState = null;
+        host.classList.remove('is-panning');
+        try { host.releasePointerCapture?.(event.pointerId); } catch (_) {}
+        if (!state.moved) return;
+        const width = Math.max(1, host.getBoundingClientRect().width);
+        const dx = event.clientX - state.startX;
+        const span = state.max - state.min;
+        // Dragging the candles to the right reveals older history, matching
+        // Binance/TradingView-style chart navigation.
+        const shift = -(dx / width) * span;
+        await applyChartViewport(state.min + shift, state.max + shift);
+    };
+    host.addEventListener('pointerup', finishDrag);
+    host.addEventListener('pointercancel', finishDrag);
+
+    host.addEventListener('wheel', async event => {
+        if (!candleChart || !chartLoadedCandles.length) return;
+        event.preventDefault();
+        const bounds = chartCandleBounds();
+        const min = Number.isFinite(chartViewport.min) ? chartViewport.min : bounds.first;
+        const max = Number.isFinite(chartViewport.max) ? chartViewport.max : bounds.last;
+        const span = max - min;
+        const rect = host.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
+        const anchor = min + span * ratio;
+        const factor = event.deltaY < 0 ? 0.80 : 1.25;
+        const minSpan = 5 * 60 * 1000;
+        const maxSpan = Math.max(minSpan, bounds.last - bounds.first);
+        const nextSpan = Math.max(minSpan, Math.min(maxSpan, span * factor));
+        const nextMin = anchor - nextSpan * ratio;
+        const nextMax = anchor + nextSpan * (1 - ratio);
+        await applyChartViewport(nextMin, nextMax);
+    }, { passive: false });
+
+    const latestButton = el('chart-go-latest');
+    if (latestButton) latestButton.addEventListener('click', goToLatestChart);
+}
+
+function renderCharts(candles, executions = [], options = {}) {
+    const { force = false, preserveViewport = false } = options;
+    // While the user is inspecting history, periodic dashboard refreshes must
+    // not snap the chart back to the newest candles.
+    if (chartHistoryActive && !force) return;
+
+    chartLoadedCandles = mergeChartCandles(force ? chartLoadedCandles : [], candles || []);
+    if (!force) chartLoadedExecutions = executions || [];
+    const renderCandlesList = chartLoadedCandles;
+    const renderExecutions = force ? chartLoadedExecutions : (executions || []);
+
+    const candleSeries = renderCandlesList.map(c => ({
         x: window.CryptoTime.parseUtc(c.time),
         y: [Number(c.open), Number(c.high), Number(c.low), Number(c.close)],
         openTime: c.openTime ?? c.time,
         closeTime: c.closeTime,
         open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close)
     }));
-    const volumeSeries = candles.map(c => ({ x: window.CryptoTime.parseUtc(c.time), y: Number(c.volume) }));
-    latestWalletExecutions = new Map((executions || []).map(execution => [String(execution.id), execution]));
-    const annotations = (executions || []).map(execution => {
+    const volumeSeries = renderCandlesList.map(c => ({ x: window.CryptoTime.parseUtc(c.time), y: Number(c.volume) }));
+    latestWalletExecutions = new Map((renderExecutions || []).map(execution => [String(execution.id), execution]));
+    const annotations = (renderExecutions || []).map(execution => {
         const isBuy = String(execution.side || '').toUpperCase() === 'BUY';
         return {
             x: window.CryptoTime.parseUtc(execution.executedAt)?.getTime(),
@@ -960,6 +1157,8 @@ function renderCharts(candles, executions = []) {
         }
     }] : [];
     if (candleSeries.length) updateFixedCandleSummary(candleSeries.at(-1));
+    const bounds = chartCandleBounds();
+    if (bounds && (!preserveViewport || !Number.isFinite(chartViewport.min))) chartViewport = { min: bounds.first, max: bounds.last };
     const candleEvents = {
         mouseMove: (_event, _chart, config) => {
             const index = config?.dataPointIndex;
@@ -968,19 +1167,32 @@ function renderCharts(candles, executions = []) {
         dataPointSelection: (_event, _chart, config) => {
             const index = config?.dataPointIndex;
             if (Number.isInteger(index) && index >= 0 && candleSeries[index]) updateFixedCandleSummary(candleSeries[index]);
+        },
+        zoomed: (_chart, axes) => {
+            if (Number.isFinite(axes?.xaxis?.min) && Number.isFinite(axes?.xaxis?.max)) {
+                chartViewport = { min: axes.xaxis.min, max: axes.xaxis.max };
+            }
         }
     };
     const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime', labels: { datetimeUTC: false }, tooltip: { enabled: true, formatter: value => { const d = new Date(Number(value)); return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(); } } }, noData: { text: 'Waiting for closed candles' } };
     if (!candleChart) {
         candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390, events: candleEvents }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations }, tooltip: { shared:false, followCursor:false, fixed:{enabled:true,position:'topRight',offsetX:-12,offsetY:12}, custom: ({ seriesIndex, dataPointIndex, w }) => candleTooltipHtml(w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex]) }, yaxis: { tooltip: { enabled: true }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
-        candleChart.render().then(() => { bindExecutionMarkerClicks(); bindDebugTradeDotTitles(); });
+        candleChart.render().then(() => { bindExecutionMarkerClicks(); bindDebugTradeDotTitles(); bindChartNavigation(); });
         volumeChart = new ApexCharts(el('volume-chart'), { ...common, chart: { ...common.chart, type: 'bar', height: 150 }, series: [{ name: 'Volume', data: volumeSeries }], dataLabels: { enabled: false }, yaxis: { labels: { formatter: v => Number(v).toLocaleString(undefined, { notation: 'compact' }) } } });
         volumeChart.render();
     } else {
         candleChart.updateSeries([{ name: 'Price', data: candleSeries }], false);
-        candleChart.updateOptions({ chart: { events: candleEvents }, annotations: { points: annotations, xaxis: debugZoneAnnotations } }, false, true, false).then(() => { bindExecutionMarkerClicks(); bindDebugTradeDotTitles(); });
+        candleChart.updateOptions({ chart: { events: candleEvents }, annotations: { points: annotations, xaxis: debugZoneAnnotations } }, false, true, false).then(async () => {
+            bindExecutionMarkerClicks();
+            bindDebugTradeDotTitles();
+            if (preserveViewport && Number.isFinite(chartViewport.min) && Number.isFinite(chartViewport.max)) {
+                candleChart.zoomX(chartViewport.min, chartViewport.max);
+                if (volumeChart) volumeChart.zoomX(chartViewport.min, chartViewport.max);
+            }
+        });
         volumeChart.updateSeries([{ name: 'Volume', data: volumeSeries }], false);
     }
+    updateChartLatestButton();
 }
 
 function bindDebugTradeDotTitles() {

@@ -189,6 +189,37 @@ public class DashboardApiController {
         return response;
     }
 
+    /**
+     * Older candles for Binance-style click/drag dashboard navigation.
+     * This endpoint is read-only and is intentionally separate from analysis,
+     * signal generation and execution. The browser asks for another page only
+     * when the user pans past the oldest candle already loaded.
+     */
+    @GetMapping("/chart-history")
+    @Transactional(readOnly = true)
+    public Map<String, Object> chartHistory(
+            @RequestParam(defaultValue = "BTCUSDT") String symbol,
+            @RequestParam(defaultValue = "1m") String interval,
+            @RequestParam Instant before,
+            @RequestParam(defaultValue = "180") int limit
+    ) {
+        String normalizedSymbol = symbol.trim().toUpperCase();
+        String normalizedInterval = interval.trim().toLowerCase();
+        int safeLimit = Math.max(30, Math.min(limit, 500));
+
+        List<Candle> candles = isDisplayOnlyInterval(normalizedInterval)
+                ? loadAggregatedCandlesAtOrBefore(normalizedSymbol, normalizedInterval, before, safeLimit)
+                : loadClosedCandlesAtOrBefore(normalizedSymbol, normalizedInterval, before, safeLimit);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("symbol", normalizedSymbol);
+        response.put("interval", normalizedInterval);
+        response.put("before", before);
+        response.put("count", candles.size());
+        response.put("candles", candles.stream().map(this::candleDto).toList());
+        return response;
+    }
+
     @GetMapping("/overview")
     @Transactional(readOnly = true)
     public Map<String, Object> overview(
@@ -408,6 +439,75 @@ public class DashboardApiController {
                 .filter(Candle::isClosed)
                 .limit(500)
                 .toList();
+    }
+
+    private List<Candle> loadClosedCandlesAtOrBefore(
+            String symbol,
+            String interval,
+            Instant before,
+            int limit
+    ) {
+        List<Candle> candles = candleRepository.findClosedCandlesAtOrBefore(
+                symbol, interval, before, PageRequest.of(0, limit));
+        Collections.reverse(candles);
+        return candles;
+    }
+
+    private List<Candle> loadAggregatedCandlesAtOrBefore(
+            String symbol,
+            String interval,
+            Instant before,
+            int targetBuckets
+    ) {
+        int bucketHours = "4h".equals(interval) ? 4 : 24;
+        int sourceLimit = targetBuckets * bucketHours + bucketHours;
+        List<Candle> oneHourCandles = candleRepository.findClosedCandlesAtOrBefore(
+                symbol, "1h", before, PageRequest.of(0, sourceLimit));
+        Collections.reverse(oneHourCandles);
+        if (oneHourCandles.isEmpty()) return List.of();
+
+        long bucketMillis = Duration.ofHours(bucketHours).toMillis();
+        Map<Long, List<Candle>> grouped = new LinkedHashMap<>();
+        for (Candle candle : oneHourCandles) {
+            long bucketStart = Math.floorDiv(candle.getOpenTime().toEpochMilli(), bucketMillis) * bucketMillis;
+            grouped.computeIfAbsent(bucketStart, ignored -> new ArrayList<>()).add(candle);
+        }
+
+        List<Candle> result = new ArrayList<>();
+        for (Map.Entry<Long, List<Candle>> entry : grouped.entrySet()) {
+            List<Candle> bucket = entry.getValue();
+            if (bucket.size() != bucketHours) continue;
+            bucket.sort(java.util.Comparator.comparing(Candle::getOpenTime));
+            Candle first = bucket.get(0);
+            Candle last = bucket.get(bucket.size() - 1);
+            BigDecimal high = bucket.stream().map(Candle::getHighPrice).max(BigDecimal::compareTo).orElse(first.getHighPrice());
+            BigDecimal low = bucket.stream().map(Candle::getLowPrice).min(BigDecimal::compareTo).orElse(first.getLowPrice());
+            BigDecimal volume = bucket.stream().map(Candle::getVolume).filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal quoteVolume = bucket.stream().map(Candle::getQuoteAssetVolume).filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+            long trades = bucket.stream().map(Candle::getNumberOfTrades).filter(java.util.Objects::nonNull).mapToLong(Long::longValue).sum();
+            BigDecimal takerBase = bucket.stream().map(Candle::getTakerBuyBaseVolume).filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal takerQuote = bucket.stream().map(Candle::getTakerBuyQuoteVolume).filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            result.add(Candle.builder()
+                    .symbol(symbol)
+                    .intervalCode(interval)
+                    .openTime(Instant.ofEpochMilli(entry.getKey()))
+                    .closeTime(last.getCloseTime())
+                    .openPrice(first.getOpenPrice())
+                    .highPrice(high)
+                    .lowPrice(low)
+                    .closePrice(last.getClosePrice())
+                    .volume(volume)
+                    .quoteAssetVolume(quoteVolume)
+                    .numberOfTrades(trades)
+                    .takerBuyBaseVolume(takerBase)
+                    .takerBuyQuoteVolume(takerQuote)
+                    .closed(true)
+                    .build());
+        }
+        return result.size() <= targetBuckets
+                ? List.copyOf(result)
+                : List.copyOf(result.subList(result.size() - targetBuckets, result.size()));
     }
 
     private List<Candle> loadAggregatedCandles(String symbol, String interval, int targetBuckets) {

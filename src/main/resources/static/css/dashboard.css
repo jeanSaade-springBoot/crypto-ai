@@ -2796,3 +2796,10 @@ body.position-modal-open{overflow:hidden}
 .signal-evidence-controls select{min-width:135px;padding:8px 10px;border-radius:8px}
 .signal-evidence-controls #signal-evidence-status{align-self:center;white-space:nowrap}
 @media(max-width:760px){.signal-evidence-heading{align-items:flex-start}.signal-evidence-controls{justify-content:flex-start;width:100%}}
+
+/* Binance-style dashboard chart navigation. UI only. */
+.chart-navigation-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+#chart-go-latest { padding:6px 10px; font-size:12px; }
+#candlestick-chart { cursor:grab; touch-action:none; user-select:none; }
+#candlestick-chart.is-panning { cursor:grabbing; }
+@media (max-width: 760px) { .chart-navigation-actions { width:100%; justify-content:space-between; } }
