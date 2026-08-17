@@ -20,5 +20,5 @@
 @media(max-width:900px){.inspector-card-head{align-items:flex-start;flex-direction:column}.inspector-head-actions{width:100%;justify-content:space-between}.trade-chart-link{order:2}.inspector-result{text-align:left}.inspector-card-body{grid-template-columns:1fr}.inspector-block{border-right:0;border-bottom:1px solid var(--border)}.inspector-block:last-child{border-bottom:0}}
 
 /* Dedicated inspected-trade chart mirrors the Proven Analyzed Trades focused chart. */
-.inspector-chart-panel{padding-top:16px}.inspector-chart-controls{display:flex;align-items:end;gap:10px}.inspector-chart-controls label{display:grid;gap:5px;color:var(--muted);font-size:11px}.inspector-chart-controls select{min-width:120px}.inspected-trade-chart{min-height:420px}.trade-chart-link{font:inherit;cursor:pointer}
+.inspector-chart-panel{padding-top:16px}.inspector-chart-controls{display:flex;align-items:end;gap:10px}.inspector-chart-controls label{display:grid;gap:5px;color:var(--muted);font-size:11px}.inspector-chart-controls select{min-width:120px}.inspected-trade-chart{min-height:460px;width:100%}.trade-chart-link{font:inherit;cursor:pointer}
 @media(max-width:760px){.inspector-chart-panel .section-heading{align-items:flex-start;gap:12px}.inspector-chart-controls{width:100%}.inspector-chart-controls label,.inspector-chart-controls select{width:100%}}

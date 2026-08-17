@@ -74,6 +74,50 @@
             behavior: "Proven Analyzed Trades no longer carries independent trading formulas for the corrected areas. Production and replay share scoring/final decision, normal and pressure-probe entry intelligence, BUY/SELL MTF validation, position continuation/exit authority, Dynamic Profit Lock math, wallet allocation/budget/reserve math and progressive-add allocation semantics. Replay writes only to test tables.",
             regression: "Added direct tests for the shared ProfitLockPolicy and WalletExecutionSizingPolicy and updated DynamicProfitLockServiceTest to instantiate the shared policy. Existing ExecutionIntelligence/PressureReadiness tests continue to exercise the same production services. Jenkins/Maven must run the complete suite after deployment packaging."
         }
+        ,{
+            id: "FIX-004",
+            status: "IMPLEMENTED",
+            title: "Delayed higher-timeframe candle price caused false 4-second STOP_LOSS",
+            scenario: "ALLOUSDT wallet trades #164/#165 · position analysis #622",
+            symbol: "ALLOUSDT",
+            entry: "BUY 0.282200000000 · ACCUMULATED_EVIDENCE · 25%",
+            exit: "False SELL 0.280600000000 · POSITION_STOP_LOSS · -0.566974%",
+            entryTime: "2026-08-17 18:23:26.470 UTC (21:23:26 KSA)",
+            exitTime: "2026-08-17 18:23:30.320 UTC (21:23:30 KSA)",
+            location: "Position price authority between delayed TradeSignal context and mechanical TP/SL/profit-lock protection",
+            classes: [
+                "com.crypto.position.service.PositionPriceAuthorityPolicy",
+                "com.crypto.position.service.PositionManagementService",
+                "com.crypto.service.PaperTradingService",
+                "com.crypto.regression.service.ShadowProductionReplayService",
+                "com.crypto.position.service.LivePositionProtectionService",
+                "com.crypto.position.service.PositionPriceAuthorityPolicyTest"
+            ],
+            cause: "ALLOUSDT was legitimately bought at 0.2822. Two seconds later trade_signal #81252 was generated for the older 5m candle opened at 18:15 and closed at 18:19:59. That candle close was 0.2806. PositionManagementService treated signal.latestPrice as if it were the current market price, compared 0.2806 with the immutable stop 0.280789 and created STOP_LOSS analysis #622. WalletAutoExecutionService then sold at the same historical 0.2806 even though the actual 18:23 1m candle low was 0.2819 and ALLO subsequently traded higher. The defect was temporal price authority, not the stop calculation itself.",
+            solution: "Introduce PositionPriceAuthorityPolicy as the single production/replay rule for whether a TradeSignal price may drive mechanical protection. It derives the signal's actual market observation time from candle_open_time + interval and forbids TP/SL/profit-lock use when that market observation predates the position open time. Delayed signals remain valid for trend/MTF/thesis context. PositionManagementService and PaperTradingService apply the guard before all signal-price mechanical protection. ShadowProductionReplayService applies the exact same policy so replay cannot retroactively stop a position using a pre-entry candle. LivePositionProtectionService remains the authoritative production mechanical-protection path because it consumes the current live Binance price.",
+            behavior: "A delayed 5m/1h signal can still change thesis comparison, MTF state and validated SELL context, but its historical latestPrice cannot manufacture a P/L, TP, SL or profit-lock event for a position that did not exist when that candle price was observed. For ALLO #164, #81252 at 0.2806 is context-only for mechanical price protection, so it cannot generate the false four-second STOP_LOSS.",
+            regression: "PositionPriceAuthorityPolicyTest reproduces the exact ALLO timing: 5m candle 18:15 + 5m = 18:20 observation, position opened 18:23:26, therefore 0.2806 is rejected for mechanical protection. A 1m candle whose close occurs after entry is accepted for historical replay. Proven uses this same production policy rather than a copied replay rule. Jenkins/Maven must run the full suite."
+        },{
+            id: "FIX-005",
+            status: "IMPLEMENTED",
+            title: "Trade Inspector 14-day context and precise crosshair labels",
+            scenario: "Trade Inspector historical BUY → SELL chart usability",
+            symbol: "ALL",
+            entry: "7 days of historical context before BUY",
+            exit: "7 days of historical context after SELL",
+            entryTime: "UI chart context",
+            exitTime: "UI chart context",
+            location: "Trade Inspector historical chart rendering",
+            classes: [
+                "src/main/resources/static/js/trade-inspector.js",
+                "src/main/resources/static/trade-inspector.html",
+                "src/main/resources/static/css/trade-inspector.css"
+            ],
+            cause: "The inspected-trade chart only loaded one day before/after the trade, defaulted to 5m for the entire context, and used generic axis/tooltip formatting. On sparse historical data a literal datetime axis also makes missing bars appear as large visual gaps; fabricating candles to hide those gaps would make the historical chart incorrect.",
+            solution: "Expand the requested chart range to seven days before BUY and seven days after SELL, default the wide overview to 1h while keeping 1m/5m/4h selectable, enable x-axis zoom with automatic y scaling, and add crosshair/tooltip formatters that show date/time to the minute and price with asset-sensitive precision. Preserve true datetime spacing so missing market data remains visible rather than inventing candles.",
+            behavior: "Trade Inspector opens with a readable 14-day 1h overview. Users can switch to 5m or 1m and zoom into the entry/exit. Hovering shows the corresponding time to the minute on the x-axis and exact price on the y-axis, including sufficient precision for low-price assets such as SHIB/PEPE.",
+            regression: "Static JavaScript syntax validation passes. No production trading, replay, signal scoring, execution, or persistence logic is changed by this UI-only fix."
+        }
 
     ];
 

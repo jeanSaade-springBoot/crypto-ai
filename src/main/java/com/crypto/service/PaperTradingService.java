@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.crypto.position.service.PositionManagementService;
 import com.crypto.position.service.DynamicProfitLockService;
+import com.crypto.position.service.PositionPriceAuthorityPolicy;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -41,6 +42,7 @@ public class PaperTradingService {
     private final TradeExecutionValidationService executionValidationService;
     private final ExecutionIntelligenceService executionIntelligenceService;
     private final DynamicProfitLockService dynamicProfitLockService;
+    private final PositionPriceAuthorityPolicy priceAuthorityPolicy;
 
     /** Advisory-only; optional injection preserves existing constructor-based tests. */
     @Autowired(required = false)
@@ -89,17 +91,26 @@ public class PaperTradingService {
             PaperPosition position = openPosition.get();
             BigDecimal price = signal.getLatestPrice();
 
-            if (price.compareTo(position.getTakeProfit()) >= 0) {
+            // Never treat a delayed timeframe candle close as the current mark price.
+            // Context from that signal is still processed below, but TP/SL/profit-lock
+            // mechanics require a post-entry market observation. Live production protection
+            // is independently driven by LivePositionProtectionService.onPrice(...).
+            boolean authoritativePrice = priceAuthorityPolicy.canUseSignalPrice(signal, position.getOpenedAt());
+            DynamicProfitLockService.Evaluation profitLock = authoritativePrice
+                    ? dynamicProfitLockService.evaluate(signal)
+                    : DynamicProfitLockService.Evaluation.inactive(
+                            "Signal price predates the open position and is context-only for mechanical protection.");
+
+            if (authoritativePrice && price.compareTo(position.getTakeProfit()) >= 0) {
                 return Optional.of(closeFromSignal(position, signal, PositionStatus.CLOSED,
                         "TAKE_PROFIT", "Price reached the configured take-profit target."));
             }
 
-            DynamicProfitLockService.Evaluation profitLock = dynamicProfitLockService.evaluate(signal);
-            if (profitLock.triggered()) {
+            if (authoritativePrice && profitLock.triggered()) {
                 return Optional.of(closeFromProfitLock(position, signal, profitLock));
             }
 
-            if (price.compareTo(position.getStopLoss()) <= 0) {
+            if (authoritativePrice && price.compareTo(position.getStopLoss()) <= 0) {
                 return Optional.of(closeFromSignal(position, signal, PositionStatus.STOPPED,
                         "STOP_LOSS", "Price reached the configured stop loss."));
             }

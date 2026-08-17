@@ -117,8 +117,12 @@ async function loadInspectedTradeChart(){
   if(!t)return;
   const opened=window.CryptoTime.parseUtc(t.openedAt),closed=window.CryptoTime.parseUtc(t.closedAt);
   if(!opened||!closed||Number.isNaN(opened.getTime())||Number.isNaN(closed.getTime()))return;
-  const interval=$('inspected-trade-interval')?.value||'5m';
-  const from=new Date(opened.getTime()-24*60*60*1000),to=new Date(closed.getTime()+24*60*60*1000);
+  const interval=$('inspected-trade-interval')?.value||'1h';
+  // Trade Inspector intentionally loads a wide context window: seven complete days
+  // before BUY and seven complete days after SELL. The 1h default keeps the 14-day
+  // overview readable; users can still switch to 5m/1m and zoom into the trade.
+  const contextMs=7*24*60*60*1000;
+  const from=new Date(opened.getTime()-contextMs),to=new Date(closed.getTime()+contextMs);
   const params=new URLSearchParams({symbol:String(t.symbol||'').toUpperCase(),interval,from:from.toISOString(),to:to.toISOString()});
   const r=await fetch(`/api/trade-inspector/chart?${params.toString()}`,{cache:'no-store'});
   if(!r.ok)throw new Error(`Chart HTTP ${r.status}`);
@@ -132,16 +136,42 @@ async function loadInspectedTradeChart(){
   empty?.classList.add('hidden');
   const pnl=Number(t.realizedPnlPercent??0);
   const path=[{x:opened.getTime(),y:Number(t.entryPrice)},{x:closed.getTime(),y:Number(t.exitPrice)}];
+  const priceLabel=value=>{
+    const n=Number(value);if(!Number.isFinite(n))return '';
+    // Keep enough precision for both normal-price assets (ALLO/BNB) and tiny-price assets (SHIB/PEPE).
+    const abs=Math.abs(n),digits=abs>0&&abs<0.0001?12:abs<0.01?8:abs<1?6:4;
+    return n.toFixed(digits).replace(/(?:\.0+|(?<=\.[0-9]*?)0+)$/,'');
+  };
+  const minuteLabel=value=>{
+    const d=new Date(Number(value));
+    return Number.isNaN(d.getTime())?'':d.toLocaleString(undefined,{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
+  };
   const options={
-    chart:{type:'line',height:420,background:'transparent',foreColor:'#8da2b1',toolbar:{show:true},animations:{enabled:false},zoom:{enabled:true}},
+    chart:{type:'line',height:460,background:'transparent',foreColor:'#8da2b1',toolbar:{show:true,autoSelected:'zoom'},animations:{enabled:false},zoom:{enabled:true,type:'x',autoScaleYaxis:true}},
     title:{text:`${String(t.symbol||'').toUpperCase()} · ${interval} · Trade ${t.tradeHistoryId==null?'':`#${t.tradeHistoryId}`} · ${pnl>=0?'+':''}${pnl.toFixed(3)}%`,align:'left',style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'}},
     series:[{name:'Price',type:'candlestick',data:candles},{name:`Trade Path · ${pnl>=0?'+':''}${pnl.toFixed(3)}%`,type:'line',data:path}],
-    stroke:{width:[1,3],curve:'straight'},markers:{size:[0,3]},dataLabels:{enabled:false},
-    xaxis:{type:'datetime',labels:{datetimeUTC:false},tooltip:{enabled:true,formatter:value=>{const d=new Date(Number(value));return Number.isNaN(d.getTime())?'':d.toLocaleString();}}},
-    yaxis:{tooltip:{enabled:true},decimalsInFloat:4},grid:{borderColor:'#203342'},theme:{mode:'dark'},
-    plotOptions:{candlestick:{colors:{upward:'#39d98a',downward:'#ff6b72'}}},
+    stroke:{width:[1,2],curve:'straight'},markers:{size:[0,3]},dataLabels:{enabled:false},
+    xaxis:{
+      type:'datetime',
+      min:from.getTime(),max:to.getTime(),tickAmount:12,
+      labels:{datetimeUTC:false,hideOverlappingLabels:true,formatter:(value,timestamp)=>minuteLabel(timestamp??value)},
+      axisTicks:{show:true},crosshairs:{show:true,position:'front',stroke:{width:1,dashArray:3}},
+      tooltip:{enabled:true,formatter:value=>minuteLabel(value)}
+    },
+    yaxis:{
+      forceNiceScale:true,
+      labels:{formatter:value=>priceLabel(value)},
+      tooltip:{enabled:true},
+      crosshairs:{show:true,position:'front',stroke:{width:1,dashArray:3}}
+    },
+    grid:{borderColor:'#203342',xaxis:{lines:{show:false}}},theme:{mode:'dark'},
+    plotOptions:{candlestick:{colors:{upward:'#39d98a',downward:'#ff6b72'},wick:{useFillColor:true}}},
     annotations:{points:[inspectorPoint(t.openedAt,t.entryPrice,'BUY'),inspectorPoint(t.closedAt,t.exitPrice,'SELL')]},
-    tooltip:{shared:false}
+    tooltip:{
+      shared:false,followCursor:true,
+      x:{formatter:value=>minuteLabel(value)},
+      y:{formatter:value=>priceLabel(value)}
+    }
   };
   if(inspectedTradeChart)inspectedTradeChart.destroy();
   inspectedTradeChart=new ApexCharts($('inspected-trade-chart'),options);

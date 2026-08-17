@@ -8,6 +8,7 @@ import com.crypto.execution.service.ExecutionReplayScope;
 import com.crypto.position.service.PositionContinuationPolicy;
 import com.crypto.position.service.PositionExitPolicy;
 import com.crypto.position.service.ProfitLockPolicy;
+import com.crypto.position.service.PositionPriceAuthorityPolicy;
 import com.crypto.service.TradeExecutionValidationService;
 import com.crypto.wallet.domain.WalletSettings;
 import com.crypto.wallet.repository.WalletSettingsRepository;
@@ -41,6 +42,7 @@ public class ShadowProductionReplayService {
     private final TradeExecutionValidationService executionValidationService;
     private final WalletSettingsRepository walletSettingsRepository;
     private final WalletExecutionSizingPolicy executionSizingPolicy;
+    private final PositionPriceAuthorityPolicy priceAuthorityPolicy;
 
     public ReplayStats replay(long runId, String symbol, Instant executionStart, Instant executionEnd, List<TradeSignal> generatedSignals) {
         List<TradeSignal> timeline = generatedSignals.stream()
@@ -184,7 +186,12 @@ public class ShadowProductionReplayService {
     private ExitDecision evaluateExit(long runId, ShadowPosition p, TradeSignal s, TradeSignal oneMinute, TradeSignal five, TradeSignal one) {
         BigDecimal price = s.getLatestPrice();
         if (price == null) return ExitDecision.hold();
-        if (p.takeProfit() != null && price.compareTo(p.takeProfit()) >= 0) {
+
+        // Replay uses the exact same temporal price-authority rule as production. A signal
+        // generated later may still carry a candle close from before entry; that historical
+        // price may update MTF context but may not retroactively hit TP/SL/profit-lock.
+        boolean authoritativePrice = priceAuthorityPolicy.canUseSignalPrice(s, p.entryTime());
+        if (authoritativePrice && p.takeProfit() != null && price.compareTo(p.takeProfit()) >= 0) {
             PositionContinuationPolicy.Evaluation continuation = continuationPolicy.evaluate(
                     oneMinute != null ? oneMinute : s, five, one, p.entryTrend(), p.entryMomentum(), p.entryVolume());
             if (continuation.extendTarget()) {
@@ -197,9 +204,9 @@ public class ShadowProductionReplayService {
             persistManagement(runId, s, "TAKE_PROFIT_EXIT", p.takeProfit(), p.takeProfit(), p, continuation.explanation());
             return new ExitDecision(true, "TAKE_PROFIT", continuation.explanation());
         }
-        ShadowPosition updated = profitLockState(p, price);
+        ShadowPosition updated = authoritativePrice ? profitLockState(p, price) : p;
         BigDecimal minimumProfitableExit = p.entryPrice().multiply(BigDecimal.valueOf(1.0005));
-        if (updated.profitLockActive() && updated.profitLockPrice() != null
+        if (authoritativePrice && updated.profitLockActive() && updated.profitLockPrice() != null
                 && price.compareTo(updated.profitLockPrice()) <= 0) {
             if (price.compareTo(minimumProfitableExit) < 0) {
                 String floorReason = "Profit-lock hard floor was breached; protected profit can no longer be preserved. "
@@ -219,7 +226,7 @@ public class ShadowProductionReplayService {
             persistManagement(runId, s, "PROFIT_LOCK_EXIT", p.takeProfit(), p.takeProfit(), updated, lockReason);
             return new ExitDecision(true, lockDecision.code(), lockReason);
         }
-        if (p.stopLoss() != null && price.compareTo(p.stopLoss()) <= 0)
+        if (authoritativePrice && p.stopLoss() != null && price.compareTo(p.stopLoss()) <= 0)
             return new ExitDecision(true, "STOP_LOSS", "Price reached the stored stop loss.");
 
         // Production has two SELL authorities: the live HTF PositionExitPolicy and the
@@ -240,7 +247,7 @@ public class ShadowProductionReplayService {
     }
 
     private ShadowPosition updateProfitLock(ShadowPosition p, TradeSignal s) {
-        if (s.getLatestPrice() == null) return p;
+        if (s.getLatestPrice() == null || !priceAuthorityPolicy.canUseSignalPrice(s, p.entryTime())) return p;
         ShadowPosition n = profitLockState(p, s.getLatestPrice());
         if (!equalsNullable(p.highest(), n.highest()) || p.profitLockActive() != n.profitLockActive()
                 || !equalsNullable(p.profitLockPrice(), n.profitLockPrice())) {

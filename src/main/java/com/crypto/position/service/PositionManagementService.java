@@ -41,6 +41,7 @@ public class PositionManagementService {
     private final PositionAnalysisRepository analysisRepository;
     private final ObjectMapper objectMapper;
     private final WalletAutoExecutionService walletAutoExecutionService;
+    private final PositionPriceAuthorityPolicy priceAuthorityPolicy;
 
     @Transactional
     public Optional<PositionAnalysis> analyze(TradeSignal signal) {
@@ -63,13 +64,22 @@ public class PositionManagementService {
         long holdingMinutes = Math.max(0,
                 Duration.between(position.getOpenedAt(), Instant.now()).toMinutes());
 
-        PositionRecommendation hardRecommendation = hardRiskRecommendation(position, price);
+        // A TradeSignal price can belong to a candle that closed BEFORE this position opened.
+        // ALLOUSDT incident 2026-08-17: a delayed 5m signal carried 0.2806 from the
+        // 18:15-18:19 candle and falsely stopped a position opened at 18:23 @ 0.2822.
+        // Such signals are still valid thesis/MTF context, but they are forbidden from
+        // driving price-based hard protection. Live TP/SL is handled by
+        // LivePositionProtectionService from the actual live Binance price stream.
+        boolean authoritativePrice = priceAuthorityPolicy.canUseSignalPrice(signal, position.getOpenedAt());
+        PositionRecommendation hardRecommendation = authoritativePrice
+                ? hardRiskRecommendation(position, price)
+                : null;
 
         ThesisComparison thesis = compareThesis(position, signal);
         int trendDeterioration = thesis.trendPressure();
         int momentumExhaustion = thesis.momentumPressure();
         int profitProtection = profitProtection(pnlPercent, thesis);
-        int riskEvents = stopRiskPressure(position, price);
+        int riskEvents = authoritativePrice ? stopRiskPressure(position, price) : 0;
         int opportunityCost = 0; // intentionally excluded from v1
         int exitScore = Math.min(25, trendDeterioration + momentumExhaustion
                 + profitProtection + riskEvents);

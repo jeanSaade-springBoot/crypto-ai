@@ -27,3 +27,10 @@ Production `LivePositionProtectionService` sees intra-candle live price updates.
 2. Removed shadow-only `INITIAL_CAPITAL * position%` spend formula and centralized production reserve/budget/allocation sizing in `WalletExecutionSizingPolicy`.
 3. Added the shared production `TradeExecutionValidationService.validateSell(...)` path to replay in addition to the shared HTF `PositionExitPolicy`.
 4. Added unit coverage for the new shared policies and updated Dynamic Profit Lock tests.
+
+
+## FIX-004 — Temporal price authority for position protection
+
+Production and Proven now share `PositionPriceAuthorityPolicy`. A delayed signal can carry a valid historical candle close while being generated after a new position opens. That signal remains valid as analysis/MTF context, but its price cannot drive TP, SL, profit-lock or replay mark-to-market when the candle observation time (`candleOpenTime + interval`) predates the position open time.
+
+This specifically protects the ALLOUSDT 2026-08-17 incident where a 5m signal generated at 18:23:28 carried the 18:15-18:19 candle close 0.2806 and falsely stopped a position opened at 18:23:26 @ 0.2822. Production live mechanical protection continues to use `LivePositionProtectionService.onPrice(...)`. Replay uses the identical temporal authority policy before historical signal prices can trigger mechanical exits.
