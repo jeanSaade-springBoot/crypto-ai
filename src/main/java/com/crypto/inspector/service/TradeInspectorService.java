@@ -216,6 +216,38 @@ public class TradeInspectorService {
         return new TradeInspectorSummary(trades.size(), wins, losses, winRate, net, avg, avgWin, avgLoss, profitFactor);
     }
 
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> chart(String requestedSymbol, String requestedInterval, Instant from, Instant to) {
+        String symbol = normalizeSymbol(requestedSymbol);
+        String interval = normalizeChartInterval(requestedInterval);
+        if (symbol == null || from == null || to == null || !to.isAfter(from)) {
+            throw new IllegalArgumentException("Symbol and a valid chart window are required.");
+        }
+        // Same historical source used by the Proven Analyzed chart: real closed market candles only.
+        List<Candle> candles = candleRepository.findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(
+                symbol, interval, from, to).stream().filter(Candle::isClosed).toList();
+        List<Map<String, Object>> rows = candles.stream().map(c -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("openTime", c.getOpenTime());
+            row.put("openPrice", c.getOpenPrice());
+            row.put("highPrice", c.getHighPrice());
+            row.put("lowPrice", c.getLowPrice());
+            row.put("closePrice", c.getClosePrice());
+            row.put("volume", c.getVolume());
+            return row;
+        }).toList();
+        return Map.of("symbol", symbol, "interval", interval, "candles", rows);
+    }
+
+    private String normalizeChartInterval(String interval) {
+        String value = interval == null ? "5m" : interval.trim().toLowerCase(Locale.ROOT);
+        return switch (value) {
+            case "1m", "5m", "1h", "4h" -> value;
+            default -> "5m";
+        };
+    }
+
     private BigDecimal percentChange(BigDecimal from, BigDecimal to) {
         if (from == null || to == null || from.signum() == 0) return null;
         return to.subtract(from).multiply(HUNDRED).divide(from, 8, RoundingMode.HALF_UP);

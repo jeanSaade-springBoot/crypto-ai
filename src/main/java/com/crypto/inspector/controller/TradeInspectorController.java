@@ -7,6 +7,9 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 
+import java.time.Instant;
+import java.util.Map;
+
 @Controller
 public class TradeInspectorController {
 
@@ -28,4 +31,14 @@ public class TradeInspectorController {
             @RequestParam(required = false, defaultValue = "20") int limit) {
         return service.inspect(symbol, limit);
     }
+    @GetMapping("/api/trade-inspector/chart")
+    @ResponseBody
+    public Map<String, Object> chart(
+            @RequestParam String symbol,
+            @RequestParam(required = false, defaultValue = "5m") String interval,
+            @RequestParam Instant from,
+            @RequestParam Instant to) {
+        return service.chart(symbol, interval, from, to);
+    }
+
 }
