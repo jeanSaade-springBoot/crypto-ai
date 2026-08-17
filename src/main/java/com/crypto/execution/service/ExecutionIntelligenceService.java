@@ -94,6 +94,19 @@ public class ExecutionIntelligenceService {
     private static final int EXCEPTIONAL_PROBE_BTC_SELL_PERCENT = 15;
     private static final int EXCEPTIONAL_PROBE_BTC_STRONG_SELL_PERCENT = 10;
 
+    // Pressure-readiness early path. This is deliberately separate from the normal
+    // 1m/5m/1h BUY engine: normal valid BUY routes always keep priority. The pressure
+    // path may open only a small probe when a recent candle-level bullish release is
+    // followed by higher-timeframe recovery. It never changes signal scores, strategy
+    // thresholds, FinalDecision authority, ATR rules, or normal MTF confirmation.
+    // Historical evidence: SHIBUSDT 2026-08-17 ~12:55-13:05 UTC (15:55-16:05 KSA).
+    private static final Duration PRESSURE_RECENT_BEARISH_5M_LOOKBACK = Duration.ofMinutes(20);
+    private static final int PRESSURE_PROBE_MIN_1M_SCORE = 60;
+    private static final int PRESSURE_PROBE_MIN_1M_CONFIDENCE = 60;
+    private static final int PRESSURE_PROBE_POSITION_PERCENT = 15;
+    private static final int PRESSURE_PROBE_MIN_BEARISH_1H_SCORE = 30;
+    private static final int PRESSURE_PROBE_MIN_BEARISH_1H_MOMENTUM = 10;
+
     // Reversal retracement entry. ATR remains authoritative: an overextended BUY is
     // still not chased. Instead, a high-quality BUY may stay actionable for a short
     // window and execute only if price returns close to ATR's own retracement level
@@ -192,6 +205,7 @@ public class ExecutionIntelligenceService {
     private final OpportunityConsolidationService consolidationService;
     private final TradeSignalRepository signalRepository;
     private final ExecutionOpportunityRepository opportunityRepository;
+    private final PressureReadinessService pressureReadinessService;
     @Autowired(required = false)
     private ExecutionReplayScope replayScope;
 
@@ -424,6 +438,21 @@ public class ExecutionIntelligenceService {
             }
         }
 
+        // EARLY-ENTRY PATH (separate from the normal BUY path).
+        // It is reached only after every existing normal/special initial-entry route above
+        // had the opportunity to act. A valid normal BUY therefore always keeps priority.
+        // The pressure service reads closed candles as-of this signal timestamp; replay calls
+        // this exact production method and therefore exercises the exact same logic.
+        ExecutionDecision pressureProbe = pressureProbeDecision(signal, evidence);
+        if (pressureProbe != null) {
+            pressureProbe = applyInitialEntryQualityGuard(pressureProbe, entryQuality);
+            saveOpportunity(signal, evidence,
+                    pressureProbe.allowed() ? "CONFIRMED" : pressureProbe.state(),
+                    pressureProbe.source(), pressureProbe.positionPercent(),
+                    pressureProbe.code(), pressureProbe.explanation());
+            return pressureProbe;
+        }
+
         // Intelligent evidence path: BUY and strong WATCH observations can build one opportunity.
         ExecutionDecision accumulated = applyInitialEntryQualityGuard(
                 accumulatedDecision(signal, evidence), entryQuality);
@@ -440,6 +469,7 @@ public class ExecutionIntelligenceService {
         currentOpportunity(signal.getSymbol(), List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
                 .ifPresent(opportunity -> {
                     boolean stillBuilding = "SCOUT_ENTRY".equals(decision.source())
+                            || "PRESSURE_PROBE_ENTRY".equals(decision.source())
                             || "CONFIRMATION_ADD".equals(decision.source());
                     opportunity.setStatus(stillBuilding ? "BUILDING" : "EXECUTED");
                     opportunity.setExecutionSource(decision.source());
@@ -1137,6 +1167,74 @@ public class ExecutionIntelligenceService {
         java.math.BigDecimal reward = signal.getTakeProfit().subtract(signal.getLatestPrice());
         if (risk.signum() <= 0 || reward.signum() <= 0) return 0d;
         return reward.divide(risk, 8, java.math.RoundingMode.HALF_UP).doubleValue();
+    }
+
+    /**
+     * Small, auditable early probe for a recent candle-level bullish release while MTF
+     * context is RECOVERING. This method never promotes or modifies the TradeSignal.
+     *
+     * Routing rules:
+     *  - current 1m must be WATCH/NEUTRAL/BUY, never SELL/STRONG_SELL;
+     *  - the exact production PressureReadinessService must have seen a recent bullish release;
+     *  - fresh 5m must no longer be bearish and must either be WATCH/BUY or have recovered
+     *    from a bearish 5m state inside the last 20 minutes;
+     *  - 1h STRONG_SELL blocks. A 1h SELL is allowed only as a small counter-trend probe
+     *    when its score/momentum show it is not a collapsing higher timeframe;
+     *  - hard risk, FinalDecision and ATR gates have already passed before this method runs.
+     */
+    private ExecutionDecision pressureProbeDecision(TradeSignal current, Evidence e) {
+        if (current == null || current.getGeneratedAt() == null) return null;
+        // Preserve the established decision-authority fix: final decision is authoritative;
+        // originalDecision is audit context and must not re-veto a corrected final decision.
+        if (isBearish(current.getDecision())) return null;
+        // If the current signal already qualifies for the normal direct BUY route, the
+        // pressure path is not allowed to become a fallback around normal validation.
+        if (isDirectBuyCandidate(current)) return null;
+        if (current.getDecision() != SignalDecision.WATCH
+                && current.getDecision() != SignalDecision.NEUTRAL
+                && !isBullish(current.getDecision())) return null;
+        if (current.getTotalScore() < PRESSURE_PROBE_MIN_1M_SCORE
+                || current.getConfidenceScore() < PRESSURE_PROBE_MIN_1M_CONFIDENCE) return null;
+
+        PressureReadinessService.Result pressure = pressureReadinessService.evaluate(current);
+        if (pressure == null || !pressure.recentBullishRelease()) return null;
+
+        TradeSignal five = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
+        TradeSignal oneHour = latestAtOrBefore(current, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
+        if (five == null || oneHour == null) return null;
+
+        SignalDecision fiveDecision = strongerDecision(five.getDecision(), five.getOriginalDecision());
+        SignalDecision oneHourDecision = strongerDecision(oneHour.getDecision(), oneHour.getOriginalDecision());
+        if (isBearish(fiveDecision)) return null;
+        if (oneHourDecision == SignalDecision.STRONG_SELL) return null;
+
+        boolean fiveAlreadySupportive = fiveDecision == SignalDecision.WATCH || isBullish(fiveDecision);
+        Instant fiveCutoff = current.getGeneratedAt().minus(PRESSURE_RECENT_BEARISH_5M_LOOKBACK);
+        boolean fiveRecoveredFromBearish = recentSignals(current.getSymbol(), CONFIRMATION_INTERVAL, current.getGeneratedAt()).stream()
+                .filter(s -> s != null && s.getGeneratedAt() != null)
+                .filter(s -> !s.getGeneratedAt().isAfter(current.getGeneratedAt())
+                        && !s.getGeneratedAt().isBefore(fiveCutoff))
+                .anyMatch(s -> isBearish(strongerDecision(s.getDecision(), s.getOriginalDecision())));
+        if (!fiveAlreadySupportive && !fiveRecoveredFromBearish) return null;
+
+        if (oneHourDecision == SignalDecision.SELL) {
+            if (oneHour.getTotalScore() < PRESSURE_PROBE_MIN_BEARISH_1H_SCORE
+                    || oneHour.getMomentumScore() < PRESSURE_PROBE_MIN_BEARISH_1H_MOMENTUM) return null;
+        }
+
+        return ExecutionDecision.allow(
+                "PRESSURE_PROBE_ENTRY",
+                "BULLISH_RELEASE_MTF_RECOVERY_PROBE",
+                PRESSURE_PROBE_POSITION_PERCENT,
+                "Early pressure probe approved without changing the normal BUY engine. "
+                        + pressure.explanation()
+                        + " Current 1m=" + current.getDecision() + " " + current.getTotalScore()
+                        + ", 5m=" + fiveDecision + " " + five.getTotalScore()
+                        + (fiveRecoveredFromBearish ? " (recent bearish 5m recovered)" : "")
+                        + ", 1h=" + oneHourDecision + " " + oneHour.getTotalScore()
+                        + ". Initial exposure is capped at " + PRESSURE_PROBE_POSITION_PERCENT
+                        + "% until the existing progressive/normal confirmation path adds later.",
+                e);
     }
 
     private ExecutionDecision accumulatedDecision(TradeSignal current, Evidence e) {

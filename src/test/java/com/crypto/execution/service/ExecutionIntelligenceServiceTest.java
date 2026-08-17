@@ -33,6 +33,7 @@ class ExecutionIntelligenceServiceTest {
     @Mock OpportunityConsolidationService consolidationService;
     @Mock TradeSignalRepository signalRepository;
     @Mock ExecutionOpportunityRepository opportunityRepository;
+    @Mock PressureReadinessService pressureReadinessService;
 
     private ExecutionIntelligenceService service;
     private Instant now;
@@ -40,7 +41,7 @@ class ExecutionIntelligenceServiceTest {
     @BeforeEach
     void setUp() {
         service = new ExecutionIntelligenceService(properties, validationService, consolidationService,
-                signalRepository, opportunityRepository);
+                signalRepository, opportunityRepository, pressureReadinessService);
         now = Instant.parse("2026-08-08T10:00:00Z");
         when(opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(any(), any(), any()))
                 .thenReturn(Optional.empty());
@@ -1062,6 +1063,104 @@ class ExecutionIntelligenceServiceTest {
         assertThat(decision.allowed()).isTrue();
         assertThat(decision.code()).isEqualTo("BALANCED_EARLY_POST_BEARISH_RECOVERED");
         assertThat(decision.positionPercent()).isEqualTo(25);
+    }
+
+
+    @Test
+    void pressureProbeUsesProductionEarlyPathOnlyAfterFiveMinuteRecovery() {
+        TradeSignal current = signal(1100L, "SHIBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 66, 66);
+        current.setCandleOpenTime(now.minusSeconds(60));
+        current.setMomentumScore(14);
+        current.setTrendScore(18);
+        current.setVolumeScore(7);
+        current.setAtrAtSignal(BigDecimal.ONE);
+
+        TradeSignal fiveNeutral = signal(1101L, "SHIBUSDT", "5m", SignalDecision.NEUTRAL, SignalDecision.NEUTRAL,
+                now.minusSeconds(300), 58, 74);
+        TradeSignal fiveStrongSell = signal(1102L, "SHIBUSDT", "5m", SignalDecision.STRONG_SELL, SignalDecision.STRONG_SELL,
+                now.minusSeconds(900), 24, 80);
+        TradeSignal oneHourSell = signal(1103L, "SHIBUSDT", "1h", SignalDecision.SELL, SignalDecision.SELL,
+                now.minusSeconds(1800), 31, 68);
+        oneHourSell.setMomentumScore(11);
+        oneHourSell.setTrendScore(4);
+
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SHIBUSDT", "1m"))
+                .thenReturn(List.of(current));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SHIBUSDT", "5m"))
+                .thenReturn(List.of(fiveNeutral, fiveStrongSell));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "SHIBUSDT", "5m", now)).thenReturn(Optional.of(fiveNeutral));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "SHIBUSDT", "1h", now)).thenReturn(Optional.of(oneHourSell));
+        when(pressureReadinessService.evaluate(current)).thenReturn(new PressureReadinessService.Result(
+                PressureReadinessService.State.SELL_ABSORPTION, true, now.minusSeconds(480),
+                0.0767d, 3.03d, -0.002242d, new BigDecimal("595"), new BigDecimal("590"),
+                "Pressure state=SELL_ABSORPTION, recent bullish release at prior bucket."));
+
+        // Keep the established normal BUY route below its direct threshold; the pressure
+        // path is therefore the only new path eligible to act.
+        when(properties.minimumBuyScore()).thenReturn(75);
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.source()).isEqualTo("PRESSURE_PROBE_ENTRY");
+        assertThat(decision.code()).isEqualTo("BULLISH_RELEASE_MTF_RECOVERY_PROBE");
+        assertThat(decision.positionPercent()).isEqualTo(15);
+        assertThat(decision.explanation()).contains("recent bearish 5m recovered");
+    }
+
+    @Test
+    void pressureProbeCannotBypassStillBearishFiveMinuteContext() {
+        TradeSignal current = signal(1110L, "SHIBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 66, 66);
+        current.setCandleOpenTime(now.minusSeconds(60));
+        current.setAtrAtSignal(BigDecimal.ONE);
+
+        TradeSignal fiveSell = signal(1111L, "SHIBUSDT", "5m", SignalDecision.SELL, SignalDecision.SELL,
+                now.minusSeconds(300), 40, 74);
+        TradeSignal oneHourSell = signal(1112L, "SHIBUSDT", "1h", SignalDecision.SELL, SignalDecision.SELL,
+                now.minusSeconds(1800), 31, 68);
+        oneHourSell.setMomentumScore(11);
+
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SHIBUSDT", "1m"))
+                .thenReturn(List.of(current));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "SHIBUSDT", "5m", now)).thenReturn(Optional.of(fiveSell));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "SHIBUSDT", "1h", now)).thenReturn(Optional.of(oneHourSell));
+        when(pressureReadinessService.evaluate(current)).thenReturn(new PressureReadinessService.Result(
+                PressureReadinessService.State.BULLISH_RELEASE, true, now.minusSeconds(300),
+                0.90d, 4.0d, 0.002d, null, null, "recent bullish release"));
+        when(properties.minimumBuyScore()).thenReturn(75);
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.source()).isNotEqualTo("PRESSURE_PROBE_ENTRY");
+        assertThat(decision.allowed()).isFalse();
+    }
+
+
+    @Test
+    void normalDirectBuyKeepsPriorityOverPressureProbePath() {
+        TradeSignal current = signal(1120L, "SHIBUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 82, 78);
+        current.setCandleOpenTime(now.minusSeconds(60));
+        current.setAtrAtSignal(BigDecimal.ONE);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SHIBUSDT", "1m"))
+                .thenReturn(List.of(current));
+        context("SHIBUSDT", "5m", SignalDecision.WATCH, now.minusSeconds(60));
+        context("SHIBUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));
+        when(properties.minimumBuyScore()).thenReturn(75);
+        when(validationService.validateBuy(current)).thenReturn(
+                TradeExecutionValidationService.ValidationResult.allow(60, "NORMAL_BUY", "normal path approved"));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.source()).isEqualTo("IMMEDIATE_VALIDATION");
+        assertThat(decision.code()).isEqualTo("NORMAL_BUY");
     }
 
 }
