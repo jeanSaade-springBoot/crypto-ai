@@ -1067,80 +1067,132 @@ class ExecutionIntelligenceServiceTest {
 
 
     @Test
-    void pressureProbeUsesProductionEarlyPathOnlyAfterFiveMinuteRecovery() {
-        TradeSignal current = signal(1100L, "SHIBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
-                now, 66, 66);
-        current.setCandleOpenTime(now.minusSeconds(60));
+    void solPressureProbeCanTakeSmallPositionDuringRetestEvenWhileNormalMtfRemainsBearish() {
+        TradeSignal current = signal(1100L, "SOLUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 69, 71);
+        current.setCandleOpenTime(now.minusSeconds(120));
+        current.setTrendScore(13);
+        current.setVolumeScore(16);
         current.setMomentumScore(14);
-        current.setTrendScore(18);
-        current.setVolumeScore(7);
         current.setAtrAtSignal(BigDecimal.ONE);
 
-        TradeSignal fiveNeutral = signal(1101L, "SHIBUSDT", "5m", SignalDecision.NEUTRAL, SignalDecision.NEUTRAL,
-                now.minusSeconds(300), 58, 74);
-        TradeSignal fiveStrongSell = signal(1102L, "SHIBUSDT", "5m", SignalDecision.STRONG_SELL, SignalDecision.STRONG_SELL,
-                now.minusSeconds(900), 24, 80);
-        TradeSignal oneHourSell = signal(1103L, "SHIBUSDT", "1h", SignalDecision.SELL, SignalDecision.SELL,
-                now.minusSeconds(1800), 31, 68);
-        oneHourSell.setMomentumScore(11);
-        oneHourSell.setTrendScore(4);
+        // Latest 5m is the rejection/retest SELL, but a recent 5m BREAKOUT/WATCH already
+        // proved the first bullish attempt. The pressure service must independently prove
+        // that the subsequent retest held and pressure rebuilt before this route can act.
+        TradeSignal latestFiveSell = signal(1101L, "SOLUSDT", "5m", SignalDecision.SELL, SignalDecision.SELL,
+                now.minusSeconds(360), 32, 79);
+        latestFiveSell.setTrendScore(4);
+        latestFiveSell.setVolumeScore(4);
+        latestFiveSell.setMomentumScore(12);
 
-        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SHIBUSDT", "1m"))
+        TradeSignal priorFiveSetup = signal(1102L, "SOLUSDT", "5m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(1080), 70, 75);
+        priorFiveSetup.setSelectedStrategy(TradingStrategy.BREAKOUT);
+        priorFiveSetup.setTrendScore(11);
+        priorFiveSetup.setVolumeScore(16);
+        priorFiveSetup.setMomentumScore(15);
+
+        TradeSignal oneHourStrongSell = signal(1103L, "SOLUSDT", "1h", SignalDecision.STRONG_SELL, SignalDecision.STRONG_SELL,
+                now.minusSeconds(3300), 9, 68);
+        oneHourStrongSell.setTrendScore(1);
+        oneHourStrongSell.setVolumeScore(2);
+        oneHourStrongSell.setMomentumScore(1);
+
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SOLUSDT", "1m"))
                 .thenReturn(List.of(current));
-        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SHIBUSDT", "5m"))
-                .thenReturn(List.of(fiveNeutral, fiveStrongSell));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SOLUSDT", "5m"))
+                .thenReturn(List.of(latestFiveSell, priorFiveSetup));
         when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
-                "SHIBUSDT", "5m", now)).thenReturn(Optional.of(fiveNeutral));
+                "SOLUSDT", "5m", now)).thenReturn(Optional.of(latestFiveSell));
         when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
-                "SHIBUSDT", "1h", now)).thenReturn(Optional.of(oneHourSell));
-        when(pressureReadinessService.evaluate(current)).thenReturn(new PressureReadinessService.Result(
-                PressureReadinessService.State.SELL_ABSORPTION, true, now.minusSeconds(480),
-                0.0767d, 3.03d, -0.002242d, new BigDecimal("595"), new BigDecimal("590"),
-                "Pressure state=SELL_ABSORPTION, recent bullish release at prior bucket."));
-
-        // Keep the established normal BUY route below its direct threshold; the pressure
-        // path is therefore the only new path eligible to act.
+                "SOLUSDT", "1h", now)).thenReturn(Optional.of(oneHourStrongSell));
+        when(pressureReadinessService.evaluate(current)).thenReturn(readyPressureResult());
         when(properties.minimumBuyScore()).thenReturn(75);
 
         var decision = service.evaluateBuy(current);
 
         assertThat(decision.allowed()).isTrue();
         assertThat(decision.source()).isEqualTo("PRESSURE_PROBE_ENTRY");
-        assertThat(decision.code()).isEqualTo("BULLISH_RELEASE_MTF_RECOVERY_PROBE");
+        assertThat(decision.code()).isEqualTo("ABSORPTION_RETEST_REBUILD_PROBE");
         assertThat(decision.positionPercent()).isEqualTo(15);
-        assertThat(decision.explanation()).contains("recent bearish 5m recovered");
+        assertThat(decision.explanation()).contains("normal BUY path").contains("1h=STRONG_SELL 9");
     }
 
     @Test
-    void pressureProbeCannotBypassStillBearishFiveMinuteContext() {
-        TradeSignal current = signal(1110L, "SHIBUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
-                now, 66, 66);
-        current.setCandleOpenTime(now.minusSeconds(60));
+    void pressureProbeDoesNotBuyFirstBurstBeforeRetestAndRebuildAreProven() {
+        TradeSignal current = signal(1110L, "SOLUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 74, 71);
+        current.setCandleOpenTime(now.minusSeconds(120));
+        current.setTrendScore(12);
+        current.setVolumeScore(20);
+        current.setMomentumScore(15);
         current.setAtrAtSignal(BigDecimal.ONE);
 
-        TradeSignal fiveSell = signal(1111L, "SHIBUSDT", "5m", SignalDecision.SELL, SignalDecision.SELL,
-                now.minusSeconds(300), 40, 74);
-        TradeSignal oneHourSell = signal(1112L, "SHIBUSDT", "1h", SignalDecision.SELL, SignalDecision.SELL,
-                now.minusSeconds(1800), 31, 68);
-        oneHourSell.setMomentumScore(11);
+        TradeSignal fiveSetup = signal(1111L, "SOLUSDT", "5m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(120), 70, 75);
+        fiveSetup.setSelectedStrategy(TradingStrategy.BREAKOUT);
+        fiveSetup.setVolumeScore(16);
+        fiveSetup.setMomentumScore(15);
+        TradeSignal oneHour = signal(1112L, "SOLUSDT", "1h", SignalDecision.STRONG_SELL, SignalDecision.STRONG_SELL,
+                now.minusSeconds(1800), 9, 68);
 
-        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SHIBUSDT", "1m"))
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SOLUSDT", "1m"))
                 .thenReturn(List.of(current));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SOLUSDT", "5m"))
+                .thenReturn(List.of(fiveSetup));
         when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
-                "SHIBUSDT", "5m", now)).thenReturn(Optional.of(fiveSell));
+                "SOLUSDT", "5m", now)).thenReturn(Optional.of(fiveSetup));
         when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
-                "SHIBUSDT", "1h", now)).thenReturn(Optional.of(oneHourSell));
+                "SOLUSDT", "1h", now)).thenReturn(Optional.of(oneHour));
         when(pressureReadinessService.evaluate(current)).thenReturn(new PressureReadinessService.Result(
-                PressureReadinessService.State.BULLISH_RELEASE, true, now.minusSeconds(300),
-                0.90d, 4.0d, 0.002d, null, null, "recent bullish release"));
+                PressureReadinessService.State.NORMAL, false, now.minusSeconds(60), null, null,
+                0.80d, 3.0d, 0.002d, new BigDecimal("74.43"), null,
+                new BigDecimal("74.75"), 0, 0, "Initial burst only; retest/rebuild not complete."));
         when(properties.minimumBuyScore()).thenReturn(75);
 
         var decision = service.evaluateBuy(current);
 
         assertThat(decision.source()).isNotEqualTo("PRESSURE_PROBE_ENTRY");
-        assertThat(decision.allowed()).isFalse();
     }
 
+    @Test
+    void pressureProbeRequiresRecentFiveMinuteBreakoutSetupAndCannotInventOneFromCandlesAlone() {
+        TradeSignal current = signal(1115L, "SOLUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 69, 71);
+        current.setTrendScore(13);
+        current.setVolumeScore(16);
+        current.setMomentumScore(14);
+        current.setAtrAtSignal(BigDecimal.ONE);
+        TradeSignal fiveSell = signal(1116L, "SOLUSDT", "5m", SignalDecision.SELL, SignalDecision.SELL,
+                now.minusSeconds(300), 32, 79);
+        TradeSignal oneHour = signal(1117L, "SOLUSDT", "1h", SignalDecision.STRONG_SELL, SignalDecision.STRONG_SELL,
+                now.minusSeconds(1800), 9, 68);
+
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SOLUSDT", "1m"))
+                .thenReturn(List.of(current));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SOLUSDT", "5m"))
+                .thenReturn(List.of(fiveSell));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "SOLUSDT", "5m", now)).thenReturn(Optional.of(fiveSell));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "SOLUSDT", "1h", now)).thenReturn(Optional.of(oneHour));
+        when(pressureReadinessService.evaluate(current)).thenReturn(readyPressureResult());
+        when(properties.minimumBuyScore()).thenReturn(75);
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.source()).isNotEqualTo("PRESSURE_PROBE_ENTRY");
+    }
+
+    private PressureReadinessService.Result readyPressureResult() {
+        return new PressureReadinessService.Result(
+                PressureReadinessService.State.PROBE_READY, true,
+                now.minusSeconds(1020), now.minusSeconds(480), now.minusSeconds(120),
+                0.80d, 2.8d, 0.0024d,
+                new BigDecimal("74.43"), new BigDecimal("74.54"), new BigDecimal("74.75"),
+                5, 3,
+                "Pressure probe ready: burst rejected, higher-low retest held, buyer pressure rebuilt.");
+    }
 
     @Test
     void normalDirectBuyKeepsPriorityOverPressureProbePath() {

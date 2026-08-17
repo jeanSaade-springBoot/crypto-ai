@@ -26,7 +26,7 @@
         },
         {
             id: "FIX-002",
-            status: "IMPLEMENTED",
+            status: "REFINED BY FIX-006",
             title: "Early pressure/release entry path without changing normal 1m/5m/1h BUY confirmation",
             scenario: "SHIBUSDT early-move investigation before trade #166",
             symbol: "SHIBUSDT",
@@ -117,6 +117,28 @@
             solution: "Expand the requested chart range to seven days before BUY and seven days after SELL, default the wide overview to 1h while keeping 1m/5m/4h selectable, enable x-axis zoom with automatic y scaling, and add crosshair/tooltip formatters that show date/time to the minute and price with asset-sensitive precision. Preserve true datetime spacing so missing market data remains visible rather than inventing candles.",
             behavior: "Trade Inspector opens with a readable 14-day 1h overview. Users can switch to 5m or 1m and zoom into the entry/exit. Hovering shows the corresponding time to the minute on the x-axis and exact price on the y-axis, including sufficient precision for low-price assets such as SHIB/PEPE.",
             regression: "Static JavaScript syntax validation passes. No production trading, replay, signal scoring, execution, or persistence logic is changed by this UI-only fix."
+        },{
+            id: "FIX-006",
+            status: "IMPLEMENTED",
+            title: "Sequence-based pressure probe catches an early reversal without weakening the normal BUY path",
+            scenario: "SOLUSDT missed early reversal on 2026-08-17 before later wallet trade signal #80012",
+            symbol: "SOLUSDT",
+            entry: "Expected exploratory probe near 74.62-74.71 around the 00:58-01:00 UTC evaluation window; later production BUY was 75.63 via signal #80012",
+            exit: "No historical probe exit is hard-coded. Probe positions remain managed by the existing production position/exit engine and progressive confirmation path.",
+            entryTime: "Analyzed early-entry window: 2026-08-17 ~00:58-01:00 UTC (03:58-04:00 KSA); actual later production entry: 14:14:06 UTC (17:14:06 KSA)",
+            exitTime: "Not applicable to the missed historical probe; no synthetic exit is introduced by this fix",
+            location: "Execution Intelligence pressure-probe side path + closed-candle pressure readiness; normal 1m/5m/1h BUY path remains unchanged",
+            classes: [
+                "com.crypto.execution.service.PressureReadinessService",
+                "com.crypto.execution.service.ExecutionIntelligenceService",
+                "com.crypto.regression.service.ShadowProductionReplayService",
+                "com.crypto.execution.service.PressureReadinessServiceTest",
+                "com.crypto.execution.service.ExecutionIntelligenceServiceTest"
+            ],
+            cause: "The existing signal engine did see the developing SOL reversal, but the early path could not act safely. A first 5m BREAKOUT/WATCH attempt around 00:48 UTC was rejected, then selling pushed price back without making a new structural low, buyers rebuilt from the higher-low retest, and the 1m returned to WATCH 69 with trend 13, volume 16 and momentum 14. The prior pressure-probe implementation required 5m to have already recovered and blocked 1h STRONG_SELL, so it could not represent this controlled counter-trend discovery phase. Waiting for normal higher-timeframe confirmation surrendered the early-entry advantage.",
+            solution: "Keep every normal BUY/MTF/ATR/scoring rule untouched and replace only the pressure-probe detector with a sequence requirement: meaningful bullish burst, rejection with real sell pressure, retest that holds above the pre-burst structural low, repeated bullish pressure rebuild, and price reclaim. Execution remains restricted to current WATCH/NEUTRAL 1m signals with minimum production trend/volume/momentum quality, requires a recent 5m WATCH/BUY BREAKOUT setup, refuses a fresh 5m STRONG_SELL, keeps all existing FinalDecision/strategy/ATR/BTC/liquidity/derivatives gates, and caps exposure at 15%. A normal BUY is explicitly excluded from this route so the probe can never bypass normal validation.",
+            behavior: "The old normal BUY path still has priority and behaves exactly as before. A single high taker-buy candle or first breakout attempt does not buy. The SOL false/early burst is observed only; the probe becomes eligible only after rejection, higher-low retest and pressure rebuild are complete. A bearish 1h can coexist with the 15% exploratory probe, but it still blocks normal/full-size confirmation. Existing progressive confirmation can add later; existing position management exits failures.",
+            regression: "PressureReadinessServiceTest uses the real SOL 00:20-00:59 UTC candle sequence and proves the detector is NOT ready during the first burst but becomes ready after the higher-low retest/rebuild. It also verifies candle retrieval uses close_time <= generated_at to prevent replay look-ahead. ExecutionIntelligenceServiceTest proves the small SOL probe can coexist with a bearish 1h only when a prior 5m BREAKOUT setup exists, cannot invent that setup from candles alone, and that a valid normal direct BUY keeps priority. Proven/Regression continues to call the exact production ExecutionIntelligenceService.evaluateBuy(...) and PressureReadinessService; only persistence/wallet state is shadowed."
         }
 
     ];

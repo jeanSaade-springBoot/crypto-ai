@@ -119,8 +119,10 @@ public class ShadowProductionReplayService {
             int currentAllocation = open == null ? 0 : open.positionPercent();
             String currentStage = replayStage(currentAllocation);
             // IMPORTANT: Proven/Regression never re-implements pressure readiness or entry routing.
-            // This is the exact production evaluateBuy path, including PressureReadinessService; only
-            // wallet/opportunity persistence is shadowed by ExecutionReplayScope.
+            // This is the exact production evaluateBuy path, including the sequence-based
+            // PressureReadinessService. That service queries only candles with close_time <= the
+            // historical signal.generatedAt, so replay cannot borrow future candles. Only wallet/
+            // opportunity persistence is shadowed by ExecutionReplayScope.
             ExecutionIntelligenceService.ExecutionDecision decision =
                     executionIntelligenceService.evaluateBuy(signal, currentAllocation, currentStage);
             if (!inExecutionWindow) continue;

@@ -94,18 +94,27 @@ public class ExecutionIntelligenceService {
     private static final int EXCEPTIONAL_PROBE_BTC_SELL_PERCENT = 15;
     private static final int EXCEPTIONAL_PROBE_BTC_STRONG_SELL_PERCENT = 10;
 
-    // Pressure-readiness early path. This is deliberately separate from the normal
-    // 1m/5m/1h BUY engine: normal valid BUY routes always keep priority. The pressure
-    // path may open only a small probe when a recent candle-level bullish release is
-    // followed by higher-timeframe recovery. It never changes signal scores, strategy
-    // thresholds, FinalDecision authority, ATR rules, or normal MTF confirmation.
-    // Historical evidence: SHIBUSDT 2026-08-17 ~12:55-13:05 UTC (15:55-16:05 KSA).
-    private static final Duration PRESSURE_RECENT_BEARISH_5M_LOOKBACK = Duration.ofMinutes(20);
-    private static final int PRESSURE_PROBE_MIN_1M_SCORE = 60;
-    private static final int PRESSURE_PROBE_MIN_1M_CONFIDENCE = 60;
+    // Pressure-probe side path. NORMAL BUY/MTF logic remains authoritative and is
+    // evaluated first. This route exists only for WATCH/NEUTRAL 1m states after a
+    // completed candle-level sequence proves: bullish burst -> rejection -> higher-low
+    // retest -> pressure rebuild. It never rewrites a TradeSignal, never changes score
+    // thresholds, never upgrades a final decision, and never grants normal/full size.
+    //
+    // Regression anchors:
+    //  - SOLUSDT 2026-08-17 ~00:43-01:00 UTC: first burst rejected, retest held above
+    //    the 74.43 structural low, buyers rebuilt, then the normal 5m BUY arrived later.
+    //  - The earlier isolated 00:28 burst must NOT be enough by itself.
+    //  - Existing SHIB pressure-probe behavior remains covered by the same generic path.
+    private static final Duration PRESSURE_RECENT_5M_SETUP_LOOKBACK = Duration.ofMinutes(25);
+    private static final int PRESSURE_PROBE_MIN_1M_SCORE = 65;
+    private static final int PRESSURE_PROBE_MIN_1M_CONFIDENCE = 65;
+    private static final int PRESSURE_PROBE_MIN_1M_TREND = 12;
+    private static final int PRESSURE_PROBE_MIN_1M_VOLUME = 14;
+    private static final int PRESSURE_PROBE_MIN_1M_MOMENTUM = 12;
+    private static final int PRESSURE_PROBE_MIN_5M_SETUP_SCORE = 65;
+    private static final int PRESSURE_PROBE_MIN_5M_SETUP_VOLUME = 14;
+    private static final int PRESSURE_PROBE_MIN_5M_SETUP_MOMENTUM = 12;
     private static final int PRESSURE_PROBE_POSITION_PERCENT = 15;
-    private static final int PRESSURE_PROBE_MIN_BEARISH_1H_SCORE = 30;
-    private static final int PRESSURE_PROBE_MIN_BEARISH_1H_MOMENTUM = 10;
 
     // Reversal retracement entry. ATR remains authoritative: an overextended BUY is
     // still not chased. Instead, a high-quality BUY may stay actionable for a short
@@ -1170,70 +1179,94 @@ public class ExecutionIntelligenceService {
     }
 
     /**
-     * Small, auditable early probe for a recent candle-level bullish release while MTF
-     * context is RECOVERING. This method never promotes or modifies the TradeSignal.
+     * Small exploratory entry for a proven pressure-reversal sequence while normal MTF
+     * confirmation is still lagging. This is intentionally NOT a BUY-promotion method.
      *
-     * Routing rules:
-     *  - current 1m must be WATCH/NEUTRAL/BUY, never SELL/STRONG_SELL;
-     *  - the exact production PressureReadinessService must have seen a recent bullish release;
-     *  - fresh 5m must no longer be bearish and must either be WATCH/BUY or have recovered
-     *    from a bearish 5m state inside the last 20 minutes;
-     *  - 1h STRONG_SELL blocks. A 1h SELL is allowed only as a small counter-trend probe
-     *    when its score/momentum show it is not a collapsing higher timeframe;
-     *  - hard risk, FinalDecision and ATR gates have already passed before this method runs.
+     * <p>Normal direct BUY validation already ran before this method. Therefore a BUY
+     * that belongs to the existing normal path can never use PRESSURE_PROBE_ENTRY as a
+     * fallback around normal validation. The probe is restricted to WATCH/NEUTRAL.</p>
+     *
+     * <p>A bearish 1h label is allowed only because the exposure is capped at 15% and
+     * PressureReadinessService must prove a completed burst/rejection/higher-low/rebuild
+     * sequence using only candles closed as-of the current signal timestamp. This does
+     * not weaken the normal 1h veto for normal-sized trades.</p>
      */
     private ExecutionDecision pressureProbeDecision(TradeSignal current, Evidence e) {
         if (current == null || current.getGeneratedAt() == null) return null;
-        // Preserve the established decision-authority fix: final decision is authoritative;
-        // originalDecision is audit context and must not re-veto a corrected final decision.
-        if (isBearish(current.getDecision())) return null;
-        // If the current signal already qualifies for the normal direct BUY route, the
-        // pressure path is not allowed to become a fallback around normal validation.
-        if (isDirectBuyCandidate(current)) return null;
-        if (current.getDecision() != SignalDecision.WATCH
-                && current.getDecision() != SignalDecision.NEUTRAL
-                && !isBullish(current.getDecision())) return null;
+
+        // Preserve normal BUY authority. A bullish final decision belongs to the normal
+        // path and must never fall back to this probe if normal validation rejects it.
+        if (isBullish(current.getDecision()) || isBearish(current.getDecision())) return null;
+        if (current.getDecision() != SignalDecision.WATCH && current.getDecision() != SignalDecision.NEUTRAL) return null;
+
         if (current.getTotalScore() < PRESSURE_PROBE_MIN_1M_SCORE
-                || current.getConfidenceScore() < PRESSURE_PROBE_MIN_1M_CONFIDENCE) return null;
+                || current.getConfidenceScore() < PRESSURE_PROBE_MIN_1M_CONFIDENCE
+                || current.getTrendScore() < PRESSURE_PROBE_MIN_1M_TREND
+                || current.getVolumeScore() < PRESSURE_PROBE_MIN_1M_VOLUME
+                || current.getMomentumScore() < PRESSURE_PROBE_MIN_1M_MOMENTUM) return null;
+
+        // These are existing production safety authorities; the pressure path cannot
+        // manufacture permission when another context/risk layer already vetoed entry.
+        if (!current.isFinalEntryAllowed()
+                || !current.isStrategyEntryAllowed()
+                || !current.isAtrImmediateEntryAllowed()
+                || !current.isBtcContextEntryAllowed()
+                || !current.isLiquidityEntryAllowed()
+                || !current.isDerivativesEntryAllowed()) return null;
 
         PressureReadinessService.Result pressure = pressureReadinessService.evaluate(current);
-        if (pressure == null || !pressure.recentBullishRelease()) return null;
+        if (pressure == null || !pressure.probeReady()) return null;
 
-        TradeSignal five = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
+        TradeSignal latestFive = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
         TradeSignal oneHour = latestAtOrBefore(current, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
-        if (five == null || oneHour == null) return null;
+        if (latestFive == null || oneHour == null) return null;
 
-        SignalDecision fiveDecision = strongerDecision(five.getDecision(), five.getOriginalDecision());
+        SignalDecision latestFiveDecision = strongerDecision(latestFive.getDecision(), latestFive.getOriginalDecision());
         SignalDecision oneHourDecision = strongerDecision(oneHour.getDecision(), oneHour.getOriginalDecision());
-        if (isBearish(fiveDecision)) return null;
-        if (oneHourDecision == SignalDecision.STRONG_SELL) return null;
 
-        boolean fiveAlreadySupportive = fiveDecision == SignalDecision.WATCH || isBullish(fiveDecision);
-        Instant fiveCutoff = current.getGeneratedAt().minus(PRESSURE_RECENT_BEARISH_5M_LOOKBACK);
-        boolean fiveRecoveredFromBearish = recentSignals(current.getSymbol(), CONFIRMATION_INTERVAL, current.getGeneratedAt()).stream()
+        // A fresh 5m STRONG_SELL is too hostile even for a probe. A plain 5m SELL can
+        // represent the retest only when a recent 5m WATCH/BUY BREAKOUT already proved
+        // the first bullish attempt. This is the SOL sequence: setup -> retest -> rebuild.
+        if (latestFiveDecision == SignalDecision.STRONG_SELL) return null;
+
+        Instant setupCutoff = current.getGeneratedAt().minus(PRESSURE_RECENT_5M_SETUP_LOOKBACK);
+        TradeSignal recentFiveMinuteSetup = recentSignals(current.getSymbol(), CONFIRMATION_INTERVAL, current.getGeneratedAt()).stream()
                 .filter(s -> s != null && s.getGeneratedAt() != null)
                 .filter(s -> !s.getGeneratedAt().isAfter(current.getGeneratedAt())
-                        && !s.getGeneratedAt().isBefore(fiveCutoff))
-                .anyMatch(s -> isBearish(strongerDecision(s.getDecision(), s.getOriginalDecision())));
-        if (!fiveAlreadySupportive && !fiveRecoveredFromBearish) return null;
+                        && !s.getGeneratedAt().isBefore(setupCutoff))
+                .filter(s -> {
+                    SignalDecision d = strongerDecision(s.getDecision(), s.getOriginalDecision());
+                    return d == SignalDecision.WATCH || isBullish(d);
+                })
+                .filter(s -> s.getSelectedStrategy() == TradingStrategy.BREAKOUT)
+                .filter(s -> s.getTotalScore() >= PRESSURE_PROBE_MIN_5M_SETUP_SCORE)
+                .filter(s -> s.getVolumeScore() >= PRESSURE_PROBE_MIN_5M_SETUP_VOLUME)
+                .filter(s -> s.getMomentumScore() >= PRESSURE_PROBE_MIN_5M_SETUP_MOMENTUM)
+                .findFirst()
+                .orElse(null);
+        if (recentFiveMinuteSetup == null) return null;
 
-        if (oneHourDecision == SignalDecision.SELL) {
-            if (oneHour.getTotalScore() < PRESSURE_PROBE_MIN_BEARISH_1H_SCORE
-                    || oneHour.getMomentumScore() < PRESSURE_PROBE_MIN_BEARISH_1H_MOMENTUM) return null;
-        }
+        // The probe may coexist with a bearish 1h because it is explicitly counter-trend
+        // discovery risk, not normal confirmation. We still require a fresh 1h object so
+        // the conflict is known/auditable rather than silently treated as unavailable.
+        if (oneHourDecision == null) return null;
 
         return ExecutionDecision.allow(
                 "PRESSURE_PROBE_ENTRY",
-                "BULLISH_RELEASE_MTF_RECOVERY_PROBE",
+                "ABSORPTION_RETEST_REBUILD_PROBE",
                 PRESSURE_PROBE_POSITION_PERCENT,
-                "Early pressure probe approved without changing the normal BUY engine. "
+                "Small pressure probe approved without changing the normal BUY path. "
                         + pressure.explanation()
                         + " Current 1m=" + current.getDecision() + " " + current.getTotalScore()
-                        + ", 5m=" + fiveDecision + " " + five.getTotalScore()
-                        + (fiveRecoveredFromBearish ? " (recent bearish 5m recovered)" : "")
+                        + " (trend=" + current.getTrendScore() + ", volume=" + current.getVolumeScore()
+                        + ", momentum=" + current.getMomentumScore() + "), latest 5m="
+                        + latestFiveDecision + " " + latestFive.getTotalScore()
+                        + ", prior 5m setup #" + recentFiveMinuteSetup.getId() + "="
+                        + strongerDecision(recentFiveMinuteSetup.getDecision(), recentFiveMinuteSetup.getOriginalDecision())
+                        + " " + recentFiveMinuteSetup.getTotalScore() + " " + recentFiveMinuteSetup.getSelectedStrategy()
                         + ", 1h=" + oneHourDecision + " " + oneHour.getTotalScore()
-                        + ". Initial exposure is capped at " + PRESSURE_PROBE_POSITION_PERCENT
-                        + "% until the existing progressive/normal confirmation path adds later.",
+                        + ". Exposure is capped at " + PRESSURE_PROBE_POSITION_PERCENT
+                        + "% until the existing progressive/normal confirmation path adds or exits.",
                 e);
     }
 
