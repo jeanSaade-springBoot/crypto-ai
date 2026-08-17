@@ -46,7 +46,35 @@
             solution: "Add a read-only PressureReadinessService that aggregates the real closed 1m candles into 5m pressure buckets using weighted taker-buy volume, 30m high/low structure, abnormal volume and price response. ExecutionIntelligenceService may open only a 15% PRESSURE_PROBE_ENTRY when a recent BULLISH_RELEASE exists, the current final 1m decision is non-bearish with minimum quality, fresh 5m context is no longer bearish and has recovered from recent bearish context (or is already WATCH/BUY), 1h is not STRONG_SELL, and every existing hard-risk/ATR/risk-plan/entry-quality authority still passes. A current normal direct BUY is explicitly excluded from the pressure route, so normal validation keeps priority.",
             behavior: "The old normal BUY path is unchanged. Pressure building alone never buys. The new path is a small early-positioning exception only after a proven release plus MTF recovery. PRESSURE_PROBE_ENTRY remains a BUILDING opportunity so the existing progressive confirmation logic can add later; it does not duplicate full normal sizing. FinalDecision remains authoritative and originalDecision is audit-only, preserving the prior decision-authority fix.",
             regression: "Tests call the exact production PressureReadinessService thresholds rather than a copied test algorithm. PressureReadinessServiceTest reproduces the analyzed SHIB bullish-release -> sell-absorption sequence. ExecutionIntelligenceServiceTest proves the 15% probe requires 5m recovery, cannot bypass a still-bearish 5m, and that a valid normal direct BUY wins over the pressure route. Proven/Administration replay already invokes the same production ExecutionIntelligenceService.evaluateBuy(...) path, so the new service is exercised by the same production code with shadow wallet/opportunity persistence rather than a separate replay rule."
+        }        ,{
+            id: "FIX-003",
+            status: "IMPLEMENTED",
+            title: "Proven Analysis lifecycle parity with production",
+            scenario: "All Proven Analyzed Trades / regression reruns",
+            symbol: "ALL",
+            entry: "No scenario-specific entry; parity infrastructure fix",
+            exit: "No scenario-specific exit; parity infrastructure fix",
+            entryTime: "Applies to every historical replay timestamp",
+            exitTime: "Applies to every historical replay timestamp",
+            location: "Shared production policies used by live wallet/position lifecycle and ShadowProductionReplayService",
+            classes: [
+                "com.crypto.service.AnalysisService",
+                "com.crypto.execution.service.ExecutionIntelligenceService",
+                "com.crypto.service.TradeExecutionValidationService",
+                "com.crypto.position.service.PositionContinuationPolicy",
+                "com.crypto.position.service.PositionExitPolicy",
+                "com.crypto.position.service.ProfitLockPolicy",
+                "com.crypto.position.service.DynamicProfitLockService",
+                "com.crypto.wallet.service.WalletExecutionSizingPolicy",
+                "com.crypto.wallet.service.WalletAutoExecutionService",
+                "com.crypto.regression.service.ShadowProductionReplayService"
+            ],
+            cause: "A parity audit found that Proven already reused production AnalysisService.buildSignal, ExecutionIntelligenceService.evaluateBuy, PositionContinuationPolicy and PositionExitPolicy, but shadow replay still duplicated Dynamic Profit Lock progression, used its own 10,000 x position-percent wallet spend calculation, and did not also invoke the production TradeExecutionValidationService SELL path. Those copies could drift from live behavior even when signal decisions were identical.",
+            solution: "Centralize Dynamic Profit Lock progression in ProfitLockPolicy and wallet reserve/budget/allocation math in WalletExecutionSizingPolicy; call those same policies from both production and Proven. Proven also calls the same TradeExecutionValidationService.validateSell used by production signal exits. Analysis remains one shared buildSignal implementation; replay only swaps live market-context observations for historical/as-of observations to prevent future-data leakage. Shadow persistence remains isolated from production tables.",
+            behavior: "Proven Analyzed Trades no longer carries independent trading formulas for the corrected areas. Production and replay share scoring/final decision, normal and pressure-probe entry intelligence, BUY/SELL MTF validation, position continuation/exit authority, Dynamic Profit Lock math, wallet allocation/budget/reserve math and progressive-add allocation semantics. Replay writes only to test tables.",
+            regression: "Added direct tests for the shared ProfitLockPolicy and WalletExecutionSizingPolicy and updated DynamicProfitLockServiceTest to instantiate the shared policy. Existing ExecutionIntelligence/PressureReadiness tests continue to exercise the same production services. Jenkins/Maven must run the complete suite after deployment packaging."
         }
+
     ];
 
     const list = document.getElementById("fix-registry-list");

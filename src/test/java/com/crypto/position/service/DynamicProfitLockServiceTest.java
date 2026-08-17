@@ -29,7 +29,7 @@ class DynamicProfitLockServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new DynamicProfitLockService(positionRepository, settingsRepository);
+        service = new DynamicProfitLockService(positionRepository, settingsRepository, new ProfitLockPolicy());
         position = WalletManagedPosition.builder()
                 .id(1L)
                 .symbol("ETHUSDT")

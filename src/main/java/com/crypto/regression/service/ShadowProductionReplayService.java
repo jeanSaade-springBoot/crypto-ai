@@ -7,8 +7,11 @@ import com.crypto.execution.service.ExecutionIntelligenceService;
 import com.crypto.execution.service.ExecutionReplayScope;
 import com.crypto.position.service.PositionContinuationPolicy;
 import com.crypto.position.service.PositionExitPolicy;
+import com.crypto.position.service.ProfitLockPolicy;
+import com.crypto.service.TradeExecutionValidationService;
 import com.crypto.wallet.domain.WalletSettings;
 import com.crypto.wallet.repository.WalletSettingsRepository;
+import com.crypto.wallet.service.WalletExecutionSizingPolicy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -18,6 +21,8 @@ import java.math.MathContext;
 import java.math.RoundingMode;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.Comparator;
 import java.util.List;
 
@@ -32,7 +37,10 @@ public class ShadowProductionReplayService {
     private final ExecutionReplayScope replayScope;
     private final PositionContinuationPolicy continuationPolicy;
     private final PositionExitPolicy exitPolicy;
+    private final ProfitLockPolicy profitLockPolicy;
+    private final TradeExecutionValidationService executionValidationService;
     private final WalletSettingsRepository walletSettingsRepository;
+    private final WalletExecutionSizingPolicy executionSizingPolicy;
 
     public ReplayStats replay(long runId, String symbol, Instant executionStart, Instant executionEnd, List<TradeSignal> generatedSignals) {
         List<TradeSignal> timeline = generatedSignals.stream()
@@ -48,6 +56,12 @@ public class ShadowProductionReplayService {
         BigDecimal cash = INITIAL_CAPITAL;
         BigDecimal realized = BigDecimal.ZERO;
         int trades = 0, wins = 0, losses = 0;
+        WalletSettings replayWalletSettings = walletSettings();
+        BigDecimal replayDailyBudget = executionSizingPolicy.initialDailyBudget(
+                cash, replayWalletSettings.getMinimumUsdtReserve(),
+                replayWalletSettings.getBaseTradeAmountUsdt(), replayWalletSettings.getMaximumDailyNewPositions());
+        LocalDate replayTradeDate = null;
+        int replayExecutedNewPositions = 0;
 
         try (ExecutionReplayScope.Scope ignored = replayScope.open(runId, timeline,
                 opportunity -> {
@@ -92,6 +106,14 @@ public class ShadowProductionReplayService {
             // position before the requested test window.
             boolean inExecutionWindow = !signal.getGeneratedAt().isBefore(executionStart)
                     && !signal.getGeneratedAt().isAfter(executionEnd);
+            LocalDate signalTradeDate = signal.getGeneratedAt().atZone(ZoneId.systemDefault()).toLocalDate();
+            if (!signalTradeDate.equals(replayTradeDate)) {
+                replayTradeDate = signalTradeDate;
+                replayExecutedNewPositions = 0;
+                replayDailyBudget = executionSizingPolicy.initialDailyBudget(
+                        cash, replayWalletSettings.getMinimumUsdtReserve(),
+                        replayWalletSettings.getBaseTradeAmountUsdt(), replayWalletSettings.getMaximumDailyNewPositions());
+            }
             int currentAllocation = open == null ? 0 : open.positionPercent();
             String currentStage = replayStage(currentAllocation);
             // IMPORTANT: Proven/Regression never re-implements pressure readiness or entry routing.
@@ -105,14 +127,19 @@ public class ShadowProductionReplayService {
                 int atrPercent = signal.getAtrRecommendedPositionPercent() <= 0 ? 100 : signal.getAtrRecommendedPositionPercent();
                 int effectivePercent = Math.max(1, Math.min(100,
                         (int)Math.round(atrPercent * decision.positionPercent() / 100.0)));
-                BigDecimal budget = INITIAL_CAPITAL.multiply(BigDecimal.valueOf(effectivePercent), MC)
-                        .divide(BigDecimal.valueOf(100), MC).min(cash);
-                if (budget.signum() > 0 && signal.getLatestPrice() != null && signal.getLatestPrice().signum() > 0) {
-                    BigDecimal qty = budget.divide(signal.getLatestPrice(), 12, RoundingMode.HALF_UP);
+                WalletExecutionSizingPolicy.Plan sizing = executionSizingPolicy.plan(
+                        cash, replayWalletSettings.getMinimumUsdtReserve(), replayDailyBudget,
+                        effectivePercent, 0, true, replayWalletSettings.getMaximumDailyNewPositions(),
+                        replayExecutedNewPositions, signal.getLatestPrice());
+                BigDecimal budget = sizing.spend();
+                if (sizing.allowed()) {
+                    BigDecimal qty = sizing.quantity();
+                    effectivePercent = sizing.normalizedPositionPercent();
                     long positionId = openPosition(runId, symbol, signal, qty, budget, effectivePercent);
                     persistBuy(runId, symbol, signal, qty, budget, effectivePercent, decision);
                     executionIntelligenceService.markExecuted(signal, decision);
                     cash = cash.subtract(budget, MC);
+                    replayExecutedNewPositions++;
                     open = new ShadowPosition(positionId, signal.getGeneratedAt(), signal.getLatestPrice(), qty, budget,
                             effectivePercent, signal.getStopLoss(), signal.getTakeProfit(), signal.getLatestPrice(), false, null,
                             signal.getTotalScore(), signal.getConfidenceScore(), signal.getTrendScore(), signal.getMomentumScore(), signal.getVolumeScore());
@@ -122,10 +149,14 @@ public class ShadowProductionReplayService {
                 // is the ADD allocation, not a new target allocation, and ATR percentage is
                 // not re-applied to confirmation/trend adds in production.
                 int addPercent = Math.max(1, Math.min(100 - open.positionPercent(), decision.positionPercent()));
-                BigDecimal budget = INITIAL_CAPITAL.multiply(BigDecimal.valueOf(addPercent), MC)
-                        .divide(BigDecimal.valueOf(100), MC).min(cash);
-                if (addPercent > 0 && budget.signum() > 0 && signal.getLatestPrice() != null && signal.getLatestPrice().signum() > 0) {
-                    BigDecimal addedQty = budget.divide(signal.getLatestPrice(), 12, RoundingMode.HALF_UP);
+                WalletExecutionSizingPolicy.Plan sizing = executionSizingPolicy.plan(
+                        cash, replayWalletSettings.getMinimumUsdtReserve(), replayDailyBudget,
+                        addPercent, open.positionPercent(), false, replayWalletSettings.getMaximumDailyNewPositions(),
+                        replayExecutedNewPositions, signal.getLatestPrice());
+                BigDecimal budget = sizing.spend();
+                if (sizing.allowed()) {
+                    addPercent = sizing.normalizedPositionPercent();
+                    BigDecimal addedQty = sizing.quantity();
                     persistBuy(runId, symbol, signal, addedQty, budget, addPercent, decision);
                     executionIntelligenceService.markExecuted(signal, decision);
                     cash = cash.subtract(budget, MC);
@@ -191,10 +222,19 @@ public class ShadowProductionReplayService {
         if (p.stopLoss() != null && price.compareTo(p.stopLoss()) <= 0)
             return new ExitDecision(true, "STOP_LOSS", "Price reached the stored stop loss.");
 
+        // Production has two SELL authorities: the live HTF PositionExitPolicy and the
+        // 1m signal TradeExecutionValidationService. Replay executes both shared production
+        // policies in the same order instead of carrying a test-only SELL rule.
         PositionExitPolicy.Evaluation normalExit = exitPolicy.evaluateNormalExit(
                 oneMinute != null ? oneMinute : s, five, one);
         if (normalExit.exit()) {
             return new ExitDecision(true, normalExit.code(), normalExit.explanation());
+        }
+        if ("1m".equals(s.getInterval()) && bearish(s.getDecision())) {
+            TradeExecutionValidationService.ValidationResult validatedSell = executionValidationService.validateSell(s);
+            if (validatedSell.allowed()) {
+                return new ExitDecision(true, validatedSell.code(), validatedSell.explanation());
+            }
         }
         return ExitDecision.hold();
     }
@@ -211,35 +251,15 @@ public class ShadowProductionReplayService {
     }
 
     private ShadowPosition profitLockState(ShadowPosition p, BigDecimal price) {
-        BigDecimal highest = p.highest() == null || price.compareTo(p.highest()) > 0 ? price : p.highest();
-        if (p.takeProfit() == null || p.takeProfit().compareTo(p.entryPrice()) <= 0)
-            return p.withLock(highest, p.profitLockActive(), p.profitLockPrice());
         WalletSettings settings = walletSettings();
-        if (!settings.isDynamicProfitLockEnabled())
-            return p.withLock(highest, false, null);
-
-        BigDecimal distance = p.takeProfit().subtract(p.entryPrice());
-        BigDecimal progress = highest.subtract(p.entryPrice()).multiply(BigDecimal.valueOf(100), MC)
-                .divide(distance, 6, RoundingMode.HALF_UP).max(BigDecimal.ZERO);
-        // Replay must use the exact same Administration percentages as production.
-        // Do not silently replace 70/40/10 (or any configured values) with an
-        // entry-quality-derived 30/10/5 profile.
-        BigDecimal activation = nvl(settings.getProfitLockActivationPercent(), BigDecimal.valueOf(70));
-        BigDecimal initial = nvl(settings.getProfitLockInitialPercent(), BigDecimal.valueOf(40));
-        BigDecimal step = nvl(settings.getProfitLockTrailStepPercent(), BigDecimal.valueOf(10));
-        boolean active = p.profitLockActive();
-        BigDecimal lock = p.profitLockPrice();
-        if (progress.compareTo(activation) >= 0) {
-            active = true;
-            BigDecimal completed = progress.subtract(activation).max(BigDecimal.ZERO).divide(step, 0, RoundingMode.DOWN);
-            BigDecimal lockedProgress = initial.add(completed.multiply(step));
-            BigDecimal maximum = progress.subtract(step).max(initial);
-            lockedProgress = lockedProgress.min(maximum).max(initial);
-            BigDecimal candidate = p.entryPrice().add(distance.multiply(lockedProgress).divide(BigDecimal.valueOf(100), 12, RoundingMode.HALF_UP));
-            candidate = candidate.max(p.entryPrice().multiply(BigDecimal.valueOf(1.0005)));
-            if (lock == null || candidate.compareTo(lock) > 0) lock = candidate;
-        }
-        return p.withLock(highest, active, lock);
+        ProfitLockPolicy.State state = profitLockPolicy.evaluate(
+                p.entryPrice(), p.takeProfit(), price, p.highest(),
+                p.profitLockActive(), p.profitLockPrice(),
+                settings.isDynamicProfitLockEnabled(),
+                nvl(settings.getProfitLockActivationPercent(), BigDecimal.valueOf(70)),
+                nvl(settings.getProfitLockInitialPercent(), BigDecimal.valueOf(40)),
+                nvl(settings.getProfitLockTrailStepPercent(), BigDecimal.valueOf(10)));
+        return p.withLock(state.highestPrice(), state.active(), state.lockPrice());
     }
 
     private void persistManagement(long runId, TradeSignal s, String code, BigDecimal oldTp, BigDecimal newTp, ShadowPosition p, String explanation) {

@@ -27,6 +27,7 @@ public class WalletAutoExecutionService {
     private final WalletTradeRepository tradeRepository;
     private final WalletManagedPositionRepository managedPositionRepository;
     private final WalletSettingsRepository settingsRepository;
+    private final WalletExecutionSizingPolicy executionSizingPolicy;
     private final WalletDailyStatisticsRepository dailyStatisticsRepository;
     private final WalletService walletService;
     private final ObjectMapper objectMapper;
@@ -53,8 +54,6 @@ public class WalletAutoExecutionService {
                 .findTopBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
                 .orElse(null);
         int currentAllocatedPercent = existingPosition == null ? 0 : Math.max(0, existingPosition.getAllocatedPositionPercent());
-        int normalizedPositionPercent = Math.min(requestedPositionPercent, Math.max(0, 100 - currentAllocatedPercent));
-        if (normalizedPositionPercent <= 0) return false;
 
         String key = signal.getId() + ":BUY";
         if (tradeRepository.existsByExecutionKey(key)) return true;
@@ -65,19 +64,14 @@ public class WalletAutoExecutionService {
         WalletDailyStatistics daily = dailyStatistics(settings, usdt);
 
         boolean newPosition = existingPosition == null;
-        if (newPosition && daily.getMaximumNewPositions() > 0
-                && daily.getExecutedBuys() >= daily.getMaximumNewPositions()) return false;
-
-        BigDecimal availableAboveReserve = usdt.getQuantity()
-                .subtract(settings.getMinimumUsdtReserve())
-                .max(ZERO);
-        BigDecimal spend = daily.getDailyTradeBudgetUsdt()
-                .multiply(BigDecimal.valueOf(normalizedPositionPercent))
-                .divide(BigDecimal.valueOf(100), SCALE, RoundingMode.DOWN);
-        if (spend.signum() <= 0 || availableAboveReserve.compareTo(spend) < 0) return false;
-
-        BigDecimal quantity = spend.divide(price, SCALE, RoundingMode.DOWN);
-        if (quantity.signum() <= 0) return false;
+        WalletExecutionSizingPolicy.Plan sizing = executionSizingPolicy.plan(
+                usdt.getQuantity(), settings.getMinimumUsdtReserve(), daily.getDailyTradeBudgetUsdt(),
+                requestedPositionPercent, currentAllocatedPercent, newPosition,
+                daily.getMaximumNewPositions(), daily.getExecutedBuys(), price);
+        if (!sizing.allowed()) return false;
+        int normalizedPositionPercent = sizing.normalizedPositionPercent();
+        BigDecimal spend = sizing.spend();
+        BigDecimal quantity = sizing.quantity();
 
         WalletAsset coin = getOrCreate(assetSymbol);
         BigDecimal oldCost = coin.getQuantity().multiply(nvl(coin.getAverageBuyPriceUsdt()));
@@ -466,14 +460,9 @@ public class WalletAutoExecutionService {
         if (existing != null) return existing;
 
         int maximum = settings.getMaximumDailyNewPositions();
-        BigDecimal tradable = usdt.getQuantity()
-                .subtract(settings.getMinimumUsdtReserve())
-                .max(ZERO);
-        BigDecimal budget = tradable.signum() <= 0
-                ? ZERO
-                : maximum == 0
-                ? settings.getBaseTradeAmountUsdt().min(tradable)
-                : tradable.divide(BigDecimal.valueOf(maximum), SCALE, RoundingMode.DOWN);
+        BigDecimal budget = executionSizingPolicy.initialDailyBudget(
+                usdt.getQuantity(), settings.getMinimumUsdtReserve(),
+                settings.getBaseTradeAmountUsdt(), maximum);
         BigDecimal portfolio = walletService.currentPortfolioValue();
         Instant now = Instant.now();
 

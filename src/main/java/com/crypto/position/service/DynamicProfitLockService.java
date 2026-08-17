@@ -38,6 +38,7 @@ public class DynamicProfitLockService {
 
     private final WalletManagedPositionRepository positionRepository;
     private final WalletSettingsRepository settingsRepository;
+    private final ProfitLockPolicy profitLockPolicy;
 
     @Transactional
     public Evaluation evaluate(TradeSignal signal) {
@@ -78,48 +79,20 @@ public class DynamicProfitLockService {
             return Evaluation.inactive("The position does not have a valid long take-profit distance.");
         }
 
-        BigDecimal highest = position.getHighestPriceUsdt();
-        if (highest == null || highest.compareTo(entry) < 0) highest = entry;
-        if (current.compareTo(highest) > 0) highest = current;
-
-        BigDecimal targetDistance = target.subtract(entry);
-        BigDecimal progress = highest.subtract(entry)
-                .multiply(HUNDRED)
-                .divide(targetDistance, 6, RoundingMode.HALF_UP)
-                .max(BigDecimal.ZERO);
-
         ProfitLockProfile profile = configuredProfile(settings);
         BigDecimal activation = profile.activationPercent();
         BigDecimal initialLock = profile.initialLockPercent();
         BigDecimal trailStep = profile.trailStepPercent();
-
-        boolean active = position.isProfitLockActive();
-        BigDecimal lockPrice = position.getProfitLockPriceUsdt();
+        ProfitLockPolicy.State policyState = profitLockPolicy.evaluate(
+                entry, target, current, position.getHighestPriceUsdt(),
+                position.isProfitLockActive(), position.getProfitLockPriceUsdt(),
+                true, activation, initialLock, trailStep);
+        BigDecimal highest = policyState.highestPrice();
+        BigDecimal progress = policyState.progressPercent();
+        boolean active = policyState.active();
+        BigDecimal lockPrice = policyState.lockPrice();
         Instant activatedAt = position.getProfitLockActivatedAt();
-
-        if (progress.compareTo(activation) >= 0) {
-            active = true;
-            if (activatedAt == null) activatedAt = Instant.now();
-
-            BigDecimal progressBeyondActivation = progress.subtract(activation).max(BigDecimal.ZERO);
-            BigDecimal completedSteps = progressBeyondActivation
-                    .divide(trailStep, 0, RoundingMode.DOWN);
-            BigDecimal lockedProgress = initialLock.add(completedSteps.multiply(trailStep));
-
-            // Never set a lock at/above the best observed progress. Preserve at least
-            // one configured trail step of breathing room where possible.
-            BigDecimal maximumLockProgress = progress.subtract(trailStep).max(initialLock);
-            lockedProgress = lockedProgress.min(maximumLockProgress).max(initialLock);
-
-            BigDecimal candidateLock = entry.add(targetDistance
-                    .multiply(lockedProgress)
-                    .divide(HUNDRED, SCALE, RoundingMode.HALF_UP));
-            BigDecimal minimumProfitableLock = entry.multiply(BigDecimal.valueOf(1.0005));
-            candidateLock = candidateLock.max(minimumProfitableLock);
-            if (lockPrice == null || candidateLock.compareTo(lockPrice) > 0) {
-                lockPrice = candidateLock;
-            }
-        }
+        if (active && activatedAt == null) activatedAt = Instant.now();
 
         boolean changed = position.getHighestPriceUsdt() == null
                 || highest.compareTo(position.getHighestPriceUsdt()) != 0
@@ -138,8 +111,7 @@ public class DynamicProfitLockService {
             positionRepository.save(position);
         }
 
-        boolean triggered = active && lockPrice != null
-                && current.compareTo(lockPrice) <= 0;
+        boolean triggered = policyState.triggered();
         String explanation;
         String profileText = " Admin profile=" + profile.name() +
                 " (activation=" + activation.stripTrailingZeros().toPlainString() + "%, initial lock=" +
