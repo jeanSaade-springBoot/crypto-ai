@@ -903,22 +903,14 @@ function candleTooltipPrice(value) {
 function candleTooltipHtml(point) {
     if (!point) return '';
     const y = Array.isArray(point.y) ? point.y : [];
-    const open = point.open ?? y[0];
-    const high = point.high ?? y[1];
-    const low = point.low ?? y[2];
-    const close = point.close ?? y[3];
-    const openTime = point.openTime ?? point.x;
-    const closeTime = point.closeTime;
+    // Dashboard hover is intentionally minimal: show only the candle timestamp
+    // and the price at that hovered candle (the candle close / plotted price).
+    const price = point.close ?? y[3] ?? point.y;
+    const timestamp = point.openTime ?? point.x;
     return `
-        <div class="candle-hover-tooltip">
-            <div class="candle-hover-time"><span>Open time</span><strong>${candleTooltipTime(openTime)}</strong></div>
-            <div class="candle-hover-time"><span>Close time</span><strong>${candleTooltipTime(closeTime)}</strong></div>
-            <div class="candle-hover-ohlc">
-                <span><small>Open</small><b>${candleTooltipPrice(open)}</b></span>
-                <span><small>High</small><b>${candleTooltipPrice(high)}</b></span>
-                <span><small>Low</small><b>${candleTooltipPrice(low)}</b></span>
-                <span><small>Close</small><b>${candleTooltipPrice(close)}</b></span>
-            </div>
+        <div class="candle-hover-tooltip candle-hover-tooltip-minimal">
+            <div class="candle-hover-time"><span>Time</span><strong>${candleTooltipTime(timestamp)}</strong></div>
+            <div class="candle-hover-price"><span>Price</span><strong>${candleTooltipPrice(price)}</strong></div>
         </div>`;
 }
 
