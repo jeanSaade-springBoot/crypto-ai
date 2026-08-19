@@ -197,11 +197,6 @@ function inspectedRows(data){
   return {candles,meta};
 }
 
-function inspectedMetaText(state){
-  const loaded=Number(state.candles?.length||0).toLocaleString();
-  const total=Number(state.totalPointCount||0).toLocaleString();
-  return `${loaded} ${state.interval} candles in active window · ${total} total available · history ${chartTimeLabel(state.fullStart)} → ${chartTimeLabel(state.fullEnd)} · choose pan hand to move left/right; more candles load automatically`;
-}
 
 async function replaceInspectedWindow(min,max){
   const state=window.__inspectedChartState;
@@ -210,7 +205,6 @@ async function replaceInspectedWindow(min,max){
   if(bounds.from>=state.loadedStart&&bounds.to<=state.loadedEnd)return;
   const requestId=++inspectedWindowRequest;
   state.loading=true;
-  $('inspected-trade-chart-meta').textContent='Loading nearby candles…';
   try{
     const data=await fetchInspectedWindow(state.trade,state.interval,bounds.from,bounds.to);
     if(requestId!==inspectedWindowRequest)return;
@@ -230,7 +224,6 @@ async function replaceInspectedWindow(min,max){
     ],false);
     inspectedTradeChart.zoomX(min,max);
     requestAnimationFrame(()=>{if(window.__inspectedChartState)window.__inspectedChartState.suppressWindowCheck=false;});
-    $('inspected-trade-chart-meta').textContent=inspectedMetaText(state);
   }finally{
     if(window.__inspectedChartState)window.__inspectedChartState.loading=false;
   }
@@ -267,7 +260,6 @@ async function loadInspectedTradeChart(){
   const empty=$('inspected-trade-chart-empty');
   if(!candles.length){
     empty?.classList.remove('hidden');
-    $('inspected-trade-chart-meta').textContent='No closed candles available.';
     if(inspectedTradeChart){inspectedTradeChart.destroy();inspectedTradeChart=null;}
     return;
   }
@@ -286,7 +278,6 @@ async function loadInspectedTradeChart(){
     totalPointCount:Number(data.totalPointCount||candles.length),
     visibleMin:initialMin,visibleMax:initialMax,loading:false,suppressWindowCheck:false
   };
-  $('inspected-trade-chart-meta').textContent=inspectedMetaText(window.__inspectedChartState);
 
   const customTooltip=({seriesIndex,dataPointIndex,w})=>{
     const point=w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex];
@@ -342,7 +333,7 @@ async function loadInspectedTradeChart(){
       tooltip:{enabled:true,offsetX:0},
       crosshairs:{show:true,position:'front',stroke:{width:1,dashArray:3}}
     },
-    grid:{borderColor:'#203342',xaxis:{lines:{show:false}},padding:{left:6,right:10}},theme:{mode:'dark'},
+    grid:{borderColor:'#203342',xaxis:{lines:{show:false}},yaxis:{lines:{show:true}},padding:{left:6,right:10}},theme:{mode:'dark'},
     plotOptions:{candlestick:{colors:{upward:'#39d98a',downward:'#ff6b72'},wick:{useFillColor:true}}},
     annotations:inspectedChartAnnotations(t),
     tooltip:{shared:false,intersect:false,followCursor:true,custom:customTooltip}

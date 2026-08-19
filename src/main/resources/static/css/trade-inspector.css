@@ -58,3 +58,10 @@
 #inspected-trade-chart .apexcharts-yaxistooltip-right:after {
   border-right-color:#486477 !important;
 }
+
+/* FIX-012: cleaner Binance-like Trade Inspector chart surface.
+   Keep interaction confined to the plot while the controls above remain normal page controls. */
+#inspected-trade-chart .apexcharts-yaxis { font-variant-numeric: tabular-nums; }
+#inspected-trade-chart .apexcharts-xaxis-texts-g text,
+#inspected-trade-chart .apexcharts-yaxis-texts-g text { font-size:10px; }
+#inspected-trade-chart .apexcharts-gridline { opacity:.55; }

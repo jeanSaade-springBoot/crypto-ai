@@ -233,6 +233,28 @@
         }
 
         ,{
+            id: "FIX-012",
+            title: "Trade Inspector Binance-like chart cleanup",
+            scenario: "Remove chart instructional/status clutter and keep the trading chart focused on candles, trade lifecycle and exact hover price",
+            symbol: "ALL",
+            entry: "N/A",
+            exit: "N/A",
+            entryTime: "N/A",
+            exitTime: "N/A",
+            location: "Trade Inspector chart UI only",
+            classes: [
+                "src/main/resources/static/trade-inspector.html",
+                "src/main/resources/static/js/trade-inspector.js",
+                "src/main/resources/static/css/trade-inspector.css"
+            ],
+            cause: "The Trade Inspector chart showed a long instructional paragraph and a moving-window/history-count status line above the plot, making the inspector feel unlike a focused exchange chart.",
+            solution: "Remove both text blocks. Keep the detailed candlestick chart, BUY/SELL lifecycle, right-side price scale, horizontal/vertical crosshair, OHLC hover detail, lazy historical navigation and the exact hovered-price badge on the right Y axis. Add subtle horizontal price grid lines for a more exchange-like reading surface.",
+            behavior: "Trade Inspector now presents the chart directly with controls and compact legend. Hovering the plot shows the exact cursor price on the right Y axis; candle OHLC detail remains available and historical navigation remains unchanged.",
+            regression: "UI-only cleanup. No BUY, SELL, TP continuation, stop loss, wallet, Replay, candle API or trading decision logic is changed.",
+            status: "IMPLEMENTED"
+        }
+
+        ,{
             id: "FIX-011",
             title: "TP continuation uses the same immutable BUY-thesis pressure as Position Management",
             scenario: "SOLUSDT first position on 2026-08-19: good BUY at 78.45 reached TP near 78.77 but continuation failed even though Position Analysis still said HOLD",
