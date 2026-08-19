@@ -65,3 +65,27 @@
 #inspected-trade-chart .apexcharts-xaxis-texts-g text,
 #inspected-trade-chart .apexcharts-yaxis-texts-g text { font-size:10px; }
 #inspected-trade-chart .apexcharts-gridline { opacity:.55; }
+
+
+/* FIX-013: dedicated Binance-style hover price badge on the right Y axis.
+   Pointer-events stay disabled so this overlay can never block pan, zoom,
+   dropdowns, toolbar controls, or normal page scrolling. */
+#inspected-trade-chart .inspector-y-hover-price{
+  position:absolute;
+  display:none;
+  transform:translateY(-50%);
+  min-width:72px;
+  padding:4px 7px;
+  background:#152430;
+  border:1px solid #486477;
+  border-radius:4px;
+  color:#f4f8fb;
+  font-size:11px;
+  font-weight:700;
+  line-height:1.1;
+  text-align:right;
+  font-variant-numeric:tabular-nums;
+  box-shadow:0 2px 8px rgba(0,0,0,.35);
+  pointer-events:none;
+  z-index:30;
+}

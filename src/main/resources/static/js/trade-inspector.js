@@ -343,11 +343,53 @@ async function loadInspectedTradeChart(){
   inspectedTradeChart=new ApexCharts($('inspected-trade-chart'),options);
   await inspectedTradeChart.render();
 
-  // FIX-009: do not hijack the mouse wheel. Vertical wheel/trackpad gestures must
-  // scroll the Trade Inspector page normally. Use Apex toolbar zoom buttons for
-  // chart zoom and explicitly choose the pan hand for left/right navigation.
+  // FIX-013: ApexCharts' built-in Y-axis tooltip is unreliable for a mixed
+  // candlestick + lifecycle series. Render our own Binance-style price badge by
+  // mapping the pointer's vertical position inside the actual plot grid to the
+  // chart's current visible Y range. This is display-only and never captures
+  // clicks, wheel events, pan/zoom gestures, or toolbar controls.
   const host=$('inspected-trade-chart');
-  if(host)host.onwheel=null;
+  if(host){
+    host.onwheel=null;
+    installInspectorYAxisHoverPrice(host, inspectedTradeChart);
+  }
+}
+
+function installInspectorYAxisHoverPrice(host, chart){
+  host.querySelector('.inspector-y-hover-price')?.remove();
+  const badge=document.createElement('div');
+  badge.className='inspector-y-hover-price';
+  badge.setAttribute('aria-hidden','true');
+  host.appendChild(badge);
+
+  const hide=()=>{badge.style.display='none';};
+  const move=(event)=>{
+    const grid=host.querySelector('.apexcharts-grid');
+    const yAxis=host.querySelector('.apexcharts-yaxis');
+    if(!grid||!yAxis){hide();return;}
+    const gridRect=grid.getBoundingClientRect();
+    const hostRect=host.getBoundingClientRect();
+    if(event.clientX<gridRect.left||event.clientX>gridRect.right||event.clientY<gridRect.top||event.clientY>gridRect.bottom){hide();return;}
+
+    const globals=chart?.w?.globals;
+    let min=Number(globals?.minYArr?.[0]);
+    let max=Number(globals?.maxYArr?.[0]);
+    if(!Number.isFinite(min)||!Number.isFinite(max)||max<=min){
+      const ys=(globals?.seriesCandleO||[]).flat().concat((globals?.seriesCandleH||[]).flat(),(globals?.seriesCandleL||[]).flat(),(globals?.seriesCandleC||[]).flat()).map(Number).filter(Number.isFinite);
+      if(!ys.length){hide();return;}
+      min=Math.min(...ys);max=Math.max(...ys);
+    }
+
+    const ratio=Math.min(1,Math.max(0,(event.clientY-gridRect.top)/Math.max(1,gridRect.height)));
+    const value=max-ratio*(max-min);
+    badge.textContent=chartPriceLabel(value);
+    badge.style.display='block';
+    badge.style.top=`${event.clientY-hostRect.top}px`;
+    badge.style.right='0px';
+  };
+
+  host.addEventListener('mousemove',move,{passive:true});
+  host.addEventListener('mouseleave',hide,{passive:true});
 }
 
 async function showInspectedTradeChart(t){

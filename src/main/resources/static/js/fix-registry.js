@@ -255,6 +255,27 @@
         }
 
         ,{
+            id: "FIX-013",
+            title: "Trade Inspector dedicated right-axis hover price",
+            scenario: "Built-in ApexCharts Y-axis tooltip did not reliably show the Binance-style cursor price on the mixed candlestick/lifecycle chart",
+            symbol: "ALL",
+            entry: "N/A",
+            exit: "N/A",
+            entryTime: "N/A",
+            exitTime: "N/A",
+            location: "Trade Inspector chart pointer/crosshair UI only",
+            classes: [
+                "src/main/resources/static/js/trade-inspector.js",
+                "src/main/resources/static/css/trade-inspector.css"
+            ],
+            cause: "FIX-010/012 relied on ApexCharts' built-in Y-axis tooltip. On the mixed candlestick plus BUY-to-SELL lifecycle series that tooltip is not consistently rendered, so the crosshair could move without showing the price badge on the right axis.",
+            solution: "Add a dedicated display-only hover badge. On mouse move inside the actual plot grid, map the pointer's vertical position to the chart's current visible Y-axis min/max and render the exact adaptive-precision price at the right edge. Hide it outside the plot. The overlay uses pointer-events:none and does not intercept wheel, pan, zoom, dropdown or toolbar interactions.",
+            behavior: "Hovering anywhere over the candle plot now shows the exact cursor price on the right Y axis, Binance-style, independent of ApexCharts' internal Y-axis tooltip behavior. Existing OHLC tooltip and X-axis time crosshair remain unchanged.",
+            regression: "UI-only fix. No BUY, SELL, stop-loss, TP continuation, wallet, Replay, Proven Analysis, candle paging or execution behavior changes.",
+            status: "IMPLEMENTED"
+        }
+
+        ,{
             id: "FIX-011",
             title: "TP continuation uses the same immutable BUY-thesis pressure as Position Management",
             scenario: "SOLUSDT first position on 2026-08-19: good BUY at 78.45 reached TP near 78.77 but continuation failed even though Position Analysis still said HOLD",
