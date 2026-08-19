@@ -226,9 +226,34 @@
                 "src/main/resources/static/css/trade-inspector.css"
             ],
             cause: "The horizontal crosshair was visible, but the Y-axis hover value was not visually prominent enough to behave like Binance/TradingView.",
-            solution: "Keep the existing candlestick tooltip and X-axis time crosshair, and explicitly enable/style the ApexCharts Y-axis tooltip so the exact hovered price is displayed as a badge on the right price axis using the same adaptive candle-price precision.",
-            behavior: "Hovering the candle plot shows a horizontal crosshair with a clearly visible exact-price badge attached to the Y axis. The badge disappears when the hover leaves the plot.",
+            solution: "Keep the existing candlestick tooltip and X-axis time crosshair, explicitly place the price scale on the right like Binance/TradingView, and enable/style the ApexCharts Y-axis tooltip so the exact hovered price is displayed as a badge on that right price axis using the same adaptive candle-price precision.",
+            behavior: "The price scale is displayed on the right. Hovering the candle plot shows a horizontal crosshair with a clearly visible exact-price badge attached to that Y axis. The badge disappears when the hover leaves the plot.",
             regression: "UI-only hover enhancement. No candle paging, zoom/pan behavior, signal logic, wallet logic, pressure-probe logic, Replay or Proven Analysis behavior is changed.",
+            status: "IMPLEMENTED"
+        }
+
+        ,{
+            id: "FIX-011",
+            title: "TP continuation uses the same immutable BUY-thesis pressure as Position Management",
+            scenario: "SOLUSDT first position on 2026-08-19: good BUY at 78.45 reached TP near 78.77 but continuation failed even though Position Analysis still said HOLD",
+            symbol: "SOLUSDT",
+            entry: "78.45 via trade signal #94801 (STRONG_BUY 88, confidence 78)",
+            exit: "Historical exit 78.77 TAKE_PROFIT; corrected behavior extends TP when thesis pressure remains minor instead of failing only on the old binary 1m trend floor",
+            entryTime: "2026-08-19 13:25:31 UTC / 16:25:31 KSA",
+            exitTime: "Historical TP exit 2026-08-19 14:17:23 UTC / 17:17:23 KSA",
+            location: "Shared position thesis pressure + live/replay take-profit continuation",
+            classes: [
+                "com.crypto.position.service.PositionThesisPressurePolicy",
+                "com.crypto.position.service.PositionManagementService",
+                "com.crypto.position.service.PositionContinuationPolicy",
+                "com.crypto.position.service.LivePositionProtectionService",
+                "com.crypto.regression.service.ShadowProductionReplayService",
+                "src/test/java/com/crypto/position/service/PositionContinuationPolicyTest.java"
+            ],
+            cause: "Position Management and TP continuation evaluated the same immutable BUY thesis differently. Position Management scored SOL trend 21->16 and structure 5->2 as trend pressure 2/8 with momentum pressure 0/5 and HOLD, while PositionContinuationPolicy used a binary trend floor of entryTrend-3 (18) and failed continuation solely because current trend 16 was below 18. This closed the entire good entry even though 1m=WATCH, 5m=NEUTRAL, 1h=WATCH and momentum had improved 13->15.",
+            solution: "Extract the proven immutable-thesis deterioration calculation into PositionThesisPressurePolicy and make both PositionManagementService and PositionContinuationPolicy call that exact shared policy. Add a narrow THESIS_INTACT_CONSOLIDATION continuation path requiring current supportive, 5m non-bearish, 1h non-bearish, trend pressure <=2/8 and momentum pressure <=1/5. Existing bearish timeframe vetoes remain first and absolute. Live production passes the full immutable entry thesis, and ShadowProductionReplayService now stores/passes entry structure as well so Replay exercises the exact production policy.",
+            behavior: "For the exact SOL state (entry trend/structure/momentum/volume 21/5/13/19 -> TP state 16/2/15/7, 1m WATCH, 5m NEUTRAL, 1h WATCH), continuation now PASSes via THESIS_INTACT_CONSOLIDATION and the existing TP-extension mechanism pushes the target instead of selling 100%. Severe trend/structure deterioration, real momentum collapse, or SELL/STRONG_SELL on any monitored timeframe still fails continuation.",
+            regression: "Exact SOL regression asserts continuation PASS with trend pressure 2/8 and momentum pressure 0/5. Negative controls assert severe trend/structure break still FAILs and a bearish 5m still vetoes. Existing continuation tests remain in place. BUY generation, entry validation, stop loss, normal SELL authority, ATR entry logic and execution intelligence are unchanged. Replay uses the same PositionContinuationPolicy and PositionThesisPressurePolicy as production; no test-only continuation formula is introduced.",
             status: "IMPLEMENTED"
         }
 

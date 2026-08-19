@@ -333,6 +333,8 @@ async function loadInspectedTradeChart(){
       tooltip:{enabled:true,formatter:value=>chartTimeLabel(value,true)}
     },
     yaxis:{
+      // FIX-010: Binance/TradingView-style price scale lives on the right side.
+      opposite:true,
       forceNiceScale:true,decimalsInFloat:8,
       labels:{formatter:value=>chartPriceLabel(value)},
       // FIX-010: keep an explicit Binance-style hover price badge on the Y axis.

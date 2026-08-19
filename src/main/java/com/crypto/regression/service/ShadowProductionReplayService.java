@@ -144,9 +144,12 @@ public class ShadowProductionReplayService {
                     executionIntelligenceService.markExecuted(signal, decision);
                     cash = cash.subtract(budget, MC);
                     replayExecutedNewPositions++;
+                    // Keep the complete immutable BUY thesis needed by production continuation.
+                    // Replay must not drop entry structure and silently evaluate a different exit policy.
                     open = new ShadowPosition(positionId, signal.getGeneratedAt(), signal.getLatestPrice(), qty, budget,
                             effectivePercent, signal.getStopLoss(), signal.getTakeProfit(), signal.getLatestPrice(), false, null,
-                            signal.getTotalScore(), signal.getConfidenceScore(), signal.getTrendScore(), signal.getMomentumScore(), signal.getVolumeScore());
+                            signal.getTotalScore(), signal.getConfidenceScore(), signal.getTrendScore(), signal.getTrendStructureScore(),
+                            signal.getMomentumScore(), signal.getVolumeScore());
                 }
             } else if (open != null && decision.allowed()) {
                 // Exact production progressive-position semantics: decision.positionPercent()
@@ -194,8 +197,12 @@ public class ShadowProductionReplayService {
         // price may update MTF context but may not retroactively hit TP/SL/profit-lock.
         boolean authoritativePrice = priceAuthorityPolicy.canUseSignalPrice(s, p.entryTime());
         if (authoritativePrice && p.takeProfit() != null && price.compareTo(p.takeProfit()) >= 0) {
+            // Exact production TP-continuation call, including immutable entry structure.
+            // FIX-011 regression relies on Replay and live using this same shared policy.
             PositionContinuationPolicy.Evaluation continuation = continuationPolicy.evaluate(
-                    oneMinute != null ? oneMinute : s, five, one, p.entryTrend(), p.entryMomentum(), p.entryVolume());
+                    oneMinute != null ? oneMinute : s, five, one,
+                    p.entryTrend(), p.entryStructure(), p.entryMomentum(), p.entryVolume(),
+                    p.entryConfidence(), p.entryScore());
             if (continuation.extendTarget()) {
                 BigDecimal distance = p.takeProfit().subtract(p.entryPrice());
                 BigDecimal newTarget = p.takeProfit().add(distance.multiply(BigDecimal.valueOf(0.50), MC), MC);
@@ -393,9 +400,9 @@ public class ShadowProductionReplayService {
         ExitDecision(boolean exit,String reason,String explanation){this(exit,reason,explanation,null);}
         static ExitDecision hold(){return new ExitDecision(false,"HOLD","Position remains open.",null);}
     }
-    private record ShadowPosition(long positionId,Instant entryTime,BigDecimal entryPrice,BigDecimal quantity,BigDecimal cost,int positionPercent,BigDecimal stopLoss,BigDecimal takeProfit,BigDecimal highest,boolean profitLockActive,BigDecimal profitLockPrice,int entryScore,int entryConfidence,int entryTrend,int entryMomentum,int entryVolume){
-        ShadowPosition withLock(BigDecimal h,boolean a,BigDecimal l){return new ShadowPosition(positionId,entryTime,entryPrice,quantity,cost,positionPercent,stopLoss,takeProfit,h,a,l,entryScore,entryConfidence,entryTrend,entryMomentum,entryVolume);}
-        ShadowPosition withTakeProfit(BigDecimal tp){return new ShadowPosition(positionId,entryTime,entryPrice,quantity,cost,positionPercent,stopLoss,tp,highest,profitLockActive,profitLockPrice,entryScore,entryConfidence,entryTrend,entryMomentum,entryVolume);}
-        ShadowPosition withAdd(BigDecimal newEntry,BigDecimal newQuantity,BigDecimal newCost,int newPercent,BigDecimal newStop,BigDecimal newTakeProfit){return new ShadowPosition(positionId,entryTime,newEntry,newQuantity,newCost,newPercent,newStop,newTakeProfit,highest,profitLockActive,profitLockPrice,entryScore,entryConfidence,entryTrend,entryMomentum,entryVolume);}
+    private record ShadowPosition(long positionId,Instant entryTime,BigDecimal entryPrice,BigDecimal quantity,BigDecimal cost,int positionPercent,BigDecimal stopLoss,BigDecimal takeProfit,BigDecimal highest,boolean profitLockActive,BigDecimal profitLockPrice,int entryScore,int entryConfidence,int entryTrend,int entryStructure,int entryMomentum,int entryVolume){
+        ShadowPosition withLock(BigDecimal h,boolean a,BigDecimal l){return new ShadowPosition(positionId,entryTime,entryPrice,quantity,cost,positionPercent,stopLoss,takeProfit,h,a,l,entryScore,entryConfidence,entryTrend,entryStructure,entryMomentum,entryVolume);}
+        ShadowPosition withTakeProfit(BigDecimal tp){return new ShadowPosition(positionId,entryTime,entryPrice,quantity,cost,positionPercent,stopLoss,tp,highest,profitLockActive,profitLockPrice,entryScore,entryConfidence,entryTrend,entryStructure,entryMomentum,entryVolume);}
+        ShadowPosition withAdd(BigDecimal newEntry,BigDecimal newQuantity,BigDecimal newCost,int newPercent,BigDecimal newStop,BigDecimal newTakeProfit){return new ShadowPosition(positionId,entryTime,newEntry,newQuantity,newCost,newPercent,newStop,newTakeProfit,highest,profitLockActive,profitLockPrice,entryScore,entryConfidence,entryTrend,entryStructure,entryMomentum,entryVolume);}
     }
 }

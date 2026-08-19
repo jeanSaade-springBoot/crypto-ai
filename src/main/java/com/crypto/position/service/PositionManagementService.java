@@ -42,6 +42,7 @@ public class PositionManagementService {
     private final ObjectMapper objectMapper;
     private final WalletAutoExecutionService walletAutoExecutionService;
     private final PositionPriceAuthorityPolicy priceAuthorityPolicy;
+    private final PositionThesisPressurePolicy thesisPressurePolicy;
 
     @Transactional
     public Optional<PositionAnalysis> analyze(TradeSignal signal) {
@@ -75,7 +76,10 @@ public class PositionManagementService {
                 ? hardRiskRecommendation(position, price)
                 : null;
 
-        ThesisComparison thesis = compareThesis(position, signal);
+        PositionThesisPressurePolicy.ThesisPressure thesis = thesisPressurePolicy.evaluate(
+                position.getEntryTrendScore(), position.getEntryStructureScore(),
+                position.getEntryMomentumScore(), position.getEntryVolumeScore(),
+                position.getEntryConfidence(), position.getEntryTotalScore(), signal);
         int trendDeterioration = thesis.trendPressure();
         int momentumExhaustion = thesis.momentumPressure();
         int profitProtection = profitProtection(pnlPercent, thesis);
@@ -174,40 +178,7 @@ public class PositionManagementService {
         return null;
     }
 
-    private ThesisComparison compareThesis(WalletManagedPosition p, TradeSignal current) {
-        int entryTrend = valueOrCurrent(p.getEntryTrendScore(), current.getTrendScore());
-        int entryStructure = valueOrCurrent(p.getEntryStructureScore(), current.getTrendStructureScore());
-        int entryMomentum = valueOrCurrent(p.getEntryMomentumScore(), current.getMomentumScore());
-        int entryVolume = valueOrCurrent(p.getEntryVolumeScore(), current.getVolumeScore());
-        int entryConfidence = valueOrCurrent(p.getEntryConfidence(), current.getConfidenceScore());
-        int entryTotal = valueOrCurrent(p.getEntryTotalScore(), current.getTotalScore());
-
-        int trendDrop = positiveDrop(entryTrend, current.getTrendScore());
-        int structureDrop = positiveDrop(entryStructure, current.getTrendStructureScore());
-        int momentumDrop = positiveDrop(entryMomentum, current.getMomentumScore());
-        int volumeDrop = positiveDrop(entryVolume, current.getVolumeScore());
-        int confidenceDrop = positiveDrop(entryConfidence, current.getConfidenceScore());
-        int totalDrop = positiveDrop(entryTotal, current.getTotalScore());
-
-        int trendPressure = Math.min(8,
-                points(trendDrop, 3, 6, 10, 3)
-                        + points(structureDrop, 2, 3, 5, 2)
-                        + (current.getTrendScore() <= 8 ? 2 : current.getTrendScore() <= 13 ? 1 : 0));
-
-        int momentumPressure = Math.min(5,
-                points(momentumDrop, 3, 5, 8, 2)
-                        + (current.getMomentumScore() <= 4 ? 2 : current.getMomentumScore() <= 8 ? 1 : 0));
-
-        return new ThesisComparison(entryTrend, current.getTrendScore(), trendDrop,
-                entryStructure, current.getTrendStructureScore(), structureDrop,
-                entryMomentum, current.getMomentumScore(), momentumDrop,
-                entryVolume, current.getVolumeScore(), volumeDrop,
-                entryConfidence, current.getConfidenceScore(), confidenceDrop,
-                entryTotal, current.getTotalScore(), totalDrop,
-                trendPressure, momentumPressure);
-    }
-
-    private int profitProtection(BigDecimal pnlPercent, ThesisComparison thesis) {
+    private int profitProtection(BigDecimal pnlPercent, PositionThesisPressurePolicy.ThesisPressure thesis) {
         if (pnlPercent.signum() <= 0) return 0;
         int score = 0;
         if (pnlPercent.compareTo(BigDecimal.valueOf(5)) >= 0) score += 2;
@@ -265,7 +236,7 @@ public class PositionManagementService {
     }
 
     private List<String> evidence(WalletManagedPosition p, TradeSignal s, BigDecimal pnlPct,
-                                  ThesisComparison t, int trend, int momentum, int protection,
+                                  PositionThesisPressurePolicy.ThesisPressure t, int trend, int momentum, int protection,
                                   int risk, int authority, PositionRecommendation hard) {
         List<String> e = new ArrayList<>();
         e.add("Unrealized P/L is " + pnlPct.setScale(2, RoundingMode.HALF_UP) + "%");
@@ -292,7 +263,7 @@ public class PositionManagementService {
     }
 
     private Map<String, Object> details(WalletManagedPosition p, TradeSignal s,
-                                        BigDecimal pnlPct, ThesisComparison t,
+                                        BigDecimal pnlPct, PositionThesisPressurePolicy.ThesisPressure t,
                                         int trend, int momentum, int protection,
                                         int risk, int opportunity, int exitScore,
                                         int authority, List<String> evidence) {
@@ -332,21 +303,6 @@ public class PositionManagementService {
         return details;
     }
 
-    private int points(int drop, int low, int medium, int high, int max) {
-        if (drop >= high) return max;
-        if (drop >= medium) return Math.max(1, max - 1);
-        if (drop >= low) return 1;
-        return 0;
-    }
-
-    private int valueOrCurrent(Integer value, int current) {
-        return value == null ? current : value;
-    }
-
-    private int positiveDrop(int entry, int current) {
-        return Math.max(0, entry - current);
-    }
-
     private BigDecimal percentageChange(BigDecimal entry, BigDecimal current) {
         if (entry == null || entry.signum() == 0) return ZERO;
         return current.subtract(entry)
@@ -379,13 +335,5 @@ public class PositionManagementService {
         return value.length() <= max ? value : value.substring(0, max);
     }
 
-    private record ThesisComparison(
-            int entryTrend, int currentTrend, int trendDrop,
-            int entryStructure, int currentStructure, int structureDrop,
-            int entryMomentum, int currentMomentum, int momentumDrop,
-            int entryVolume, int currentVolume, int volumeDrop,
-            int entryConfidence, int currentConfidence, int confidenceDrop,
-            int entryTotal, int currentTotal, int totalDrop,
-            int trendPressure, int momentumPressure) {
-    }
+
 }

@@ -52,8 +52,12 @@ public class LivePositionProtectionService {
 
         // Reaching TP is a management checkpoint, not an unconditional full exit.
         if (managed.getTakeProfitUsdt() != null && price.compareTo(managed.getTakeProfitUsdt()) >= 0) {
+            // Pass the complete immutable BUY thesis. PositionContinuationPolicy and
+            // PositionManagementService now evaluate the same deterioration pressure (FIX-011).
             PositionContinuationPolicy.Evaluation continuation = continuationPolicy.evaluate(one, five, hour,
-                    managed.getEntryTrendScore(), managed.getEntryMomentumScore(), managed.getEntryVolumeScore());
+                    managed.getEntryTrendScore(), managed.getEntryStructureScore(),
+                    managed.getEntryMomentumScore(), managed.getEntryVolumeScore(),
+                    managed.getEntryConfidence(), managed.getEntryTotalScore());
             if (continuation.extendTarget()) {
                 BigDecimal distance = managed.getTakeProfitUsdt().subtract(managed.getAverageEntryPriceUsdt());
                 BigDecimal oldTarget = managed.getTakeProfitUsdt();
