@@ -99,7 +99,7 @@
             regression: "PositionPriceAuthorityPolicyTest reproduces the exact ALLO timing: 5m candle 18:15 + 5m = 18:20 observation, position opened 18:23:26, therefore 0.2806 is rejected for mechanical protection. A 1m candle whose close occurs after entry is accepted for historical replay. Proven uses this same production policy rather than a copied replay rule. Jenkins/Maven must run the full suite."
         },{
             id: "FIX-005",
-            status: "IMPLEMENTED",
+            status: "REFINED BY FIX-007",
             title: "Trade Inspector 14-day context and precise crosshair labels",
             scenario: "Trade Inspector historical BUY → SELL chart usability",
             symbol: "ALL",
@@ -139,6 +139,31 @@
             solution: "Keep every normal BUY/MTF/ATR/scoring rule untouched and replace only the pressure-probe detector with a sequence requirement: meaningful bullish burst, rejection with real sell pressure, retest that holds above the pre-burst structural low, repeated bullish pressure rebuild, and price reclaim. Execution remains restricted to current WATCH/NEUTRAL 1m signals with minimum production trend/volume/momentum quality, requires a recent 5m WATCH/BUY BREAKOUT setup, refuses a fresh 5m STRONG_SELL, keeps all existing FinalDecision/strategy/ATR/BTC/liquidity/derivatives gates, and caps exposure at 15%. A normal BUY is explicitly excluded from this route so the probe can never bypass normal validation.",
             behavior: "The old normal BUY path still has priority and behaves exactly as before. A single high taker-buy candle or first breakout attempt does not buy. The SOL false/early burst is observed only; the probe becomes eligible only after rejection, higher-low retest and pressure rebuild are complete. A bearish 1h can coexist with the 15% exploratory probe, but it still blocks normal/full-size confirmation. Existing progressive confirmation can add later; existing position management exits failures.",
             regression: "PressureReadinessServiceTest uses the real SOL 00:20-00:59 UTC candle sequence and proves the detector is NOT ready during the first burst but becomes ready after the higher-low retest/rebuild. It also verifies candle retrieval uses close_time <= generated_at to prevent replay look-ahead. ExecutionIntelligenceServiceTest proves the small SOL probe can coexist with a bearish 1h only when a prior 5m BREAKOUT setup exists, cannot invent that setup from candles alone, and that a valid normal direct BUY keeps priority. Proven/Regression continues to call the exact production ExecutionIntelligenceService.evaluateBuy(...) and PressureReadinessService; only persistence/wallet state is shadowed."
+        }
+
+        ,{
+            id: "FIX-007",
+            status: "IMPLEMENTED",
+            title: "Trade Inspector full-history Binance-style navigation",
+            scenario: "Trade Inspector forensic chart for all completed wallet trades",
+            symbol: "ALL",
+            entry: "BUY marker, entry-price line and jump-to-entry navigation",
+            exit: "SELL marker, exit-price line and persistent BUY → SELL lifecycle path",
+            entryTime: "UI historical navigation; no trading timestamp is modified",
+            exitTime: "UI historical navigation; no trading timestamp is modified",
+            location: "Trade Inspector chart API and browser rendering only",
+            classes: [
+                "com.crypto.inspector.service.TradeInspectorService",
+                "com.crypto.inspector.controller.TradeInspectorController",
+                "com.crypto.repository.CandleRepository",
+                "src/main/resources/static/js/trade-inspector.js",
+                "src/main/resources/static/trade-inspector.html",
+                "src/main/resources/static/css/trade-inspector.css"
+            ],
+            cause: "The prior FIX-005 chart was still bounded to seven days before BUY and seven days after SELL. That made deep historical inspection awkward and forced the user to change context windows instead of panning naturally through the complete persisted history. The default 1h overview also hid the minute-level behavior needed for entry/exit diagnosis.",
+            solution: "Keep the existing truthful candlestick rendering, BUY/SELL markers and lifecycle line, but make the chart endpoint return all real closed candles for the selected symbol/interval when no explicit range is supplied. Default the inspector to 1m, render the complete series, initially zoom around the selected trade, enable drag-to-pan and mouse-wheel zoom, and add Fit trade, Jump to entry and Full range controls. Add exact OHLC, volume, taker-buy percentage and number-of-trades hover details plus entry/exit/SL/TP horizontal reference lines. Missing candles are never synthesized.",
+            behavior: "Opening a trade loads the full closed-candle history for that symbol and interval while displaying a focused BUY→SELL viewport. The user can continuously drag left or right across the complete loaded dataset, zoom around the cursor, inspect exact candle data and return instantly to the trade or entry. Switching interval reloads the same full-history model at 1m/5m/1h/4h granularity.",
+            regression: "UI/API-only enhancement. Existing normal BUY, pressure-probe BUY, MTF confirmation, wallet execution, position protection and Replay/Proven Analysis logic are unchanged. JavaScript syntax validation passes. The chart endpoint remains read-only and only exposes persisted closed candles. Jenkins/Maven should run the complete application suite before deployment."
         }
 
     ];

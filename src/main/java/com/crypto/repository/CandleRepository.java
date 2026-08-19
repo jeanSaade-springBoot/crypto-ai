@@ -186,6 +186,14 @@ public interface CandleRepository extends JpaRepository<Candle, Long> {
             String symbol, String intervalCode, Instant from, Instant to
     );
 
+    /**
+     * Trade Inspector full-history source. This remains read-only and returns only
+     * real closed candles; the UI decides which visible window to focus initially.
+     */
+    List<Candle> findBySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeAsc(
+            String symbol, String intervalCode
+    );
+
     long countBySymbolAndIntervalCodeAndClosedTrue(
             String symbol,
             String intervalCode

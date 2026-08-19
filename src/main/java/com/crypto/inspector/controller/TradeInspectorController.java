@@ -35,9 +35,9 @@ public class TradeInspectorController {
     @ResponseBody
     public Map<String, Object> chart(
             @RequestParam String symbol,
-            @RequestParam(required = false, defaultValue = "5m") String interval,
-            @RequestParam Instant from,
-            @RequestParam Instant to) {
+            @RequestParam(required = false, defaultValue = "1m") String interval,
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to) {
         return service.chart(symbol, interval, from, to);
     }
 

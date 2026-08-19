@@ -56,16 +56,28 @@
                 <div class="inspector-chart-controls">
                     <label>Interval
                         <select id="inspected-trade-interval">
-                            <option value="1m">1 min</option>
+                            <option value="1m" selected>1 min</option>
                             <option value="5m">5 min</option>
-                            <option value="1h" selected>1 hour</option>
+                            <option value="1h">1 hour</option>
                             <option value="4h">4 hours</option>
                         </select>
                     </label>
+                    <div class="inspector-chart-nav" aria-label="Trade chart navigation">
+                        <button id="inspected-trade-fit" type="button" title="Fit the selected BUY to SELL lifecycle">Fit trade</button>
+                        <button id="inspected-trade-entry" type="button" title="Jump back to the entry candle">Jump to entry</button>
+                        <button id="inspected-trade-full" type="button" title="Show every loaded historical candle">Full range</button>
+                    </div>
                 </div>
             </div>
-            <p class="form-note">Historical context: 7 full days before BUY through 7 full days after SELL. Default is 1 hour for a readable 14-day overview; switch to 5m/1m and zoom for detail. Hover crosshairs show exact price and date/time to the minute.</p>
-            <div id="inspected-trade-chart" class="inspected-trade-chart"></div>
+            <p class="form-note">Full closed-candle history is loaded for the selected symbol and interval. The first view is focused around the BUY → SELL lifecycle; drag the chart left/right to pan through all loaded history, zoom in/out, or use the navigation buttons. Missing database candles stay visible as real gaps.</p>
+            <div class="inspector-chart-meta" id="inspected-trade-chart-meta">—</div>
+            <div class="inspector-chart-legend">
+                <span><i class="legend-dot buy-dot"></i>BUY</span>
+                <span><i class="legend-dot sell-dot"></i>SELL</span>
+                <span><i class="legend-line"></i>BUY → SELL lifecycle</span>
+                <span>Hover: OHLC · volume · taker buy % · trades</span>
+            </div>
+            <div id="inspected-trade-chart" class="inspected-trade-chart" tabindex="0" aria-label="Interactive candlestick chart"></div>
             <div id="inspected-trade-chart-empty" class="empty hidden">Historical candles are not available for this trade and interval.</div>
         </section>
 

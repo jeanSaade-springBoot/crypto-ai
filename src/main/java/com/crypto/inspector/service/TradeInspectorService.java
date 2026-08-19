@@ -221,30 +221,67 @@ public class TradeInspectorService {
     public Map<String, Object> chart(String requestedSymbol, String requestedInterval, Instant from, Instant to) {
         String symbol = normalizeSymbol(requestedSymbol);
         String interval = normalizeChartInterval(requestedInterval);
-        if (symbol == null || from == null || to == null || !to.isAfter(from)) {
-            throw new IllegalArgumentException("Symbol and a valid chart window are required.");
+        if (symbol == null) {
+            throw new IllegalArgumentException("Symbol is required.");
         }
-        // Same historical source used by the Proven Analyzed chart: real closed market candles only.
-        List<Candle> candles = candleRepository.findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(
-                symbol, interval, from, to).stream().filter(Candle::isClosed).toList();
+        if ((from == null) != (to == null)) {
+            throw new IllegalArgumentException("Chart from/to must either both be supplied or both be omitted.");
+        }
+        if (from != null && !to.isAfter(from)) {
+            throw new IllegalArgumentException("Chart 'to' must be after 'from'.");
+        }
+
+        /*
+         * FIX-007 / Trade Inspector navigation:
+         * - When no range is supplied, return the COMPLETE closed-candle history for
+         *   the selected symbol + interval. The browser renders the full series but
+         *   initially zooms around the inspected BUY/SELL, so panning left/right never
+         *   hits the old fixed +/-7-day wall.
+         * - A bounded range is still supported for backward compatibility.
+         * - Never synthesize/fill missing candles. Historical gaps remain visible so
+         *   the chart cannot imply market data that was never persisted.
+         * - This endpoint is read-only and does not touch trading/replay state.
+         */
+        List<Candle> candles = from == null
+                ? candleRepository.findBySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeAsc(symbol, interval)
+                : candleRepository.findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(symbol, interval, from, to)
+                    .stream().filter(Candle::isClosed).toList();
+
         List<Map<String, Object>> rows = candles.stream().map(c -> {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("openTime", c.getOpenTime());
+            row.put("closeTime", c.getCloseTime());
             row.put("openPrice", c.getOpenPrice());
             row.put("highPrice", c.getHighPrice());
             row.put("lowPrice", c.getLowPrice());
             row.put("closePrice", c.getClosePrice());
             row.put("volume", c.getVolume());
+            row.put("quoteAssetVolume", c.getQuoteAssetVolume());
+            row.put("numberOfTrades", c.getNumberOfTrades());
+            row.put("takerBuyBaseVolume", c.getTakerBuyBaseVolume());
+            BigDecimal takerBuyPercent = c.getVolume() == null || c.getVolume().signum() == 0 || c.getTakerBuyBaseVolume() == null
+                    ? BigDecimal.ZERO
+                    : c.getTakerBuyBaseVolume().multiply(HUNDRED).divide(c.getVolume(), 4, RoundingMode.HALF_UP);
+            row.put("takerBuyPercent", takerBuyPercent);
             return row;
         }).toList();
-        return Map.of("symbol", symbol, "interval", interval, "candles", rows);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("symbol", symbol);
+        response.put("interval", interval);
+        response.put("fullHistory", from == null);
+        response.put("pointCount", rows.size());
+        response.put("firstOpenTime", candles.isEmpty() ? null : candles.getFirst().getOpenTime());
+        response.put("lastOpenTime", candles.isEmpty() ? null : candles.getLast().getOpenTime());
+        response.put("candles", rows);
+        return response;
     }
 
     private String normalizeChartInterval(String interval) {
-        String value = interval == null ? "5m" : interval.trim().toLowerCase(Locale.ROOT);
+        String value = interval == null ? "1m" : interval.trim().toLowerCase(Locale.ROOT);
         return switch (value) {
             case "1m", "5m", "1h", "4h" -> value;
-            default -> "5m";
+            default -> "1m";
         };
     }
 
