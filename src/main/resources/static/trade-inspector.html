@@ -65,11 +65,12 @@
                     <div class="inspector-chart-nav" aria-label="Trade chart navigation">
                         <button id="inspected-trade-fit" type="button" title="Fit the selected BUY to SELL lifecycle">Fit trade</button>
                         <button id="inspected-trade-entry" type="button" title="Jump back to the entry candle">Jump to entry</button>
-                        <button id="inspected-trade-full" type="button" title="Show every loaded historical candle">Full range</button>
+                        <button id="inspected-trade-earliest" type="button" title="Jump to the earliest available historical candle">Earliest</button>
+                        <button id="inspected-trade-latest" type="button" title="Jump to the latest available historical candle">Latest</button>
                     </div>
                 </div>
             </div>
-            <p class="form-note">Full closed-candle history is loaded for the selected symbol and interval. The first view is focused around the BUY → SELL lifecycle; drag the chart left/right to pan through all loaded history, zoom in/out, or use the navigation buttons. Missing database candles stay visible as real gaps.</p>
+            <p class="form-note">The chart keeps a fast moving window of real closed candles while preserving access to the full stored history. The first view is focused around the BUY → SELL lifecycle. Use the chart zoom buttons, choose the pan-hand when you want to drag left/right, or jump to Earliest/Latest. Normal mouse-wheel and trackpad gestures scroll the page. Missing database candles stay visible as real gaps.</p>
             <div class="inspector-chart-meta" id="inspected-trade-chart-meta">—</div>
             <div class="inspector-chart-legend">
                 <span><i class="legend-dot buy-dot"></i>BUY</span>

@@ -161,12 +161,78 @@
                 "src/main/resources/static/css/trade-inspector.css"
             ],
             cause: "The prior FIX-005 chart was still bounded to seven days before BUY and seven days after SELL. That made deep historical inspection awkward and forced the user to change context windows instead of panning naturally through the complete persisted history. The default 1h overview also hid the minute-level behavior needed for entry/exit diagnosis.",
-            solution: "Keep the existing truthful candlestick rendering, BUY/SELL markers and lifecycle line, but make the chart endpoint return all real closed candles for the selected symbol/interval when no explicit range is supplied. Default the inspector to 1m, render the complete series, initially zoom around the selected trade, enable drag-to-pan and mouse-wheel zoom, and add Fit trade, Jump to entry and Full range controls. Add exact OHLC, volume, taker-buy percentage and number-of-trades hover details plus entry/exit/SL/TP horizontal reference lines. Missing candles are never synthesized.",
-            behavior: "Opening a trade loads the full closed-candle history for that symbol and interval while displaying a focused BUY→SELL viewport. The user can continuously drag left or right across the complete loaded dataset, zoom around the cursor, inspect exact candle data and return instantly to the trade or entry. Switching interval reloads the same full-history model at 1m/5m/1h/4h granularity.",
+            solution: "Keep the existing truthful candlestick rendering, BUY/SELL markers and lifecycle line, but make the chart endpoint return all real closed candles for the selected symbol/interval when no explicit range is supplied. Default the inspector to 1m, provide full-history navigation, initially focus around the selected trade, and expose Fit trade / Jump to entry navigation. FIX-009 later replaced complete-series rendering with lazy windows for performance. Add exact OHLC, volume, taker-buy percentage and number-of-trades hover details plus entry/exit/SL/TP horizontal reference lines. Missing candles are never synthesized.",
+            behavior: "Opening a trade exposes the full stored history while displaying a focused BUY→SELL viewport. FIX-009 later optimized this into lazy windows so deep history remains reachable without rendering every candle at once. Switching interval reloads the same full-history model at 1m/5m/1h/4h granularity.",
             regression: "UI/API-only enhancement. Existing normal BUY, pressure-probe BUY, MTF confirmation, wallet execution, position protection and Replay/Proven Analysis logic are unchanged. JavaScript syntax validation passes. The chart endpoint remains read-only and only exposes persisted closed candles. Jenkins/Maven should run the complete application suite before deployment."
+        },
+
+        {
+            id: "FIX-008",
+            title: "Trade Inspector chart no longer captures interval controls",
+            scenario: "Trade Inspector full-history chart interaction",
+            symbol: "ALL",
+            entry: "N/A",
+            exit: "N/A",
+            entryTime: "N/A",
+            exitTime: "N/A",
+            location: "Trade Inspector browser UI only",
+            classes: [
+                "src/main/resources/static/js/trade-inspector.js",
+                "src/main/resources/static/css/trade-inspector.css",
+                "src/main/resources/static/trade-inspector.html"
+            ],
+            cause: "FIX-007 opened ApexCharts with pan selected by default and applied a grab cursor to the complete chart host. On some layouts the interactive chart layer could visually/physically dominate the chart header area, making the interval selector feel captured by the hand/pan interaction.",
+            solution: "Keep full-history navigation unchanged, but start ApexCharts in normal zoom mode instead of pan mode. Pan remains available explicitly from the chart toolbar. Raise the interval selector and navigation toolbar above the chart canvas with their own pointer-event layer, remove the global grab cursor, and restrict wheel handling to the chart host only.",
+            behavior: "The 1m/5m/1h/4h dropdown and chart navigation buttons remain normally clickable. The hand cursor no longer covers the inspector controls. Users can zoom immediately and select the Apex pan tool when they want to drag left/right through full history.",
+            regression: "UI interaction only. No Java decision, execution, wallet, position, pressure-probe, Replay or Proven Analysis class is changed.",
+            status: "IMPLEMENTED"
+        }
+        ,{
+            id: "FIX-009",
+            title: "Trade Inspector lazy-window performance and native page scrolling",
+            scenario: "Trade Inspector lag after enabling full-history 1m navigation",
+            symbol: "ALL",
+            entry: "N/A",
+            exit: "N/A",
+            entryTime: "N/A",
+            exitTime: "N/A",
+            location: "Trade Inspector chart API and browser rendering only",
+            classes: [
+                "com.crypto.inspector.service.TradeInspectorService",
+                "com.crypto.repository.CandleRepository",
+                "src/main/resources/static/js/trade-inspector.js",
+                "src/main/resources/static/trade-inspector.html",
+                "src/main/resources/static/css/trade-inspector.css"
+            ],
+            cause: "The browser fetched and rendered the complete closed-candle history at once. On 1m data this can mean tens of thousands of candlesticks, making ApexCharts and even normal page scrolling feel frozen. A custom wheel handler also called preventDefault(), so wheel/trackpad gestures over the chart could not scroll the page.",
+            solution: "Preserve access to the complete stored history without rendering it all simultaneously. The chart API now returns bounded windows plus global first/last timestamps and total count. The browser keeps only a moving candle window and lazily replaces nearby history when panning approaches an edge. Remove custom wheel interception; use Apex zoom controls and explicit pan mode. Replace Full range with Earliest/Latest jumps so full-history navigation never forces every 1m candle into the browser.",
+            behavior: "Trade Inspector opens around the selected BUY→SELL lifecycle with a manageable candle block. Choose the pan hand to move left/right; additional windows load automatically near an edge. Earliest/Latest jump across the complete stored history. Mouse-wheel and trackpad gestures scroll the page normally, so the rest of Trade Inspector remains responsive.",
+            regression: "Read-only chart/UI performance fix only. No AnalysisService, FinalDecisionService, Execution Intelligence, pressure-probe, wallet, position management, Replay or Proven Analysis trading behavior was changed.",
+            status: "IMPLEMENTED"
         }
 
-    ];
+        ,{
+            id: "FIX-010",
+            title: "Trade Inspector Y-axis hover price badge",
+            scenario: "Binance-style chart hover should show the exact cursor price on the right Y axis",
+            symbol: "ALL",
+            entry: "N/A",
+            exit: "N/A",
+            entryTime: "N/A",
+            exitTime: "N/A",
+            location: "Trade Inspector chart hover/crosshair only",
+            classes: [
+                "src/main/resources/static/js/trade-inspector.js",
+                "src/main/resources/static/css/trade-inspector.css"
+            ],
+            cause: "The horizontal crosshair was visible, but the Y-axis hover value was not visually prominent enough to behave like Binance/TradingView.",
+            solution: "Keep the existing candlestick tooltip and X-axis time crosshair, and explicitly enable/style the ApexCharts Y-axis tooltip so the exact hovered price is displayed as a badge on the right price axis using the same adaptive candle-price precision.",
+            behavior: "Hovering the candle plot shows a horizontal crosshair with a clearly visible exact-price badge attached to the Y axis. The badge disappears when the hover leaves the plot.",
+            regression: "UI-only hover enhancement. No candle paging, zoom/pan behavior, signal logic, wallet logic, pressure-probe logic, Replay or Proven Analysis behavior is changed.",
+            status: "IMPLEMENTED"
+        }
+
+];
 
     const list = document.getElementById("fix-registry-list");
     const count = document.getElementById("fix-count");

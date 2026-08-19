@@ -232,20 +232,38 @@ public class TradeInspectorService {
         }
 
         /*
-         * FIX-007 / Trade Inspector navigation:
-         * - When no range is supplied, return the COMPLETE closed-candle history for
-         *   the selected symbol + interval. The browser renders the full series but
-         *   initially zooms around the inspected BUY/SELL, so panning left/right never
-         *   hits the old fixed +/-7-day wall.
-         * - A bounded range is still supported for backward compatibility.
-         * - Never synthesize/fill missing candles. Historical gaps remain visible so
-         *   the chart cannot imply market data that was never persisted.
-         * - This endpoint is read-only and does not touch trading/replay state.
+         * FIX-009 / Trade Inspector performance:
+         * Never return the complete 1m history in one response. ApexCharts becomes
+         * sluggish when tens of thousands of candlesticks are rendered together and
+         * can make the whole page feel frozen. The browser now requests bounded
+         * windows and lazily replaces the distant window while the user pans.
+         *
+         * Full-history NAVIGATION is preserved through firstOpenTime/lastOpenTime and
+         * totalPointCount. Missing candles remain truthful gaps; nothing is synthesized.
+         * This endpoint remains read-only and does not touch trading/replay state.
          */
-        List<Candle> candles = from == null
-                ? candleRepository.findBySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeAsc(symbol, interval)
-                : candleRepository.findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(symbol, interval, from, to)
+        Candle first = candleRepository
+                .findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeAsc(symbol, interval)
+                .orElse(null);
+        Candle last = candleRepository
+                .findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByCloseTimeDesc(symbol, interval)
+                .orElse(null);
+
+        List<Candle> candles;
+        if (from == null) {
+            // Defensive fallback for direct API calls: return only the latest bounded block.
+            if (last == null) {
+                candles = List.of();
+            } else {
+                candles = new ArrayList<>(candleRepository.findClosedCandlesClosedAtOrBefore(
+                        symbol, interval, last.getCloseTime(), PageRequest.of(0, 1200)));
+                Collections.reverse(candles);
+            }
+        } else {
+            candles = candleRepository
+                    .findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(symbol, interval, from, to)
                     .stream().filter(Candle::isClosed).toList();
+        }
 
         List<Map<String, Object>> rows = candles.stream().map(c -> {
             Map<String, Object> row = new LinkedHashMap<>();
@@ -269,10 +287,13 @@ public class TradeInspectorService {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("symbol", symbol);
         response.put("interval", interval);
-        response.put("fullHistory", from == null);
+        response.put("windowed", true);
         response.put("pointCount", rows.size());
-        response.put("firstOpenTime", candles.isEmpty() ? null : candles.getFirst().getOpenTime());
-        response.put("lastOpenTime", candles.isEmpty() ? null : candles.getLast().getOpenTime());
+        response.put("totalPointCount", candleRepository.countBySymbolAndIntervalCodeAndClosedTrue(symbol, interval));
+        response.put("firstOpenTime", first == null ? null : first.getOpenTime());
+        response.put("lastOpenTime", last == null ? null : last.getOpenTime());
+        response.put("windowStart", candles.isEmpty() ? null : candles.getFirst().getOpenTime());
+        response.put("windowEnd", candles.isEmpty() ? null : candles.getLast().getOpenTime());
         response.put("candles", rows);
         return response;
     }

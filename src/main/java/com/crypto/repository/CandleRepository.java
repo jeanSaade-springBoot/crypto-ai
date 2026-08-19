@@ -182,6 +182,11 @@ public interface CandleRepository extends JpaRepository<Candle, Long> {
             String intervalCode
     );
 
+    Optional<Candle> findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeAsc(
+            String symbol,
+            String intervalCode
+    );
+
     List<Candle> findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(
             String symbol, String intervalCode, Instant from, Instant to
     );

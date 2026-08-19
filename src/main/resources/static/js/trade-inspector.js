@@ -161,32 +161,108 @@ function inspectedChartAnnotations(t){
   return annotations;
 }
 
+const INSPECTOR_WINDOW_POINTS=1600;
+const INSPECTOR_EDGE_POINTS=260;
+let inspectedWindowTimer=null;
+let inspectedWindowRequest=0;
+
+function inspectedWindowBounds(min,max,step,fullStart=null,fullEnd=null){
+  const visibleSpan=Math.max(step*40,Number(max)-Number(min));
+  const buffer=Math.max(step*500,Math.min(step*INSPECTOR_WINDOW_POINTS,visibleSpan*1.4));
+  let from=Number(min)-buffer,to=Number(max)+buffer;
+  if(Number.isFinite(fullStart))from=Math.max(fullStart,from);
+  if(Number.isFinite(fullEnd))to=Math.min(fullEnd,to);
+  return {from,to};
+}
+
+async function fetchInspectedWindow(t,interval,fromMs,toMs){
+  const params=new URLSearchParams({
+    symbol:String(t.symbol||'').toUpperCase(),
+    interval,
+    from:new Date(fromMs).toISOString(),
+    to:new Date(toMs).toISOString()
+  });
+  const r=await fetch(`/api/trade-inspector/chart?${params.toString()}`,{cache:'no-store'});
+  if(!r.ok)throw new Error(`Chart HTTP ${r.status}`);
+  return r.json();
+}
+
+function inspectedRows(data){
+  const meta=new Map();
+  const candles=(data.candles||[]).map(c=>{
+    const when=window.CryptoTime.parseUtc(c.openTime);const ts=when?.getTime();
+    meta.set(Number(ts),c);
+    return {x:ts,y:[Number(c.openPrice),Number(c.highPrice),Number(c.lowPrice),Number(c.closePrice)]};
+  }).filter(c=>Number.isFinite(c.x)&&c.y.every(Number.isFinite));
+  return {candles,meta};
+}
+
+function inspectedMetaText(state){
+  const loaded=Number(state.candles?.length||0).toLocaleString();
+  const total=Number(state.totalPointCount||0).toLocaleString();
+  return `${loaded} ${state.interval} candles in active window · ${total} total available · history ${chartTimeLabel(state.fullStart)} → ${chartTimeLabel(state.fullEnd)} · choose pan hand to move left/right; more candles load automatically`;
+}
+
+async function replaceInspectedWindow(min,max){
+  const state=window.__inspectedChartState;
+  if(!state||!inspectedTradeChart||state.loading)return;
+  const bounds=inspectedWindowBounds(min,max,state.step,state.fullStart,state.fullEnd);
+  if(bounds.from>=state.loadedStart&&bounds.to<=state.loadedEnd)return;
+  const requestId=++inspectedWindowRequest;
+  state.loading=true;
+  $('inspected-trade-chart-meta').textContent='Loading nearby candles…';
+  try{
+    const data=await fetchInspectedWindow(state.trade,state.interval,bounds.from,bounds.to);
+    if(requestId!==inspectedWindowRequest)return;
+    const parsed=inspectedRows(data);
+    if(!parsed.candles.length)return;
+    state.candles=parsed.candles;
+    state.candleMeta=parsed.meta;
+    state.loadedStart=parsed.candles[0].x;
+    state.loadedEnd=parsed.candles[parsed.candles.length-1].x;
+    state.totalPointCount=Number(data.totalPointCount||state.totalPointCount||parsed.candles.length);
+    state.fullStart=window.CryptoTime.parseUtc(data.firstOpenTime)?.getTime()??state.fullStart;
+    state.fullEnd=window.CryptoTime.parseUtc(data.lastOpenTime)?.getTime()??state.fullEnd;
+    state.suppressWindowCheck=true;
+    await inspectedTradeChart.updateSeries([
+      {name:'Candles',type:'candlestick',data:state.candles},
+      {name:state.pathName,type:'line',data:state.path}
+    ],false);
+    inspectedTradeChart.zoomX(min,max);
+    requestAnimationFrame(()=>{if(window.__inspectedChartState)window.__inspectedChartState.suppressWindowCheck=false;});
+    $('inspected-trade-chart-meta').textContent=inspectedMetaText(state);
+  }finally{
+    if(window.__inspectedChartState)window.__inspectedChartState.loading=false;
+  }
+}
+
+function scheduleInspectedWindow(min,max){
+  const state=window.__inspectedChartState;
+  if(!state||state.suppressWindowCheck||state.loading)return;
+  state.visibleMin=Number(min);state.visibleMax=Number(max);
+  const edge=state.step*INSPECTOR_EDGE_POINTS;
+  const nearLeft=state.visibleMin-state.loadedStart<edge&&state.loadedStart>state.fullStart;
+  const nearRight=state.loadedEnd-state.visibleMax<edge&&state.loadedEnd<state.fullEnd;
+  if(!nearLeft&&!nearRight)return;
+  clearTimeout(inspectedWindowTimer);
+  inspectedWindowTimer=setTimeout(()=>replaceInspectedWindow(state.visibleMin,state.visibleMax).catch(e=>{
+    $('inspector-error').textContent=`Trade chart could not load nearby candles: ${e.message}`;
+    $('inspector-error').classList.remove('hidden');
+  }),140);
+}
+
 async function loadInspectedTradeChart(){
   const t=inspectedTradeFocus;
   if(!t)return;
   const opened=window.CryptoTime.parseUtc(t.openedAt),closed=window.CryptoTime.parseUtc(t.closedAt);
   if(!opened||!closed||Number.isNaN(opened.getTime())||Number.isNaN(closed.getTime()))return;
   const interval=$('inspected-trade-interval')?.value||'1m';
-
-  /*
-   * FIX-007: request the complete closed-candle history for this symbol/interval.
-   * The series stays complete while xaxis.min/max only define the initial viewport.
-   * This preserves free left/right panning without the former +/-7 day boundary.
-   */
-  const params=new URLSearchParams({symbol:String(t.symbol||'').toUpperCase(),interval});
-  const r=await fetch(`/api/trade-inspector/chart?${params.toString()}`,{cache:'no-store'});
-  if(!r.ok)throw new Error(`Chart HTTP ${r.status}`);
-  const data=await r.json();
-  const candleMeta=new Map();
-  const candles=(data.candles||[]).map(c=>{
-    const when=window.CryptoTime.parseUtc(c.openTime);const ts=when?.getTime();
-    const row={
-      x:ts,
-      y:[Number(c.openPrice),Number(c.highPrice),Number(c.lowPrice),Number(c.closePrice)]
-    };
-    candleMeta.set(Number(ts),c);
-    return row;
-  }).filter(c=>Number.isFinite(c.x)&&c.y.every(Number.isFinite));
+  const step=inspectedIntervalMs(interval);
+  const focus=inspectedFocusRange(t,interval,'trade')||{min:opened.getTime()-step*120,max:closed.getTime()+step*120};
+  const initialBounds=inspectedWindowBounds(focus.min,focus.max,step);
+  const data=await fetchInspectedWindow(t,interval,initialBounds.from,initialBounds.to);
+  const parsed=inspectedRows(data);
+  const candles=parsed.candles,candleMeta=parsed.meta;
 
   const empty=$('inspected-trade-chart-empty');
   if(!candles.length){
@@ -197,19 +273,25 @@ async function loadInspectedTradeChart(){
   }
   empty?.classList.add('hidden');
 
-  const fullStart=candles[0].x,fullEnd=candles[candles.length-1].x;
-  const initial=inspectedFocusRange(t,interval,'trade');
-  const initialMin=Math.max(fullStart,initial?.min??fullStart),initialMax=Math.min(fullEnd,initial?.max??fullEnd);
+  const fullStart=window.CryptoTime.parseUtc(data.firstOpenTime)?.getTime()??candles[0].x;
+  const fullEnd=window.CryptoTime.parseUtc(data.lastOpenTime)?.getTime()??candles[candles.length-1].x;
+  const initialMin=Math.max(fullStart,focus.min),initialMax=Math.min(fullEnd,focus.max);
   const pnl=Number(t.realizedPnlPercent??0);
   const path=[{x:opened.getTime(),y:Number(t.entryPrice)},{x:closed.getTime(),y:Number(t.exitPrice)}];
+  const pathName=`Trade Path · ${pnl>=0?'+':''}${pnl.toFixed(3)}%`;
 
-  window.__inspectedChartState={fullStart,fullEnd,interval,candleMeta,trade:t};
-  $('inspected-trade-chart-meta').textContent=`Loaded ${Number(data.pointCount||candles.length).toLocaleString()} ${interval} candles · ${chartTimeLabel(fullStart)} → ${chartTimeLabel(fullEnd)} · drag left/right to pan`;
+  window.__inspectedChartState={
+    fullStart,fullEnd,interval,step,candleMeta,candles,trade:t,path,pathName,
+    loadedStart:candles[0].x,loadedEnd:candles[candles.length-1].x,
+    totalPointCount:Number(data.totalPointCount||candles.length),
+    visibleMin:initialMin,visibleMax:initialMax,loading:false,suppressWindowCheck:false
+  };
+  $('inspected-trade-chart-meta').textContent=inspectedMetaText(window.__inspectedChartState);
 
   const customTooltip=({seriesIndex,dataPointIndex,w})=>{
     const point=w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex];
     const ts=Number(point?.x instanceof Date?point.x.getTime():point?.x);
-    const c=candleMeta.get(ts);
+    const c=window.__inspectedChartState?.candleMeta?.get(ts);
     if(c){
       const buyPct=Number(c.takerBuyPercent);
       return `<div class="inspector-candle-tooltip">
@@ -234,15 +316,15 @@ async function loadInspectedTradeChart(){
   const options={
     chart:{
       type:'line',height:540,background:'transparent',foreColor:'#8da2b1',animations:{enabled:false},
-      toolbar:{show:true,autoSelected:'pan',tools:{download:false,selection:true,zoom:true,zoomin:true,zoomout:true,pan:true,reset:true}},
+      toolbar:{show:true,autoSelected:'zoom',tools:{download:false,selection:true,zoom:true,zoomin:true,zoomout:true,pan:true,reset:true}},
       zoom:{enabled:true,type:'x',autoScaleYaxis:true},
       events:{
-        zoomed:(_ctx,{xaxis})=>{if(window.__inspectedChartState&&xaxis){window.__inspectedChartState.visibleMin=xaxis.min;window.__inspectedChartState.visibleMax=xaxis.max;}},
-        scrolled:(_ctx,{xaxis})=>{if(window.__inspectedChartState&&xaxis){window.__inspectedChartState.visibleMin=xaxis.min;window.__inspectedChartState.visibleMax=xaxis.max;}}
+        zoomed:(_ctx,{xaxis})=>{if(xaxis)scheduleInspectedWindow(xaxis.min,xaxis.max);},
+        scrolled:(_ctx,{xaxis})=>{if(xaxis)scheduleInspectedWindow(xaxis.min,xaxis.max);}
       }
     },
     title:{text:`${String(t.symbol||'').toUpperCase()} · ${interval} · Trade ${t.tradeHistoryId==null?'':`#${t.tradeHistoryId}`} · ${pnl>=0?'+':''}${pnl.toFixed(3)}%`,align:'left',style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'}},
-    series:[{name:'Candles',type:'candlestick',data:candles},{name:`Trade Path · ${pnl>=0?'+':''}${pnl.toFixed(3)}%`,type:'line',data:path}],
+    series:[{name:'Candles',type:'candlestick',data:candles},{name:pathName,type:'line',data:path}],
     stroke:{width:[1,2],curve:'straight',dashArray:[0,0]},markers:{size:[0,4]},dataLabels:{enabled:false},
     xaxis:{
       type:'datetime',min:initialMin,max:initialMax,tickAmount:10,
@@ -252,7 +334,10 @@ async function loadInspectedTradeChart(){
     },
     yaxis:{
       forceNiceScale:true,decimalsInFloat:8,
-      labels:{formatter:value=>chartPriceLabel(value)},tooltip:{enabled:true},
+      labels:{formatter:value=>chartPriceLabel(value)},
+      // FIX-010: keep an explicit Binance-style hover price badge on the Y axis.
+      // The badge follows the horizontal crosshair and uses the same precision as candle prices.
+      tooltip:{enabled:true,offsetX:0},
       crosshairs:{show:true,position:'front',stroke:{width:1,dashArray:3}}
     },
     grid:{borderColor:'#203342',xaxis:{lines:{show:false}},padding:{left:6,right:10}},theme:{mode:'dark'},
@@ -265,28 +350,11 @@ async function loadInspectedTradeChart(){
   inspectedTradeChart=new ApexCharts($('inspected-trade-chart'),options);
   await inspectedTradeChart.render();
 
-  // Mouse wheel zoom around the cursor, while drag remains dedicated to horizontal pan.
+  // FIX-009: do not hijack the mouse wheel. Vertical wheel/trackpad gestures must
+  // scroll the Trade Inspector page normally. Use Apex toolbar zoom buttons for
+  // chart zoom and explicitly choose the pan hand for left/right navigation.
   const host=$('inspected-trade-chart');
-  if(host){
-    host.onwheel=event=>{
-      if(!inspectedTradeChart||!window.__inspectedChartState)return;
-      event.preventDefault();
-      const state=window.__inspectedChartState;
-      const currentMin=Number(state.visibleMin??initialMin),currentMax=Number(state.visibleMax??initialMax);
-      const span=Math.max(inspectedIntervalMs(interval)*20,currentMax-currentMin);
-      const rect=host.getBoundingClientRect();
-      const ratio=Math.max(0,Math.min(1,(event.clientX-rect.left)/Math.max(1,rect.width)));
-      const anchor=currentMin+span*ratio;
-      const factor=event.deltaY<0?0.78:1.28;
-      let nextSpan=Math.max(inspectedIntervalMs(interval)*12,Math.min(fullEnd-fullStart,span*factor));
-      let nextMin=anchor-nextSpan*ratio,nextMax=nextMin+nextSpan;
-      if(nextMin<fullStart){nextMax+=fullStart-nextMin;nextMin=fullStart;}
-      if(nextMax>fullEnd){nextMin-=nextMax-fullEnd;nextMax=fullEnd;}
-      nextMin=Math.max(fullStart,nextMin);nextMax=Math.min(fullEnd,nextMax);
-      state.visibleMin=nextMin;state.visibleMax=nextMax;
-      inspectedTradeChart.zoomX(nextMin,nextMax);
-    };
-  }
+  if(host)host.onwheel=null;
 }
 
 async function showInspectedTradeChart(t){
@@ -297,16 +365,22 @@ async function showInspectedTradeChart(t){
   $('inspected-trade-chart-panel')?.scrollIntoView({behavior:'smooth',block:'start'});
 }
 
-function inspectedNavigate(mode){
+async function inspectedNavigate(mode){
   if(!inspectedTradeChart||!inspectedTradeFocus||!window.__inspectedChartState)return;
   const state=window.__inspectedChartState;
-  if(mode==='full'){
-    state.visibleMin=state.fullStart;state.visibleMax=state.fullEnd;
-    inspectedTradeChart.zoomX(state.fullStart,state.fullEnd);return;
+  let min,max;
+  if(mode==='earliest'){
+    const span=Math.max(state.step*240,Number(state.visibleMax-state.visibleMin)||state.step*480);
+    min=state.fullStart;max=Math.min(state.fullEnd,min+span);
+  }else if(mode==='latest'){
+    const span=Math.max(state.step*240,Number(state.visibleMax-state.visibleMin)||state.step*480);
+    max=state.fullEnd;min=Math.max(state.fullStart,max-span);
+  }else{
+    const range=inspectedFocusRange(inspectedTradeFocus,state.interval,mode==='entry'?'entry':'trade');
+    if(!range)return;
+    min=Math.max(state.fullStart,range.min);max=Math.min(state.fullEnd,range.max);
   }
-  const range=inspectedFocusRange(inspectedTradeFocus,state.interval,mode==='entry'?'entry':'trade');
-  if(!range)return;
-  const min=Math.max(state.fullStart,range.min),max=Math.min(state.fullEnd,range.max);
+  await replaceInspectedWindow(min,max);
   state.visibleMin=min;state.visibleMax=max;
   inspectedTradeChart.zoomX(min,max);
 }
@@ -317,6 +391,7 @@ document.addEventListener('click',event=>{
   showInspectedTradeChart(trade).catch(e=>{ $('inspector-error').textContent=`Trade chart could not load: ${e.message}`;$('inspector-error').classList.remove('hidden'); });
 });
 $('inspected-trade-interval')?.addEventListener('change',()=>loadInspectedTradeChart().catch(e=>{ $('inspector-error').textContent=`Trade chart could not load: ${e.message}`;$('inspector-error').classList.remove('hidden'); }));
-$('inspected-trade-fit')?.addEventListener('click',()=>inspectedNavigate('trade'));
-$('inspected-trade-entry')?.addEventListener('click',()=>inspectedNavigate('entry'));
-$('inspected-trade-full')?.addEventListener('click',()=>inspectedNavigate('full'));
+$('inspected-trade-fit')?.addEventListener('click',()=>inspectedNavigate('trade').catch(()=>{}));
+$('inspected-trade-entry')?.addEventListener('click',()=>inspectedNavigate('entry').catch(()=>{}));
+$('inspected-trade-earliest')?.addEventListener('click',()=>inspectedNavigate('earliest').catch(()=>{}));
+$('inspected-trade-latest')?.addEventListener('click',()=>inspectedNavigate('latest').catch(()=>{}));

@@ -25,5 +25,36 @@
 
 
 /* FIX-007: Binance-style full-history Trade Inspector navigation. */
-.inspector-chart-controls{flex-wrap:wrap;justify-content:flex-end}.inspector-chart-nav{display:flex;gap:7px;flex-wrap:wrap}.inspector-chart-nav button{padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,.025);color:var(--text);font-size:11px;font-weight:700;cursor:pointer}.inspector-chart-nav button:hover{border-color:var(--accent);background:rgba(57,217,138,.07)}.inspector-chart-meta{margin:8px 0 4px;color:var(--muted);font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace}.inspector-chart-legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:6px 0 8px;color:var(--muted);font-size:10px}.inspector-chart-legend span{display:inline-flex;align-items:center;gap:6px}.legend-dot{width:8px;height:8px;border-radius:50%;display:inline-block}.buy-dot{background:#39d98a}.sell-dot{background:#ff6b72}.legend-line{display:inline-block;width:18px;border-top:2px solid #e7c75f}.inspected-trade-chart{cursor:grab;outline:none}.inspected-trade-chart:active{cursor:grabbing}.inspector-candle-tooltip{min-width:190px;padding:10px 11px;background:#0d1820;border:1px solid #2a3f4d;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35);font-size:11px;line-height:1.45;color:#dbe8ef}.inspector-candle-tooltip .tooltip-time{font-weight:800;margin-bottom:6px;color:#fff}.inspector-candle-tooltip .tooltip-grid{display:grid;grid-template-columns:auto auto;gap:3px 12px}.inspector-candle-tooltip .tooltip-grid span:nth-child(odd){color:#8da2b1}.inspector-candle-tooltip .tooltip-grid strong{text-align:right;font-variant-numeric:tabular-nums}.inspector-candle-tooltip .tooltip-side{margin-top:6px;padding-top:6px;border-top:1px solid #203342;color:#e7c75f;font-weight:700}
+.inspector-chart-controls{flex-wrap:wrap;justify-content:flex-end}.inspector-chart-nav{display:flex;gap:7px;flex-wrap:wrap}.inspector-chart-nav button{padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,.025);color:var(--text);font-size:11px;font-weight:700;cursor:pointer}.inspector-chart-nav button:hover{border-color:var(--accent);background:rgba(57,217,138,.07)}.inspector-chart-meta{margin:8px 0 4px;color:var(--muted);font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace}.inspector-chart-legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:6px 0 8px;color:var(--muted);font-size:10px}.inspector-chart-legend span{display:inline-flex;align-items:center;gap:6px}.legend-dot{width:8px;height:8px;border-radius:50%;display:inline-block}.buy-dot{background:#39d98a}.sell-dot{background:#ff6b72}.legend-line{display:inline-block;width:18px;border-top:2px solid #e7c75f}.inspector-chart-panel .section-heading,.inspector-chart-controls,.inspector-chart-controls label,.inspector-chart-controls select,.inspector-chart-nav{position:relative;z-index:20;pointer-events:auto}.inspected-trade-chart{position:relative;z-index:1;cursor:default;outline:none}.inspected-trade-chart .apexcharts-canvas{z-index:1}.inspected-trade-chart .apexcharts-pan-icon.selected~*{cursor:grab}.inspector-candle-tooltip{min-width:190px;padding:10px 11px;background:#0d1820;border:1px solid #2a3f4d;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35);font-size:11px;line-height:1.45;color:#dbe8ef}.inspector-candle-tooltip .tooltip-time{font-weight:800;margin-bottom:6px;color:#fff}.inspector-candle-tooltip .tooltip-grid{display:grid;grid-template-columns:auto auto;gap:3px 12px}.inspector-candle-tooltip .tooltip-grid span:nth-child(odd){color:#8da2b1}.inspector-candle-tooltip .tooltip-grid strong{text-align:right;font-variant-numeric:tabular-nums}.inspector-candle-tooltip .tooltip-side{margin-top:6px;padding-top:6px;border-top:1px solid #203342;color:#e7c75f;font-weight:700}
 @media(max-width:760px){.inspector-chart-controls{align-items:stretch}.inspector-chart-nav{width:100%}.inspector-chart-nav button{flex:1}.inspector-chart-legend{gap:8px 12px}}
+
+/* FIX-008: keep chart interaction below toolbar/select controls. */
+#inspected-trade-interval{position:relative;z-index:30;pointer-events:auto;cursor:pointer}
+.inspector-chart-controls button{position:relative;z-index:30;pointer-events:auto}
+
+
+/* FIX-009: keep the page responsive while chart history is lazily windowed. */
+.inspected-trade-chart{touch-action:pan-y;contain:layout paint;will-change:auto}
+.inspector-chart-panel{overscroll-behavior:auto}
+
+
+/* FIX-010: make the hover price on the right Y axis obvious, Binance-style. */
+#inspected-trade-chart .apexcharts-yaxistooltip {
+  background:#152430 !important;
+  border:1px solid #486477 !important;
+  color:#f4f8fb !important;
+  border-radius:4px !important;
+  box-shadow:0 2px 8px rgba(0,0,0,.35) !important;
+  font-size:11px !important;
+  font-weight:700 !important;
+  padding:4px 7px !important;
+  z-index:12 !important;
+}
+#inspected-trade-chart .apexcharts-yaxistooltip-left:before,
+#inspected-trade-chart .apexcharts-yaxistooltip-left:after {
+  border-left-color:#486477 !important;
+}
+#inspected-trade-chart .apexcharts-yaxistooltip-right:before,
+#inspected-trade-chart .apexcharts-yaxistooltip-right:after {
+  border-right-color:#486477 !important;
+}
