@@ -47,38 +47,46 @@
         </section>
 
 
-        <section id="inspected-trade-chart-panel" class="panel inspector-chart-panel hidden">
-            <div class="section-heading">
-                <div>
-                    <p class="eyebrow">INSPECTED TRADE · HISTORICAL CONTEXT</p>
-                    <h2 id="inspected-trade-chart-title">Trade chart</h2>
-                </div>
-                <div class="inspector-chart-controls">
-                    <label>Interval
-                        <select id="inspected-trade-interval">
-                            <option value="1m" selected>1 min</option>
-                            <option value="5m">5 min</option>
-                            <option value="1h">1 hour</option>
-                            <option value="4h">4 hours</option>
-                        </select>
-                    </label>
-                    <div class="inspector-chart-nav" aria-label="Trade chart navigation">
-                        <button id="inspected-trade-fit" type="button" title="Fit the selected BUY to SELL lifecycle">Fit trade</button>
-                        <button id="inspected-trade-entry" type="button" title="Jump back to the entry candle">Jump to entry</button>
-                        <button id="inspected-trade-earliest" type="button" title="Jump to the earliest available historical candle">Earliest</button>
-                        <button id="inspected-trade-latest" type="button" title="Jump to the latest available historical candle">Latest</button>
+        <!-- FIX-019: Trade Inspector uses the same focused popup chart as Proven Trades.
+             The parent inspector remains visible but dimmed while the selected trade stays in context. -->
+        <div id="inspected-trade-chart-panel" class="inspector-trade-chart-modal hidden" aria-hidden="true">
+            <div class="inspector-trade-chart-backdrop" data-inspector-popup-close="1"></div>
+            <section class="inspector-trade-chart-dialog" role="dialog" aria-modal="true" aria-labelledby="inspected-trade-chart-title">
+                <div class="section-heading inspector-popup-head">
+                    <div>
+                        <p class="eyebrow">INSPECTED TRADE · HISTORICAL CONTEXT</p>
+                        <h2 id="inspected-trade-chart-title">Trade chart</h2>
+                    </div>
+                    <div class="inspector-chart-controls">
+                        <label>Interval
+                            <select id="inspected-trade-interval">
+                                <option value="1m" selected>1 min</option>
+                                <option value="5m">5 min</option>
+                                <option value="1h">1 hour</option>
+                                <option value="4h">4 hours</option>
+                            </select>
+                        </label>
+                        <div class="inspector-chart-nav" aria-label="Trade chart navigation">
+                            <button id="inspected-trade-fit" type="button" title="Fit the selected BUY to SELL lifecycle">Fit trade</button>
+                            <button id="inspected-trade-entry" type="button" title="Jump back to the entry candle">Jump to entry</button>
+                            <button id="inspected-trade-earliest" type="button" title="Jump to the earliest available historical candle">Earliest</button>
+                            <button id="inspected-trade-latest" type="button" title="Jump to the latest available historical candle">Latest</button>
+                            <button id="inspected-trade-close" type="button" title="Close inspected trade chart">Close</button>
+                        </div>
                     </div>
                 </div>
-            </div>
-            <div class="inspector-chart-legend">
-                <span><i class="legend-dot buy-dot"></i>BUY</span>
-                <span><i class="legend-dot sell-dot"></i>SELL</span>
-                <span><i class="legend-line"></i>BUY → SELL lifecycle</span>
-                <span>Hover: OHLC · volume · taker buy % · trades</span>
-            </div>
-            <div id="inspected-trade-chart" class="inspected-trade-chart" tabindex="0" aria-label="Interactive candlestick chart"></div>
-            <div id="inspected-trade-chart-empty" class="empty hidden">Historical candles are not available for this trade and interval.</div>
-        </section>
+                <div class="inspector-chart-legend">
+                    <span><i class="legend-dot buy-dot"></i>BUY</span>
+                    <span><i class="legend-dot sell-dot"></i>SELL</span>
+                    <span><i class="legend-line"></i>BUY → SELL lifecycle</span>
+                    <span>Hover: OHLC · volume · taker buy % · trades · X date/time · Y price</span>
+                </div>
+                <div class="inspector-popup-chart-wrap">
+                    <div id="inspected-trade-chart" class="inspected-trade-chart" tabindex="0" aria-label="Interactive candlestick chart"></div>
+                    <div id="inspected-trade-chart-empty" class="empty hidden">Historical candles are not available for this trade and interval.</div>
+                </div>
+            </section>
+        </div>
 
         <section class="panel">
             <div class="section-heading">

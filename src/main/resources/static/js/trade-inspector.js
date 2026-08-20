@@ -327,7 +327,9 @@ async function loadInspectedTradeChart(){
       type:'datetime',min:initialMin,max:initialMax,tickAmount:10,
       labels:{datetimeUTC:false,hideOverlappingLabels:true,formatter:(value,timestamp)=>chartTimeLabel(timestamp??value)},
       axisTicks:{show:true},crosshairs:{show:true,position:'front',stroke:{width:1,dashArray:3}},
-      tooltip:{enabled:true,formatter:value=>chartTimeLabel(value,true)}
+      // FIX-019: X-axis date/time is rendered by the dedicated crosshair layer so it
+      // survives interval changes and Apex toolbar mode changes consistently.
+      tooltip:{enabled:false}
     },
     yaxis:{
       // FIX-010: Binance/TradingView-style price scale lives on the right side.
@@ -336,7 +338,8 @@ async function loadInspectedTradeChart(){
       labels:{formatter:value=>chartPriceLabel(value)},
       // FIX-010: keep an explicit Binance-style hover price badge on the Y axis.
       // The badge follows the horizontal crosshair and uses the same precision as candle prices.
-      tooltip:{enabled:true,offsetX:0},
+      // FIX-019: Y-axis price is rendered by the dedicated crosshair layer.
+      tooltip:{enabled:false},
       crosshairs:{show:true,position:'front',stroke:{width:1,dashArray:3}}
     },
     grid:{borderColor:'#203342',xaxis:{lines:{show:false}},yaxis:{lines:{show:true}},padding:{left:6,right:10}},theme:{mode:'dark'},
@@ -397,45 +400,72 @@ function inspectorVisibleYRange(chart){
 }
 
 function installInspectorYAxisHoverPrice(host, chart){
-  // Remove listeners belonging to the previous interval/chart instance first.
-  // Without this cleanup an old destroyed ApexCharts closure can keep handling hover.
+  // FIX-019: Trade Inspector now shares the Proven/Test full X/Y crosshair behavior.
+  // The custom layer is lifecycle-safe: interval changes destroy the old chart/listeners,
+  // while zoom/pan/reset simply rebind against Apex's current visible scale. It is display-only
+  // and never owns pointer events, so toolbar, wheel, page scrolling and chart gestures remain intact.
   if(typeof host.__inspectorYAxisHoverCleanup==='function')host.__inspectorYAxisHoverCleanup();
-  host.querySelector('.inspector-y-hover-price')?.remove();
+  host.querySelectorAll('.inspector-crosshair-v,.inspector-crosshair-h,.inspector-axis-hover-label,.inspector-y-hover-price').forEach(el=>el.remove());
 
-  const badge=document.createElement('div');
-  badge.className='inspector-y-hover-price';
-  badge.setAttribute('aria-hidden','true');
-  host.appendChild(badge);
+  const make=(className)=>{const el=document.createElement('div');el.className=className;el.setAttribute('aria-hidden','true');host.appendChild(el);return el;};
+  const ui={
+    vertical:make('inspector-crosshair-v'),
+    horizontal:make('inspector-crosshair-h'),
+    price:make('inspector-axis-hover-label inspector-crosshair-price'),
+    time:make('inspector-axis-hover-label inspector-crosshair-time')
+  };
   host.__inspectorYAxisHoverChart=chart;
 
-  const hide=()=>{badge.style.display='none';};
+  const hide=()=>Object.values(ui).forEach(el=>{el.style.display='none';});
   const move=(event)=>{
     const activeChart=host.__inspectorYAxisHoverChart||inspectedTradeChart;
     const grid=host.querySelector('.apexcharts-grid')||host.querySelector('.apexcharts-inner');
-    const yAxis=host.querySelector('.apexcharts-yaxis');
-    if(!grid||!yAxis||!activeChart){hide();return;}
-    const gridRect=grid.getBoundingClientRect();
+    if(!grid||!activeChart?.w?.globals){hide();return;}
+    const rect=grid.getBoundingClientRect();
     const hostRect=host.getBoundingClientRect();
-    if(event.clientX<gridRect.left||event.clientX>gridRect.right||event.clientY<gridRect.top||event.clientY>gridRect.bottom){hide();return;}
+    if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom){hide();return;}
 
-    const range=inspectorVisibleYRange(activeChart);
-    if(!range){hide();return;}
-    const ratio=Math.min(1,Math.max(0,(event.clientY-gridRect.top)/Math.max(1,gridRect.height)));
-    const value=range.max-ratio*(range.max-range.min);
-    badge.textContent=chartPriceLabel(value);
-    badge.style.display='block';
-    badge.style.top=`${event.clientY-hostRect.top}px`;
-    badge.style.right='0px';
+    const globals=activeChart.w.globals;
+    const yRange=inspectorVisibleYRange(activeChart);
+    const minX=Number(globals.minX ?? window.__inspectedChartState?.visibleMin);
+    const maxX=Number(globals.maxX ?? window.__inspectedChartState?.visibleMax);
+    if(!yRange||!Number.isFinite(minX)||!Number.isFinite(maxX)||maxX<=minX){hide();return;}
+
+    const gx=rect.left-hostRect.left,gy=rect.top-hostRect.top;
+    const px=event.clientX-rect.left,py=event.clientY-rect.top;
+    const xRatio=Math.min(1,Math.max(0,px/Math.max(1,rect.width)));
+    const yRatio=Math.min(1,Math.max(0,py/Math.max(1,rect.height)));
+    const timeValue=minX+xRatio*(maxX-minX);
+    const priceValue=yRange.max-yRatio*(yRange.max-yRange.min);
+
+    ui.vertical.style.display='block';
+    ui.vertical.style.left=`${gx+px}px`;
+    ui.vertical.style.top=`${gy}px`;
+    ui.vertical.style.height=`${rect.height}px`;
+
+    ui.horizontal.style.display='block';
+    ui.horizontal.style.left=`${gx}px`;
+    ui.horizontal.style.top=`${gy+py}px`;
+    ui.horizontal.style.width=`${rect.width}px`;
+
+    ui.price.textContent=chartPriceLabel(priceValue);
+    ui.price.style.display='block';
+    ui.price.style.left=`${gx+rect.width+4}px`;
+    ui.price.style.top=`${gy+py}px`;
+
+    ui.time.textContent=chartTimeLabel(timeValue,true);
+    const labelLeft=Math.max(gx+72,Math.min(gx+rect.width-72,gx+px));
+    ui.time.style.display='block';
+    ui.time.style.left=`${labelLeft}px`;
+    ui.time.style.top=`${gy+rect.height+5}px`;
   };
 
-  // Capture-phase pointer handling survives Apex toolbar mode changes (zoom/pan/selection)
-  // even when SVG interaction layers stop normal bubbling. The badge never captures input.
   host.addEventListener('pointermove',move,{passive:true,capture:true});
   host.addEventListener('pointerleave',hide,{passive:true,capture:true});
   host.__inspectorYAxisHoverCleanup=()=>{
     host.removeEventListener('pointermove',move,true);
     host.removeEventListener('pointerleave',hide,true);
-    badge.remove();
+    Object.values(ui).forEach(el=>el.remove());
     host.__inspectorYAxisHoverCleanup=null;
     host.__inspectorYAxisHoverChart=null;
   };
@@ -443,10 +473,25 @@ function installInspectorYAxisHoverPrice(host, chart){
 
 async function showInspectedTradeChart(t){
   inspectedTradeFocus=t;
-  $('inspected-trade-chart-panel')?.classList.remove('hidden');
+  const modal=$('inspected-trade-chart-panel');
+  modal?.classList.remove('hidden');
+  modal?.setAttribute('aria-hidden','false');
+  document.body.classList.add('inspector-modal-open');
   $('inspected-trade-chart-title').textContent=`${String(t.symbol||'').toUpperCase()} · inspected BUY → SELL`;
   await loadInspectedTradeChart();
-  $('inspected-trade-chart-panel')?.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+function closeInspectedTradeChart(){
+  const modal=$('inspected-trade-chart-panel');
+  modal?.classList.add('hidden');
+  modal?.setAttribute('aria-hidden','true');
+  document.body.classList.remove('inspector-modal-open');
+  const host=$('inspected-trade-chart');
+  if(host&&typeof host.__inspectorYAxisHoverCleanup==='function')host.__inspectorYAxisHoverCleanup();
+  if(inspectedTradeChart){inspectedTradeChart.destroy();inspectedTradeChart=null;}
+  if(host)host.innerHTML='';
+  window.__inspectedChartState=null;
+  inspectedTradeFocus=null;
 }
 
 async function inspectedNavigate(mode){
@@ -475,6 +520,9 @@ document.addEventListener('click',event=>{
   showInspectedTradeChart(trade).catch(e=>{ $('inspector-error').textContent=`Trade chart could not load: ${e.message}`;$('inspector-error').classList.remove('hidden'); });
 });
 $('inspected-trade-interval')?.addEventListener('change',()=>loadInspectedTradeChart().catch(e=>{ $('inspector-error').textContent=`Trade chart could not load: ${e.message}`;$('inspector-error').classList.remove('hidden'); }));
+$('inspected-trade-close')?.addEventListener('click',closeInspectedTradeChart);
+document.addEventListener('click',event=>{if(event.target.closest('[data-inspector-popup-close]'))closeInspectedTradeChart();});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&inspectedTradeFocus)closeInspectedTradeChart();});
 $('inspected-trade-fit')?.addEventListener('click',()=>inspectedNavigate('trade').catch(()=>{}));
 $('inspected-trade-entry')?.addEventListener('click',()=>inspectedNavigate('entry').catch(()=>{}));
 $('inspected-trade-earliest')?.addEventListener('click',()=>inspectedNavigate('earliest').catch(()=>{}));

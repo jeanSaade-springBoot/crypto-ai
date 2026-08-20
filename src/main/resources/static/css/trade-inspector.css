@@ -89,3 +89,25 @@
   pointer-events:none;
   z-index:30;
 }
+
+/* FIX-019: Trade Inspector uses the same focused chart overlay as Proven/Test review.
+   The parent page remains visible but dimmed, so the selected trade keeps its context. */
+.inspector-trade-chart-modal{position:fixed;inset:0;z-index:2200;display:grid;place-items:center;padding:24px}
+.inspector-trade-chart-modal.hidden{display:none}
+.inspector-trade-chart-backdrop{position:absolute;inset:0;background:rgba(2,8,18,.76);backdrop-filter:blur(2px)}
+.inspector-trade-chart-dialog{position:relative;z-index:1;width:min(1180px,calc(100vw - 48px));max-height:calc(100vh - 48px);overflow:auto;border:1px solid var(--border,#203342);border-radius:16px;background:#0b1420;box-shadow:0 24px 70px rgba(0,0,0,.5);padding:18px}
+.inspector-popup-head{gap:18px;align-items:flex-start}
+.inspector-popup-chart-wrap{position:relative;min-height:540px;border:1px solid rgba(141,162,177,.18);border-radius:12px;overflow:hidden;background:rgba(5,12,20,.42)}
+body.inspector-modal-open{overflow:hidden}
+
+/* FIX-019: Dedicated X/Y crosshair labels are independent from Apex tooltip lifecycle.
+   pointer-events remain disabled so the overlay never blocks pan/zoom/toolbar interaction. */
+#inspected-trade-chart .inspector-crosshair-v,
+#inspected-trade-chart .inspector-crosshair-h,
+#inspected-trade-chart .inspector-axis-hover-label{position:absolute;z-index:18;pointer-events:none;display:none}
+#inspected-trade-chart .inspector-crosshair-v{width:1px;background:rgba(210,224,235,.48)}
+#inspected-trade-chart .inspector-crosshair-h{height:1px;background:rgba(210,224,235,.48)}
+#inspected-trade-chart .inspector-axis-hover-label{background:#dbe8ef;color:#071018;border-radius:4px;padding:3px 6px;font-size:.72rem;line-height:1.2;white-space:nowrap;font-variant-numeric:tabular-nums}
+#inspected-trade-chart .inspector-crosshair-price{transform:translateY(-50%)}
+#inspected-trade-chart .inspector-crosshair-time{transform:translateX(-50%)}
+@media(max-width:700px){.inspector-trade-chart-modal{padding:10px}.inspector-trade-chart-dialog{width:calc(100vw - 20px);max-height:calc(100vh - 20px);padding:12px}.inspector-popup-head{flex-direction:column}.inspector-popup-chart-wrap,.inspected-trade-chart{min-height:430px}}

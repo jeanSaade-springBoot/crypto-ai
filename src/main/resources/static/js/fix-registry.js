@@ -414,6 +414,28 @@
             behavior: "View Chart opens above the trade being reviewed instead of navigating away. The parent test remains visible but faded. Hover anywhere inside the candle plot shows a vertical time line, horizontal price line, exact Y-axis price badge and X-axis date/time badge. The behavior continues after changing 1m/5m/1h/4h and after zoom/pan/reset actions.",
             regression: "UI-only review enhancement. No signal scoring, BUY/SELL authority, opportunity lifecycle, wallet execution, position management, FIX-014 setup wake-up or replay calculation is changed. JavaScript syntax validation must pass.",
             status: "IMPLEMENTED"
+        },
+        {
+            id: "FIX-019",
+            title: "Trade Inspector uses focused modal chart with persistent Binance-style X/Y crosshair",
+            scenario: "Inspecting a completed wallet trade should keep the parent Trade Inspector visible while chart hover continues to show exact price and date/time after interval and toolbar changes",
+            symbol: "ALL",
+            entry: "Selected Trade Inspector BUY marker remains visible in the popup chart",
+            exit: "Selected Trade Inspector SELL marker and BUY → SELL lifecycle line remain visible in the popup chart",
+            entryTime: "Uses the exact selected wallet trade BUY execution time",
+            exitTime: "Uses the exact selected wallet trade SELL execution time",
+            replayWindow: "No strategy replay required; validate on any Trade Inspector row by opening View chart, switching 1m/5m/1h/4h, using zoom/pan/reset, then hovering across the plot",
+            location: "Trade Inspector browser UI only",
+            classes: [
+                "src/main/resources/static/trade-inspector.html",
+                "src/main/resources/static/js/trade-inspector.js",
+                "src/main/resources/static/css/trade-inspector.css"
+            ],
+            cause: "Trade Inspector still used an inline chart panel and a Y-only custom hover badge. That differed from FIX-018 Proven/Test review and could lose useful hover context after interval recreation or Apex toolbar actions. It also did not provide a dedicated X-axis date/time badge paired with the Y-axis price.",
+            solution: "Reuse the FIX-018 interaction pattern in Trade Inspector: open the selected trade chart in a centered modal overlay that dims the parent page, preserve the existing real candle endpoint, BUY/SELL markers and lifecycle line, and replace the Y-only helper with a lifecycle-safe dedicated vertical/horizontal crosshair. The crosshair maps the pointer to Apex's current visible X/Y ranges and renders browser-local date/time below the X axis plus adaptive-precision price beside the Y axis. Old listeners are removed whenever the interval recreates the chart and are rebound after zoom/pan/reset updates.",
+            behavior: "Trade Inspector View chart now opens above the selected trade instead of scrolling to an inline panel. Hover anywhere inside the candle plot shows both crosshair lines, exact Y price and X date/time, including after interval changes and chart toolbar actions. Close button, backdrop click and Escape return to the unchanged parent inspector.",
+            regression: "UI-only enhancement. Existing Trade Inspector candle loading, BUY/SELL annotations, trade-path rendering, history navigation, signal scoring, execution intelligence, opportunity lifecycle, wallet execution, replay and position management are unchanged. JavaScript syntax validation must pass.",
+            status: "IMPLEMENTED"
         }
 
 ];
