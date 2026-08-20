@@ -54,6 +54,7 @@ function tradeCard(t){
    <div class="inspector-symbol"><strong>${esc(t.symbol)}</strong>${t.tradeHistoryId==null?'':`<span class="trade-reference">Trade #${esc(t.tradeHistoryId)}</span>`}<span class="badge buy">BUY ↑</span><span class="trade-action-arrow">→</span><span class="badge sell">SELL ↓</span><span class="quality ${qualityClass(t.exitQuality)}">${qualityLabel(t.exitQuality)}</span></div>
    <div class="inspector-head-actions">
     <button type="button" class="trade-chart-link" data-inspect-chart="1" data-trade-id="${esc(t.tradeHistoryId??t.walletSellTradeId??'')}" title="Inspect only this BUY/SELL on the dedicated chart"><span>↗</span> View chart</button>
+    <button type="button" class="trade-chart-link trade-path-link" data-inspect-path="1" data-trade-id="${esc(t.tradeHistoryId??t.walletSellTradeId??'')}" title="View the persisted decision and state path for this trade"><span>⌁</span> View path</button>
     <div class="inspector-result"><strong class="${resultClass}">${money(t.realizedPnl)} · ${pct(t.realizedPnlPercent)}</strong><small>${duration(t.holdingMinutes)} holding time · ${esc(t.closeReason||t.status)}</small></div>
    </div>
   </div>
@@ -527,3 +528,96 @@ $('inspected-trade-fit')?.addEventListener('click',()=>inspectedNavigate('trade'
 $('inspected-trade-entry')?.addEventListener('click',()=>inspectedNavigate('entry').catch(()=>{}));
 $('inspected-trade-earliest')?.addEventListener('click',()=>inspectedNavigate('earliest').catch(()=>{}));
 $('inspected-trade-latest')?.addEventListener('click',()=>inspectedNavigate('latest').catch(()=>{}));
+
+
+// FIX-024: Trade Inspector View Path. This is intentionally presentation-only:
+// it renders persisted production signal/opportunity/wallet evidence returned by the
+// read-only path endpoint and never recalculates trading rules in JavaScript.
+function ksaDateTime(value){
+  if(!value)return '—';
+  const d=new Date(value);if(Number.isNaN(d.getTime()))return '—';
+  return new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(d)+' KSA';
+}
+function secondsLabel(value){
+  const total=Math.max(0,Math.round(Number(value||0)));
+  const h=Math.floor(total/3600),m=Math.floor((total%3600)/60),sec=total%60;
+  if(h)return `${h}h ${m}m ${sec}s`;
+  if(m)return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+function pathValue(value,suffix=''){return value===null||value===undefined||value===''?'—':`${esc(value)}${suffix}`}
+function pathSignalCard(label,s){
+  if(!s||!s.id)return `<article class="trade-path-node muted"><div class="trade-path-node-head"><strong>${esc(label)}</strong><span>Unavailable</span></div></article>`;
+  return `<article class="trade-path-node">
+    <div class="trade-path-node-head"><strong>${esc(label)} · ${esc(s.interval||'')}</strong><span>${ksaDateTime(s.generatedAt)}</span></div>
+    <div class="trade-path-primary"><b>${esc(s.decision||'—')}</b><span>${pathValue(s.score)}/100 · confidence ${pathValue(s.confidence)}/100 · ${price(s.price)}</span></div>
+    <div class="trade-path-stat-grid">
+      <div><small>Trend</small><strong>${pathValue(s.trend)}</strong></div><div><small>Volume</small><strong>${pathValue(s.volume)}</strong></div><div><small>Momentum</small><strong>${pathValue(s.momentum)}</strong></div>
+      <div><small>Regime</small><strong>${pathValue(s.regime)}</strong></div><div><small>Strategy</small><strong>${pathValue(s.strategy)}</strong></div><div><small>Confluence</small><strong>${pathValue(s.confluence)}</strong></div>
+    </div>
+  </article>`;
+}
+function contributor(label,status,body,kind=''){
+  return `<article class="trade-contributor ${esc(kind)}"><div class="trade-contributor-head"><strong>${esc(label)}</strong><span>${esc(status||'—')}</span></div><div class="trade-contributor-body">${body}</div></article>`;
+}
+function decisionPathRows(raw){
+  if(!raw)return '<div class="empty">No persisted final-decision path is available for this entry signal.</div>';
+  try{
+    const rows=typeof raw==='string'?JSON.parse(raw):raw;
+    if(!Array.isArray(rows)||!rows.length)return '<div class="empty">No persisted final-decision checks.</div>';
+    return `<div class="decision-check-list">${rows.map(r=>`<div class="decision-check ${String(r.type||'').toLowerCase()}"><span class="decision-check-seq">${esc(r.sequence??'')}</span><div><strong>${esc(r.source||r.type||'CHECK')} · ${esc(r.beforeDecision||'—')} → ${esc(r.afterDecision||'—')}</strong><p>${esc(r.reason||'')}</p></div><span class="decision-check-state">${r.entryAllowedAfter===false?'BLOCKED':'PASS'}</span></div>`).join('')}</div>`;
+  }catch(_){return `<pre class="trade-path-json">${esc(raw)}</pre>`;}
+}
+function renderTradePath(data){
+  const one=data.oneMinute||{},five=data.fiveMinute||{},hour=data.oneHour||{},entry=data.entrySignal||one,opp=data.opportunity||{},mgmt=data.management||{};
+  $('inspected-trade-path-title').textContent=`${String(data.symbol||'').toUpperCase()} · BUY → SELL decision path`;
+  $('inspected-trade-path-summary').innerHTML=`Opened <strong>${ksaDateTime(data.openedAt)}</strong> at <strong>${price(data.entryPrice)}</strong> · closed <strong>${ksaDateTime(data.closedAt)}</strong> at <strong>${price(data.exitPrice)}</strong> · holding <strong>${secondsLabel(data.holdingSeconds)}</strong> · P&amp;L <strong class="${cls(data.realizedPnlPercent)}">${pct(data.realizedPnlPercent)}</strong>`;
+
+  const opportunityAge=opp.startedAt&&data.openedAt?Math.max(0,(new Date(data.openedAt)-new Date(opp.startedAt))/1000):null;
+  const flow=[
+    opp.startedAt?{name:'Opportunity started',time:opp.startedAt,detail:`#${opp.id} · ${opp.status||'—'} · evidence ${opp.evidenceScore??'—'} · health ${opp.health??'—'}`} : null,
+    entry.generatedAt?{name:'Entry signal',time:entry.generatedAt,detail:`${entry.interval||'1m'} ${entry.decision||'—'} ${entry.score??'—'}/100 · ${price(entry.price)}`} : null,
+    {name:'Wallet BUY',time:data.openedAt,detail:`${data.entryExecutionReason||'BUY'} · ${price(data.entryPrice)}`},
+    mgmt.profitLockActivatedAt?{name:'Profit lock activated',time:mgmt.profitLockActivatedAt,detail:`lock ${price(mgmt.profitLockPrice)} · progress ${pathValue(mgmt.profitLockProgressPercent,'%')}`} : null,
+    data.exitSignal?.generatedAt?{name:'Exit signal',time:data.exitSignal.generatedAt,detail:`${data.exitSignal.decision||data.exitExecutionReason||'SELL'} ${data.exitSignal.score??'—'}/100`} : null,
+    {name:'Wallet SELL',time:data.closedAt,detail:`${data.exitExecutionReason||'SELL'} · ${price(data.exitPrice)}`}
+  ].filter(Boolean).sort((a,b)=>new Date(a.time)-new Date(b.time));
+  let previous=null;
+  const timeline=flow.map(item=>{const elapsed=previous?Math.max(0,(new Date(item.time)-new Date(previous.time))/1000):null;previous=item;return `<div class="trade-path-step"><div class="trade-path-dot"></div><div class="trade-path-step-body"><div><strong>${esc(item.name)}</strong><span>${ksaDateTime(item.time)}</span></div><p>${esc(item.detail)}</p>${elapsed===null?'':`<small>+${secondsLabel(elapsed)} from previous state</small>`}</div></div>`}).join('');
+
+  const technicalBody=`<div class="trade-path-stat-grid compact"><div><small>EMA cross</small><strong>${pathValue(entry.emaCross)}</strong></div><div><small>EMA200 location</small><strong>${pathValue(entry.priceEma200)}</strong></div><div><small>EMA alignment</small><strong>${pathValue(entry.emaAlignment)}</strong></div><div><small>SMA20</small><strong>${pathValue(entry.sma20)}</strong></div><div><small>Trend direction</small><strong>${pathValue(entry.trendDirection)}</strong></div><div><small>Structure</small><strong>${pathValue(entry.trendStructure)}</strong></div><div><small>Strength</small><strong>${pathValue(entry.trendStrength)}</strong></div><div><small>Price location</small><strong>${pathValue(entry.trendPriceLocation)}</strong></div><div><small>RSI</small><strong>${pathValue(entry.rsi)}</strong></div><div><small>MACD</small><strong>${pathValue(entry.macd)}</strong></div><div><small>Bollinger</small><strong>${pathValue(entry.bollinger)}</strong></div><div><small>RVOL</small><strong>${pathValue(entry.relativeVolume)}</strong></div><div><small>Volume SMA20</small><strong>${pathValue(entry.volumeSma20)}</strong></div><div><small>Raw / max</small><strong>${pathValue(entry.rawScore)} / ${pathValue(entry.maximumAvailableScore)}</strong></div><div><small>Sentiment</small><strong>${entry.sentimentAvailable?pathValue(entry.sentiment):'EXCLUDED'}</strong></div><div><small>Fundamental</small><strong>${entry.fundamentalAvailable?pathValue(entry.fundamental):'EXCLUDED'}</strong></div></div>`;
+  const orderBody=`<div class="trade-path-stat-grid compact"><div><small>Imbalance</small><strong>${pathValue(entry.orderBookImbalance)}</strong></div><div><small>Spread</small><strong>${pathValue(entry.spreadPercent,'%')}</strong></div><div><small>Bid depth</small><strong>${pathValue(entry.bidDepth)}</strong></div><div><small>Ask depth</small><strong>${pathValue(entry.askDepth)}</strong></div><div><small>Ask wall</small><strong>${price(entry.askWallPrice)}</strong></div><div><small>Ask wall size</small><strong>${pathValue(entry.askWallSize)}</strong></div><div><small>Bid wall</small><strong>${price(entry.bidWallPrice)}</strong></div><div><small>Bid wall size</small><strong>${pathValue(entry.bidWallSize)}</strong></div><div><small>Persistence</small><strong>${secondsLabel(entry.wallPersistenceSeconds)}</strong></div><div><small>Observations</small><strong>${pathValue(entry.orderBookObservations)}</strong></div><div><small>Window</small><strong>${secondsLabel(entry.orderBookWindowSeconds)}</strong></div><div><small>Influence</small><strong>${pathValue(entry.orderBookInfluence)}</strong></div><div><small>Target blocked</small><strong>${entry.targetBlocked?'YES':'NO'}</strong></div><div><small>Stop exposed</small><strong>${entry.stopExposed?'YES':'NO'}</strong></div></div><p>${esc(entry.liquidityExplanation||'')}</p>`;
+  const btcBody=`<div class="trade-path-stat-grid compact"><div><small>BTC decision</small><strong>${pathValue(entry.btcDecision)}</strong></div><div><small>BTC trend</small><strong>${pathValue(entry.btcTrend)}</strong></div><div><small>Correlation</small><strong>${pathValue(entry.btcCorrelation)}</strong></div><div><small>Beta</small><strong>${pathValue(entry.btcBeta)}</strong></div><div><small>Influence</small><strong>${pathValue(entry.btcInfluence)}</strong></div><div><small>Samples</small><strong>${pathValue(entry.btcSampleSize)}</strong></div><div><small>Stable</small><strong>${entry.btcStable?'YES':'NO'}</strong></div><div><small>Higher TF</small><strong>${pathValue(entry.higherInterval)} ${pathValue(entry.higherDecision)}</strong></div></div><p>${esc(entry.btcExplanation||'')}</p>`;
+  const derivBody=`<div class="trade-path-stat-grid compact"><div><small>Funding</small><strong>${pathValue(entry.fundingRate)}</strong></div><div><small>Funding percentile</small><strong>${pathValue(entry.fundingPercentile,'%')}</strong></div><div><small>Open interest</small><strong>${pathValue(entry.openInterest)}</strong></div><div><small>OI value</small><strong>${pathValue(entry.openInterestValue)}</strong></div><div><small>OI change</small><strong>${pathValue(entry.openInterestChangePercent,'%')}</strong></div><div><small>Price change</small><strong>${pathValue(entry.derivativesPriceChangePercent,'%')}</strong></div><div><small>Confidence adj.</small><strong>${pathValue(entry.derivativesConfidenceAdjustment)}</strong></div></div>`;
+  const atrBody=`<div class="trade-path-stat-grid compact"><div><small>ATR</small><strong>${pathValue(entry.atr)}</strong></div><div><small>ATR %</small><strong>${pathValue(entry.atrPercent,'%')}</strong></div><div><small>Entry type</small><strong>${pathValue(entry.atrEntryType)}</strong></div><div><small>Immediate</small><strong>${entry.atrImmediateEntryAllowed?'YES':'NO'}</strong></div><div><small>Overextended</small><strong>${entry.atrOverextended?'YES':'NO'}</strong></div><div><small>R/R</small><strong>${pathValue(entry.riskReward)}</strong></div><div><small>Position</small><strong>${pathValue(entry.atrRecommendedPositionPercent,'%')}</strong></div><div><small>Stop / TP</small><strong>${price(entry.stopLoss)} / ${price(entry.takeProfit)}</strong></div></div>`;
+  const oppBody=opp.id?`<div class="trade-path-stat-grid compact"><div><small>Age at BUY</small><strong>${opportunityAge==null?'—':secondsLabel(opportunityAge)}</strong></div><div><small>Evidence</small><strong>${pathValue(opp.evidenceScore)}</strong></div><div><small>BUY/WATCH</small><strong>${pathValue(opp.buyCount)} / ${pathValue(opp.watchCount)}</strong></div><div><small>Neutral/Bearish</small><strong>${pathValue(opp.neutralCount)} / ${pathValue(opp.bearishCount)}</strong></div><div><small>Health</small><strong>${pathValue(opp.health)}</strong></div><div><small>Health momentum</small><strong>${pathValue(opp.healthMomentum)}</strong></div><div><small>Evidence momentum</small><strong>${pathValue(opp.evidenceMomentum)}</strong></div><div><small>Execution source</small><strong>${pathValue(opp.executionSource)}</strong></div></div><p>${esc(opp.explanation||'')}</p>`:'<p>No linked execution-opportunity snapshot was found for the entry signal.</p>';
+
+  $('inspected-trade-path-content').innerHTML=`
+    <section class="trade-path-hero"><div><small>Holding time</small><strong>${secondsLabel(data.holdingSeconds)}</strong></div><div><small>Opportunity age</small><strong>${opportunityAge==null?'—':secondsLabel(opportunityAge)}</strong></div><div><small>Entry source</small><strong>${esc(data.entryExecutionReason||'—')}</strong></div><div><small>Exit source</small><strong>${esc(data.exitExecutionReason||'—')}</strong></div></section>
+    <section class="trade-path-section"><div class="trade-path-section-head"><h3>Timestamped lifecycle</h3><span>All times shown in KSA (UTC+3)</span></div><div class="trade-path-timeline">${timeline}</div></section>
+    <section class="trade-path-section"><div class="trade-path-section-head"><h3>1m / 5m / 1h state at entry</h3><span>Latest persisted state available at wallet execution</span></div><div class="trade-path-signal-grid">${pathSignalCard('Timing',one)}${pathSignalCard('Setup',five)}${pathSignalCard('Authority',hour)}</div></section>
+    <section class="trade-path-section"><div class="trade-path-section-head"><h3>Decision contributors</h3><span>What strengthened, reduced or blocked the entry</span></div><div class="trade-contributor-grid">${contributor('Technical statistics',`${entry.decision||'—'} ${entry.score??'—'}/100`,technicalBody)}${contributor('Opportunity',opp.status||'—',oppBody)}${contributor('ATR / volatility',entry.atrImmediateEntryAllowed?'PASS':'WAIT',atrBody,entry.atrImmediateEntryAllowed?'pass':'warn')}${contributor('BTC + MTF',`${entry.btcStatus||'—'} · ${entry.confluence||'—'}`,btcBody)}${contributor('Order book / liquidity',entry.liquidityStatus||'—',orderBody,entry.liquidityEntryAllowed?'pass':'warn')}${contributor('Derivatives',entry.derivativesStatus||'—',derivBody)}</div></section>
+    <section class="trade-path-section"><div class="trade-path-section-head"><h3>Final decision checks</h3><span>Persisted ordered decision path</span></div>${decisionPathRows(data.decisionPath)}</section>`;
+}
+async function showInspectedTradePath(t){
+  const modal=$('inspected-trade-path-panel');
+  modal?.classList.remove('hidden');modal?.setAttribute('aria-hidden','false');document.body.classList.add('inspector-modal-open');
+  $('inspected-trade-path-title').textContent=`${String(t.symbol||'').toUpperCase()} · decision path`;
+  $('inspected-trade-path-summary').textContent='Loading persisted decision evidence…';
+  $('inspected-trade-path-content').innerHTML='<div class="empty">Loading trade path…</div>';
+  const q=new URLSearchParams({buyTradeId:String(t.walletBuyTradeId),sellTradeId:String(t.walletSellTradeId)});
+  const r=await fetch(`/api/trade-inspector/path?${q.toString()}`,{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);
+  renderTradePath(await r.json());
+}
+function closeInspectedTradePath(){
+  const modal=$('inspected-trade-path-panel');modal?.classList.add('hidden');modal?.setAttribute('aria-hidden','true');
+  if($('inspected-trade-chart-panel')?.classList.contains('hidden'))document.body.classList.remove('inspector-modal-open');
+}
+document.addEventListener('click',event=>{
+  const button=event.target.closest('button[data-inspect-path]');if(!button)return;
+  const trade=findTradeByKey(button.dataset.tradeId);if(!trade)return;
+  showInspectedTradePath(trade).catch(e=>{$('inspector-error').textContent=`Trade path could not load: ${e.message}`;$('inspector-error').classList.remove('hidden');closeInspectedTradePath();});
+});
+$('inspected-trade-path-close')?.addEventListener('click',closeInspectedTradePath);
+document.addEventListener('click',event=>{if(event.target.closest('[data-inspector-path-close]'))closeInspectedTradePath();});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!$('inspected-trade-path-panel')?.classList.contains('hidden'))closeInspectedTradePath();});

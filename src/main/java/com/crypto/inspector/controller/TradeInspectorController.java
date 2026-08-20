@@ -31,6 +31,15 @@ public class TradeInspectorController {
             @RequestParam(required = false, defaultValue = "20") int limit) {
         return service.inspect(symbol, limit);
     }
+    // FIX-024: read-only decision-state path for one Trade Inspector BUY -> SELL pair.
+    @GetMapping("/api/trade-inspector/path")
+    @ResponseBody
+    public Map<String, Object> path(
+            @RequestParam Long buyTradeId,
+            @RequestParam Long sellTradeId) {
+        return service.path(buyTradeId, sellTradeId);
+    }
+
     @GetMapping("/api/trade-inspector/chart")
     @ResponseBody
     public Map<String, Object> chart(

@@ -88,6 +88,25 @@
             </section>
         </div>
 
+        <!-- FIX-024: View Path stays beside View Chart and opens a read-only state-flow overlay
+             for the selected trade. It visualizes persisted production evidence only. -->
+        <div id="inspected-trade-path-panel" class="inspector-trade-chart-modal hidden" aria-hidden="true">
+            <div class="inspector-trade-chart-backdrop" data-inspector-path-close="1"></div>
+            <section class="inspector-trade-path-dialog" role="dialog" aria-modal="true" aria-labelledby="inspected-trade-path-title">
+                <div class="section-heading inspector-popup-head">
+                    <div>
+                        <p class="eyebrow">INSPECTED TRADE · DECISION STATE PATH</p>
+                        <h2 id="inspected-trade-path-title">Trade path</h2>
+                        <p id="inspected-trade-path-summary" class="trade-path-summary">Loading persisted decision evidence…</p>
+                    </div>
+                    <button id="inspected-trade-path-close" type="button" class="trade-path-close">Close</button>
+                </div>
+                <div id="inspected-trade-path-content" class="trade-path-content">
+                    <div class="empty">Loading trade path…</div>
+                </div>
+            </section>
+        </div>
+
         <section class="panel">
             <div class="section-heading">
                 <div><p class="eyebrow">COMPLETED POSITIONS</p><h2>Recent inspected trades</h2></div>

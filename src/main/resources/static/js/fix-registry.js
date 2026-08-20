@@ -527,6 +527,32 @@
             status: "IMPLEMENTED"
         }
 
+        ,{
+            id: "FIX-024",
+            status: "IMPLEMENTED",
+            title: "Trade Inspector timestamped decision-state View Path",
+            scenario: "Trade Inspector diagnostic visualization for every completed BUY -> SELL trade",
+            symbol: "ALL",
+            entry: "Read-only visualization; no trading entry behavior changed",
+            exit: "Read-only visualization; no trading exit behavior changed",
+            entryTime: "Uses each selected trade's actual wallet BUY timestamp and persisted decision timestamps",
+            exitTime: "Uses each selected trade's actual wallet SELL timestamp and displays exact holding duration",
+            replayWindow: "N/A - UI/diagnostic-only fix; no replay/trading behavior changed",
+            location: "Trade Inspector card action next to View Chart -> View Path overlay",
+            classes: [
+                "com.crypto.inspector.service.TradeInspectorService",
+                "com.crypto.inspector.controller.TradeInspectorController",
+                "com.crypto.execution.repository.ExecutionOpportunityRepository",
+                "src/main/resources/static/trade-inspector.html",
+                "src/main/resources/static/js/trade-inspector.js",
+                "src/main/resources/static/css/trade-inspector.css"
+            ],
+            cause: "Trade Inspector exposed the trade chart and summary metrics but debugging a trade still required manual SQL to reconstruct 1m/5m/1h authority, opportunity age/evidence, ATR, BTC, order book, derivatives, ordered FinalDecision checks, timestamps and holding time.",
+            solution: "Add a View Path button beside View Chart. A read-only endpoint returns the persisted entry/exit signals, the latest 1m/5m/1h states available at wallet execution, the linked/overlapping execution opportunity, position-management snapshot and the original ordered decision_path. The overlay renders a timestamped state timeline in KSA, exact holding time, opportunity age, timeframe cards and contributor diagnostics including order-book statistics.",
+            behavior: "Selecting View Path dims the Trade Inspector and opens a focused decision-state overlay for only that trade. All timestamps are displayed in KSA (UTC+3), elapsed time is shown between lifecycle states, and holding time is prominent. No score, decision, wallet, replay or execution state is recomputed or modified.",
+            regression: "UI-only diagnostic regression: verify View Path opens beside View Chart for normal, accumulated-evidence and scout/progressive trades; confirm opportunity fallback works when latest_signal_id changed after the initial scout; verify 1m/5m/1h, ATR, BTC, order book, derivatives, decision checks, BUY/SELL timestamps and holding duration match persisted production records."
+        }
+
 ];
 
     const list = document.getElementById("fix-registry-list");

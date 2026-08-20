@@ -17,6 +17,11 @@ public interface ExecutionOpportunityRepository extends JpaRepository<ExecutionO
 
     List<ExecutionOpportunity> findTop50ByStatusInOrderByUpdatedAtDesc(Collection<String> statuses);
     Optional<ExecutionOpportunity> findTopByLatestSignalIdOrderByUpdatedAtDesc(Long latestSignalId);
+
+    // FIX-024: Trade Inspector can recover the opportunity that was active at a wallet BUY
+    // even when progressive building later changed latest_signal_id. Read-only diagnostic use.
+    List<ExecutionOpportunity> findTop10BySymbolAndStartedAtLessThanEqualAndUpdatedAtGreaterThanEqualOrderByUpdatedAtDesc(
+            String symbol, Instant startedAt, Instant updatedAt);
     long countByStartedAtGreaterThanEqual(Instant startedAt);
     long countByStatusIn(Collection<String> statuses);
     long countByStatusInAndUpdatedAtGreaterThanEqual(Collection<String> statuses, Instant updatedAt);

@@ -7,6 +7,9 @@ import com.crypto.dto.TradeInspectorSummary;
 import com.crypto.dto.TradeInspectorTradeView;
 import com.crypto.repository.CandleRepository;
 import com.crypto.repository.PaperPositionRepository;
+import com.crypto.repository.TradeSignalRepository;
+import com.crypto.execution.domain.ExecutionOpportunity;
+import com.crypto.execution.repository.ExecutionOpportunityRepository;
 import com.crypto.wallet.domain.WalletTrade;
 import com.crypto.wallet.domain.WalletManagedPosition;
 import com.crypto.wallet.repository.WalletTradeRepository;
@@ -31,15 +34,21 @@ public class TradeInspectorService {
     private final CandleRepository candleRepository;
     private final PaperPositionRepository paperPositionRepository;
     private final WalletManagedPositionRepository walletManagedPositionRepository;
+    private final TradeSignalRepository tradeSignalRepository;
+    private final ExecutionOpportunityRepository executionOpportunityRepository;
 
     public TradeInspectorService(WalletTradeRepository walletTradeRepository,
                                  CandleRepository candleRepository,
                                  PaperPositionRepository paperPositionRepository,
-                                 WalletManagedPositionRepository walletManagedPositionRepository) {
+                                 WalletManagedPositionRepository walletManagedPositionRepository,
+                                 TradeSignalRepository tradeSignalRepository,
+                                 ExecutionOpportunityRepository executionOpportunityRepository) {
         this.walletTradeRepository = walletTradeRepository;
         this.candleRepository = candleRepository;
         this.paperPositionRepository = paperPositionRepository;
         this.walletManagedPositionRepository = walletManagedPositionRepository;
+        this.tradeSignalRepository = tradeSignalRepository;
+        this.executionOpportunityRepository = executionOpportunityRepository;
     }
 
     @Transactional(readOnly = true)
@@ -216,6 +225,159 @@ public class TradeInspectorService {
         return new TradeInspectorSummary(trades.size(), wins, losses, winRate, net, avg, avgWin, avgLoss, profitFactor);
     }
 
+
+
+    /**
+     * FIX-024 / Trade Inspector View Path:
+     * Build a read-only, timestamped explanation of one executed BUY -> SELL lifecycle.
+     * This deliberately reads the same persisted trade_signal / execution_opportunity / wallet
+     * evidence that production created; it does not recompute, rescore, or mutate trading state.
+     * KSA presentation is handled by the browser from the stored UTC/Binance timestamps.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> path(Long buyTradeId, Long sellTradeId) {
+        WalletTrade buy = walletTradeRepository.findById(buyTradeId)
+                .orElseThrow(() -> new IllegalArgumentException("BUY wallet trade was not found."));
+        WalletTrade sell = walletTradeRepository.findById(sellTradeId)
+                .orElseThrow(() -> new IllegalArgumentException("SELL wallet trade was not found."));
+        if (!"BUY".equalsIgnoreCase(buy.getSide()) || !"SELL".equalsIgnoreCase(sell.getSide())) {
+            throw new IllegalArgumentException("View Path requires a BUY wallet trade and a SELL wallet trade.");
+        }
+        if (!Objects.equals(normalizeSymbol(buy.getSymbol()), normalizeSymbol(sell.getSymbol()))) {
+            throw new IllegalArgumentException("BUY and SELL must belong to the same symbol.");
+        }
+
+        TradeSignal entry = buy.getSignal();
+        TradeSignal exit = sell.getSignal();
+        Instant reference = buy.getExecutedAt();
+        TradeSignal oneMinute = latestSignalAtOrBefore(buy.getSymbol(), "1m", reference);
+        TradeSignal fiveMinute = latestSignalAtOrBefore(buy.getSymbol(), "5m", reference);
+        TradeSignal oneHour = latestSignalAtOrBefore(buy.getSymbol(), "1h", reference);
+
+        ExecutionOpportunity opportunity = entry == null ? null : executionOpportunityRepository
+                .findTopByLatestSignalIdOrderByUpdatedAtDesc(entry.getId()).orElse(null);
+        if (opportunity == null && buy.getExecutedAt() != null) {
+            // FIX-024: progressive scout/add flows may update latest_signal_id after the first BUY.
+            // Recover the BUY opportunity whose persisted lifecycle overlapped this exact wallet entry.
+            opportunity = executionOpportunityRepository
+                    .findTop10BySymbolAndStartedAtLessThanEqualAndUpdatedAtGreaterThanEqualOrderByUpdatedAtDesc(
+                            buy.getSymbol(), buy.getExecutedAt(), buy.getExecutedAt())
+                    .stream().filter(o -> "BUY".equalsIgnoreCase(o.getDirection())).findFirst().orElse(null);
+        }
+        WalletManagedPosition managed = entry == null ? null : walletManagedPositionRepository
+                .findTopByEntrySignalIdOrderByOpenedAtDesc(entry.getId()).orElse(null);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("symbol", buy.getSymbol());
+        result.put("buyTradeId", buy.getId());
+        result.put("sellTradeId", sell.getId());
+        result.put("openedAt", buy.getExecutedAt());
+        result.put("closedAt", sell.getExecutedAt());
+        result.put("holdingSeconds", Math.max(0, Duration.between(buy.getExecutedAt(), sell.getExecutedAt()).toSeconds()));
+        result.put("entryPrice", buy.getPriceUsdt());
+        result.put("exitPrice", sell.getPriceUsdt());
+        result.put("entryExecutionReason", buy.getExecutionReason());
+        result.put("exitExecutionReason", sell.getExecutionReason());
+        result.put("realizedPnlPercent", sell.getRealizedPnlPercent());
+        result.put("opportunity", opportunityView(opportunity));
+        result.put("oneMinute", signalPathView(oneMinute));
+        result.put("fiveMinute", signalPathView(fiveMinute));
+        result.put("oneHour", signalPathView(oneHour));
+        result.put("entrySignal", signalPathView(entry));
+        result.put("exitSignal", signalPathView(exit));
+        result.put("decisionPath", entry == null ? null : entry.getDecisionPath());
+
+        Map<String, Object> management = new LinkedHashMap<>();
+        if (managed != null) {
+            management.put("stopLoss", managed.getStopLossUsdt());
+            management.put("takeProfit", managed.getTakeProfitUsdt());
+            management.put("highestPrice", managed.getHighestPriceUsdt());
+            management.put("profitLockActivatedAt", managed.getProfitLockActivatedAt());
+            management.put("profitLockPrice", managed.getProfitLockPriceUsdt());
+            management.put("profitLockProgressPercent", managed.getProfitLockProgressPercent());
+        }
+        result.put("management", management);
+        return result;
+    }
+
+    private TradeSignal latestSignalAtOrBefore(String symbol, String interval, Instant reference) {
+        if (symbol == null || interval == null || reference == null) return null;
+        return tradeSignalRepository
+                .findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(symbol, interval, reference)
+                .orElse(null);
+    }
+
+    private Map<String, Object> opportunityView(ExecutionOpportunity o) {
+        if (o == null) return Map.of();
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", o.getId()); m.put("status", o.getStatus()); m.put("startedAt", o.getStartedAt());
+        m.put("lastEvidenceAt", o.getLastEvidenceAt()); m.put("executedAt", o.getExecutedAt());
+        m.put("evidenceCount", o.getEvidenceCount()); m.put("buyCount", o.getBuyCount());
+        m.put("watchCount", o.getWatchCount()); m.put("neutralCount", o.getNeutralCount());
+        m.put("bearishCount", o.getBearishCount()); m.put("evidenceScore", o.getEvidenceScore());
+        m.put("health", o.getOpportunityHealth()); m.put("healthMomentum", o.getHealthMomentum());
+        m.put("evidenceMomentum", o.getEvidenceMomentum()); m.put("averageScore", o.getAverageSignalScore());
+        m.put("averageConfidence", o.getAverageConfidence()); m.put("fiveMinuteDecision", o.getFiveMinuteDecision());
+        m.put("oneHourDecision", o.getOneHourDecision()); m.put("executionSource", o.getExecutionSource());
+        m.put("recommendedPositionPercent", o.getRecommendedPositionPercent()); m.put("decisionCode", o.getDecisionCode());
+        m.put("explanation", o.getDecisionExplanation());
+        return m;
+    }
+
+    private Map<String, Object> signalPathView(TradeSignal s) {
+        if (s == null) return Map.of();
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", s.getId()); m.put("interval", s.getInterval()); m.put("generatedAt", s.getGeneratedAt());
+        m.put("candleOpenTime", s.getCandleOpenTime()); m.put("price", s.getLatestPrice());
+        m.put("originalDecision", s.getOriginalDecision() == null ? null : s.getOriginalDecision().name());
+        m.put("decision", s.getDecision() == null ? null : s.getDecision().name());
+        m.put("score", s.getTotalScore()); m.put("confidence", s.getConfidenceScore());
+        m.put("trend", s.getTrendScore()); m.put("volume", s.getVolumeScore()); m.put("momentum", s.getMomentumScore());
+        m.put("sentiment", s.getSentimentScore()); m.put("fundamental", s.getFundamentalScore());
+        m.put("sentimentAvailable", s.isSentimentAvailable()); m.put("fundamentalAvailable", s.isFundamentalAvailable());
+        m.put("emaCross", s.getEmaCrossScore()); m.put("priceEma200", s.getPriceEma200Score());
+        m.put("emaAlignment", s.getEmaAlignmentScore()); m.put("sma20", s.getSma20Score());
+        m.put("trendDirection", s.getTrendDirectionScore()); m.put("trendStructure", s.getTrendStructureScore());
+        m.put("trendStrength", s.getTrendStrengthScore()); m.put("trendPriceLocation", s.getTrendPriceLocationScore());
+        m.put("rsi", s.getRsiScore()); m.put("macd", s.getMacdScore()); m.put("bollinger", s.getBollingerScore());
+        m.put("relativeVolume", s.getRelativeVolumeScore()); m.put("volumeSma20", s.getVolumeSma20Score());
+        m.put("rawScore", s.getRawScore()); m.put("maximumAvailableScore", s.getMaximumAvailableScore());
+        m.put("regime", s.getMarketRegime() == null ? null : s.getMarketRegime().name());
+        m.put("regimeConfidence", s.getMarketRegimeConfidence());
+        m.put("strategy", s.getSelectedStrategy() == null ? null : s.getSelectedStrategy().name());
+        m.put("confluence", s.getConfluenceStatus() == null ? null : s.getConfluenceStatus().name());
+        m.put("higherInterval", s.getConfluenceHigherInterval());
+        m.put("higherDecision", s.getConfluenceHigherDecision() == null ? null : s.getConfluenceHigherDecision().name());
+        m.put("higherTrend", s.getConfluenceHigherTrendScore());
+        m.put("btcStatus", s.getBtcContextStatus() == null ? null : s.getBtcContextStatus().name());
+        m.put("btcDecision", s.getBtcContextDecision() == null ? null : s.getBtcContextDecision().name());
+        m.put("btcTrend", s.getBtcContextTrendScore()); m.put("btcCorrelation", s.getBtcCorrelation());
+        m.put("btcBeta", s.getBtcBeta()); m.put("btcInfluence", s.getBtcInfluenceFactor());
+        m.put("btcSampleSize", s.getBtcRelationshipSampleSize()); m.put("btcStable", s.isBtcRelationshipStable());
+        m.put("btcExplanation", s.getBtcContextExplanation());
+        m.put("liquidityStatus", s.getLiquidityStatus() == null ? null : s.getLiquidityStatus().name());
+        m.put("liquidityEntryAllowed", s.isLiquidityEntryAllowed());
+        m.put("orderBookImbalance", s.getOrderBookImbalance()); m.put("spreadPercent", s.getOrderBookSpreadPercent());
+        m.put("bidDepth", s.getOrderBookBidDepth()); m.put("askDepth", s.getOrderBookAskDepth());
+        m.put("bidWallPrice", s.getNearestBidWallPrice()); m.put("bidWallSize", s.getNearestBidWallSize());
+        m.put("askWallPrice", s.getNearestAskWallPrice()); m.put("askWallSize", s.getNearestAskWallSize());
+        m.put("targetBlocked", s.isOrderBookTargetBlocked()); m.put("stopExposed", s.isOrderBookStopExposed());
+        m.put("orderBookObservations", s.getOrderBookObservations()); m.put("orderBookWindowSeconds", s.getOrderBookWindowSeconds());
+        m.put("wallPersistenceSeconds", s.getOrderBookWallPersistenceSeconds()); m.put("orderBookVetoAllowed", s.isOrderBookVetoAllowed());
+        m.put("orderBookInfluence", s.getOrderBookInfluenceFactor());
+        m.put("liquidityExplanation", s.getLiquidityExplanation());
+        m.put("derivativesStatus", s.getDerivativesStatus() == null ? null : s.getDerivativesStatus().name());
+        m.put("fundingRate", s.getFundingRate()); m.put("fundingPercentile", s.getFundingPercentile());
+        m.put("openInterest", s.getOpenInterest()); m.put("openInterestValue", s.getOpenInterestValue());
+        m.put("openInterestChangePercent", s.getOpenInterestChangePercent()); m.put("derivativesPriceChangePercent", s.getDerivativesPriceChangePercent());
+        m.put("derivativesConfidenceAdjustment", s.getDerivativesConfidenceAdjustment());
+        m.put("atr", s.getAtrAtSignal()); m.put("atrPercent", s.getAtrPercent()); m.put("riskReward", s.getRiskRewardRatio());
+        m.put("atrEntryType", s.getAtrEntryType()); m.put("atrOverextended", s.isAtrOverextended());
+        m.put("atrImmediateEntryAllowed", s.isAtrImmediateEntryAllowed()); m.put("atrRecommendedPositionPercent", s.getAtrRecommendedPositionPercent());
+        m.put("stopLoss", s.getStopLoss()); m.put("takeProfit", s.getTakeProfit());
+        m.put("finalEntryAllowed", s.isFinalEntryAllowed()); m.put("finalExplanation", s.getFinalDecisionExplanation());
+        return m;
+    }
 
     @Transactional(readOnly = true)
     public Map<String, Object> chart(String requestedSymbol, String requestedInterval, Instant from, Instant to) {
