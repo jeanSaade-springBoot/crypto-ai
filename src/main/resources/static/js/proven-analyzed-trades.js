@@ -97,7 +97,7 @@ async function loadRegressionRuns() {
                 <td>${formatMoveTime(run.start_time)} → ${formatMoveTime(run.end_time)}</td>
                 <td><span class="status-pill ${regressionStatusClass(run.status)}">${escapeHtml(run.status)}</span></td>
                 <td>${Number(run.progress_percent || 0)}%</td>
-                <td><button type="button" class="secondary-button" data-regression-run-id="${run.id}">View</button> <button type="button" class="secondary-button" data-regression-archive-id="${run.id}" ${['PENDING','RUNNING'].includes(String(run.status)) ? 'disabled' : ''}>Archive</button></td>
+                <td><button type="button" class="secondary-button" data-regression-run-id="${run.id}">View</button></td>
             </tr>
         `).join('') || '<tr><td colspan="7">No regression tests have been run yet.</td></tr>';
         const active = runs.find(run => ['PENDING', 'RUNNING'].includes(String(run.status)));
@@ -696,16 +696,6 @@ if (regressionForm) {
 const regressionRunsBody = document.getElementById('regression-runs-body');
 if (regressionRunsBody) {
     regressionRunsBody.addEventListener('click', async event => {
-        const archiveButton = event.target.closest('button[data-regression-archive-id]');
-        if (archiveButton) {
-            try {
-                archiveButton.disabled = true;
-                const saved = await api(`/api/administration/regression-tests/runs/${archiveButton.dataset.regressionArchiveId}/archive`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason:'Manual archive before logic comparison'})});
-                showAdminMessage(saved.alreadyArchived ? `Test #${archiveButton.dataset.regressionArchiveId} was already archived.` : `Test #${archiveButton.dataset.regressionArchiveId} archived safely as batch #${saved.archiveBatchId}.`);
-                await loadRegressionArchives();
-            } catch (error) { showAdminMessage(error.message, true); } finally { archiveButton.disabled = false; }
-            return;
-        }
         const button = event.target.closest('button[data-regression-run-id]');
         if (!button) return;
         try {
@@ -828,12 +818,39 @@ function renderProvenTradesGrid(all) {
             <td>${trade.exit_price == null ? '—' : formatMovePrice(trade.exit_price)}</td>
             <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>
             <td>${formatMoveTime(trade.marked_at)}</td>
+            <td class="proven-leg-actions">
+                <button type="button" class="secondary-button" data-proven-archive-leg="BUY" data-proven-id="${trade.id}" ${regressionBool(trade.buy_archived) ? 'disabled' : ''}>${regressionBool(trade.buy_archived) ? 'BUY archived' : 'Archive BUY'}</button>
+                <button type="button" class="secondary-button" data-proven-archive-leg="SELL" data-proven-id="${trade.id}" ${!trade.exit_time || regressionBool(trade.sell_archived) ? 'disabled' : ''}>${regressionBool(trade.sell_archived) ? 'SELL archived' : 'Archive SELL'}</button>
+            </td>
             <td><button type="button" class="secondary-button regression-chart-link" data-proven-view-index="${index}">View</button></td>
-        </tr>`).join('') : '<tr><td colspan="9">No proven trades yet.</td></tr>';
+        </tr>`).join('') : '<tr><td colspan="10">No proven trades yet.</td></tr>';
 }
+
+async function loadArchivedProvenTradeLegs() {
+    const body = document.getElementById('proven-archived-legs-body');
+    if (!body) return;
+    try {
+        const rows = await api('/api/administration/regression-tests/proven-trades/archived-legs');
+        body.innerHTML = (rows || []).map((leg, index) => `
+            <tr>
+                <td>${index + 1}</td>
+                <td><strong>${escapeHtml(String(leg.symbol || '—').toUpperCase())}</strong></td>
+                <td><span class="status-pill ${String(leg.side || '').toUpperCase()==='BUY' ? 'reviewed' : 'ignored'}">${escapeHtml(leg.side || '—')}</span></td>
+                <td>${formatMoveTime(leg.execution_time)}</td>
+                <td>${formatMovePrice(leg.execution_price)}</td>
+                <td>${escapeHtml(leg.exit_reason || '—')}</td>
+                <td>${leg.realized_pnl_percent == null ? '—' : Number(leg.realized_pnl_percent).toFixed(3) + '%'}</td>
+                <td>${formatMoveTime(leg.archived_at)}</td>
+            </tr>`).join('') || '<tr><td colspan="8">No archived trade legs yet.</td></tr>';
+    } catch (error) {
+        body.innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`;
+    }
+}
+
 async function loadProvenTradesGraph(preferredSymbol = null) {
     const all = await api('/api/administration/regression-tests/proven-trades');
     renderProvenTradesGrid(all);
+    await loadArchivedProvenTradeLegs();
     const selector = document.getElementById('proven-chart-symbol');
     const symbols = [...new Set((all || []).map(t => String(t.symbol || '').toUpperCase()).filter(Boolean))];
     const focusSymbol = String(provenTradeFocus?.symbol || '').toUpperCase();
@@ -935,6 +952,21 @@ if (provenTradesBody) provenTradesBody.addEventListener('change', async event =>
     finally{cb.disabled=false;}
 });
 document.getElementById('proven-saved-trades-body')?.addEventListener('click', async event => {
+    const archiveButton = event.target.closest('button[data-proven-archive-leg]');
+    if (archiveButton) {
+        archiveButton.disabled = true;
+        try {
+            const side = String(archiveButton.dataset.provenArchiveLeg || '').toUpperCase();
+            await api(`/api/administration/regression-tests/proven-trades/${encodeURIComponent(archiveButton.dataset.provenId)}/archive-leg/${encodeURIComponent(side)}`, {method:'POST'});
+            showAdminMessage(`${side} leg archived independently.`);
+            await loadProvenTradesGraph();
+        } catch (error) {
+            archiveButton.disabled = false;
+            showAdminMessage(error.message, true);
+        }
+        return;
+    }
+
     const button = event.target.closest('button[data-proven-view-index]');
     if (!button) return;
     try {

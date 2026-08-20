@@ -310,8 +310,14 @@ async function loadInspectedTradeChart(){
       toolbar:{show:true,autoSelected:'zoom',tools:{download:false,selection:true,zoom:true,zoomin:true,zoomout:true,pan:true,reset:true}},
       zoom:{enabled:true,type:'x',autoScaleYaxis:true},
       events:{
-        zoomed:(_ctx,{xaxis})=>{if(xaxis)scheduleInspectedWindow(xaxis.min,xaxis.max);},
-        scrolled:(_ctx,{xaxis})=>{if(xaxis)scheduleInspectedWindow(xaxis.min,xaxis.max);}
+        // FIX-015: toolbar/interval actions can recreate or mutate Apex internals.
+        // Rebind the display-only Y-axis hover badge after every chart interaction
+        // without changing candle, zoom, pan or trading behavior.
+        updated:()=>scheduleInspectorYAxisHoverRefresh(),
+        selection:(_ctx,{xaxis})=>{if(xaxis)scheduleInspectedWindow(xaxis.min,xaxis.max);scheduleInspectorYAxisHoverRefresh();},
+        zoomed:(_ctx,{xaxis})=>{if(xaxis)scheduleInspectedWindow(xaxis.min,xaxis.max);scheduleInspectorYAxisHoverRefresh();},
+        scrolled:(_ctx,{xaxis})=>{if(xaxis)scheduleInspectedWindow(xaxis.min,xaxis.max);scheduleInspectorYAxisHoverRefresh();},
+        beforeResetZoom:()=>{scheduleInspectorYAxisHoverRefresh();}
       }
     },
     title:{text:`${String(t.symbol||'').toUpperCase()} · ${interval} · Trade ${t.tradeHistoryId==null?'':`#${t.tradeHistoryId}`} · ${pnl>=0?'+':''}${pnl.toFixed(3)}%`,align:'left',style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'}},
@@ -339,8 +345,10 @@ async function loadInspectedTradeChart(){
     tooltip:{shared:false,intersect:false,followCursor:true,custom:customTooltip}
   };
 
+  const chartHost=$('inspected-trade-chart');
+  if(chartHost&&typeof chartHost.__inspectorYAxisHoverCleanup==='function')chartHost.__inspectorYAxisHoverCleanup();
   if(inspectedTradeChart)inspectedTradeChart.destroy();
-  inspectedTradeChart=new ApexCharts($('inspected-trade-chart'),options);
+  inspectedTradeChart=new ApexCharts(chartHost,options);
   await inspectedTradeChart.render();
 
   // FIX-013: ApexCharts' built-in Y-axis tooltip is unreliable for a mixed
@@ -355,41 +363,82 @@ async function loadInspectedTradeChart(){
   }
 }
 
+function scheduleInspectorYAxisHoverRefresh(){
+  window.clearTimeout(window.__inspectorHoverRefreshTimer);
+  window.__inspectorHoverRefreshTimer=window.setTimeout(()=>{
+    const host=$('inspected-trade-chart');
+    if(host&&inspectedTradeChart)installInspectorYAxisHoverPrice(host,inspectedTradeChart);
+  },0);
+}
+
+function inspectorVisibleYRange(chart){
+  const globals=chart?.w?.globals;
+  // Prefer Apex's live rendered scale. These arrays are refreshed after zoom/pan/reset.
+  let min=Number(globals?.minYArr?.[0]);
+  let max=Number(globals?.maxYArr?.[0]);
+  if(Number.isFinite(min)&&Number.isFinite(max)&&max>min)return {min,max};
+
+  // FIX-015 fallback: derive the range from candles that are actually visible after
+  // interval changes or toolbar actions. This avoids holding a stale destroyed chart scale.
+  const state=window.__inspectedChartState;
+  const minX=Number(globals?.minX ?? state?.visibleMin);
+  const maxX=Number(globals?.maxX ?? state?.visibleMax);
+  const values=[];
+  (state?.candles||[]).forEach(point=>{
+    const x=Number(point?.x);
+    if(Number.isFinite(minX)&&Number.isFinite(maxX)&&(x<minX||x>maxX))return;
+    (Array.isArray(point?.y)?point.y:[point?.y]).forEach(v=>{const n=Number(v);if(Number.isFinite(n))values.push(n);});
+  });
+  if(!values.length)return null;
+  min=Math.min(...values);max=Math.max(...values);
+  if(max<=min)return null;
+  const pad=(max-min)*0.04;
+  return {min:min-pad,max:max+pad};
+}
+
 function installInspectorYAxisHoverPrice(host, chart){
+  // Remove listeners belonging to the previous interval/chart instance first.
+  // Without this cleanup an old destroyed ApexCharts closure can keep handling hover.
+  if(typeof host.__inspectorYAxisHoverCleanup==='function')host.__inspectorYAxisHoverCleanup();
   host.querySelector('.inspector-y-hover-price')?.remove();
+
   const badge=document.createElement('div');
   badge.className='inspector-y-hover-price';
   badge.setAttribute('aria-hidden','true');
   host.appendChild(badge);
+  host.__inspectorYAxisHoverChart=chart;
 
   const hide=()=>{badge.style.display='none';};
   const move=(event)=>{
-    const grid=host.querySelector('.apexcharts-grid');
+    const activeChart=host.__inspectorYAxisHoverChart||inspectedTradeChart;
+    const grid=host.querySelector('.apexcharts-grid')||host.querySelector('.apexcharts-inner');
     const yAxis=host.querySelector('.apexcharts-yaxis');
-    if(!grid||!yAxis){hide();return;}
+    if(!grid||!yAxis||!activeChart){hide();return;}
     const gridRect=grid.getBoundingClientRect();
     const hostRect=host.getBoundingClientRect();
     if(event.clientX<gridRect.left||event.clientX>gridRect.right||event.clientY<gridRect.top||event.clientY>gridRect.bottom){hide();return;}
 
-    const globals=chart?.w?.globals;
-    let min=Number(globals?.minYArr?.[0]);
-    let max=Number(globals?.maxYArr?.[0]);
-    if(!Number.isFinite(min)||!Number.isFinite(max)||max<=min){
-      const ys=(globals?.seriesCandleO||[]).flat().concat((globals?.seriesCandleH||[]).flat(),(globals?.seriesCandleL||[]).flat(),(globals?.seriesCandleC||[]).flat()).map(Number).filter(Number.isFinite);
-      if(!ys.length){hide();return;}
-      min=Math.min(...ys);max=Math.max(...ys);
-    }
-
+    const range=inspectorVisibleYRange(activeChart);
+    if(!range){hide();return;}
     const ratio=Math.min(1,Math.max(0,(event.clientY-gridRect.top)/Math.max(1,gridRect.height)));
-    const value=max-ratio*(max-min);
+    const value=range.max-ratio*(range.max-range.min);
     badge.textContent=chartPriceLabel(value);
     badge.style.display='block';
     badge.style.top=`${event.clientY-hostRect.top}px`;
     badge.style.right='0px';
   };
 
-  host.addEventListener('mousemove',move,{passive:true});
-  host.addEventListener('mouseleave',hide,{passive:true});
+  // Capture-phase pointer handling survives Apex toolbar mode changes (zoom/pan/selection)
+  // even when SVG interaction layers stop normal bubbling. The badge never captures input.
+  host.addEventListener('pointermove',move,{passive:true,capture:true});
+  host.addEventListener('pointerleave',hide,{passive:true,capture:true});
+  host.__inspectorYAxisHoverCleanup=()=>{
+    host.removeEventListener('pointermove',move,true);
+    host.removeEventListener('pointerleave',hide,true);
+    badge.remove();
+    host.__inspectorYAxisHoverCleanup=null;
+    host.__inspectorYAxisHoverChart=null;
+  };
 }
 
 async function showInspectedTradeChart(t){

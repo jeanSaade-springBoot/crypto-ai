@@ -309,6 +309,7 @@
             exit: "Existing stop-loss, TP continuation, Dynamic Profit Lock and validated SELL logic remain unchanged",
             entryTime: "Key handoff 2026-08-19 20:22:06-20:22:07 UTC (23:22:06-23:22:07 KSA)",
             exitTime: "Scenario-specific; no exit rule is changed by this fix",
+            replayWindow: "2026-08-19 19:50-20:35 UTC (22:50-23:35 KSA) · recommended Proven replay window for the XRP setup-timeframe wake-up",
             location: "Execution Intelligence setup-timeframe ATR handoff + PaperTradingService trigger routing + ShadowProductionReplayService parity",
             classes: [
                 "com.crypto.execution.service.ExecutionIntelligenceService",
@@ -320,6 +321,75 @@
             solution: "Keep 5m/1h non-executable and keep the normal 1m BUY path unchanged. Add a narrow wake-up hook: only a fresh 5m transition from non-BUY to BUY/STRONG_BUY may re-evaluate an existing unexecuted BUY opportunity, only when the latest 1m signal is fresh (<=2 minutes), supportive/non-bearish, final-entry-allowed and still ATR-deferred, and fresh 1h authority is at least WATCH/BUY. The hook calls the existing SETUP_TIMEFRAME_ATR decision and Entry Quality guard using the 5m ATR authority; strategy/BTC/derivatives/liquidity/risk-plan vetoes remain mandatory. Repeated 5m BUY candles cannot retrigger the hook and an already-open allocation cannot use it.",
             behavior: "A 5m BUY never opens a trade by itself. It can only wake a previously recognized, still-unexecuted 1m BUY opportunity and request the existing conservative setup-timeframe ATR evaluation. Normal direct 1m BUYs, BALANCED_EARLY, HTF_TRANSITION, pressure probes, progressive adds and all SELL/position-management behavior retain their existing priority and rules.",
             regression: "Production and Administration replay call the same evaluateSetupTimeframeWakeup(...) method. Unit coverage verifies the XRP-shaped WATCH 1m / ATR-deferred + fresh 5m BUY + 1h WATCH handoff can produce SETUP_TIMEFRAME_WAKEUP, while repeated 5m BUY candles remain context-only. Full Jenkins Maven tests and an XRP replay around 2026-08-19 19:50-20:35 UTC should verify an earlier reduced entry without changing previously proven BUY/SELL scenarios.",
+            status: "IMPLEMENTED"
+        }
+
+        ,{
+            id: "FIX-015",
+            title: "Trade Inspector hover-price survives interval and toolbar actions",
+            scenario: "Trade Inspector Y-axis hover price disappears after changing 1m/5m/1h/4h interval or using zoom/pan/reset/selection controls",
+            symbol: "ALL",
+            entry: "N/A · UI-only chart interaction fix",
+            exit: "N/A · UI-only chart interaction fix",
+            entryTime: "N/A",
+            exitTime: "N/A",
+            replayWindow: "No Proven replay required; verify interactively by changing interval and using each chart toolbar action, then hover the candle plot",
+            location: "Trade Inspector chart lifecycle / dedicated right-axis hover price badge",
+            classes: [
+                "src/main/resources/static/js/trade-inspector.js",
+                "src/main/resources/static/css/trade-inspector.css"
+            ],
+            cause: "FIX-013 bound the dedicated hover-price badge to the ApexCharts instance that existed when the chart first rendered. Interval changes destroy/recreate that instance, while toolbar actions mutate its internal plot scale and interaction layers. The old pointer closure could therefore become stale or stop receiving normal bubbled mouse events.",
+            solution: "Clean up the previous chart hover listeners before chart destruction, bind the badge to the current chart instance, listen to pointer movement in capture phase, rebind after Apex updated/selection/zoom/pan/reset events, and recalculate the visible Y range with a current-candle fallback. The badge remains pointer-events:none and cannot block graph or page controls.",
+            behavior: "The exact cursor price continues to appear on the right Y axis after changing interval and after pressing zoom, pan, reset or selection actions in the chart itself.",
+            regression: "UI-only interaction fix. No candle retrieval, BUY/SELL decision, wallet, position management, replay or Proven trading behavior changes. JavaScript syntax validation must pass.",
+            status: "IMPLEMENTED"
+        }
+
+        ,{
+            id: "FIX-016",
+            title: "Proven Trades archives BUY and SELL execution legs independently",
+            scenario: "Manual Proven review needs to preserve one BUY or one SELL point without manually archiving the entire regression test run",
+            symbol: "ALL",
+            entry: "Archive BUY snapshots only the reviewed entry execution",
+            exit: "Archive SELL snapshots only the reviewed exit execution and its exit/P&L metadata",
+            entryTime: "Uses the exact Proven trade BUY execution time",
+            exitTime: "Uses the exact Proven trade SELL execution time",
+            replayWindow: "No replay required; validate on any completed Proven trade by archiving BUY and SELL independently",
+            location: "Proven Analyzed Trades persistence/API/UI; full-run Clear Data safety archive remains unchanged",
+            classes: [
+                "com.crypto.regression.service.RegressionTestService",
+                "com.crypto.regression.controller.RegressionTestController",
+                "src/main/resources/db/migration/V60__archive_proven_trade_legs.sql",
+                "src/main/resources/static/js/proven-analyzed-trades.js",
+                "src/main/resources/static/proven-analyzed-trades.html"
+            ],
+            cause: "The visible manual Archive action operated at regression-run level, so preserving one reviewed execution point unnecessarily archived the whole test dataset. Proven review is trade-centric and needs leg-level persistence.",
+            solution: "Add a dedicated proven_trade_leg_archive table and API that accept only BUY or SELL for an existing Proven trade. Add separate Archive BUY / Archive SELL controls and a read-only archived-leg table. Remove the manual full-run Archive button from Current Test rows; automatic full-run archival before Clear Data remains intact for safety and diagnostics.",
+            behavior: "A reviewer can archive BUY now and SELL later (or vice versa) without copying the whole tested run. Each leg is idempotent and records its own exact time/price; SELL also stores exit reason and realized P/L.",
+            regression: "Persistence/UI-only Proven review change. Existing shadow replay tables, automatic Clear Data run archive, live wallet tables and trading algorithms are unchanged.",
+            status: "IMPLEMENTED"
+        }
+
+        ,{
+            id: "FIX-017",
+            title: "Fix Registry includes explicit Proven replay guidance",
+            scenario: "Scenario fixes need entry time, exit time and a ready-to-use replay window for future regression validation",
+            symbol: "ALL",
+            entry: "Registry metadata only",
+            exit: "Registry metadata only",
+            entryTime: "Existing scenario Entry time field retained",
+            exitTime: "Existing scenario Exit time field retained",
+            replayWindow: "Each fix now shows Suggested Proven replay window; FIX-014 explicitly recommends 2026-08-19 19:50-20:35 UTC / 22:50-23:35 KSA",
+            location: "Fix Registry UI and Copy all fixes output",
+            classes: [
+                "src/main/resources/static/js/fix-registry.js",
+                "src/main/resources/static/fix-registry.html"
+            ],
+            cause: "Entry and exit timestamps were already documented, but there was no dedicated field telling a future reviewer what From/To window to enter in Proven Analyzed Trades.",
+            solution: "Keep Entry time and Exit time unchanged and add Suggested Proven replay window to every rendered/copied registry record. Scenario fixes can provide an explicit wider replayWindow; older records safely fall back to their documented entry/exit timestamps when no dedicated window exists.",
+            behavior: "Future debugging can copy the exact scenario timing directly from Fix Registry before rerunning Proven Analysis, reducing accidental test-window mismatch.",
+            regression: "Documentation/UI metadata only. No production or replay decision logic changes.",
             status: "IMPLEMENTED"
         }
 
@@ -343,6 +413,14 @@
             <span>${esc(value)}</span>
         </div>`;
 
+    // Proven replay guidance is display/audit metadata only. Existing fixes already
+    // contain entry/exit timestamps; use them as a safe fallback and let scenario
+    // fixes provide a wider explicit replayWindow when a better regression window is known.
+    const suggestedReplayWindow = fix => fix.replayWindow ||
+        ((fix.entryTime && fix.exitTime && fix.entryTime !== "N/A" && fix.exitTime !== "N/A")
+            ? `${fix.entryTime} → ${fix.exitTime}`
+            : "Use the scenario regression/protection notes; no fixed trade window is required.");
+
     function render() {
         count.textContent = `${FIXES.length} ${FIXES.length === 1 ? "fix" : "fixes"}`;
         list.innerHTML = FIXES.map(fix => `
@@ -361,6 +439,7 @@
                     ${field("Exit", fix.exit)}
                     ${field("Entry time", fix.entryTime)}
                     ${field("Exit time", fix.exitTime)}
+                    ${field("Suggested Proven replay window", suggestedReplayWindow(fix), true)}
                     ${field("Fix location", fix.location, true)}
                     <div class="fix-field wide">
                         <small>Java classes</small>
@@ -384,6 +463,7 @@
             `Exit: ${fix.exit}`,
             `Entry time: ${fix.entryTime}`,
             `Exit time: ${fix.exitTime}`,
+            `Suggested Proven replay window: ${suggestedReplayWindow(fix)}`,
             `Fix location: ${fix.location}`,
             `Java classes: ${fix.classes.join(", ")}`,
             `Cause: ${fix.cause}`,

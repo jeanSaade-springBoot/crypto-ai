@@ -302,10 +302,64 @@ public class RegressionTestService {
     @Transactional(readOnly = true)
     public List<Map<String, Object>> provenTrades() {
         return jdbcTemplate.queryForList("""
+                SELECT p.id, p.source_test_run_id, p.source_trade_id, p.symbol, p.entry_time, p.entry_price,
+                       p.exit_time, p.exit_price, p.exit_reason, p.realized_pnl_usdt, p.realized_pnl_percent,
+                       p.position_percent, p.marked_at,
+                       EXISTS (SELECT 1 FROM proven_trade_leg_archive a WHERE a.proven_trade_id=p.id AND a.side='BUY') AS buy_archived,
+                       EXISTS (SELECT 1 FROM proven_trade_leg_archive a WHERE a.proven_trade_id=p.id AND a.side='SELL') AS sell_archived
+                FROM proven_analyzed_trade p
+                ORDER BY p.entry_time ASC
+                LIMIT 1000
+                """);
+    }
+
+    /**
+     * Archive only one reviewed execution leg. This is intentionally separate from
+     * regression-run archiving: a reviewer can preserve the BUY or SELL point on its
+     * own without freezing/copying the complete test run. Clear Data still keeps the
+     * existing full-run safety archive so replay diagnostics remain recoverable.
+     */
+    @Transactional
+    public Map<String, Object> archiveProvenTradeLeg(long provenTradeId, String requestedSide) {
+        String side = requestedSide == null ? "" : requestedSide.trim().toUpperCase(Locale.ROOT);
+        if (!side.equals("BUY") && !side.equals("SELL")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Archive side must be BUY or SELL.");
+        }
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
                 SELECT id, source_test_run_id, source_trade_id, symbol, entry_time, entry_price, exit_time, exit_price,
-                       exit_reason, realized_pnl_usdt, realized_pnl_percent, position_percent, marked_at
+                       exit_reason, realized_pnl_usdt, realized_pnl_percent
                 FROM proven_analyzed_trade
-                ORDER BY entry_time ASC
+                WHERE id=?
+                """, provenTradeId);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Proven trade not found.");
+        Map<String, Object> trade = rows.get(0);
+        Object time = side.equals("BUY") ? trade.get("entry_time") : trade.get("exit_time");
+        Object price = side.equals("BUY") ? trade.get("entry_price") : trade.get("exit_price");
+        if (time == null || price == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, side + " leg is not available for this proven trade.");
+        }
+        jdbcTemplate.update("""
+                INSERT INTO proven_trade_leg_archive
+                    (proven_trade_id, source_test_run_id, source_trade_id, symbol, side, execution_time, execution_price,
+                     exit_reason, realized_pnl_usdt, realized_pnl_percent)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE execution_time=VALUES(execution_time), execution_price=VALUES(execution_price),
+                    exit_reason=VALUES(exit_reason), realized_pnl_usdt=VALUES(realized_pnl_usdt),
+                    realized_pnl_percent=VALUES(realized_pnl_percent), archived_at=CURRENT_TIMESTAMP(6)
+                """, provenTradeId, trade.get("source_test_run_id"), trade.get("source_trade_id"), trade.get("symbol"),
+                side, time, price, side.equals("SELL") ? trade.get("exit_reason") : null,
+                side.equals("SELL") ? trade.get("realized_pnl_usdt") : null,
+                side.equals("SELL") ? trade.get("realized_pnl_percent") : null);
+        return Map.of("archived", true, "provenTradeId", provenTradeId, "side", side);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> archivedProvenTradeLegs() {
+        return jdbcTemplate.queryForList("""
+                SELECT id, proven_trade_id, source_test_run_id, source_trade_id, symbol, side, execution_time,
+                       execution_price, exit_reason, realized_pnl_usdt, realized_pnl_percent, archived_at
+                FROM proven_trade_leg_archive
+                ORDER BY archived_at DESC, id DESC
                 LIMIT 1000
                 """);
     }

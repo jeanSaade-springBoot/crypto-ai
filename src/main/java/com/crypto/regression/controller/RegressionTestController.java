@@ -91,6 +91,14 @@ public class RegressionTestController {
     @GetMapping("/proven-trades")
     public List<Map<String, Object>> provenTrades() { return service.provenTrades(); }
 
+    @PostMapping("/proven-trades/{provenTradeId}/archive-leg/{side}")
+    public Map<String, Object> archiveProvenTradeLeg(@PathVariable long provenTradeId, @PathVariable String side) {
+        return service.archiveProvenTradeLeg(provenTradeId, side);
+    }
+
+    @GetMapping("/proven-trades/archived-legs")
+    public List<Map<String, Object>> archivedProvenTradeLegs() { return service.archivedProvenTradeLegs(); }
+
     @GetMapping("/proven-trades/chart")
     public Map<String, Object> provenTradeChart(@RequestParam String symbol,
                                                  @RequestParam(defaultValue = "5m") String interval) {
