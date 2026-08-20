@@ -23,6 +23,8 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -45,6 +47,10 @@ class ExecutionIntelligenceServiceTest {
         now = Instant.parse("2026-08-08T10:00:00Z");
         when(opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(any(), any(), any()))
                 .thenReturn(Optional.empty());
+        // FIX-021 default: existing accumulated-evidence tests continue under an allowed
+        // HTF authority unless the test explicitly models a profile rejection.
+        lenient().when(validationService.validateBuyContext(any())).thenReturn(
+                TradeExecutionValidationService.ValidationResult.allow(50, "BALANCED_EARLY", "test authority"));
     }
 
     @Test
@@ -725,7 +731,7 @@ class ExecutionIntelligenceServiceTest {
     }
 
     @Test
-    void accumulatedEvidenceWithRealBuyObservationRemainsEligibleWithNeutralFiveMinute() {
+    void accumulatedEvidenceWaitsWhenConfiguredHtfAuthorityRejectsCurrentContext() {
         TradeSignal current = signal(260L, "REALBUYUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
                 now, 66, 67);
         List<TradeSignal> evidence = new java.util.ArrayList<>();
@@ -741,11 +747,15 @@ class ExecutionIntelligenceServiceTest {
         context("REALBUYUSDT", "5m", SignalDecision.NEUTRAL, now.minusSeconds(60));
         context("REALBUYUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));
 
+        when(validationService.validateBuyContext(current)).thenReturn(
+                TradeExecutionValidationService.ValidationResult.reject(
+                        "BALANCED_CONFIRMATION_INSUFFICIENT",
+                        "Balanced profile rejects 5m NEUTRAL + 1h WATCH."));
+
         var decision = service.evaluateBuy(current);
 
-        assertThat(decision.allowed()).isTrue();
-        assertThat(decision.source()).isEqualTo("ACCUMULATED_EVIDENCE");
-        assertThat(decision.code()).isEqualTo("OPPORTUNITY_CONFIRMED");
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.code()).isEqualTo("ACCUMULATED_AUTHORITY_WAIT");
         assertThat(decision.evidence().buyCount()).isEqualTo(1);
     }
 
@@ -827,6 +837,73 @@ class ExecutionIntelligenceServiceTest {
         var wakeup = service.evaluateSetupTimeframeWakeup(triggerFive, 0);
 
         assertThat(wakeup.present()).isFalse();
+    }
+
+    @Test
+    void freshFiveMinuteBuyCanWakeSupportiveOneMinuteAfterLiquidityConfirmationClears() {
+        TradeSignal current = signal(102889L, "ETHUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(3), 69, 68);
+        current.setLatestPrice(new BigDecimal("2301.32"));
+        current.setTrendScore(19);
+        current.setVolumeScore(7);
+        current.setMomentumScore(13);
+        current.setAtrAtSignal(new BigDecimal("4.80"));
+
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "ETHUSDT", "1m", now)).thenReturn(Optional.of(current));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("ETHUSDT", "1m"))
+                .thenReturn(List.of(current));
+
+        TradeSignal previousFive = signal(102860L, "ETHUSDT", "5m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(360), 65, 72);
+        TradeSignal triggerFive = signal(102890L, "ETHUSDT", "5m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 83, 78);
+        triggerFive.setLatestPrice(new BigDecimal("2301.03"));
+        triggerFive.setAtrAtSignal(new BigDecimal("10.0"));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanOrderByGeneratedAtDesc(
+                "ETHUSDT", "5m", now)).thenReturn(Optional.of(previousFive));
+
+        com.crypto.execution.domain.ExecutionOpportunity opportunity =
+                com.crypto.execution.domain.ExecutionOpportunity.builder()
+                        .id(14747L).symbol("ETHUSDT").direction("BUY").status("BUILDING")
+                        .startedAt(now.minusSeconds(1800)).lastEvidenceAt(current.getGeneratedAt())
+                        .evidenceScore(4).opportunityHealth(90).createdAt(now.minusSeconds(1800)).updatedAt(now)
+                        .build();
+        when(opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(
+                any(), any(), any())).thenReturn(Optional.of(opportunity));
+        when(validationService.validateBuyContext(triggerFive)).thenReturn(
+                TradeExecutionValidationService.ValidationResult.allow(75, "BALANCED_STRONG",
+                        "5m BUY with non-bearish 1h authority"));
+
+        var wakeup = service.evaluateConfirmedSetupWakeup(triggerFive, 0);
+
+        assertThat(wakeup.present()).isTrue();
+        assertThat(wakeup.executionSignal().getId()).isEqualTo(102889L);
+        assertThat(wakeup.decision().allowed()).isTrue();
+        assertThat(wakeup.decision().source()).isEqualTo("SETUP_CONFIRMATION_WAKEUP");
+        assertThat(wakeup.decision().code()).isEqualTo("FRESH_5M_CONFIRMATION");
+        assertThat(wakeup.decision().positionPercent()).isLessThanOrEqualTo(25);
+    }
+
+    @Test
+    void terminalPositionCloseConsumesBuildingOpportunityEvidence() {
+        TradeSignal exit = signal(103900L, "ENAUSDT", "1m", SignalDecision.NEUTRAL, SignalDecision.SELL,
+                now, 40, 60);
+        com.crypto.execution.domain.ExecutionOpportunity opportunity =
+                com.crypto.execution.domain.ExecutionOpportunity.builder()
+                        .id(14829L).symbol("ENAUSDT").direction("BUY").status("BUILDING")
+                        .startedAt(now.minusSeconds(3600)).lastEvidenceAt(now.minusSeconds(60))
+                        .evidenceScore(9).opportunityHealth(98).createdAt(now.minusSeconds(3600)).updatedAt(now)
+                        .build();
+        when(opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(
+                any(), any(), any())).thenReturn(Optional.of(opportunity));
+
+        service.completePositionOpportunity("ENAUSDT", exit, "TAKE_PROFIT");
+
+        assertThat(opportunity.getStatus()).isEqualTo("COMPLETED");
+        assertThat(opportunity.getDecisionCode()).isEqualTo("POSITION_CLOSED_EVIDENCE_BOUNDARY");
+        assertThat(opportunity.getLatestSignal()).isEqualTo(exit);
+        verify(opportunityRepository).save(opportunity);
     }
 
     private TradeSignal signal(Long id, String symbol, String interval,

@@ -86,6 +86,50 @@ public class TradeExecutionValidationService {
         };
     }
 
+    /**
+     * FIX-021 / accumulated-evidence authority parity:
+     * Validate only the current 5m/1h execution authority using the same configured
+     * execution profile as a normal direct BUY. This intentionally skips the 1m BUY
+     * transition requirement because accumulated evidence may be triggered by a WATCH,
+     * but it must never be allowed to use weaker higher-timeframe authority than the
+     * normal BUY path would accept.
+     */
+    public ValidationResult validateBuyContext(TradeSignal referenceSignal) {
+        if (referenceSignal == null || referenceSignal.getGeneratedAt() == null) {
+            return ValidationResult.reject("INVALID_SIGNAL", "Execution reference signal is missing required timing data.");
+        }
+
+        TradeSignal fiveMinute = latestAtOrBefore(referenceSignal, CONFIRMATION_INTERVAL);
+        if (!isFresh(fiveMinute, referenceSignal.getGeneratedAt(), FIVE_MINUTE_MAX_AGE)) {
+            return ValidationResult.reject("MISSING_5M_CONFIRMATION",
+                    "No fresh 5m confirmation was available for accumulated-evidence authority.");
+        }
+
+        TradeSignal oneHour = latestAtOrBefore(referenceSignal, TREND_INTERVAL);
+        if (!isFresh(oneHour, referenceSignal.getGeneratedAt(), ONE_HOUR_MAX_AGE)) {
+            return ValidationResult.reject("MISSING_1H_CONTEXT",
+                    "No fresh 1h strategic context was available for accumulated-evidence authority.");
+        }
+
+        if (isBearish(fiveMinute.getDecision())) {
+            return ValidationResult.reject("5M_BEARISH_VETO",
+                    "Accumulated evidence was blocked because fresh 5m context is " + fiveMinute.getDecision() + ".");
+        }
+        if (isBearish(oneHour.getDecision())) {
+            return ValidationResult.reject("1H_BEARISH_VETO",
+                    "Accumulated evidence was blocked because fresh 1h context is " + oneHour.getDecision() + ".");
+        }
+
+        ExecutionProfile profile = ExecutionProfile.from(settings().getExecutionProfile());
+        TradeSignal oneMinuteQuality = latestAtOrBefore(referenceSignal, EXECUTION_INTERVAL);
+        TradeSignal qualitySignal = oneMinuteQuality == null ? referenceSignal : oneMinuteQuality;
+        return switch (profile) {
+            case CONSERVATIVE -> conservativeBuy(fiveMinute, oneHour);
+            case BALANCED -> balancedBuy(fiveMinute, oneHour);
+            case AGGRESSIVE -> aggressiveBuy(qualitySignal, fiveMinute, oneHour);
+        };
+    }
+
     public ValidationResult validateSell(TradeSignal executionSignal) {
         ValidationResult base = validateBaseSignal(executionSignal, false);
         if (!base.allowed()) return base;

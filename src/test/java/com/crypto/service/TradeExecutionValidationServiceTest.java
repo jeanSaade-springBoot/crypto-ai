@@ -120,6 +120,35 @@ class TradeExecutionValidationServiceTest {
     }
 
     @Test
+    void accumulatedEvidenceContextUsesSameBalancedAuthorityAsDirectBuy() {
+        settings("BALANCED", false);
+        TradeSignal reference = signal("BICOUSDT", "1m", SignalDecision.WATCH, now, 76, 22, 6, 7);
+        latest("BICOUSDT", "1m", reference);
+        latest("BICOUSDT", "5m", signal("BICOUSDT", "5m", SignalDecision.NEUTRAL, now.minusSeconds(120), 79, 21, 14, 9));
+        latest("BICOUSDT", "1h", signal("BICOUSDT", "1h", SignalDecision.NEUTRAL, now.minusSeconds(1800), 75, 12, 16, 9));
+
+        var result = service.validateBuyContext(reference);
+
+        assertThat(result.allowed()).isFalse();
+        assertThat(result.code()).isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+    }
+
+    @Test
+    void accumulatedEvidenceContextAllowsFreshBullishFiveMinuteWithNeutralOneHour() {
+        settings("BALANCED", false);
+        TradeSignal reference = signal("ETHUSDT", "5m", SignalDecision.BUY, now, 78, 19, 15, 14);
+        latest("ETHUSDT", "1m", signal("ETHUSDT", "1m", SignalDecision.WATCH, now.minusSeconds(3), 68, 19, 7, 13));
+        latest("ETHUSDT", "5m", reference);
+        latest("ETHUSDT", "1h", signal("ETHUSDT", "1h", SignalDecision.NEUTRAL, now.minusSeconds(1800), 69, 19, 7, 1));
+
+        var result = service.validateBuyContext(reference);
+
+        assertThat(result.allowed()).isTrue();
+        assertThat(result.code()).isEqualTo("BALANCED_STRONG");
+        assertThat(result.positionPercent()).isEqualTo(75);
+    }
+
+    @Test
     void sellKeepsExistingStrictConfirmationRules() {
         settings("AGGRESSIVE", false);
         TradeSignal oneMinute = signal("ETHUSDT", "1m", SignalDecision.SELL, now, 30, 15, 5, 4);

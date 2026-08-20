@@ -228,10 +228,22 @@ public class OrderBookLiquidityService {
 
         boolean strongBearishImbalance = latestMetrics.imbalance() != null
                 && latestMetrics.imbalance().compareTo(properties.strongImbalance().negate()) <= 0;
+        // FIX-022 / ETHUSDT 2026-08-20 18:11 KSA:
+        // A wall that is extremely close to price and already shrinking materially must not be
+        // treated like static resistance. In the proven ETH case the ask wall was only 0.097%
+        // away and had already reduced by 16.6%; price consumed it minutes later. Keep the wall
+        // as negative liquidity evidence, but do not hard-veto the setup solely because its
+        // historical persistence/strength score is high. A stable/growing wall that is not
+        // materially shrinking remains a full hard veto exactly as before.
+        boolean ultraCloseWallBeingConsumed = targetBlocked
+                && askWallLifecycle != null
+                && askWallLifecycle.distancePercent().compareTo(new BigDecimal("0.10")) <= 0
+                && askWallLifecycle.sizeChangePercent().compareTo(new BigDecimal("-10.0")) <= 0;
         boolean hardTargetBlock = targetBlocked
                 && askWallLifecycle != null
                 && askWallLifecycle.strengthScore() >= 70
-                && askWallLifecycle.trend() != WallTrend.WEAKENING;
+                && askWallLifecycle.trend() != WallTrend.WEAKENING
+                && !ultraCloseWallBeingConsumed;
         boolean strongConflict = hardTargetBlock || strongBearishImbalance;
         if (isBuy(currentDecision)
                 && properties.vetoStrongConflict()
@@ -244,8 +256,14 @@ public class OrderBookLiquidityService {
                     + " policy permits a hard veto because liquidity pressure is strong enough to matter now; "
                     + "the long entry was downgraded to WATCH.";
         } else if (targetBlocked && !hardTargetBlock) {
-            explanation += " The wall is relevant to the target but is not strong/stable enough for a hard veto. "
-                    + "It remains execution evidence and may reduce confidence while fresh signals continue to be evaluated.";
+            if (ultraCloseWallBeingConsumed) {
+                explanation += " The target-side wall is ultra-close but is already shrinking materially, so it is treated "
+                        + "as potentially consumable breakout liquidity rather than an automatic hard veto. It remains "
+                        + "negative execution evidence and fresh confirmation is still required.";
+            } else {
+                explanation += " The wall is relevant to the target but is not strong/stable enough for a hard veto. "
+                        + "It remains execution evidence and may reduce confidence while fresh signals continue to be evaluated.";
+            }
         } else if (strongConflict && !policy.allowVeto()) {
             explanation += " This interval is informational only for liquidity; no entry veto was applied.";
         }

@@ -92,6 +92,9 @@ public class ShadowProductionReplayService {
                     if (pnl.signum() > 0) wins++; else if (pnl.signum() < 0) losses++;
                     persistSell(runId, symbol, signal, open, exit, pnl, pnlPct);
                     closePosition(runId, open.positionId(), signal, exit, pnl, pnlPct);
+                    // FIX-020 replay parity: a terminal replay exit consumes the same
+                    // opportunity evidence boundary as production before any new BUY can form.
+                    executionIntelligenceService.completePositionOpportunity(symbol, signal, exit.reason());
                     open = null;
                 } else {
                     if (exit.newTakeProfit() != null) open = open.withTakeProfit(exit.newTakeProfit());
@@ -114,6 +117,11 @@ public class ShadowProductionReplayService {
             } else if ("5m".equals(signal.getInterval()) && open == null) {
                 ExecutionIntelligenceService.SetupWakeupEvaluation wakeup =
                         executionIntelligenceService.evaluateSetupTimeframeWakeup(signal, 0);
+                if (!wakeup.present()) {
+                    // FIX-023 replay parity: use the exact same production confirmation wake-up
+                    // after liquidity/HTF improves; 5m remains context-only execution authority.
+                    wakeup = executionIntelligenceService.evaluateConfirmedSetupWakeup(signal, 0);
+                }
                 if (!wakeup.present()) continue;
                 executionSignal = wakeup.executionSignal();
                 decision = wakeup.decision();

@@ -436,6 +436,95 @@
             behavior: "Trade Inspector View chart now opens above the selected trade instead of scrolling to an inline panel. Hover anywhere inside the candle plot shows both crosshair lines, exact Y price and X date/time, including after interval changes and chart toolbar actions. Close button, backdrop click and Escape return to the unchanged parent inspector.",
             regression: "UI-only enhancement. Existing Trade Inspector candle loading, BUY/SELL annotations, trade-path rendering, history navigation, signal scoring, execution intelligence, opportunity lifecycle, wallet execution, replay and position management are unchanged. JavaScript syntax validation must pass.",
             status: "IMPLEMENTED"
+        },
+        {
+            id: "FIX-020",
+            title: "Completed position consumes its opportunity evidence",
+            scenario: "ENAUSDT 2026-08-20: a good scout opened at 0.1069 and closed profitably at 0.1082, but the same BUILDING opportunity survived the completed position and reused its pre-exit evidence to re-enter 73 seconds later at 0.1082",
+            symbol: "ENAUSDT",
+            entry: "Good first position: 0.1069 via #103770 SCOUT_ENTRY; stale second entry: 0.1082 via #103889 ACCUMULATED_EVIDENCE",
+            exit: "First position TAKE_PROFIT at 0.1082; stale second position later stopped at 0.1079",
+            entryTime: "DB/Binance 2026-08-20 18:19:10 UTC / 21:19:10 KSA for the good scout; stale re-entry 18:44:24 UTC / 21:44:24 KSA",
+            exitTime: "Good position closed 2026-08-20 18:43:11 UTC / 21:43:11 KSA",
+            replayWindow: "2026-08-20 18:10-19:05 DB/Binance UTC (21:10-22:05 KSA) · proves TP boundary and blocks stale post-exit re-entry",
+            location: "Execution opportunity lifecycle + PaperTradingService terminal closes + ShadowProductionReplayService parity",
+            classes: [
+                "com.crypto.execution.service.ExecutionIntelligenceService",
+                "com.crypto.service.PaperTradingService",
+                "com.crypto.regression.service.ShadowProductionReplayService",
+                "src/test/java/com/crypto/execution/service/ExecutionIntelligenceServiceTest.java"
+            ],
+            cause: "Scout/probe/confirmation decisions intentionally keep an opportunity BUILDING while the same position is open. Terminal position close paths did not consume that opportunity, so pre-exit evidence could cross a completed-trade boundary and finance a brand-new position.",
+            solution: "Add one shared completePositionOpportunity(...) lifecycle method. Every terminal production close (TP, SL, validated SELL, profit lock, manual/other completeClose path) and replay terminal close calls it. The active opportunity becomes COMPLETED with POSITION_CLOSED_EVIDENCE_BOUNDARY; no pre-exit evidence can be reused for a new position. Progressive adds remain unchanged while the position is open.",
+            behavior: "The successful ENA scout can still add progressively while open. Once it closes, the old opportunity is consumed; any later ENA BUY must create/build fresh post-exit evidence.",
+            regression: "Unit regression verifies opportunity #14829 changes BUILDING -> COMPLETED on terminal close. Proven/Regression replay calls the same production lifecycle method before any later BUY evaluation.",
+            status: "IMPLEMENTED"
+        },
+        {
+            id: "FIX-021",
+            title: "Accumulated evidence cannot bypass direct-BUY HTF authority",
+            scenario: "BICOUSDT #102491 and ETHUSDT #103638: BALANCED direct BUY authority rejected/required stronger HTF context, but ACCUMULATED_EVIDENCE later entered with 5m/1h combinations that the normal BUY profile would not approve",
+            symbol: "BICOUSDT / ETHUSDT",
+            entry: "BICO stale entry 0.01938 via #102491; ETH later entry 2345.77 via #103638",
+            exit: "BICO STOP_LOSS 0.01894; ETH STOP_LOSS 2333.78",
+            entryTime: "BICO DB 2026-08-20 14:06 UTC / 17:06 KSA; ETH DB 17:54 UTC / 20:54 KSA",
+            exitTime: "BICO DB 14:18:50 UTC / 17:18:50 KSA; ETH DB 18:02:56 UTC / 21:02:56 KSA",
+            replayWindow: "BICO 2026-08-20 13:30-14:25 DB UTC (16:30-17:25 KSA); ETH 17:20-18:10 DB UTC (20:20-21:10 KSA)",
+            location: "TradeExecutionValidationService shared HTF profile + ExecutionIntelligenceService accumulated evidence",
+            classes: [
+                "com.crypto.service.TradeExecutionValidationService",
+                "com.crypto.execution.service.ExecutionIntelligenceService",
+                "src/test/java/com/crypto/service/TradeExecutionValidationServiceTest.java",
+                "src/test/java/com/crypto/execution/service/ExecutionIntelligenceServiceTest.java"
+            ],
+            cause: "ACCUMULATED_EVIDENCE checked only that 5m/1h were non-bearish. That made historical evidence a second, weaker execution authority: BALANCED could reject 5m WATCH/NEUTRAL + 1h NEUTRAL on the normal path, yet accumulated evidence could later approve it.",
+            solution: "Add validateBuyContext(...) to TradeExecutionValidationService and call it before accumulated evidence can execute. The method reuses the configured CONSERVATIVE/BALANCED/AGGRESSIVE 5m/1h policy without requiring a fresh 1m BUY transition. Historical evidence remains memory only; it cannot override the configured HTF authority.",
+            behavior: "Insufficient HTF authority keeps the opportunity BUILDING with ACCUMULATED_AUTHORITY_WAIT instead of opening a position. When the same configured profile later becomes valid, accumulated evidence may proceed normally.",
+            regression: "Regression covers the BICO-shaped 5m NEUTRAL + 1h NEUTRAL rejection and a valid 5m BUY + 1h NEUTRAL BALANCED_STRONG context. Replay uses the same shared validation service.",
+            status: "IMPLEMENTED"
+        },
+        {
+            id: "FIX-022",
+            title: "Ultra-close shrinking ask wall is evidence, not an automatic hard veto",
+            scenario: "ETHUSDT 2026-08-20 around 18:11 KSA: otherwise valid BUY setup was vetoed only by a 2294.04 ask wall 0.097% above price; the wall had already shrunk 16.6% and price consumed it minutes later",
+            symbol: "ETHUSDT",
+            entry: "Blocked setup around 2291.81; strategy BUY, MTF PASS, BTC CONFIRMED, ATR STANDARD_ENTRY",
+            exit: "No entry occurred at the blocked point; later execution was materially higher",
+            entryTime: "DB/Binance 2026-08-20 15:11 UTC / 18:11 KSA",
+            exitTime: "N/A · this fix changes entry veto interpretation only",
+            replayWindow: "2026-08-20 14:55-15:35 DB/Binance UTC (17:55-18:35 KSA)",
+            location: "OrderBookLiquidityService wall lifecycle hard-veto classification",
+            classes: [
+                "com.crypto.service.OrderBookLiquidityService"
+            ],
+            cause: "Wall persistence/strength dominated the veto even when the wall was ultra-close and already shrinking materially. ETH had strength 90/100 but size change -16.6% at only 0.097% distance, so the wall behaved more like consumable breakout liquidity than static resistance.",
+            solution: "Keep TARGET_BLOCKED and its confidence penalty, but suppress the hard veto only when the target wall is <=0.10% away AND size has already contracted by at least 10%. Stable/growing or non-shrinking strong walls keep the exact existing hard veto. The explanation explicitly records the consumable-wall exception.",
+            behavior: "Order-book protection remains active. Only the narrow ultra-close + materially shrinking wall case stops being an automatic BUY->WATCH veto; it remains negative evidence and still needs fresh execution confirmation.",
+            regression: "Use the ETH 18:11 KSA Proven window to verify the shrinking-wall case no longer hard-vetoes while persistent non-shrinking walls still do. No SELL/order-book downside veto rule is changed.",
+            status: "IMPLEMENTED"
+        },
+        {
+            id: "FIX-023",
+            title: "Fresh 5m confirmation wakes a live opportunity after blocker clears",
+            scenario: "ETHUSDT 2026-08-20: after the early liquidity concern, a fresh 5m BUY 83 / confidence 78 / BREAKOUT / STANDARD_ENTRY appeared near 2301 around 18:24 KSA, but 5m remained context-only and execution waited until ~2313.78",
+            symbol: "ETHUSDT",
+            entry: "Target re-evaluation uses latest fresh 1m timing near 2301.32 when #102890 5m BUY confirms; 5m itself never becomes wallet price authority",
+            exit: "Existing position-management, TP, SL and SELL logic unchanged",
+            entryTime: "DB/Binance 2026-08-20 15:24:02-15:24:05 UTC / 18:24:02-18:24:05 KSA",
+            exitTime: "Scenario-specific; no exit rule changes",
+            replayWindow: "2026-08-20 14:55-15:35 DB/Binance UTC (17:55-18:35 KSA) · validates blocker-clear handoff",
+            location: "ExecutionIntelligenceService confirmation wake-up + PaperTradingService trigger routing + ShadowProductionReplayService parity",
+            classes: [
+                "com.crypto.execution.service.ExecutionIntelligenceService",
+                "com.crypto.service.PaperTradingService",
+                "com.crypto.regression.service.ShadowProductionReplayService",
+                "src/test/java/com/crypto/execution/service/ExecutionIntelligenceServiceTest.java"
+            ],
+            cause: "A fresh 5m BUY transition could update context but could not trigger immediate reconsideration unless the older FIX-014 ATR-deferred conditions were met. ETH therefore had a strong newly executable 5m confirmation while the live 1m opportunity was still supportive, yet execution waited for a later 1m/accumulated event.",
+            solution: "Add a second narrow 5m wake-up route for an existing unexecuted opportunity. It requires a real non-BUY->BUY 5m transition, final/ATR/liquidity permission on that 5m, latest 1m <=2 minutes old and supportive/immediately executable, no hard 1m risk veto, and the same configured HTF profile via validateBuyContext(...). Position is capped at 25% before the existing Entry Quality guard. The returned 1m signal owns price/SL/TP; 5m remains confirmation-only.",
+            behavior: "When a prior blocker clears and 5m becomes a fresh executable BUY, the existing opportunity is re-evaluated immediately instead of waiting for accumulated evidence. Repeated 5m BUYs, stale 1m state, open positions or insufficient HTF authority cannot use the hook.",
+            regression: "Production and Proven/Regression call the same evaluateConfirmedSetupWakeup(...) method. Unit regression models ETH #102889 + #102890 and asserts a reduced SETUP_CONFIRMATION_WAKEUP using the 1m execution signal, plus the existing FIX-014 route remains unchanged.",
+            status: "IMPLEMENTED"
         }
 
 ];

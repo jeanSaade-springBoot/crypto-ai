@@ -323,6 +323,78 @@ public class ExecutionIntelligenceService {
         return new SetupWakeupEvaluation(current1m, wakeupDecision);
     }
 
+    /**
+     * FIX-023 / ETHUSDT 2026-08-20 18:11-18:24 KSA:
+     * A fresh 5m BUY transition may wake an already-live, unexecuted opportunity after
+     * liquidity/confirmation improves. This is deliberately narrower than granting 5m
+     * direct wallet authority: the actual execution price/risk plan remains the latest
+     * fresh 1m signal, which must still be supportive, immediately executable, and free
+     * of hard risk vetoes. The configured 5m/1h execution profile is revalidated here,
+     * so HTF authority is preserved rather than bypassed.
+     */
+    @Transactional
+    public SetupWakeupEvaluation evaluateConfirmedSetupWakeup(
+            TradeSignal fiveMinuteTrigger, int currentAllocationPercent) {
+        if (currentAllocationPercent > 0 || fiveMinuteTrigger == null || fiveMinuteTrigger.getGeneratedAt() == null
+                || !CONFIRMATION_INTERVAL.equals(fiveMinuteTrigger.getInterval())
+                || !isBullish(fiveMinuteTrigger.getDecision())
+                || !fiveMinuteTrigger.isFinalEntryAllowed()
+                || !fiveMinuteTrigger.isAtrImmediateEntryAllowed()
+                || !fiveMinuteTrigger.isLiquidityEntryAllowed()) {
+            return SetupWakeupEvaluation.none();
+        }
+
+        TradeSignal previousFive = previousSignalBefore(
+                fiveMinuteTrigger.getSymbol(), CONFIRMATION_INTERVAL, fiveMinuteTrigger.getGeneratedAt()).orElse(null);
+        if (previousFive != null && isBullish(previousFive.getDecision())) {
+            return SetupWakeupEvaluation.none();
+        }
+
+        ExecutionOpportunity opportunity = currentOpportunity(
+                fiveMinuteTrigger.getSymbol(), List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
+                .filter(o -> o.getExecutedAt() == null)
+                .orElse(null);
+        if (opportunity == null) return SetupWakeupEvaluation.none();
+
+        TradeSignal current1m = latestSignalAtOrBefore(
+                fiveMinuteTrigger.getSymbol(), EXECUTION_INTERVAL, fiveMinuteTrigger.getGeneratedAt()).orElse(null);
+        if (current1m == null || current1m.getGeneratedAt() == null
+                || Duration.between(current1m.getGeneratedAt(), fiveMinuteTrigger.getGeneratedAt())
+                        .compareTo(SETUP_WAKEUP_1M_MAX_AGE) > 0
+                || !isSupportiveCurrentSignal(current1m)
+                || !current1m.isFinalEntryAllowed()
+                || !current1m.isAtrImmediateEntryAllowed()) {
+            return SetupWakeupEvaluation.none();
+        }
+
+        HardRiskBlock hardBlock = nonAtrHardRiskBlock(current1m);
+        if (hardBlock.blocked()) return SetupWakeupEvaluation.none();
+
+        TradeExecutionValidationService.ValidationResult authority =
+                validationService.validateBuyContext(fiveMinuteTrigger);
+        if (!authority.allowed()) return SetupWakeupEvaluation.none();
+
+        Evidence evidence = evidence(current1m);
+        EntryQuality quality = assessEntryQuality(current1m, fiveMinuteTrigger.getAtrAtSignal());
+        int basePercent = Math.min(25, authority.positionPercent());
+        ExecutionDecision decision = applyInitialEntryQualityGuard(
+                ExecutionDecision.allow(
+                        "SETUP_CONFIRMATION_WAKEUP",
+                        "FRESH_5M_CONFIRMATION",
+                        basePercent,
+                        "Fresh 5m BUY transition reactivated an existing unexecuted opportunity after the prior blocker cleared. "
+                                + "Execution still uses latest 1m signal #" + current1m.getId()
+                                + " at " + current1m.getLatestPrice() + "; 5m trigger #" + fiveMinuteTrigger.getId()
+                                + " remains confirmation authority only. HTF profile=" + authority.code() + ".",
+                        evidence),
+                quality);
+        if (!decision.allowed()) return new SetupWakeupEvaluation(current1m, decision);
+
+        saveOpportunity(current1m, evidence, "CONFIRMED", decision.source(),
+                decision.positionPercent(), decision.code(), decision.explanation());
+        return new SetupWakeupEvaluation(current1m, decision);
+    }
+
     @Transactional
     public ExecutionDecision evaluateBuy(TradeSignal signal, int currentAllocationPercent, String currentStage) {
         if (signal == null || signal.getGeneratedAt() == null) {
@@ -590,6 +662,37 @@ public class ExecutionIntelligenceService {
                     if (!stillBuilding) {
                         opportunity.setExecutedAt(Instant.now());
                     }
+                    opportunity.setUpdatedAt(Instant.now());
+                    saveOpportunityEntity(opportunity);
+                });
+    }
+
+
+    /**
+     * FIX-020 / ENAUSDT 2026-08-20:
+     * A fully closed position is an immutable evidence boundary. Scout/probe/confirmation
+     * opportunities intentionally remain BUILDING while the SAME position is open, but once
+     * that position reaches any terminal exit (TP, SL, SIGNAL_SELL, profit lock, manual close),
+     * its pre-exit evidence may never finance a brand-new position. Replay calls this exact
+     * method too, so production and Proven/Regression share the same lifecycle semantics.
+     */
+    @Transactional
+    public void completePositionOpportunity(String symbol, TradeSignal exitSignal, String closeReason) {
+        if (symbol == null || symbol.isBlank()) return;
+        currentOpportunity(symbol, List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
+                .ifPresent(opportunity -> {
+                    opportunity.setStatus("COMPLETED");
+                    if (exitSignal != null) {
+                        opportunity.setLatestSignal(exitSignal);
+                        if (exitSignal.getGeneratedAt() != null) {
+                            opportunity.setLastEvidenceAt(exitSignal.getGeneratedAt());
+                        }
+                    }
+                    opportunity.setDecisionCode("POSITION_CLOSED_EVIDENCE_BOUNDARY");
+                    opportunity.setDecisionExplanation(
+                            "Position lifecycle completed"
+                                    + (closeReason == null || closeReason.isBlank() ? "" : " via " + closeReason)
+                                    + "; pre-exit opportunity evidence is consumed and cannot justify a new position.");
                     opportunity.setUpdatedAt(Instant.now());
                     saveOpportunityEntity(opportunity);
                 });
@@ -1419,13 +1522,27 @@ public class ExecutionIntelligenceService {
                             + ", confidence=" + e.averageConfidence() + ".", e);
         }
 
+        // FIX-021 / BICOUSDT + ETHUSDT:
+        // Accumulated evidence is memory, not a separate execution authority. It must obey
+        // the SAME configured 5m/1h profile that a normal direct BUY would face. This closes
+        // the contradiction where BALANCED rejected 5m WATCH + 1h NEUTRAL for a fresh BUY,
+        // but ACCUMULATED_EVIDENCE later entered with that same or weaker HTF state.
+        TradeExecutionValidationService.ValidationResult authority = validationService.validateBuyContext(current);
+        if (!authority.allowed()) {
+            return ExecutionDecision.building("ACCUMULATED_AUTHORITY_WAIT",
+                    "Accumulated evidence remains stored, but current HTF execution authority is insufficient: "
+                            + authority.code() + " - " + authority.explanation(), e);
+        }
+
         int percent = e.evidenceScore() >= STRONG_EVIDENCE_SCORE ? 50 : 25;
         if (e.buyCount() >= 2) percent += 10;
         if (e.fiveMinute() == SignalDecision.WATCH) percent += 5;
         if (isBullish(e.fiveMinute())) percent += 15;
         if (e.oneHour() == SignalDecision.WATCH) percent += 5;
         if (isBullish(e.oneHour())) percent += 10;
-        percent = Math.min(75, percent);
+        // Never size accumulated evidence above the authority granted by the configured
+        // direct-BUY profile. Historical evidence may reduce uncertainty, not increase HTF authority.
+        percent = Math.min(Math.min(75, percent), authority.positionPercent());
 
         return ExecutionDecision.allow(
                 "ACCUMULATED_EVIDENCE",
@@ -1435,6 +1552,7 @@ public class ExecutionIntelligenceService {
                         + e.buyCount() + " BUY, " + e.watchCount() + " WATCH, evidence score=" + e.evidenceScore()
                         + ", average score=" + e.averageScore() + ", average confidence=" + e.averageConfidence()
                         + ", 5m=" + e.fiveMinute() + ", 1h=" + e.oneHour()
+                        + ", HTF authority=" + authority.code()
                         + ". No second trade signal was generated.",
                 e
         );
@@ -1838,7 +1956,7 @@ public class ExecutionIntelligenceService {
     private String normalizeStatus(String status) {
         if (status == null || status.isBlank()) return "BUILDING";
         return switch (status) {
-            case "CONFIRMED", "BLOCKED", "WEAKENING", "CANCELLED", "EXECUTED" -> status;
+            case "CONFIRMED", "BLOCKED", "WEAKENING", "CANCELLED", "EXECUTED", "COMPLETED" -> status;
             default -> "BUILDING";
         };
     }

@@ -206,6 +206,12 @@ public class PaperTradingService {
         ExecutionIntelligenceService.ExecutionDecision executionDecision;
         ExecutionIntelligenceService.SetupWakeupEvaluation wakeup =
                 executionIntelligenceService.evaluateSetupTimeframeWakeup(signal, 0);
+        if (!wakeup.present()) {
+            // FIX-023: a fresh executable 5m BUY transition may also wake an existing
+            // opportunity after liquidity/confirmation improves. The returned signal is
+            // still the latest 1m timing/risk plan; 5m never executes independently.
+            wakeup = executionIntelligenceService.evaluateConfirmedSetupWakeup(signal, 0);
+        }
         if (wakeup.present() && wakeup.decision().allowed()) {
             executionSignal = wakeup.executionSignal();
             executionDecision = wakeup.decision();
@@ -340,6 +346,10 @@ public class PaperTradingService {
         position.setClosedAt(Instant.now());
         PaperPosition saved = positionRepository.save(position);
 
+        // FIX-020: terminal position close consumes the opportunity that financed this
+        // position so old pre-exit evidence cannot immediately open a brand-new trade.
+        executionIntelligenceService.completePositionOpportunity(position.getSymbol(), signal, "PROFIT_LOCK");
+
         try {
             walletAutoExecutionService.executeProfitLock(signal, exitPrice, profitLock.lockPrice());
         } catch (RuntimeException ex) {
@@ -367,6 +377,11 @@ public class PaperTradingService {
         position.setExitSignal(exitSignal);
         position.setClosedAt(Instant.now());
         PaperPosition saved = positionRepository.save(position);
+
+        // FIX-020: all terminal exits (TP/SL/SIGNAL_SELL/manual/etc.) create an immutable
+        // evidence boundary. Progressive adds remain untouched while the position is open.
+        executionIntelligenceService.completePositionOpportunity(position.getSymbol(), exitSignal, closeReason);
+
         if (exitSignal != null) {
             try {
                 walletAutoExecutionService.executeSell(exitSignal);
