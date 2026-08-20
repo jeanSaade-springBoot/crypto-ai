@@ -101,11 +101,30 @@ public class ShadowProductionReplayService {
                 }
             }
 
-            if (!"1m".equals(signal.getInterval())) continue;
+            // FIX-014 replay parity: production may use a fresh 5m BUY transition only to
+            // wake an already-live deferred 1m opportunity. The actual execution/risk plan
+            // remains the latest fresh 1m signal returned by the shared production service.
+            // All other non-1m signals remain context-only exactly as before.
+            TradeSignal executionSignal = signal;
+            ExecutionIntelligenceService.ExecutionDecision decision;
+            if ("1m".equals(signal.getInterval())) {
+                int currentAllocation = open == null ? 0 : open.positionPercent();
+                String currentStage = replayStage(currentAllocation);
+                decision = executionIntelligenceService.evaluateBuy(signal, currentAllocation, currentStage);
+            } else if ("5m".equals(signal.getInterval()) && open == null) {
+                ExecutionIntelligenceService.SetupWakeupEvaluation wakeup =
+                        executionIntelligenceService.evaluateSetupTimeframeWakeup(signal, 0);
+                if (!wakeup.present()) continue;
+                executionSignal = wakeup.executionSignal();
+                decision = wakeup.decision();
+            } else {
+                continue;
+            }
 
             // Warm-up evaluates the SAME production decision service so evidence/opportunity
             // memory is realistic at executionStart, but it never opens or adds to a wallet
-            // position before the requested test window.
+            // position before the requested test window. The trigger timestamp (signal) controls
+            // the replay window; executionSignal owns price/risk just like production.
             boolean inExecutionWindow = !signal.getGeneratedAt().isBefore(executionStart)
                     && !signal.getGeneratedAt().isAfter(executionEnd);
             LocalDate signalTradeDate = signal.getGeneratedAt().atZone(ZoneId.systemDefault()).toLocalDate();
@@ -116,40 +135,34 @@ public class ShadowProductionReplayService {
                         cash, replayWalletSettings.getMinimumUsdtReserve(),
                         replayWalletSettings.getBaseTradeAmountUsdt(), replayWalletSettings.getMaximumDailyNewPositions());
             }
-            int currentAllocation = open == null ? 0 : open.positionPercent();
-            String currentStage = replayStage(currentAllocation);
-            // IMPORTANT: Proven/Regression never re-implements pressure readiness or entry routing.
-            // This is the exact production evaluateBuy path, including the sequence-based
-            // PressureReadinessService. That service queries only candles with close_time <= the
-            // historical signal.generatedAt, so replay cannot borrow future candles. Only wallet/
-            // opportunity persistence is shadowed by ExecutionReplayScope.
-            ExecutionIntelligenceService.ExecutionDecision decision =
-                    executionIntelligenceService.evaluateBuy(signal, currentAllocation, currentStage);
+            // IMPORTANT: Proven/Regression never re-implements pressure readiness, normal BUY
+            // routing, or FIX-014 wake-up rules. All are executed by the production
+            // ExecutionIntelligenceService above; only wallet/opportunity persistence is shadowed.
             if (!inExecutionWindow) continue;
 
             if (open == null && decision.allowed()) {
-                int atrPercent = signal.getAtrRecommendedPositionPercent() <= 0 ? 100 : signal.getAtrRecommendedPositionPercent();
+                int atrPercent = executionSignal.getAtrRecommendedPositionPercent() <= 0 ? 100 : executionSignal.getAtrRecommendedPositionPercent();
                 int effectivePercent = Math.max(1, Math.min(100,
                         (int)Math.round(atrPercent * decision.positionPercent() / 100.0)));
                 WalletExecutionSizingPolicy.Plan sizing = executionSizingPolicy.plan(
                         cash, replayWalletSettings.getMinimumUsdtReserve(), replayDailyBudget,
                         effectivePercent, 0, true, replayWalletSettings.getMaximumDailyNewPositions(),
-                        replayExecutedNewPositions, signal.getLatestPrice());
+                        replayExecutedNewPositions, executionSignal.getLatestPrice());
                 BigDecimal budget = sizing.spend();
                 if (sizing.allowed()) {
                     BigDecimal qty = sizing.quantity();
                     effectivePercent = sizing.normalizedPositionPercent();
-                    long positionId = openPosition(runId, symbol, signal, qty, budget, effectivePercent);
-                    persistBuy(runId, symbol, signal, qty, budget, effectivePercent, decision);
-                    executionIntelligenceService.markExecuted(signal, decision);
+                    long positionId = openPosition(runId, symbol, executionSignal, qty, budget, effectivePercent);
+                    persistBuy(runId, symbol, executionSignal, qty, budget, effectivePercent, decision);
+                    executionIntelligenceService.markExecuted(executionSignal, decision);
                     cash = cash.subtract(budget, MC);
                     replayExecutedNewPositions++;
                     // Keep the complete immutable BUY thesis needed by production continuation.
                     // Replay must not drop entry structure and silently evaluate a different exit policy.
-                    open = new ShadowPosition(positionId, signal.getGeneratedAt(), signal.getLatestPrice(), qty, budget,
-                            effectivePercent, signal.getStopLoss(), signal.getTakeProfit(), signal.getLatestPrice(), false, null,
-                            signal.getTotalScore(), signal.getConfidenceScore(), signal.getTrendScore(), signal.getTrendStructureScore(),
-                            signal.getMomentumScore(), signal.getVolumeScore());
+                    open = new ShadowPosition(positionId, executionSignal.getGeneratedAt(), executionSignal.getLatestPrice(), qty, budget,
+                            effectivePercent, executionSignal.getStopLoss(), executionSignal.getTakeProfit(), executionSignal.getLatestPrice(), false, null,
+                            executionSignal.getTotalScore(), executionSignal.getConfidenceScore(), executionSignal.getTrendScore(), executionSignal.getTrendStructureScore(),
+                            executionSignal.getMomentumScore(), executionSignal.getVolumeScore());
                 }
             } else if (open != null && decision.allowed()) {
                 // Exact production progressive-position semantics: decision.positionPercent()

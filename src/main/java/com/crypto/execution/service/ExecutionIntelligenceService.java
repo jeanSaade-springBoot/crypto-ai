@@ -44,6 +44,7 @@ public class ExecutionIntelligenceService {
     private static final Duration EVIDENCE_WINDOW = Duration.ofMinutes(30);
     private static final Duration FIVE_MINUTE_MAX_AGE = Duration.ofMinutes(20);
     private static final Duration ONE_HOUR_MAX_AGE = Duration.ofHours(3);
+    private static final Duration SETUP_WAKEUP_1M_MAX_AGE = Duration.ofMinutes(2);
 
     private static final int WATCH_EVIDENCE_MIN_SCORE = 60;
     private static final int WATCH_EVIDENCE_MIN_CONFIDENCE = 60;
@@ -221,6 +222,105 @@ public class ExecutionIntelligenceService {
     @Transactional
     public ExecutionDecision evaluateBuy(TradeSignal signal) {
         return evaluateBuy(signal, 0, "NONE");
+    }
+
+    /**
+     * FIX-014 / XRPUSDT 2026-08-19:
+     * A fresh 5m BUY transition may wake an already-existing, unexecuted BUY opportunity
+     * whose latest 1m timing signal was deferred only by local ATR extension. The 5m signal
+     * NEVER becomes wallet execution authority: it only asks the existing SETUP_TIMEFRAME_ATR
+     * policy to re-evaluate the latest fresh 1m state. 1h WATCH/BUY authority, current 1m
+     * non-bearish timing, all hard risk gates, the existing 5m ATR plan, and Entry Quality
+     * remain mandatory. Normal 1m BUY behavior and all existing HTF/ATR routes are unchanged.
+     */
+    @Transactional
+    public SetupWakeupEvaluation evaluateSetupTimeframeWakeup(
+            TradeSignal fiveMinuteTrigger, int currentAllocationPercent) {
+        if (currentAllocationPercent > 0 || fiveMinuteTrigger == null || fiveMinuteTrigger.getGeneratedAt() == null
+                || !CONFIRMATION_INTERVAL.equals(fiveMinuteTrigger.getInterval())
+                || !isBullish(fiveMinuteTrigger.getDecision())
+                || !fiveMinuteTrigger.isFinalEntryAllowed()
+                || !fiveMinuteTrigger.isAtrImmediateEntryAllowed()) {
+            return SetupWakeupEvaluation.none();
+        }
+
+        // Only a real 5m transition can wake the opportunity. Repeated BUY candles remain
+        // context-only so this hook cannot create duplicate execution pressure.
+        TradeSignal previousFive = previousSignalBefore(
+                fiveMinuteTrigger.getSymbol(), CONFIRMATION_INTERVAL, fiveMinuteTrigger.getGeneratedAt()).orElse(null);
+        if (previousFive != null && isBullish(previousFive.getDecision())) {
+            return SetupWakeupEvaluation.none();
+        }
+
+        ExecutionOpportunity opportunity = currentOpportunity(
+                fiveMinuteTrigger.getSymbol(), List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
+                .filter(o -> o.getExecutedAt() == null)
+                .orElse(null);
+        if (opportunity == null) return SetupWakeupEvaluation.none();
+
+        TradeSignal current1m = latestSignalAtOrBefore(
+                fiveMinuteTrigger.getSymbol(), EXECUTION_INTERVAL, fiveMinuteTrigger.getGeneratedAt()).orElse(null);
+        if (current1m == null || current1m.getGeneratedAt() == null
+                || Duration.between(current1m.getGeneratedAt(), fiveMinuteTrigger.getGeneratedAt())
+                        .compareTo(SETUP_WAKEUP_1M_MAX_AGE) > 0) {
+            return SetupWakeupEvaluation.none();
+        }
+
+        // This hook is only for the already-proven SETUP_TIMEFRAME_ATR gap: current 1m timing
+        // must still be deferred by ATR. A normal immediate 1m BUY continues through evaluateBuy().
+        if (current1m.isAtrImmediateEntryAllowed()
+                || isBearish(current1m.getDecision())
+                || isBearish(current1m.getOriginalDecision())
+                || !current1m.isFinalEntryAllowed()) {
+            return SetupWakeupEvaluation.none();
+        }
+
+        TradeSignal oneHour = latestSignalAtOrBefore(
+                fiveMinuteTrigger.getSymbol(), TREND_INTERVAL, fiveMinuteTrigger.getGeneratedAt()).orElse(null);
+        if (oneHour == null || oneHour.getGeneratedAt() == null
+                || Duration.between(oneHour.getGeneratedAt(), fiveMinuteTrigger.getGeneratedAt()).compareTo(ONE_HOUR_MAX_AGE) > 0
+                || !(oneHour.getDecision() == SignalDecision.WATCH || isBullish(oneHour.getDecision()))
+                || isBearish(oneHour.getOriginalDecision())) {
+            return SetupWakeupEvaluation.none();
+        }
+
+        HardRiskBlock hardBlock = nonAtrHardRiskBlock(current1m);
+        if (hardBlock.blocked()) return SetupWakeupEvaluation.none();
+        if (current1m.getLatestPrice() == null || current1m.getStopLoss() == null || current1m.getTakeProfit() == null
+                || current1m.getStopLoss().signum() <= 0 || current1m.getTakeProfit().signum() <= 0) {
+            return SetupWakeupEvaluation.none();
+        }
+
+        Evidence evidence = evidence(current1m);
+        boolean supportiveCurrent = isSupportiveCurrentSignal(current1m);
+        boolean healthyNeutralTiming = current1m.getDecision() == SignalDecision.NEUTRAL
+                && Math.max(evidence.opportunityHealth(), opportunity.getOpportunityHealth()) >= 60
+                && Math.max(evidence.evidenceScore(), opportunity.getEvidenceScore()) >= MIN_EVIDENCE_SCORE;
+        if (!supportiveCurrent && !healthyNeutralTiming) return SetupWakeupEvaluation.none();
+
+        if (isBearish(fiveMinuteTrigger.getOriginalDecision())
+                || !fiveMinuteTrigger.isStrategyEntryAllowed()
+                || !fiveMinuteTrigger.isBtcContextEntryAllowed()
+                || !fiveMinuteTrigger.isDerivativesEntryAllowed()
+                || !fiveMinuteTrigger.isLiquidityEntryAllowed()) {
+            return SetupWakeupEvaluation.none();
+        }
+
+        ExecutionDecision decision = setupTimeframeAtrAuthorityDecision(current1m, evidence, fiveMinuteTrigger);
+        EntryQuality quality = assessEntryQuality(current1m, fiveMinuteTrigger.getAtrAtSignal());
+        decision = applyInitialEntryQualityGuard(decision, quality);
+        if (!decision.allowed()) return new SetupWakeupEvaluation(current1m, decision);
+
+        String explanation = decision.explanation()
+                + " FIX-014 wake-up: fresh 5m BUY transition " + fiveMinuteTrigger.getId()
+                + " re-evaluated existing opportunity " + opportunity.getId()
+                + " using latest 1m signal " + current1m.getId()
+                + "; 5m remains context/setup authority only and does not execute independently.";
+        ExecutionDecision wakeupDecision = ExecutionDecision.allow(
+                decision.source(), "SETUP_TIMEFRAME_WAKEUP", decision.positionPercent(), explanation, decision.evidence());
+        saveOpportunity(current1m, evidence, "CONFIRMED", wakeupDecision.source(),
+                wakeupDecision.positionPercent(), wakeupDecision.code(), wakeupDecision.explanation());
+        return new SetupWakeupEvaluation(current1m, wakeupDecision);
     }
 
     @Transactional
@@ -1720,6 +1820,11 @@ public class ExecutionIntelligenceService {
         return signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(symbol, interval, reference);
     }
 
+    private java.util.Optional<TradeSignal> previousSignalBefore(String symbol, String interval, Instant reference) {
+        if (replayScope != null && replayScope.active()) return replayScope.previousBefore(symbol, interval, reference);
+        return signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanOrderByGeneratedAtDesc(symbol, interval, reference);
+    }
+
     private java.util.Optional<ExecutionOpportunity> currentOpportunity(String symbol, List<String> statuses) {
         if (replayScope != null && replayScope.active()) return replayScope.currentOpportunity(symbol, statuses);
         return opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(symbol, "BUY", statuses);
@@ -1744,6 +1849,11 @@ public class ExecutionIntelligenceService {
 
     private boolean isBearish(SignalDecision decision) {
         return decision == SignalDecision.SELL || decision == SignalDecision.STRONG_SELL;
+    }
+
+    public record SetupWakeupEvaluation(TradeSignal executionSignal, ExecutionDecision decision) {
+        public static SetupWakeupEvaluation none() { return new SetupWakeupEvaluation(null, null); }
+        public boolean present() { return executionSignal != null && decision != null; }
     }
 
     public record ExecutionDecision(

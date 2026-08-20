@@ -300,6 +300,29 @@
             status: "IMPLEMENTED"
         }
 
+        ,{
+            id: "FIX-014",
+            title: "Fresh 5m BUY transition wakes an existing ATR-deferred 1m opportunity",
+            scenario: "XRPUSDT 2026-08-19: early 1m BUY was deferred while 5m/1h were neutral; later 5m BUY + 1h WATCH appeared near 1.075 but remained context-only, and production finally entered much later at 1.1279",
+            symbol: "XRPUSDT",
+            entry: "Historical bad execution 1.1279 via #97515; target regression is a reduced SETUP_TIMEFRAME_ATR opportunity around the #96944/#96945 1m+5m handoff near 1.075-1.078 when all existing guards pass",
+            exit: "Existing stop-loss, TP continuation, Dynamic Profit Lock and validated SELL logic remain unchanged",
+            entryTime: "Key handoff 2026-08-19 20:22:06-20:22:07 UTC (23:22:06-23:22:07 KSA)",
+            exitTime: "Scenario-specific; no exit rule is changed by this fix",
+            location: "Execution Intelligence setup-timeframe ATR handoff + PaperTradingService trigger routing + ShadowProductionReplayService parity",
+            classes: [
+                "com.crypto.execution.service.ExecutionIntelligenceService",
+                "com.crypto.service.PaperTradingService",
+                "com.crypto.regression.service.ShadowProductionReplayService",
+                "src/test/java/com/crypto/execution/service/ExecutionIntelligenceServiceTest.java"
+            ],
+            cause: "The architecture intentionally allows only fresh 1m signals to trigger wallet BUY execution. XRP #96786 correctly produced a strong 1m BUY around 1.0672 but higher-timeframe confirmation was not ready. When 5m later transitioned to BUY (#96945/#96986) with 1h WATCH and valid 5m ATR near 1.075, those 5m signals were correctly treated as CONTEXT_ONLY and could not wake the already-live deferred opportunity. The next qualifying 1m execution arrived after substantial additional expansion at 1.1279. Existing SETUP_TIMEFRAME_ATR already modeled the safe handoff but was reachable only from a later 1m event.",
+            solution: "Keep 5m/1h non-executable and keep the normal 1m BUY path unchanged. Add a narrow wake-up hook: only a fresh 5m transition from non-BUY to BUY/STRONG_BUY may re-evaluate an existing unexecuted BUY opportunity, only when the latest 1m signal is fresh (<=2 minutes), supportive/non-bearish, final-entry-allowed and still ATR-deferred, and fresh 1h authority is at least WATCH/BUY. The hook calls the existing SETUP_TIMEFRAME_ATR decision and Entry Quality guard using the 5m ATR authority; strategy/BTC/derivatives/liquidity/risk-plan vetoes remain mandatory. Repeated 5m BUY candles cannot retrigger the hook and an already-open allocation cannot use it.",
+            behavior: "A 5m BUY never opens a trade by itself. It can only wake a previously recognized, still-unexecuted 1m BUY opportunity and request the existing conservative setup-timeframe ATR evaluation. Normal direct 1m BUYs, BALANCED_EARLY, HTF_TRANSITION, pressure probes, progressive adds and all SELL/position-management behavior retain their existing priority and rules.",
+            regression: "Production and Administration replay call the same evaluateSetupTimeframeWakeup(...) method. Unit coverage verifies the XRP-shaped WATCH 1m / ATR-deferred + fresh 5m BUY + 1h WATCH handoff can produce SETUP_TIMEFRAME_WAKEUP, while repeated 5m BUY candles remain context-only. Full Jenkins Maven tests and an XRP replay around 2026-08-19 19:50-20:35 UTC should verify an earlier reduced entry without changing previously proven BUY/SELL scenarios.",
+            status: "IMPLEMENTED"
+        }
+
 ];
 
     const list = document.getElementById("fix-registry-list");

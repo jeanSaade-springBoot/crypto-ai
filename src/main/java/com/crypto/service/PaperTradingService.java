@@ -198,8 +198,21 @@ public class PaperTradingService {
             return Optional.of(position);
         }
 
-        ExecutionIntelligenceService.ExecutionDecision executionDecision =
-                executionIntelligenceService.evaluateBuy(signal);
+        // FIX-014: a fresh 5m BUY transition may wake an already-live deferred 1m BUY
+        // opportunity, but 5m never executes directly. The returned executionSignal is the
+        // latest fresh 1m timing/risk plan; all existing SETUP_TIMEFRAME_ATR and hard-risk
+        // guards remain authoritative. Normal 1m BUY handling is unchanged.
+        TradeSignal executionSignal = signal;
+        ExecutionIntelligenceService.ExecutionDecision executionDecision;
+        ExecutionIntelligenceService.SetupWakeupEvaluation wakeup =
+                executionIntelligenceService.evaluateSetupTimeframeWakeup(signal, 0);
+        if (wakeup.present() && wakeup.decision().allowed()) {
+            executionSignal = wakeup.executionSignal();
+            executionDecision = wakeup.decision();
+        } else {
+            executionDecision = executionIntelligenceService.evaluateBuy(signal);
+        }
+
         if (!executionDecision.allowed()) {
             log.info("Execution Intelligence did not open a BUY: signalId={}, symbol={}, interval={}, state={}, source={}, code={}, evidenceScore={}, buys={}, watches={}, detail={}",
                     signal.getId(), signal.getSymbol(), signal.getInterval(), executionDecision.state(),
@@ -215,9 +228,9 @@ public class PaperTradingService {
 
         enforceDailyLossLimit();
 
-        int atrPercent = signal.getAtrRecommendedPositionPercent() <= 0
+        int atrPercent = executionSignal.getAtrRecommendedPositionPercent() <= 0
                 ? 100
-                : signal.getAtrRecommendedPositionPercent();
+                : executionSignal.getAtrRecommendedPositionPercent();
         int executionPercent = executionDecision.positionPercent();
         int effectivePositionPercent = Math.max(1,
                 Math.min(100, (int) Math.round(atrPercent * executionPercent / 100.0)));
@@ -227,7 +240,7 @@ public class PaperTradingService {
                 .multiply(properties.riskPerTradePercent(), MC)
                 .divide(BigDecimal.valueOf(100), MC)
                 .multiply(positionScale, MC);
-        BigDecimal riskPerUnit = signal.getLatestPrice().subtract(signal.getStopLoss(), MC).abs();
+        BigDecimal riskPerUnit = executionSignal.getLatestPrice().subtract(executionSignal.getStopLoss(), MC).abs();
 
         if (riskPerUnit.signum() == 0) {
             throw new IllegalStateException("Invalid stop-loss distance");
@@ -238,37 +251,37 @@ public class PaperTradingService {
         final boolean walletExecuted;
         try {
             ExecutionIntelligenceService.EntryQuality entryQuality =
-                    executionIntelligenceService.assessEntryQuality(signal);
-            walletExecuted = walletAutoExecutionService.executeBuy(signal, effectivePositionPercent,
+                    executionIntelligenceService.assessEntryQuality(executionSignal);
+            walletExecuted = walletAutoExecutionService.executeBuy(executionSignal, effectivePositionPercent,
                     "Execution Intelligence [" + executionDecision.source() + "] " + executionDecision.explanation(),
                     executionDecision.source(),
                     entryQuality.score());
         } catch (RuntimeException ex) {
-            log.error("Automatic wallet BUY failed for signal {}: {}", signal.getId(), ex.getMessage(), ex);
+            log.error("Automatic wallet BUY failed for signal {}: {}", executionSignal.getId(), ex.getMessage(), ex);
             return Optional.empty();
         }
         if (!walletExecuted) {
-            log.info("Execution Intelligence approved signal {} but wallet controls declined execution; no paper position was created.", signal.getId());
+            log.info("Execution Intelligence approved signal {} but wallet controls declined execution; no paper position was created.", executionSignal.getId());
             return Optional.empty();
         }
 
         BigDecimal executedQuantity = walletTradeRepository
-                .findTopBySignalIdAndSideAndStatusOrderByExecutedAtDesc(signal.getId(), "BUY", "EXECUTED")
+                .findTopBySignalIdAndSideAndStatusOrderByExecutedAtDesc(executionSignal.getId(), "BUY", "EXECUTED")
                 .map(com.crypto.wallet.domain.WalletTrade::getQuantity)
                 .filter(q -> q != null && q.signum() > 0)
                 .orElse(riskModelQuantity);
 
-        executionIntelligenceService.markExecuted(signal, executionDecision);
+        executionIntelligenceService.markExecuted(executionSignal, executionDecision);
         PaperPosition position = positionRepository.save(PaperPosition.builder()
                 .symbol(symbol)
                 .side(PositionSide.BUY)
                 .status(PositionStatus.OPEN)
                 .quantity(executedQuantity)
-                .entryPrice(signal.getLatestPrice())
-                .stopLoss(signal.getStopLoss())
-                .takeProfit(signal.getTakeProfit())
-                .signal(signal)
-                .entryReason(signal.getExplanation() + " | Execution Intelligence [" + executionDecision.source() + "]: " + executionDecision.explanation() + " Effective position " + effectivePositionPercent + "%.")
+                .entryPrice(executionSignal.getLatestPrice())
+                .stopLoss(executionSignal.getStopLoss())
+                .takeProfit(executionSignal.getTakeProfit())
+                .signal(executionSignal)
+                .entryReason(executionSignal.getExplanation() + " | Execution Intelligence [" + executionDecision.source() + "]: " + executionDecision.explanation() + " Effective position " + effectivePositionPercent + "%.")
                 .openedAt(Instant.now())
                 .build());
         return Optional.of(position);

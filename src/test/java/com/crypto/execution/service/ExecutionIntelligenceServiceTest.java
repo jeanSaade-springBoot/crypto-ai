@@ -755,6 +755,80 @@ class ExecutionIntelligenceServiceTest {
                 signal(99L, symbol, interval, decision, decision, generatedAt, 65, 70)));
     }
 
+
+    @Test
+    void freshFiveMinuteBuyTransitionWakesDeferredOneMinuteSetupWithoutGivingFiveMinuteDirectAuthority() {
+        TradeSignal current = signal(96944L, "XRPUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(1), 75, 72);
+        current.setLatestPrice(new BigDecimal("1.0781"));
+        current.setStopLoss(new BigDecimal("1.0700"));
+        current.setTakeProfit(new BigDecimal("1.0900"));
+        current.setAtrImmediateEntryAllowed(false);
+        current.setAtrOverextended(true);
+        current.setAtrEntryType("PULLBACK_ENTRY");
+        current.setFinalEntryAllowed(true);
+
+        TradeSignal prior1m = signal(96915L, "XRPUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(360), 75, 72);
+        prior1m.setLatestPrice(new BigDecimal("1.0756"));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("XRPUSDT", "1m"))
+                .thenReturn(List.of(current, prior1m));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "XRPUSDT", "1m", now)).thenReturn(Optional.of(current));
+
+        TradeSignal priorFive = signal(96914L, "XRPUSDT", "5m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(300), 64, 72);
+        TradeSignal triggerFive = signal(96945L, "XRPUSDT", "5m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 80, 82);
+        triggerFive.setAtrAtSignal(new BigDecimal("0.0030"));
+        triggerFive.setAtrImmediateEntryAllowed(true);
+        triggerFive.setFinalEntryAllowed(true);
+        triggerFive.setAtrRecommendedPositionPercent(100);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanOrderByGeneratedAtDesc(
+                "XRPUSDT", "5m", now)).thenReturn(Optional.of(priorFive));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "XRPUSDT", "5m", current.getGeneratedAt())).thenReturn(Optional.of(priorFive));
+
+        TradeSignal oneHour = signal(96898L, "XRPUSDT", "1h", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(1200), 60, 69);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "XRPUSDT", "1h", now)).thenReturn(Optional.of(oneHour));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "XRPUSDT", "1h", current.getGeneratedAt())).thenReturn(Optional.of(oneHour));
+
+        com.crypto.execution.domain.ExecutionOpportunity opportunity =
+                com.crypto.execution.domain.ExecutionOpportunity.builder()
+                        .id(14322L).symbol("XRPUSDT").direction("BUY").status("BUILDING")
+                        .startedAt(now.minusSeconds(1200)).lastEvidenceAt(current.getGeneratedAt())
+                        .evidenceScore(7).opportunityHealth(80).createdAt(now.minusSeconds(1200)).updatedAt(now)
+                        .build();
+        when(opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(
+                any(), any(), any())).thenReturn(Optional.of(opportunity));
+
+        var wakeup = service.evaluateSetupTimeframeWakeup(triggerFive, 0);
+
+        assertThat(wakeup.present()).isTrue();
+        assertThat(wakeup.executionSignal().getId()).isEqualTo(96944L);
+        assertThat(wakeup.decision().allowed()).isTrue();
+        assertThat(wakeup.decision().source()).isEqualTo("SETUP_TIMEFRAME_ATR");
+        assertThat(wakeup.decision().code()).isEqualTo("SETUP_TIMEFRAME_WAKEUP");
+        assertThat(wakeup.decision().positionPercent()).isLessThanOrEqualTo(30);
+    }
+
+    @Test
+    void repeatedFiveMinuteBuyDoesNotWakeDeferredOpportunity() {
+        TradeSignal previousFive = signal(10L, "XRPUSDT", "5m", SignalDecision.BUY, SignalDecision.BUY,
+                now.minusSeconds(300), 80, 80);
+        TradeSignal triggerFive = signal(11L, "XRPUSDT", "5m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 81, 81);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanOrderByGeneratedAtDesc(
+                "XRPUSDT", "5m", now)).thenReturn(Optional.of(previousFive));
+
+        var wakeup = service.evaluateSetupTimeframeWakeup(triggerFive, 0);
+
+        assertThat(wakeup.present()).isFalse();
+    }
+
     private TradeSignal signal(Long id, String symbol, String interval,
                                SignalDecision decision, SignalDecision originalDecision,
                                Instant generatedAt, int score, int confidence) {
