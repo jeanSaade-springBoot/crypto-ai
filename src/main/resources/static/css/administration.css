@@ -276,3 +276,26 @@ body:has(#ai-regression-tests) main.administration-content{padding-top:0}
 .price-move-table td:last-child{white-space:normal;overflow:visible}
 .price-move-table .catching-blame-pill{font-size:11px}
 @media(max-width:1200px){.price-move-table{font-size:11px}.price-move-table th,.price-move-table td{padding:6px 4px}.price-move-table .secondary-button{padding:4px 5px;font-size:10px}}
+
+
+/* FIX-018: Trade review is a modal overlay instead of scrolling the analyst away from
+   the trade row. The backdrop fades the parent without removing its visual context. */
+.proven-trade-chart-modal{position:fixed;inset:0;z-index:2200;display:grid;place-items:center;padding:24px}
+.proven-trade-chart-modal.hidden{display:none}
+.proven-trade-chart-backdrop{position:absolute;inset:0;background:rgba(2,8,18,.76);backdrop-filter:blur(2px)}
+.proven-trade-chart-dialog{position:relative;z-index:1;width:min(1180px,calc(100vw - 48px));max-height:calc(100vh - 48px);overflow:auto;border:1px solid var(--border,#203342);border-radius:16px;background:#0b1420;box-shadow:0 24px 70px rgba(0,0,0,.5);padding:18px}
+.proven-trade-chart-head{display:flex;gap:18px;align-items:flex-start;justify-content:space-between;margin-bottom:10px}
+.proven-trade-chart-actions{display:flex;align-items:end;gap:10px;flex-wrap:wrap}
+.proven-popup-chart-wrap{position:relative;min-height:520px;border:1px solid rgba(141,162,177,.18);border-radius:12px;overflow:hidden;background:rgba(5,12,20,.42)}
+.proven-popup-chart{position:relative;min-height:520px}
+.proven-popup-hint{margin:.55rem 0 0;color:#8da2b1;font-size:.78rem}
+body.proven-modal-open{overflow:hidden}
+/* Dedicated crosshair is independent from Apex tooltip lifecycle and therefore survives
+   toolbar zoom/pan/reset actions until the chart itself is replaced on interval change. */
+.proven-popup-crosshair-v,.proven-popup-crosshair-h,.proven-popup-axis-label{position:absolute;z-index:18;pointer-events:none;display:none}
+.proven-popup-crosshair-v{width:1px;background:rgba(210,224,235,.48)}
+.proven-popup-crosshair-h{height:1px;background:rgba(210,224,235,.48)}
+.proven-popup-axis-label{background:#dbe8ef;color:#071018;border-radius:4px;padding:3px 6px;font-size:.72rem;line-height:1.2;white-space:nowrap;font-variant-numeric:tabular-nums}
+.proven-popup-price-label{transform:translateY(-50%)}
+.proven-popup-time-label{transform:translateX(-50%)}
+@media(max-width:700px){.proven-trade-chart-modal{padding:10px}.proven-trade-chart-dialog{width:calc(100vw - 20px);max-height:calc(100vh - 20px);padding:12px}.proven-trade-chart-head{flex-direction:column}.proven-popup-chart-wrap,.proven-popup-chart{min-height:430px}}

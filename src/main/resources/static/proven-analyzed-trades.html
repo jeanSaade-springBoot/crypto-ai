@@ -232,6 +232,37 @@
 
 </main>
 </div>
+<!-- FIX-018: Trade-focused chart overlay. The parent page remains visible but dimmed so
+     Proven/Test review keeps visual context while the selected trade chart sits on top. -->
+<div id="proven-trade-chart-modal" class="proven-trade-chart-modal hidden" aria-hidden="true">
+    <div class="proven-trade-chart-backdrop" data-proven-popup-close="1"></div>
+    <section class="proven-trade-chart-dialog" role="dialog" aria-modal="true" aria-labelledby="proven-popup-title">
+        <div class="proven-trade-chart-head">
+            <div>
+                <p class="eyebrow">TRADE-FOCUSED REVIEW</p>
+                <h3 id="proven-popup-title">Trade chart</h3>
+                <p id="proven-popup-meta" class="form-note">Historical candles around the selected BUY → SELL lifecycle.</p>
+            </div>
+            <div class="proven-trade-chart-actions">
+                <label class="proven-symbol-picker">Interval
+                    <select id="proven-popup-interval">
+                        <option value="1m">1 min</option>
+                        <option value="5m" selected>5 min</option>
+                        <option value="1h">1 hour</option>
+                        <option value="4h">4 hours</option>
+                    </select>
+                </label>
+                <button id="proven-popup-close" type="button" class="secondary-button" aria-label="Close trade chart">Close</button>
+            </div>
+        </div>
+        <div class="proven-popup-chart-wrap">
+            <div id="proven-popup-chart" class="proven-popup-chart"></div>
+            <div id="proven-popup-chart-empty" class="empty hidden">No candles are available for this trade window.</div>
+        </div>
+        <p class="proven-popup-hint">Hover the plot for a full crosshair. The right label shows exact price and the bottom label shows browser-local date/time.</p>
+    </section>
+</div>
+
 <script src="/js/time-utils.js"></script>
 <script src="/js/proven-analyzed-trades.js"></script>
 <script src="/js/catching-market-badge.js"></script></body>

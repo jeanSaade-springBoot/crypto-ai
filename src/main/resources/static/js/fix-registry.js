@@ -393,6 +393,29 @@
             status: "IMPLEMENTED"
         }
 
+        ,{
+            id: "FIX-018",
+            title: "Proven/Test trade chart opens as focused modal with persistent X/Y crosshair",
+            scenario: "Manual review of one replay/proven/archive trade should keep the parent row visible while giving a Binance-like focused chart",
+            symbol: "ALL",
+            entry: "Selected trade BUY marker and price remain visible inside the focused chart",
+            exit: "Selected trade SELL marker and BUY → SELL trade path remain visible inside the focused chart",
+            entryTime: "Uses the exact selected replay/proven trade BUY execution time",
+            exitTime: "Uses the exact selected replay/proven trade SELL execution time when closed",
+            replayWindow: "No strategy replay is required; validate on any Current Test, Proven or Archived trade by opening View Chart, switching intervals and using zoom/pan/reset before hovering",
+            location: "Proven Analyzed Trades browser UI only",
+            classes: [
+                "src/main/resources/static/proven-analyzed-trades.html",
+                "src/main/resources/static/js/proven-analyzed-trades.js",
+                "src/main/resources/static/css/administration.css"
+            ],
+            cause: "Trade review reused the persistent combined Proven chart and scrolled the page away from the selected row. Hover information depended on ordinary Apex axis tooltip behavior, which is not reliable enough after chart recreation or toolbar state changes and did not provide a full Binance-style X/Y cursor overlay.",
+            solution: "Keep the combined Proven chart unchanged and add a separate trade-focused modal overlay for Current Test, Proven and Archive View Chart actions. Dim/blur the parent page while retaining it underneath, render seven hours before BUY through seven hours after SELL, and add a dedicated pointer-driven vertical/horizontal crosshair. Map the pointer against Apex's current visible min/max after every zoom/pan state so the right-side badge always shows exact adaptive-precision price and the bottom badge shows browser-local date/time. Interval changes destroy/recreate only the popup chart and then rebind the dedicated crosshair cleanly.",
+            behavior: "View Chart opens above the trade being reviewed instead of navigating away. The parent test remains visible but faded. Hover anywhere inside the candle plot shows a vertical time line, horizontal price line, exact Y-axis price badge and X-axis date/time badge. The behavior continues after changing 1m/5m/1h/4h and after zoom/pan/reset actions.",
+            regression: "UI-only review enhancement. No signal scoring, BUY/SELL authority, opportunity lifecycle, wallet execution, position management, FIX-014 setup wake-up or replay calculation is changed. JavaScript syntax validation must pass.",
+            status: "IMPLEMENTED"
+        }
+
 ];
 
     const list = document.getElementById("fix-registry-list");

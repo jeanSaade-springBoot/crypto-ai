@@ -769,36 +769,185 @@ if (regressionPipelineFilter) regressionPipelineFilter.addEventListener('change'
 });
 
 
-// Current-test and archived View Chart actions reuse the single Proven chart.
-// The selected trade is only the focus/annotation; candles always come from the real historical candle table.
-async function showRegressionTradeChart(button) {
-    const entry = window.CryptoTime.parseUtc(button.dataset.chartEntryTime);
-    if (!entry || Number.isNaN(entry.getTime())) return;
-    const exit = button.dataset.chartExitTime ? window.CryptoTime.parseUtc(button.dataset.chartExitTime) : null;
-    provenTradeFocus = {
-        symbol: String(button.dataset.chartSymbol || '').toUpperCase(),
+// FIX-018: Current-test, archived and Proven "View Chart" actions open a trade-focused
+// modal. The existing combined Proven chart remains untouched; this avoids reusing one
+// Apex DOM instance for two different review jobs and keeps the parent trade row visible.
+let provenPopupChart = null;
+let provenPopupTrade = null;
+let provenPopupCrosshairCleanup = null;
+
+function normalizePopupTrade(raw = {}) {
+    const entry = raw.entry_time ? window.CryptoTime.parseUtc(raw.entry_time) : null;
+    if (!entry || Number.isNaN(entry.getTime()) || raw.entry_price == null) return null;
+    const exit = raw.exit_time ? window.CryptoTime.parseUtc(raw.exit_time) : null;
+    return {
+        ...raw,
+        symbol: String(raw.symbol || '').toUpperCase(),
         entry_time: entry.toISOString(),
-        entry_price: Number(button.dataset.chartEntryPrice),
+        entry_price: Number(raw.entry_price),
         exit_time: exit && !Number.isNaN(exit.getTime()) ? exit.toISOString() : null,
-        exit_price: button.dataset.chartExitPrice ? Number(button.dataset.chartExitPrice) : null,
-        _singleTradeView: true,
-        _label: `Trade #${Number(button.dataset.chartIndex || 0) + 1}`
+        exit_price: raw.exit_price == null ? null : Number(raw.exit_price)
     };
-    const selector = document.getElementById('proven-chart-symbol');
-    if (selector && provenTradeFocus.symbol) {
-        if (![...selector.options].some(o => o.value === provenTradeFocus.symbol)) {
-            selector.add(new Option(provenTradeFocus.symbol, provenTradeFocus.symbol));
-        }
-        selector.value = provenTradeFocus.symbol;
+}
+
+function popupTradeFromButton(button) {
+    return normalizePopupTrade({
+        symbol: button.dataset.chartSymbol,
+        entry_time: button.dataset.chartEntryTime,
+        entry_price: button.dataset.chartEntryPrice,
+        exit_time: button.dataset.chartExitTime || null,
+        exit_price: button.dataset.chartExitPrice || null,
+        _label: `Trade #${Number(button.dataset.chartIndex || 0) + 1}`
+    });
+}
+
+function openProvenTradePopup(trade) {
+    const normalized = normalizePopupTrade(trade);
+    if (!normalized) throw new Error('Trade chart requires a valid BUY time and price.');
+    provenPopupTrade = normalized;
+    const modal = document.getElementById('proven-trade-chart-modal');
+    modal?.classList.remove('hidden');
+    modal?.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('proven-modal-open');
+    document.getElementById('proven-popup-title').textContent = `${normalized.symbol} · ${normalized._label || 'Trade review'}`;
+    const buy = `${formatMoveTime(normalized.entry_time)} @ ${formatMovePrice(normalized.entry_price)}`;
+    const sell = normalized.exit_time && normalized.exit_price != null
+        ? `${formatMoveTime(normalized.exit_time)} @ ${formatMovePrice(normalized.exit_price)}`
+        : 'OPEN';
+    document.getElementById('proven-popup-meta').textContent = `BUY ${buy} · SELL ${sell}`;
+    return renderProvenTradePopup();
+}
+
+function closeProvenTradePopup() {
+    const modal = document.getElementById('proven-trade-chart-modal');
+    modal?.classList.add('hidden');
+    modal?.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('proven-modal-open');
+    provenPopupCrosshairCleanup?.();
+    provenPopupCrosshairCleanup = null;
+    if (provenPopupChart) { provenPopupChart.destroy(); provenPopupChart = null; }
+    const host = document.getElementById('proven-popup-chart');
+    if (host) host.innerHTML = '';
+    provenPopupTrade = null;
+}
+
+function adaptivePopupPrice(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    const abs = Math.abs(n);
+    const digits = abs >= 1000 ? 2 : abs >= 1 ? 4 : abs >= .01 ? 6 : 10;
+    return n.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: digits});
+}
+
+function ensurePopupCrosshairElements(host) {
+    const make = (cls) => { const el=document.createElement('div'); el.className=cls; host.appendChild(el); return el; };
+    return {
+        vertical: make('proven-popup-crosshair-v'),
+        horizontal: make('proven-popup-crosshair-h'),
+        price: make('proven-popup-axis-label proven-popup-price-label'),
+        time: make('proven-popup-axis-label proven-popup-time-label')
+    };
+}
+
+function bindPopupCrosshair(chart, host) {
+    provenPopupCrosshairCleanup?.();
+    host.querySelectorAll('.proven-popup-crosshair-v,.proven-popup-crosshair-h,.proven-popup-axis-label').forEach(el => el.remove());
+    const ui = ensurePopupCrosshairElements(host);
+    const hide = () => Object.values(ui).forEach(el => { el.style.display='none'; });
+    const onMove = event => {
+        const grid = host.querySelector('.apexcharts-grid');
+        if (!grid || !chart?.w?.globals) return hide();
+        const rect = grid.getBoundingClientRect();
+        const x = event.clientX, y = event.clientY;
+        if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return hide();
+
+        const hostRect = host.getBoundingClientRect();
+        const gx = rect.left - hostRect.left, gy = rect.top - hostRect.top;
+        const px = x - rect.left, py = y - rect.top;
+        const g = chart.w.globals;
+        const minX = Number(g.minX), maxX = Number(g.maxX);
+        const minY = Number(g.minYArr?.[0]), maxY = Number(g.maxYArr?.[0]);
+        if (![minX,maxX,minY,maxY].every(Number.isFinite) || maxX <= minX || maxY <= minY) return hide();
+        const timeValue = minX + (px / rect.width) * (maxX - minX);
+        const priceValue = maxY - (py / rect.height) * (maxY - minY);
+
+        ui.vertical.style.display='block'; ui.vertical.style.left=`${gx+px}px`; ui.vertical.style.top=`${gy}px`; ui.vertical.style.height=`${rect.height}px`;
+        ui.horizontal.style.display='block'; ui.horizontal.style.left=`${gx}px`; ui.horizontal.style.top=`${gy+py}px`; ui.horizontal.style.width=`${rect.width}px`;
+        ui.price.textContent = adaptivePopupPrice(priceValue);
+        ui.price.style.display='block'; ui.price.style.left=`${gx+rect.width+4}px`; ui.price.style.top=`${gy+py}px`;
+        const dt = new Date(timeValue);
+        ui.time.textContent = Number.isNaN(dt.getTime()) ? '' : dt.toLocaleString();
+        const labelLeft = Math.max(gx + 65, Math.min(gx + rect.width - 65, gx + px));
+        ui.time.style.display='block'; ui.time.style.left=`${labelLeft}px`; ui.time.style.top=`${gy+rect.height+5}px`;
+    };
+    host.addEventListener('pointermove', onMove, true);
+    host.addEventListener('pointerleave', hide, true);
+    provenPopupCrosshairCleanup = () => {
+        host.removeEventListener('pointermove', onMove, true);
+        host.removeEventListener('pointerleave', hide, true);
+        Object.values(ui).forEach(el => el.remove());
+    };
+}
+
+async function renderProvenTradePopup() {
+    if (!provenPopupTrade) return;
+    const trade = provenPopupTrade;
+    const interval = document.getElementById('proven-popup-interval')?.value || '5m';
+    const entry = window.CryptoTime.parseUtc(trade.entry_time);
+    const exit = trade.exit_time ? window.CryptoTime.parseUtc(trade.exit_time) : null;
+    const from = new Date(entry.getTime() - 7 * 60 * 60 * 1000);
+    const tradeEnd = exit && !Number.isNaN(exit.getTime()) ? exit : entry;
+    const to = new Date(tradeEnd.getTime() + 7 * 60 * 60 * 1000);
+    const data = await api(`/api/administration/regression-tests/trade-chart?symbol=${encodeURIComponent(trade.symbol)}&interval=${encodeURIComponent(interval)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`);
+    const candles = (data.candles || []).map(c => ({
+        x: window.CryptoTime.parseUtc(c.open_time),
+        y: [Number(c.open_price), Number(c.high_price), Number(c.low_price), Number(c.close_price)]
+    }));
+    const empty = document.getElementById('proven-popup-chart-empty');
+    empty?.classList.toggle('hidden', candles.length > 0);
+    const points=[];
+    if (trade.entry_time && trade.entry_price != null) points.push(provenPoint(trade.entry_time, trade.entry_price, 'BUY', 0));
+    if (trade.exit_time && trade.exit_price != null) points.push(provenPoint(trade.exit_time, trade.exit_price, 'SELL', 0));
+    const path=[];
+    if (trade.exit_time && trade.exit_price != null) {
+        path.push({
+            name:'Trade Path', type:'line',
+            data:[{x:entry.getTime(),y:Number(trade.entry_price)},{x:window.CryptoTime.parseUtc(trade.exit_time).getTime(),y:Number(trade.exit_price)}]
+        });
     }
-    await loadProvenTradesGraph(provenTradeFocus.symbol);
-    document.querySelector('.proven-trades-chart-panel')?.scrollIntoView({behavior:'smooth', block:'start'});
+    const options={
+        chart:{type:'line',height:520,background:'transparent',foreColor:'#8da2b1',toolbar:{show:true},animations:{enabled:false},zoom:{enabled:true,autoScaleYaxis:true}},
+        title:{text:`${trade.symbol} · ${interval} · 7h before/after trade`,align:'left',style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'}},
+        series:[{name:'Price',type:'candlestick',data:candles},...path],
+        stroke:{width:[1,...path.map(()=>3)],curve:'straight'}, markers:{size:[0,...path.map(()=>3)]}, dataLabels:{enabled:false},
+        xaxis:{type:'datetime',crosshairs:{show:true,stroke:{width:1,dashArray:0}},labels:{datetimeUTC:false},tooltip:{enabled:false}},
+        yaxis:{tooltip:{enabled:false},decimalsInFloat:4},
+        grid:{borderColor:'#203342'},theme:{mode:'dark'},plotOptions:{candlestick:{colors:{upward:'#39d98a',downward:'#ff6b72'}}},
+        annotations:{points},tooltip:{shared:false}
+    };
+    const host=document.getElementById('proven-popup-chart');
+    provenPopupCrosshairCleanup?.();
+    if (provenPopupChart) provenPopupChart.destroy();
+    host.innerHTML='';
+    provenPopupChart=new ApexCharts(host,options);
+    await provenPopupChart.render();
+    bindPopupCrosshair(provenPopupChart,host);
+    bindProvenDotTitles([trade]);
+}
+
+async function showRegressionTradeChart(button) {
+    const trade = popupTradeFromButton(button);
+    if (!trade) return;
+    await openProvenTradePopup(trade);
 }
 
 document.addEventListener('click', event => {
     const button=event.target.closest('button[data-replay-chart]');
     if (button) showRegressionTradeChart(button).catch(error => showAdminMessage(error.message,true));
+    if (event.target.closest('[data-proven-popup-close]') || event.target.closest('#proven-popup-close')) closeProvenTradePopup();
 });
+document.addEventListener('keydown', event => { if (event.key === 'Escape' && provenPopupTrade) closeProvenTradePopup(); });
+document.getElementById('proven-popup-interval')?.addEventListener('change', () => renderProvenTradePopup().catch(error => showAdminMessage(error.message,true)));
 
 let provenTradesChart = null;
 let provenTradeFocus = null;
@@ -973,12 +1122,9 @@ document.getElementById('proven-saved-trades-body')?.addEventListener('click', a
         const all = await api('/api/administration/regression-tests/proven-trades');
         const trade = all?.[Number(button.dataset.provenViewIndex)];
         if (!trade) throw new Error('Proven trade not found.');
-        provenTradeFocus = trade;
-        const selector = document.getElementById('proven-chart-symbol');
-        const symbol = String(trade.symbol || '').toUpperCase();
-        if (selector && symbol) selector.value = symbol;
-        await loadProvenTradesGraph(symbol);
-        document.querySelector('.proven-trades-chart-panel')?.scrollIntoView({behavior:'smooth', block:'start'});
+        // FIX-018: Proven trade review uses the same focused modal as Current Test/Archive.
+        // The persistent combined graph is not mutated just to inspect one row.
+        await openProvenTradePopup({...trade, _label:`Proven #${Number(button.dataset.provenViewIndex) + 1}`});
     } catch (error) {
         showAdminMessage(error.message, true);
     }
