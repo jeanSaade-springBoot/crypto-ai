@@ -296,9 +296,14 @@ public class TradeInspectorService {
                         buy.getSymbol(), "EXECUTED", buy.getExecutedAt(), sell.getExecutedAt());
         result.put("walletLifecycle", lifecycleTrades.stream().map(this::walletLifecycleView).toList());
 
+        // FIX-027: the one-look state map must be able to show the pre-entry transition
+        // (for example ENA SELLING -> STABILIZING -> RECOVERING -> RECOVERY_PROBE), not
+        // only what happened after the wallet BUY. Read a bounded 45-minute pre-entry
+        // window; this is diagnostics only and never feeds production/replay decisions.
+        Instant pathSignalStart = buy.getExecutedAt().minus(Duration.ofMinutes(45));
         List<TradeSignal> lifecycleSignals = tradeSignalRepository
                 .findBySymbolAndGeneratedAtBetweenOrderByGeneratedAtAsc(
-                        buy.getSymbol(), buy.getExecutedAt(), sell.getExecutedAt());
+                        buy.getSymbol(), pathSignalStart, sell.getExecutedAt());
         result.put("signalLifecycle", lifecycleSignals.stream()
                 .filter(this::isLifecycleSignal)
                 .map(this::signalPathView)
@@ -306,6 +311,19 @@ public class TradeInspectorService {
         result.put("exitOneMinute", signalPathView(latestSignalAtOrBefore(buy.getSymbol(), "1m", sell.getExecutedAt())));
         result.put("exitFiveMinute", signalPathView(latestSignalAtOrBefore(buy.getSymbol(), "5m", sell.getExecutedAt())));
         result.put("exitOneHour", signalPathView(latestSignalAtOrBefore(buy.getSymbol(), "1h", sell.getExecutedAt())));
+
+        // FIX-027: some important transition evidence occurs between scheduled signal
+        // evaluations (ENA's ~900K-volume / ~88% taker-BUY expansion is the anchor).
+        // Return a narrow read-only 1m candle band around entry so View Path can display
+        // that real market phase without pretending a new TradeSignal existed.
+        Instant evidenceFrom = buy.getExecutedAt().minus(Duration.ofMinutes(30));
+        Instant evidenceTo = sell.getExecutedAt().isBefore(buy.getExecutedAt().plus(Duration.ofMinutes(30)))
+                ? sell.getExecutedAt()
+                : buy.getExecutedAt().plus(Duration.ofMinutes(30));
+        result.put("entryEvidenceCandles", candleRepository
+                .findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(
+                        buy.getSymbol(), "1m", evidenceFrom, evidenceTo)
+                .stream().filter(Candle::isClosed).map(this::candleEvidenceView).toList());
 
         Map<String, Object> management = new LinkedHashMap<>();
         if (managed != null) {
@@ -396,6 +414,26 @@ public class TradeInspectorService {
         m.put("atrImmediateEntryAllowed", s.isAtrImmediateEntryAllowed()); m.put("atrRecommendedPositionPercent", s.getAtrRecommendedPositionPercent());
         m.put("stopLoss", s.getStopLoss()); m.put("takeProfit", s.getTakeProfit());
         m.put("finalEntryAllowed", s.isFinalEntryAllowed()); m.put("finalExplanation", s.getFinalDecisionExplanation());
+
+        // FIX-027: View Path is now a one-look sequential state map. Attach the exact
+        // CLOSED candle that produced this persisted signal so the node can show the
+        // market evidence the engine actually had at that step (volume, taker BUY
+        // pressure and trade count) without recomputing strategy decisions in the UI.
+        // This also protects Replay/Production interpretation: the diagnostic uses the
+        // signal's own candle_open_time, never a later candle.
+        if (s.getCandleOpenTime() != null && s.getInterval() != null) {
+            candleRepository.findBySymbolAndIntervalCodeAndOpenTime(s.getSymbol(), s.getInterval(), s.getCandleOpenTime())
+                    .ifPresent(c -> {
+                        m.put("candleVolume", c.getVolume());
+                        m.put("candleTrades", c.getNumberOfTrades());
+                        m.put("candleClose", c.getClosePrice());
+                        m.put("takerBuyBaseVolume", c.getTakerBuyBaseVolume());
+                        BigDecimal takerBuyPercent = c.getVolume() == null || c.getVolume().signum() == 0 || c.getTakerBuyBaseVolume() == null
+                                ? null
+                                : c.getTakerBuyBaseVolume().multiply(HUNDRED).divide(c.getVolume(), 2, RoundingMode.HALF_UP);
+                        m.put("takerBuyPercent", takerBuyPercent);
+                    });
+        }
         return m;
     }
 
@@ -405,7 +443,14 @@ public class TradeInspectorService {
         // changes. We persist every non-NEUTRAL 1m state and every 5m/1h state so the
         // user can see exactly how confirmation strengthened or weakened before SELL.
         if ("5m".equalsIgnoreCase(signal.getInterval()) || "1h".equalsIgnoreCase(signal.getInterval())) return true;
-        return !"NEUTRAL".equalsIgnoreCase(signal.getDecision().name());
+        // FIX-027: keep raw bearish-to-neutral transitions because they are required to
+        // explain STABILIZING/RECOVERING phases even when FinalDecisionService neutralized
+        // the raw SELL. WATCH/BUY states remain visible as before.
+        String finalDecision = signal.getDecision().name();
+        String originalDecision = signal.getOriginalDecision() == null ? "" : signal.getOriginalDecision().name();
+        return !"NEUTRAL".equalsIgnoreCase(finalDecision)
+                || "SELL".equalsIgnoreCase(originalDecision)
+                || "STRONG_SELL".equalsIgnoreCase(originalDecision);
     }
 
     private Map<String, Object> walletLifecycleView(WalletTrade trade) {
@@ -420,6 +465,23 @@ public class TradeInspectorService {
         m.put("executionReason", trade.getExecutionReason());
         m.put("executionMessage", trade.getExecutionMessage());
         m.put("realizedPnlPercent", trade.getRealizedPnlPercent());
+        return m;
+    }
+
+    private Map<String, Object> candleEvidenceView(Candle c) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("openTime", c.getOpenTime());
+        m.put("closeTime", c.getCloseTime());
+        m.put("open", c.getOpenPrice());
+        m.put("high", c.getHighPrice());
+        m.put("low", c.getLowPrice());
+        m.put("close", c.getClosePrice());
+        m.put("volume", c.getVolume());
+        m.put("trades", c.getNumberOfTrades());
+        BigDecimal takerBuyPercent = c.getVolume() == null || c.getVolume().signum() == 0 || c.getTakerBuyBaseVolume() == null
+                ? null
+                : c.getTakerBuyBaseVolume().multiply(HUNDRED).divide(c.getVolume(), 2, RoundingMode.HALF_UP);
+        m.put("takerBuyPercent", takerBuyPercent);
         return m;
     }
 

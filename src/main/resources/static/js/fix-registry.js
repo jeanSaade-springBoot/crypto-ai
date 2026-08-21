@@ -597,6 +597,28 @@
             solution: "Add a separate Recovery Transition Entry path without lowering normal BUY thresholds or rewriting market regime. It requires WATCH/NEUTRAL current state with score >=72, confidence >=68, trend >=20 and momentum >=14; a recent <=35 bearish 1m state; non-bearish fresh 5m/1h context; all existing FinalDecision/strategy/confluence/ATR/BTC/liquidity/derivatives entry gates open; and a closed-candle sequence proving prior >=80% taker-buy absorption, a <=25% taker-buy pullback/test, then three consecutive >=70% taker-buy recovery candles with rising closes and >=0.30% price advance. Approved exposure is only 25% and later adds still require ordinary confirmation.",
             behavior: "A fast bearish -> absorption -> recovery transition can open a small RECOVERY_TRANSITION_ENTRY probe while the static strategy remains WATCH. A single high taker-buy candle is never enough. Hard context/risk vetoes still block, current bearish signals never use the route, and normal BUY/Pressure Probe paths keep priority.",
             regression: "ENA anchor: at #101305 around 13:04:51 KSA use only candles closed through 13:03 KSA; the still-open 13:04 candle and 13:06-13:07 expansion must be invisible. Expected source=RECOVERY_TRANSITION_ENTRY, code=ABSORPTION_RECOVERY_PROBE, size<=25%. Negative regression: three recovery candles below 70% taker buy must not trigger. Production and Proven/Replay call the same ExecutionIntelligenceService -> RecoveryTransitionService path; no replay-only formula is permitted."
+        },
+        {
+            id: "FIX-027",
+            title: "Trade Inspector one-look sequential state path",
+            status: "Implemented",
+            scenario: "Trade Inspector View Path simplified into a sequential ERD/state-machine story for every completed trade",
+            symbol: "ALL",
+            entry: "Read-only visualization; no production BUY behavior changed",
+            exit: "Read-only visualization; no production SELL behavior changed",
+            entryTime: "Uses actual persisted signal/wallet timestamps and displays them in KSA",
+            exitTime: "Uses actual wallet SELL timestamp and exact holding time",
+            replayWindow: "N/A - diagnostic/UI-only fix; trading and replay formulas are unchanged",
+            location: "Trade Inspector -> View Path beside View Chart",
+            classes: [
+                "com.crypto.inspector.service.TradeInspectorService",
+                "src/main/resources/static/js/trade-inspector.js",
+                "src/main/resources/static/css/trade-inspector.css"
+            ],
+            cause: "FIX-024/025 contained the needed evidence but spread it across timeline, timeframe cards and contributor panels. The user could not understand the complete trade lifecycle in one look, and pre-entry recovery phases such as STABILIZING/RECOVERING were absent because the diagnostic lifecycle began at wallet BUY.",
+            solution: "Replace the primary View Path body with one compact sequential state-machine flow. Each phase shows KSA timestamp, elapsed time to the next phase, displayed score, base technical raw/max, trend, momentum, closed-candle taker BUY pressure, volume, RSI, MACD, decision/regime/strategy, 5m/1h authority, ATR action and any hard veto. Read a bounded 45-minute pre-entry signal window and attach the exact signal candle so recovery states are grounded in persisted closed-candle evidence. Recovery executions can therefore display STABILIZING -> RECOVERING -> RECOVERY_PROBE -> EXPANSION_CONFIRMED -> NORMAL_POSITION -> EXIT when those persisted phases exist. Raw decision checks remain available in a collapsed diagnostic section.",
+            behavior: "View Path is now a one-look sequential trade story instead of a dashboard of separate cards. Recovery labels are diagnostic summaries only; they never create or modify a trading state. Ordinary trades use ENTRY/confirmation/position/deterioration/EXIT phases without inventing recovery states. All timestamps are KSA and holding/phase durations are visible directly between nodes.",
+            regression: "UI/read-only verification: validate a FIX-026 recovery trade, a normal immediate BUY, an accumulated-evidence trade, a scout+add trade and a mechanical STOP_LOSS/TAKE_PROFIT. Confirm BUY pressure/volume comes from the exact persisted candle_open_time, no future candle is used, raw SELL->NEUTRAL transitions can explain pre-entry stabilization, the path always ends at actual wallet SELL, and no production/replay trading method is invoked by View Path."
         }
 
 ];

@@ -530,9 +530,9 @@ $('inspected-trade-earliest')?.addEventListener('click',()=>inspectedNavigate('e
 $('inspected-trade-latest')?.addEventListener('click',()=>inspectedNavigate('latest').catch(()=>{}));
 
 
-// FIX-024: Trade Inspector View Path. This is intentionally presentation-only:
-// it renders persisted production signal/opportunity/wallet evidence returned by the
-// read-only path endpoint and never recalculates trading rules in JavaScript.
+// FIX-024 / FIX-027: Trade Inspector View Path is presentation-only. FIX-027
+// deliberately simplifies the UI into one sequential ERD/state-machine story while
+// preserving persisted production evidence. No score, state or trade is recalculated.
 function ksaDateTime(value){
   if(!value)return '—';
   const d=new Date(value);if(Number.isNaN(d.getTime()))return '—';
@@ -546,19 +546,60 @@ function secondsLabel(value){
   return `${sec}s`;
 }
 function pathValue(value,suffix=''){return value===null||value===undefined||value===''?'—':`${esc(value)}${suffix}`}
-function pathSignalCard(label,s){
-  if(!s||!s.id)return `<article class="trade-path-node muted"><div class="trade-path-node-head"><strong>${esc(label)}</strong><span>Unavailable</span></div></article>`;
-  return `<article class="trade-path-node">
-    <div class="trade-path-node-head"><strong>${esc(label)} · ${esc(s.interval||'')}</strong><span>${ksaDateTime(s.generatedAt)}</span></div>
-    <div class="trade-path-primary"><b>${esc(s.decision||'—')}</b><span>${pathValue(s.score)}/100 · confidence ${pathValue(s.confidence)}/100 · ${price(s.price)}</span></div>
-    <div class="trade-path-stat-grid">
-      <div><small>Trend</small><strong>${pathValue(s.trend)}</strong></div><div><small>Volume</small><strong>${pathValue(s.volume)}</strong></div><div><small>Momentum</small><strong>${pathValue(s.momentum)}</strong></div>
-      <div><small>Regime</small><strong>${pathValue(s.regime)}</strong></div><div><small>Strategy</small><strong>${pathValue(s.strategy)}</strong></div><div><small>Confluence</small><strong>${pathValue(s.confluence)}</strong></div>
-    </div>
-  </article>`;
+function compactNumber(value){
+  const n=Number(value);if(!Number.isFinite(n))return '—';
+  if(Math.abs(n)>=1_000_000)return `${(n/1_000_000).toFixed(n>=10_000_000?1:2)}M`;
+  if(Math.abs(n)>=1_000)return `${(n/1_000).toFixed(n>=100_000?0:1)}K`;
+  return `${Math.round(n*100)/100}`;
 }
-function contributor(label,status,body,kind=''){
-  return `<article class="trade-contributor ${esc(kind)}"><div class="trade-contributor-head"><strong>${esc(label)}</strong><span>${esc(status||'—')}</span></div><div class="trade-contributor-body">${body}</div></article>`;
+function phaseMetric(component,result,interpretation,kind=''){
+  return `<div class="path-phase-metric ${esc(kind)}"><span>${esc(component)}</span><strong>${esc(result??'—')}</strong><small>${esc(interpretation||'')}</small></div>`;
+}
+function trendInterpretation(v){const n=Number(v);return !Number.isFinite(n)?'':n>=21?'Strong bullish structure':n>=18?'Supportive structure':n>=14?'Mixed structure':'Weak / bearish structure'}
+function momentumInterpretation(v){const n=Number(v);return !Number.isFinite(n)?'':n>=14?'Very strong momentum':n>=11?'Supportive momentum':n>=7?'Mixed momentum':'Weak momentum'}
+function pressureInterpretation(v){const n=Number(v);return !Number.isFinite(n)?'No closed-candle pressure data':n>=80?'Aggressive buyers dominant':n>=70?'Strong taker BUY pressure':n>=55?'Buyers slightly dominant':n>=45?'Balanced flow':'Sellers dominant'}
+function volumeInterpretation(v){const n=Number(v);return !Number.isFinite(n)?'No closed-candle volume':n>=1_000_000?'Exceptional activity':n>=500_000?'High activity':n>=100_000?'Active':'Light activity'}
+function scoreInterpretation(v){const n=Number(v);return !Number.isFinite(n)?'':n>=80?'Strong signal':n>=72?'Strong evidence / transition':n>=60?'Supportive evidence':'Weak evidence'}
+function technicalInterpretation(s){
+  const raw=Number(s.rawScore),max=Number(s.maximumAvailableScore);
+  if(!Number.isFinite(raw)||!Number.isFinite(max)||max<=0)return 'Persisted base technical evidence';
+  const pct=raw/max*100;return pct>=72?'Strong raw technical evidence':pct>=60?'Supportive raw technical evidence':'Weak raw technical evidence';
+}
+function atrInterpretation(s){
+  if(s.atrImmediateEntryAllowed===false)return `WAIT / ${s.atrEntryType||'ATR block'}`;
+  return `${s.atrEntryType||'ENTRY'} · ${s.atrRecommendedPositionPercent??'—'}% allowed`;
+}
+function vetoSummary(s){
+  if(s.finalEntryAllowed===false)return `FINAL BLOCK · ${s.liquidityStatus||s.confluence||'decision veto'}`;
+  if(s.liquidityEntryAllowed===false)return `ORDER BOOK VETO · ${s.liquidityStatus||'blocked'}`;
+  if(s.atrImmediateEntryAllowed===false)return `ATR WAIT · ${s.atrEntryType||'wait'}`;
+  if(s.liquidityStatus&&s.liquidityStatus!=='UNAVAILABLE'&&s.liquidityStatus!=='LEARNING')return `Order book ${s.liquidityStatus}`;
+  return 'No hard veto';
+}
+function signalEvidenceHtml(s){
+  if(!s||!s.id)return '<div class="path-phase-empty">No persisted signal snapshot</div>';
+  const raw=`${s.rawScore??'—'}/${s.maximumAvailableScore??'—'}`;
+  return `<div class="path-phase-evidence">
+    <div class="path-phase-metric path-phase-columns"><span>Component</span><strong>Result</strong><small>Interpretation</small></div>
+    ${phaseMetric('Displayed total',`${s.score??'—'}/100`,scoreInterpretation(s.score),'primary')}
+    ${phaseMetric('Base technical',raw,technicalInterpretation(s))}
+    ${phaseMetric('Trend',`${s.trend??'—'}/25`,trendInterpretation(s.trend))}
+    ${phaseMetric('Momentum',`${s.momentum??'—'}/15`,momentumInterpretation(s.momentum))}
+    ${phaseMetric('BUY pressure',s.takerBuyPercent==null?'—':`${Number(s.takerBuyPercent).toFixed(2)}%`,pressureInterpretation(s.takerBuyPercent))}
+    ${phaseMetric('Volume',compactNumber(s.candleVolume),volumeInterpretation(s.candleVolume))}
+    ${phaseMetric('RSI',`${s.rsi??'—'}/7`,Number(s.rsi)>=6?'Bullish / healthy':'Not strongly bullish')}
+    ${phaseMetric('MACD',`${s.macd??'—'}/8`,Number(s.macd)>=7?'Bullish / improving':'Weak or mixed')}
+    ${phaseMetric('Decision',`${s.originalDecision&&s.originalDecision!==s.decision?`${s.originalDecision} → `:''}${s.decision||'—'}`,`${s.strategy||'—'} · ${s.regime||'—'}`)}
+    ${phaseMetric('5m / 1h',s.pathFiveMinute||s.pathOneHour?`${s.pathFiveMinute?.decision||'—'} / ${s.pathOneHour?.decision||'—'}`:`${s.higherInterval||'HTF'} ${s.higherDecision||'—'}`,s.pathFiveMinute||s.pathOneHour?`Setup ${s.pathFiveMinute?.regime||'—'} · authority ${s.pathOneHour?.regime||'—'}`:`Confluence ${s.confluence||'—'}`)}
+    ${phaseMetric('ATR',s.atrImmediateEntryAllowed===false?'WAIT':'ENTRY OK',atrInterpretation(s),s.atrImmediateEntryAllowed===false?'warn':'')}
+    ${phaseMetric('Veto / blocker',vetoSummary(s),s.finalEntryAllowed===false?(s.finalExplanation||'Entry blocked'):'Context checks did not hard-block',s.finalEntryAllowed===false?'warn':'')}
+  </div>`;
+}
+function phaseNode(name,time,subtitle,s,kind='normal',extra=''){
+  return `<article class="trade-path-phase ${esc(kind)}">
+    <div class="trade-path-phase-head"><div><span class="trade-path-phase-label">${esc(name)}</span><strong>${esc(subtitle||'')}</strong></div><time>${ksaDateTime(time)}</time></div>
+    ${signalEvidenceHtml(s)}${extra||''}
+  </article>`;
 }
 function decisionPathRows(raw){
   if(!raw)return '<div class="empty">No persisted final-decision path is available for this entry signal.</div>';
@@ -568,61 +609,77 @@ function decisionPathRows(raw){
     return `<div class="decision-check-list">${rows.map(r=>`<div class="decision-check ${String(r.type||'').toLowerCase()}"><span class="decision-check-seq">${esc(r.sequence??'')}</span><div><strong>${esc(r.source||r.type||'CHECK')} · ${esc(r.beforeDecision||'—')} → ${esc(r.afterDecision||'—')}</strong><p>${esc(r.reason||'')}</p></div><span class="decision-check-state">${r.entryAllowedAfter===false?'BLOCKED':'PASS'}</span></div>`).join('')}</div>`;
   }catch(_){return `<pre class="trade-path-json">${esc(raw)}</pre>`;}
 }
-function lifecycleSignalDetail(s){
-  const pieces=[`${s.interval||'1m'} ${s.originalDecision&&s.originalDecision!==s.decision?`${s.originalDecision}→`:''}${s.decision||'—'}`,`${s.score??'—'}/100`,`conf ${s.confidence??'—'}`,price(s.price)];
-  if(s.confluence)pieces.push(`MTF ${s.confluence}`);
-  if(s.liquidityStatus&&s.liquidityStatus!=='UNAVAILABLE')pieces.push(`OB ${s.liquidityStatus}`);
-  return pieces.join(' · ');
+function bestLifecycleSignal(signals,predicate){return (signals||[]).filter(predicate).sort((a,b)=>new Date(a.generatedAt)-new Date(b.generatedAt))[0]||null}
+function latestBefore(signals,time,interval='1m'){
+  if(!time)return null;const t=new Date(time).getTime();
+  return (signals||[]).filter(s=>String(s.interval).toLowerCase()===interval&&new Date(s.generatedAt).getTime()<=t).sort((a,b)=>new Date(b.generatedAt)-new Date(a.generatedAt))[0]||null;
+}
+function buildSimpleTradePhases(data){
+  const signals=[...(data.signalLifecycle||[])];
+  const entryBase=data.entrySignal||data.oneMinute||{};
+  const entry={...entryBase,pathFiveMinute:data.fiveMinute||{},pathOneHour:data.oneHour||{}};
+  if(entry.id&&!signals.some(s=>s.id===entry.id))signals.push(entry);
+  const wallets=[...(data.walletLifecycle||[])];
+  const phases=[];
+  const opp=data.opportunity||{};
+
+  // FIX-027: recovery phases are evidence-backed labels, not new trading decisions. They
+  // summarize the persisted signals/candles around the trade so the user can understand
+  // the exact path in one glance. RECOVERY_PROBE is only shown when production actually
+  // executed the FIX-026 recovery route.
+  const bearish=bestLifecycleSignal(signals,s=>String(s.interval).toLowerCase()==='1m'&&['SELL','STRONG_SELL','NEUTRAL'].includes(String(s.originalDecision||s.decision||''))&&Number(s.score)<55);
+  const stabilizing=bestLifecycleSignal(signals,s=>String(s.interval).toLowerCase()==='1m'&&new Date(s.generatedAt)<new Date(data.openedAt)&&Number(s.takerBuyPercent)>=55&&Number(s.score)<72);
+  const recovering=bestLifecycleSignal(signals,s=>String(s.interval).toLowerCase()==='1m'&&new Date(s.generatedAt)<=new Date(data.openedAt)&&Number(s.score)>=68&&Number(s.trend)>=18&&Number(s.momentum)>=12);
+  const entryWallet=wallets.find(w=>String(w.side).toUpperCase()==='BUY')||null;
+  const recoveryProbe=entryWallet&&String(entryWallet.executionReason||'').toUpperCase()==='RECOVERY_TRANSITION_ENTRY';
+  const confirm=bestLifecycleSignal(signals,s=>new Date(s.generatedAt)>new Date(data.openedAt)&&((String(s.interval).toLowerCase()==='5m'&&['BUY','STRONG_BUY'].includes(String(s.decision)))||(String(s.interval).toLowerCase()==='1m'&&['BUY','STRONG_BUY'].includes(String(s.decision))&&Number(s.score)>=75)));
+  // FIX-027: capture the first real post-entry expansion candle even when no TradeSignal
+  // was emitted on that exact minute. This is a diagnostic phase only. For recovery
+  // probes, a bullish 1m candle with >=70% taker BUY and >=500K volume is displayed as
+  // EXPANSION_CONFIRMED using the latest persisted signal as its technical context.
+  const expansionCandle=(data.entryEvidenceCandles||[]).find(c=>new Date(c.closeTime)>new Date(data.openedAt)&&Number(c.takerBuyPercent)>=70&&Number(c.volume)>=500000&&Number(c.close)>=Number(c.open));
+  const addWallet=wallets.find(w=>String(w.side).toUpperCase()==='BUY'&&entryWallet&&w.id!==entryWallet.id)||null;
+  const sellWallet=wallets.filter(w=>String(w.side).toUpperCase()==='SELL').slice(-1)[0]||null;
+
+  if(opp.startedAt)phases.push({name:'OPPORTUNITY',time:opp.startedAt,s:bearish||stabilizing||entry,kind:'context',subtitle:`Evidence ${opp.evidenceScore??'—'} · health ${opp.health??'—'}`});
+  if(stabilizing)phases.push({name:'STABILIZING',time:stabilizing.generatedAt,s:stabilizing,kind:'transition',subtitle:'Selling pressure stops controlling price'});
+  if(recovering)phases.push({name:'RECOVERING',time:recovering.generatedAt,s:recovering,kind:'transition',subtitle:'Technical + flow evidence improve'});
+  if(recoveryProbe)phases.push({name:'RECOVERY_PROBE',time:entryWallet.executedAt,s:entry,kind:'buy',subtitle:`BUY ${price(entryWallet.price)} · ${entryWallet.executionReason}`});
+  else phases.push({name:'ENTRY',time:data.openedAt,s:entry,kind:'buy',subtitle:`BUY ${price(data.entryPrice)} · ${data.entryExecutionReason||'BUY'}`});
+  if(recoveryProbe&&expansionCandle){
+    const context={...(latestBefore(signals,expansionCandle.closeTime)||entry),candleVolume:expansionCandle.volume,takerBuyPercent:expansionCandle.takerBuyPercent,candleClose:expansionCandle.close};
+    phases.push({name:'EXPANSION_CONFIRMED',time:expansionCandle.closeTime,s:context,kind:'confirm',subtitle:`1m expansion · volume ${compactNumber(expansionCandle.volume)} · BUY pressure ${Number(expansionCandle.takerBuyPercent).toFixed(2)}%`});
+  }else if(confirm)phases.push({name:'EXPANSION_CONFIRMED',time:confirm.generatedAt,s:confirm,kind:'confirm',subtitle:`${confirm.interval} ${confirm.decision} confirmation`});
+  if(addWallet)phases.push({name:'NORMAL_POSITION',time:addWallet.executedAt,s:latestBefore(signals,addWallet.executedAt),kind:'position',subtitle:`Position add ${price(addWallet.price)} · ${addWallet.executionReason||'ADD'}`});
+  else if(recoveryProbe&&(expansionCandle||confirm)){
+    const normalTime=expansionCandle?.closeTime||confirm.generatedAt;
+    const normalSignal=expansionCandle?{...(latestBefore(signals,normalTime)||entry),candleVolume:expansionCandle.volume,takerBuyPercent:expansionCandle.takerBuyPercent}:confirm;
+    phases.push({name:'NORMAL_POSITION',time:normalTime,s:normalSignal,kind:'position',subtitle:'Recovery thesis graduated to normal position management'});
+  }else if(confirm)phases.push({name:'NORMAL_POSITION',time:confirm.generatedAt,s:confirm,kind:'position',subtitle:'Confirmed position management'});
+
+  const deterioration=bestLifecycleSignal(signals,s=>new Date(s.generatedAt)>new Date(data.openedAt)&&String(s.interval).toLowerCase()==='1m'&&(String(s.originalDecision||'').includes('SELL')||Number(s.score)<50));
+  if(deterioration)phases.push({name:'DETERIORATING',time:deterioration.generatedAt,s:deterioration,kind:'warn',subtitle:'Short-term thesis weakened'});
+  const exitBase=data.exitSignal?.id?data.exitSignal:(data.exitOneMinute||latestBefore(signals,data.closedAt));
+  const exitSignal={...(exitBase||{}),pathFiveMinute:data.exitFiveMinute||{},pathOneHour:data.exitOneHour||{}};
+  phases.push({name:'EXIT',time:data.closedAt,s:exitSignal,kind:'sell',subtitle:`SELL ${price(data.exitPrice)} · ${data.exitExecutionReason||'SELL'} · ${pct(data.realizedPnlPercent)}`});
+  return phases.sort((a,b)=>new Date(a.time)-new Date(b.time));
 }
 function renderTradePath(data){
-  const one=data.oneMinute||{},five=data.fiveMinute||{},hour=data.oneHour||{},entry=data.entrySignal||one,opp=data.opportunity||{},mgmt=data.management||{};
-  const exitOne=data.exitOneMinute||{},exitFive=data.exitFiveMinute||{},exitHour=data.exitOneHour||{};
-  $('inspected-trade-path-title').textContent=`${String(data.symbol||'').toUpperCase()} · BUY → SELL decision path`;
-  $('inspected-trade-path-summary').innerHTML=`Opened <strong>${ksaDateTime(data.openedAt)}</strong> at <strong>${price(data.entryPrice)}</strong> · closed <strong>${ksaDateTime(data.closedAt)}</strong> at <strong>${price(data.exitPrice)}</strong> · holding <strong>${secondsLabel(data.holdingSeconds)}</strong> · P&amp;L <strong class="${cls(data.realizedPnlPercent)}">${pct(data.realizedPnlPercent)}</strong>`;
-
-  const opportunityAge=opp.startedAt&&data.openedAt?Math.max(0,(new Date(data.openedAt)-new Date(opp.startedAt))/1000):null;
-
-  // FIX-025: build one chronological lifecycle from the persisted wallet executions
-  // and signal states that occurred while the position was actually open. This is
-  // intentionally diagnostic only; it does not infer or recalculate trading actions.
-  const flow=[];
-  if(opp.startedAt)flow.push({name:'Opportunity started',time:opp.startedAt,detail:`#${opp.id} · ${opp.status||'—'} · evidence ${opp.evidenceScore??'—'} · health ${opp.health??'—'}`,order:0});
-  if(entry.generatedAt)flow.push({name:'Entry signal',time:entry.generatedAt,detail:lifecycleSignalDetail(entry),order:1});
-  (data.walletLifecycle||[]).forEach(w=>{
-    const isTerminal=String(w.side||'').toUpperCase()==='SELL';
-    flow.push({name:isTerminal?'Wallet SELL':'Wallet BUY / add',time:w.executedAt,detail:`${w.executionReason||w.side||'EXECUTION'} · ${price(w.price)}${w.realizedPnlPercent==null?'':` · P&L ${pct(w.realizedPnlPercent)}`}`,order:isTerminal?90:10});
-  });
-  (data.signalLifecycle||[]).forEach(s=>{
-    // Do not duplicate the exact entry signal; all later timing/setup/authority changes
-    // remain visible so the user can follow confirmation, HOLD and deterioration.
-    if(entry.id&&s.id===entry.id)return;
-    flow.push({name:`${s.interval||'1m'} market state`,time:s.generatedAt,detail:lifecycleSignalDetail(s),order:30});
-  });
-  if(mgmt.profitLockActivatedAt)flow.push({name:'Profit lock activated',time:mgmt.profitLockActivatedAt,detail:`lock ${price(mgmt.profitLockPrice)} · progress ${pathValue(mgmt.profitLockProgressPercent,'%')}`,order:50});
-  if(data.exitSignal?.generatedAt)flow.push({name:'Persisted exit signal',time:data.exitSignal.generatedAt,detail:lifecycleSignalDetail(data.exitSignal),order:80});
-  // Mechanical STOP_LOSS/TAKE_PROFIT exits often have no linked TradeSignal. Keep the
-  // latest 1m/5m/1h states at SELL visible before the terminal wallet event instead.
-  [exitOne,exitFive,exitHour].filter(s=>s&&s.id).forEach(s=>flow.push({name:`Exit context · ${s.interval}`,time:s.generatedAt,detail:lifecycleSignalDetail(s),order:85}));
-  if(!(data.walletLifecycle||[]).some(w=>String(w.side||'').toUpperCase()==='SELL'))flow.push({name:'Wallet SELL',time:data.closedAt,detail:`${data.exitExecutionReason||'SELL'} · ${price(data.exitPrice)} · P&L ${pct(data.realizedPnlPercent)}`,order:99});
-
-  flow.sort((a,b)=>{const t=new Date(a.time)-new Date(b.time);return t||a.order-b.order;});
-  let previous=null;
-  const timeline=flow.map(item=>{const elapsed=previous?Math.max(0,(new Date(item.time)-new Date(previous.time))/1000):null;previous=item;return `<div class="trade-path-step"><div class="trade-path-dot"></div><div class="trade-path-step-body"><div><strong>${esc(item.name)}</strong><span>${ksaDateTime(item.time)}</span></div><p>${esc(item.detail)}</p>${elapsed===null?'':`<small>+${secondsLabel(elapsed)} from previous state</small>`}</div></div>`}).join('');
-
-  const technicalBody=`<div class="trade-path-stat-grid compact"><div><small>EMA cross</small><strong>${pathValue(entry.emaCross)}</strong></div><div><small>EMA200 location</small><strong>${pathValue(entry.priceEma200)}</strong></div><div><small>EMA alignment</small><strong>${pathValue(entry.emaAlignment)}</strong></div><div><small>SMA20</small><strong>${pathValue(entry.sma20)}</strong></div><div><small>Trend direction</small><strong>${pathValue(entry.trendDirection)}</strong></div><div><small>Structure</small><strong>${pathValue(entry.trendStructure)}</strong></div><div><small>Strength</small><strong>${pathValue(entry.trendStrength)}</strong></div><div><small>Price location</small><strong>${pathValue(entry.trendPriceLocation)}</strong></div><div><small>RSI</small><strong>${pathValue(entry.rsi)}</strong></div><div><small>MACD</small><strong>${pathValue(entry.macd)}</strong></div><div><small>Bollinger</small><strong>${pathValue(entry.bollinger)}</strong></div><div><small>RVOL</small><strong>${pathValue(entry.relativeVolume)}</strong></div><div><small>Volume SMA20</small><strong>${pathValue(entry.volumeSma20)}</strong></div><div><small>Raw / max</small><strong>${pathValue(entry.rawScore)} / ${pathValue(entry.maximumAvailableScore)}</strong></div><div><small>Sentiment</small><strong>${entry.sentimentAvailable?pathValue(entry.sentiment):'EXCLUDED'}</strong></div><div><small>Fundamental</small><strong>${entry.fundamentalAvailable?pathValue(entry.fundamental):'EXCLUDED'}</strong></div></div>`;
-  const orderBody=`<div class="trade-path-stat-grid compact"><div><small>Imbalance</small><strong>${pathValue(entry.orderBookImbalance)}</strong></div><div><small>Spread</small><strong>${pathValue(entry.spreadPercent,'%')}</strong></div><div><small>Bid depth</small><strong>${pathValue(entry.bidDepth)}</strong></div><div><small>Ask depth</small><strong>${pathValue(entry.askDepth)}</strong></div><div><small>Ask wall</small><strong>${price(entry.askWallPrice)}</strong></div><div><small>Ask wall size</small><strong>${pathValue(entry.askWallSize)}</strong></div><div><small>Bid wall</small><strong>${price(entry.bidWallPrice)}</strong></div><div><small>Bid wall size</small><strong>${pathValue(entry.bidWallSize)}</strong></div><div><small>Persistence</small><strong>${secondsLabel(entry.wallPersistenceSeconds)}</strong></div><div><small>Observations</small><strong>${pathValue(entry.orderBookObservations)}</strong></div><div><small>Window</small><strong>${secondsLabel(entry.orderBookWindowSeconds)}</strong></div><div><small>Influence</small><strong>${pathValue(entry.orderBookInfluence)}</strong></div><div><small>Target blocked</small><strong>${entry.targetBlocked?'YES':'NO'}</strong></div><div><small>Stop exposed</small><strong>${entry.stopExposed?'YES':'NO'}</strong></div></div><p>${esc(entry.liquidityExplanation||'')}</p>`;
-  const btcBody=`<div class="trade-path-stat-grid compact"><div><small>BTC decision</small><strong>${pathValue(entry.btcDecision)}</strong></div><div><small>BTC trend</small><strong>${pathValue(entry.btcTrend)}</strong></div><div><small>Correlation</small><strong>${pathValue(entry.btcCorrelation)}</strong></div><div><small>Beta</small><strong>${pathValue(entry.btcBeta)}</strong></div><div><small>Influence</small><strong>${pathValue(entry.btcInfluence)}</strong></div><div><small>Samples</small><strong>${pathValue(entry.btcSampleSize)}</strong></div><div><small>Stable</small><strong>${entry.btcStable?'YES':'NO'}</strong></div><div><small>Higher TF</small><strong>${pathValue(entry.higherInterval)} ${pathValue(entry.higherDecision)}</strong></div></div><p>${esc(entry.btcExplanation||'')}</p>`;
-  const derivBody=`<div class="trade-path-stat-grid compact"><div><small>Funding</small><strong>${pathValue(entry.fundingRate)}</strong></div><div><small>Funding percentile</small><strong>${pathValue(entry.fundingPercentile,'%')}</strong></div><div><small>Open interest</small><strong>${pathValue(entry.openInterest)}</strong></div><div><small>OI value</small><strong>${pathValue(entry.openInterestValue)}</strong></div><div><small>OI change</small><strong>${pathValue(entry.openInterestChangePercent,'%')}</strong></div><div><small>Price change</small><strong>${pathValue(entry.derivativesPriceChangePercent,'%')}</strong></div><div><small>Confidence adj.</small><strong>${pathValue(entry.derivativesConfidenceAdjustment)}</strong></div></div>`;
-  const atrBody=`<div class="trade-path-stat-grid compact"><div><small>ATR</small><strong>${pathValue(entry.atr)}</strong></div><div><small>ATR %</small><strong>${pathValue(entry.atrPercent,'%')}</strong></div><div><small>Entry type</small><strong>${pathValue(entry.atrEntryType)}</strong></div><div><small>Immediate</small><strong>${entry.atrImmediateEntryAllowed?'YES':'NO'}</strong></div><div><small>Overextended</small><strong>${entry.atrOverextended?'YES':'NO'}</strong></div><div><small>R/R</small><strong>${pathValue(entry.riskReward)}</strong></div><div><small>Position</small><strong>${pathValue(entry.atrRecommendedPositionPercent,'%')}</strong></div><div><small>Stop / TP</small><strong>${price(entry.stopLoss)} / ${price(entry.takeProfit)}</strong></div></div>`;
-  const oppBody=opp.id?`<div class="trade-path-stat-grid compact"><div><small>Age at BUY</small><strong>${opportunityAge==null?'—':secondsLabel(opportunityAge)}</strong></div><div><small>Evidence</small><strong>${pathValue(opp.evidenceScore)}</strong></div><div><small>BUY/WATCH</small><strong>${pathValue(opp.buyCount)} / ${pathValue(opp.watchCount)}</strong></div><div><small>Neutral/Bearish</small><strong>${pathValue(opp.neutralCount)} / ${pathValue(opp.bearishCount)}</strong></div><div><small>Health</small><strong>${pathValue(opp.health)}</strong></div><div><small>Health momentum</small><strong>${pathValue(opp.healthMomentum)}</strong></div><div><small>Evidence momentum</small><strong>${pathValue(opp.evidenceMomentum)}</strong></div><div><small>Execution source</small><strong>${pathValue(opp.executionSource)}</strong></div></div><p>${esc(opp.explanation||'')}</p>`:'<p>No linked execution-opportunity snapshot was found for the entry signal.</p>';
-
+  $('inspected-trade-path-title').textContent=`${String(data.symbol||'').toUpperCase()} · full trade path`;
+  $('inspected-trade-path-summary').innerHTML=`BUY <strong>${price(data.entryPrice)}</strong> · ${ksaDateTime(data.openedAt)} → SELL <strong>${price(data.exitPrice)}</strong> · ${ksaDateTime(data.closedAt)} · holding <strong>${secondsLabel(data.holdingSeconds)}</strong> · P&amp;L <strong class="${cls(data.realizedPnlPercent)}">${pct(data.realizedPnlPercent)}</strong>`;
+  const phases=buildSimpleTradePhases(data);
+  const nodes=phases.map((p,i)=>{
+    const prev=i?phases[i-1]:null;const elapsed=prev?Math.max(0,(new Date(p.time)-new Date(prev.time))/1000):null;
+    return `${i?`<div class="trade-path-arrow"><span>→</span><small>${secondsLabel(elapsed)}</small></div>`:''}${phaseNode(p.name,p.time,p.subtitle,p.s,p.kind)}`;
+  }).join('');
+  const entry=data.entrySignal||data.oneMinute||{};
+  const rawChecks=decisionPathRows(data.decisionPath);
   $('inspected-trade-path-content').innerHTML=`
-    <section class="trade-path-hero"><div><small>Holding time</small><strong>${secondsLabel(data.holdingSeconds)}</strong></div><div><small>Opportunity age</small><strong>${opportunityAge==null?'—':secondsLabel(opportunityAge)}</strong></div><div><small>Entry source</small><strong>${esc(data.entryExecutionReason||'—')}</strong></div><div><small>Exit source</small><strong>${esc(data.exitExecutionReason||'—')}</strong></div></section>
-    <section class="trade-path-section"><div class="trade-path-section-head"><h3>Full BUY → SELL lifecycle</h3><span>Signals, adds and exit context · all times KSA (UTC+3)</span></div><div class="trade-path-timeline">${timeline}</div></section>
-    <section class="trade-path-section"><div class="trade-path-section-head"><h3>1m / 5m / 1h state at entry</h3><span>Latest persisted state available at wallet execution</span></div><div class="trade-path-signal-grid">${pathSignalCard('Timing',one)}${pathSignalCard('Setup',five)}${pathSignalCard('Authority',hour)}</div></section>
-    <section class="trade-path-section"><div class="trade-path-section-head"><h3>1m / 5m / 1h state at exit</h3><span>What the system saw immediately before the SELL</span></div><div class="trade-path-signal-grid">${pathSignalCard('Exit timing',exitOne)}${pathSignalCard('Exit setup',exitFive)}${pathSignalCard('Exit authority',exitHour)}</div></section>
-    <section class="trade-path-section"><div class="trade-path-section-head"><h3>Entry decision contributors</h3><span>What strengthened, reduced or blocked the BUY</span></div><div class="trade-contributor-grid">${contributor('Technical statistics',`${entry.decision||'—'} ${entry.score??'—'}/100`,technicalBody)}${contributor('Opportunity',opp.status||'—',oppBody)}${contributor('ATR / volatility',entry.atrImmediateEntryAllowed?'PASS':'WAIT',atrBody,entry.atrImmediateEntryAllowed?'pass':'warn')}${contributor('BTC + MTF',`${entry.btcStatus||'—'} · ${entry.confluence||'—'}`,btcBody)}${contributor('Order book / liquidity',entry.liquidityStatus||'—',orderBody,entry.liquidityEntryAllowed?'pass':'warn')}${contributor('Derivatives',entry.derivativesStatus||'—',derivBody)}</div></section>
-    <section class="trade-path-section"><div class="trade-path-section-head"><h3>Entry final decision checks</h3><span>Persisted ordered decision path</span></div>${decisionPathRows(data.decisionPath)}</section>`;
+    <section class="trade-path-one-look">
+      <div class="trade-path-one-look-head"><div><h3>Sequential decision & position path</h3><p>One-look state machine · all timestamps KSA · persisted Production evidence</p></div><div class="trade-path-hold"><span>Holding time</span><strong>${secondsLabel(data.holdingSeconds)}</strong></div></div>
+      <div class="trade-path-phase-flow">${nodes}</div>
+    </section>
+    <details class="trade-path-details"><summary>Raw entry decision checks</summary>${rawChecks}</details>`;
 }
 async function showInspectedTradePath(t){
   const modal=$('inspected-trade-path-panel');
