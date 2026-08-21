@@ -34,3 +34,8 @@
 - Added Holding Time, Holding Efficiency (realized positive return / MFE), and latest-20-trade Profit Factor to Trade Inspector View Path.
 - Profit Factor is explicitly displayed as recent-system context rather than a per-trade metric.
 - Diagnostic/UI only; no Production or Replay trading behavior changed.
+
+## FIX-032 — Wallet/Binance separation and LIVE_MICRO safety controls
+- Moved Paper Wallet and Binance user account out of Administration into first-class left-menu pages.
+- Added user-scoped rolling/circuit-breaker configuration and Trade Inspector execution-venue tags/filter.
+- No trading behavior changed.

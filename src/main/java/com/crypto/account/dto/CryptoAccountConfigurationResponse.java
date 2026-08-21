@@ -15,5 +15,15 @@ public record CryptoAccountConfigurationResponse(
         BigDecimal maxTotalExposureUsdt,
         int maxOpenPositions,
         BigDecimal maxDailyLossUsdt,
+        boolean safetyEnabled,
+        int consecutiveLossPauseCount,
+        int consecutiveLossPauseMinutes,
+        int consecutiveLossManualStopCount,
+        int rollingLossWindowMinutes,
+        BigDecimal maxRollingLossUsdt,
+        int sameSymbolLossCount,
+        int sameSymbolQuarantineMinutes,
+        BigDecimal maxSlippagePercent,
+        int binanceFailurePauseCount,
         Instant updatedAt
 ) {}

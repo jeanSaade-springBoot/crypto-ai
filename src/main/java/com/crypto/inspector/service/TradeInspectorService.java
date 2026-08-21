@@ -63,9 +63,20 @@ public class TradeInspectorService {
     }
 
     @Transactional(readOnly = true)
-    public TradeInspectorResponse inspect(String requestedSymbol, int requestedLimit) {
+    public TradeInspectorResponse inspect(String requestedSymbol, String requestedVenue, int requestedLimit) {
         int limit = Math.max(1, Math.min(requestedLimit, 100));
         String symbol = normalizeSymbol(requestedSymbol);
+        String venue = requestedVenue == null ? "ALL" : requestedVenue.trim().toUpperCase(Locale.ROOT);
+
+        // FIX-032: current persisted inspector rows come from wallet_trade and are therefore WALLET.
+        // BINANCE is intentionally an empty prepared filter until the LIVE_MICRO execution bridge
+        // writes real executions; never mislabel shadow trades as real Binance fills.
+        if ("BINANCE".equals(venue)) {
+            return new TradeInspectorResponse(summary(List.of()), List.of(), List.of());
+        }
+        if (!venue.equals("ALL") && !venue.equals("WALLET")) {
+            throw new IllegalArgumentException("Trade Inspector venue must be ALL, WALLET or BINANCE.");
+        }
 
         List<WalletTrade> closed = walletTradeRepository.findRecentClosedTrades(PageRequest.of(0, 100));
         if (symbol != null) {
@@ -154,7 +165,7 @@ public class TradeInspectorService {
                 .findTopByEntrySignalIdOrderByOpenedAtDesc(entry.getId()).orElse(null);
 
         return new TradeInspectorTradeView(
-                buy.getId(), sell.getId(), tradeHistoryId, sell.getSymbol(), openedAt, closedAt,
+                buy.getId(), sell.getId(), tradeHistoryId, "WALLET", sell.getSymbol(), openedAt, closedAt,
                 Math.max(0, Duration.between(openedAt, closedAt).toMinutes()),
                 sell.getQuantity(), entryPrice, exitPrice, sell.getRealizedPnlUsdt(), realizedPercent,
                 entry == null ? null : entry.getId(),

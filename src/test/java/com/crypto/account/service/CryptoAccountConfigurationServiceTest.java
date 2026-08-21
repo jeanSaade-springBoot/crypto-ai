@@ -37,12 +37,18 @@ class CryptoAccountConfigurationServiceTest {
 
         var response = service.update("jean", new CryptoAccountConfigurationRequest(
                 "Small Binance", "LIVE_MICRO", "abcd1234KEY", "super-secret", false,
-                new BigDecimal("10"), new BigDecimal("50"), 3, new BigDecimal("10")));
+                new BigDecimal("10"), new BigDecimal("50"), 3, new BigDecimal("20"),
+                true, 3, 120, 4, 240, new BigDecimal("10"), 2, 240, new BigDecimal("0.30"), 2));
 
         assertThat(response.username()).isEqualTo("jean");
         assertThat(response.executionMode()).isEqualTo("LIVE_MICRO");
         assertThat(response.credentialsConfigured()).isTrue();
         assertThat(response.apiKeyMasked()).doesNotContain("1234KEY");
+        assertThat(response.safetyEnabled()).isTrue();
+        assertThat(response.consecutiveLossPauseCount()).isEqualTo(3);
+        assertThat(response.maxRollingLossUsdt()).isEqualByComparingTo("10");
+        assertThat(response.maxDailyLossUsdt()).isEqualByComparingTo("20");
+        assertThat(response.maxSlippagePercent()).isEqualByComparingTo("0.30");
 
         verify(repository).save(argThat(c -> c.getUserId().equals(42L)
                 && c.getApiKeyEncrypted() != null && !c.getApiKeyEncrypted().contains("abcd1234KEY")

@@ -152,3 +152,8 @@ body.inspector-modal-open{overflow:hidden}
 .trade-path-performance strong{font-size:18px}
 .trade-path-performance small{font-size:11px;line-height:1.35;opacity:.75}
 @media(max-width:760px){.trade-path-performance{grid-template-columns:1fr}}
+
+/* FIX-032: make execution venue impossible to confuse in Trade Inspector. */
+.venue-badge{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;font-size:10px;font-weight:900;letter-spacing:.08em;border:1px solid var(--border)}
+.venue-badge.wallet{background:rgba(85,167,255,.12);color:#8fc7ff}
+.venue-badge.binance{background:rgba(247,201,72,.14);color:#f7c948}

@@ -24,7 +24,9 @@ public class CryptoAccountConfigurationService {
     private static final String EXCHANGE = "BINANCE";
     private static final BigDecimal DEFAULT_MAX_ORDER = new BigDecimal("10.00");
     private static final BigDecimal DEFAULT_MAX_EXPOSURE = new BigDecimal("50.00");
-    private static final BigDecimal DEFAULT_DAILY_LOSS = new BigDecimal("10.00");
+    private static final BigDecimal DEFAULT_DAILY_LOSS = new BigDecimal("20.00");
+    private static final BigDecimal DEFAULT_ROLLING_LOSS = new BigDecimal("10.00");
+    private static final BigDecimal DEFAULT_MAX_SLIPPAGE = new BigDecimal("0.30");
 
     private final CryptoAccountConfigurationRepository repository;
     private final JdbcTemplate jdbcTemplate;
@@ -50,6 +52,22 @@ public class CryptoAccountConfigurationService {
         config.setMaxTotalExposureUsdt(positiveOrDefault(request.maxTotalExposureUsdt(), DEFAULT_MAX_EXPOSURE, "Maximum total exposure USDT"));
         config.setMaxDailyLossUsdt(positiveOrDefault(request.maxDailyLossUsdt(), DEFAULT_DAILY_LOSS, "Maximum daily loss USDT"));
         config.setMaxOpenPositions(request.maxOpenPositions() == null ? 3 : bounded(request.maxOpenPositions(), 1, 100, "Maximum open positions"));
+
+        // FIX-032: persist user-scoped circuit-breaker thresholds without connecting them to
+        // the trading brain. The future LIVE_MICRO bridge may block only real exposure; exits remain allowed.
+        config.setSafetyEnabled(request.safetyEnabled() == null || request.safetyEnabled());
+        config.setConsecutiveLossPauseCount(request.consecutiveLossPauseCount() == null ? 3 : bounded(request.consecutiveLossPauseCount(), 1, 20, "Consecutive-loss pause count"));
+        config.setConsecutiveLossPauseMinutes(request.consecutiveLossPauseMinutes() == null ? 120 : bounded(request.consecutiveLossPauseMinutes(), 1, 10080, "Consecutive-loss pause minutes"));
+        config.setConsecutiveLossManualStopCount(request.consecutiveLossManualStopCount() == null ? 4 : bounded(request.consecutiveLossManualStopCount(), 2, 20, "Manual-stop consecutive-loss count"));
+        if (config.getConsecutiveLossManualStopCount() < config.getConsecutiveLossPauseCount()) {
+            throw new IllegalArgumentException("Manual-stop loss count cannot be below the pause loss count.");
+        }
+        config.setRollingLossWindowMinutes(request.rollingLossWindowMinutes() == null ? 240 : bounded(request.rollingLossWindowMinutes(), 15, 10080, "Rolling loss window minutes"));
+        config.setMaxRollingLossUsdt(positiveOrDefault(request.maxRollingLossUsdt(), DEFAULT_ROLLING_LOSS, "Maximum rolling loss USDT"));
+        config.setSameSymbolLossCount(request.sameSymbolLossCount() == null ? 2 : bounded(request.sameSymbolLossCount(), 1, 20, "Same-symbol loss count"));
+        config.setSameSymbolQuarantineMinutes(request.sameSymbolQuarantineMinutes() == null ? 240 : bounded(request.sameSymbolQuarantineMinutes(), 1, 10080, "Same-symbol quarantine minutes"));
+        config.setMaxSlippagePercent(positiveOrDefault(request.maxSlippagePercent(), DEFAULT_MAX_SLIPPAGE, "Maximum slippage percent"));
+        config.setBinanceFailurePauseCount(request.binanceFailurePauseCount() == null ? 2 : bounded(request.binanceFailurePauseCount(), 1, 20, "Binance failure pause count"));
 
         // Credentials are intentionally all-or-nothing. Blank fields preserve the existing secret;
         // explicit clearCredentials removes both values so partial/ambiguous API access cannot occur.
@@ -83,6 +101,16 @@ public class CryptoAccountConfigurationService {
                 .maxTotalExposureUsdt(DEFAULT_MAX_EXPOSURE)
                 .maxOpenPositions(3)
                 .maxDailyLossUsdt(DEFAULT_DAILY_LOSS)
+                .safetyEnabled(true)
+                .consecutiveLossPauseCount(3)
+                .consecutiveLossPauseMinutes(120)
+                .consecutiveLossManualStopCount(4)
+                .rollingLossWindowMinutes(240)
+                .maxRollingLossUsdt(DEFAULT_ROLLING_LOSS)
+                .sameSymbolLossCount(2)
+                .sameSymbolQuarantineMinutes(240)
+                .maxSlippagePercent(DEFAULT_MAX_SLIPPAGE)
+                .binanceFailurePauseCount(2)
                 .createdAt(now)
                 .updatedAt(now)
                 .build();
@@ -93,7 +121,11 @@ public class CryptoAccountConfigurationService {
         return new CryptoAccountConfigurationResponse(
                 c.getId(), username, c.getExchangeCode(), c.getAccountLabel(), c.getExecutionMode(),
                 configured, configured ? c.getApiKeyHint() : null,
-                c.getMaxOrderUsdt(), c.getMaxTotalExposureUsdt(), c.getMaxOpenPositions(), c.getMaxDailyLossUsdt(), c.getUpdatedAt());
+                c.getMaxOrderUsdt(), c.getMaxTotalExposureUsdt(), c.getMaxOpenPositions(), c.getMaxDailyLossUsdt(),
+                c.isSafetyEnabled(), c.getConsecutiveLossPauseCount(), c.getConsecutiveLossPauseMinutes(),
+                c.getConsecutiveLossManualStopCount(), c.getRollingLossWindowMinutes(), c.getMaxRollingLossUsdt(),
+                c.getSameSymbolLossCount(), c.getSameSymbolQuarantineMinutes(), c.getMaxSlippagePercent(),
+                c.getBinanceFailurePauseCount(), c.getUpdatedAt());
     }
 
     private long userId(String username) {

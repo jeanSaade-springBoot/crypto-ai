@@ -688,6 +688,28 @@
             solution: "Create one BINANCE crypto_account_configuration row per app_user and resolve ownership only from Principal.getName(). Store execution mode and micro-live safety limits per user. Encrypt API key/secret with AES-GCM using CRYPTO_ACCOUNT_MASTER_KEY; return only a masked key hint and never return the API secret. Keep shared market data, signal scoring, wallet strategy and all Production/Replay behavior unchanged.",
             behavior: "Each logged-in user sees and edits only their own Crypto Account configuration. Defaults are PAPER, max order 10 USDT, max exposure 50 USDT, max 3 open positions and max 10 USDT daily loss. LIVE_MICRO is prepared as configuration metadata only; FIX-031 does not send Binance orders.",
             regression: "Create two app_user accounts, GET /api/crypto-account under each session and confirm different rows/user_id values. Update one account and confirm the other is unchanged. Verify raw API secret is never returned. Verify saving credentials fails clearly when CRYPTO_ACCOUNT_MASTER_KEY is missing/invalid. Run existing Production/Replay tests unchanged."
+        },
+        {
+            id: "FIX-032",
+            status: "IMPLEMENTED",
+            title: "Separate Wallet/Binance navigation and configure LIVE_MICRO safety isolation",
+            scenario: "Keep the proven trading brain unchanged while separating shadow Wallet from user-owned Binance configuration and preparing loss circuit breakers",
+            symbol: "ALL",
+            entry: "No entry logic changed",
+            exit: "No exit logic changed; future safety blocks must never block risk-reducing exits",
+            entryTime: "N/A",
+            exitTime: "N/A",
+            location: "Left menu -> Wallet / Binance; Trade Inspector -> Venue filter; Flyway V63",
+            classes: [
+                "com.crypto.account.service.CryptoAccountConfigurationService",
+                "com.crypto.account.domain.CryptoAccountConfiguration",
+                "com.crypto.inspector.service.TradeInspectorService",
+                "src/main/resources/db/migration/V63__add_binance_live_micro_safety_controls.sql"
+            ],
+            cause: "Paper/shadow Wallet and real Binance configuration were mixed inside Administration, and Trade Inspector had no execution-venue identity. LIVE_MICRO also needed user-scoped rolling-loss and isolation thresholds before any real execution bridge is enabled.",
+            solution: "Move Wallet and Binance to separate first-class left-menu pages. Keep existing wallet trades explicitly tagged WALLET and provide ALL/WALLET/BINANCE filtering. Persist per-user safety settings: max order/exposure/positions, 3-loss pause for 120m, 4-loss manual resume, 240m rolling loss limit 10 USDT, daily loss 20 USDT, same-symbol 2-loss quarantine for 240m, 0.30% slippage pause and 2 Binance failures pause.",
+            behavior: "Administration contains system/market configuration only. Wallet remains the existing internal execution/shadow account. Binance contains only the logged-in user's credentials and LIVE_MICRO safety configuration. BINANCE Trade Inspector results remain empty until genuine Binance fills exist; shadow rows are never relabeled as real executions.",
+            regression: "Verify /wallet preserves current wallet configuration/assets/trades; /binance persists only the authenticated user's V63 limits; /administration contains no wallet/binance account forms; Trade Inspector WALLET shows current trades and BINANCE shows none before the live bridge. Existing Production/Replay strategy tests must remain unchanged."
         }
 
 ];

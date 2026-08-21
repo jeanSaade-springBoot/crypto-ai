@@ -51,7 +51,7 @@ function tradeCard(t){
  const mfeClass=cls(t.maximumFavorablePercent),maeClass=cls(t.maximumAdversePercent);
  return `<article class="inspector-card">
   <div class="inspector-card-head">
-   <div class="inspector-symbol"><strong>${esc(t.symbol)}</strong>${t.tradeHistoryId==null?'':`<span class="trade-reference">Trade #${esc(t.tradeHistoryId)}</span>`}<span class="badge buy">BUY ↑</span><span class="trade-action-arrow">→</span><span class="badge sell">SELL ↓</span><span class="quality ${qualityClass(t.exitQuality)}">${qualityLabel(t.exitQuality)}</span></div>
+   <div class="inspector-symbol"><strong>${esc(t.symbol)}</strong>${t.tradeHistoryId==null?'':`<span class="trade-reference">Trade #${esc(t.tradeHistoryId)}</span>`}<span class="venue-badge ${String(t.executionVenue||'WALLET').toLowerCase()}">${esc(t.executionVenue||'WALLET')}</span><span class="badge buy">BUY ↑</span><span class="trade-action-arrow">→</span><span class="badge sell">SELL ↓</span><span class="quality ${qualityClass(t.exitQuality)}">${qualityLabel(t.exitQuality)}</span></div>
    <div class="inspector-head-actions">
     <button type="button" class="trade-chart-link" data-inspect-chart="1" data-trade-id="${esc(t.tradeHistoryId??t.walletSellTradeId??'')}" title="Inspect only this BUY/SELL on the dedicated chart"><span>↗</span> View chart</button>
     <button type="button" class="trade-chart-link trade-path-link" data-inspect-path="1" data-trade-id="${esc(t.tradeHistoryId??t.walletSellTradeId??'')}" title="View the persisted decision and state path for this trade"><span>⌁</span> View path</button>
@@ -90,14 +90,14 @@ function tradeCard(t){
 async function load(){
  $('inspector-error').classList.add('hidden');
  try{
-  const symbol=encodeURIComponent($('symbol-filter').value||'ALL'),limit=encodeURIComponent($('limit-filter').value||20);
-  const r=await fetch(`/api/trade-inspector?symbol=${symbol}&limit=${limit}`,{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);
+  const symbol=encodeURIComponent($('symbol-filter').value||'ALL'),venue=encodeURIComponent($('venue-filter').value||'ALL'),limit=encodeURIComponent($('limit-filter').value||20);
+  const r=await fetch(`/api/trade-inspector?symbol=${symbol}&venue=${venue}&limit=${limit}`,{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);
   const d=await r.json();window.__inspectorTrades=d.trades||[];renderSummary(d.summary);renderSymbols(d.symbols);
   $('trade-cards').innerHTML=d.trades?.length?d.trades.map(tradeCard).join(''):'<div class="empty">No completed trades match this filter.</div>';
   $('inspector-updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
  }catch(e){$('inspector-error').textContent=`Trade Inspector could not load: ${e.message}`;$('inspector-error').classList.remove('hidden')}
 }
-$('refresh-inspector').addEventListener('click',load);$('symbol-filter').addEventListener('change',load);$('limit-filter').addEventListener('change',load);load();
+$('refresh-inspector').addEventListener('click',load);$('symbol-filter').addEventListener('change',load);$('venue-filter').addEventListener('change',load);$('limit-filter').addEventListener('change',load);load();
 
 
 function inspectorTradeKey(t){return String(t.tradeHistoryId??t.walletSellTradeId??'')}

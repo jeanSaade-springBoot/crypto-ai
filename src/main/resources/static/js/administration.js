@@ -1,3 +1,14 @@
+async function api(url, options) {
+    const response = await fetch(url, options);
+    if (!response.ok) {
+        let message = 'Request failed';
+        try { const json = await response.json(); message = json.message || json.error || message; }
+        catch (_) { const text = await response.text(); if (text) message = text; }
+        throw new Error(message);
+    }
+    return response.status === 204 ? null : response.json();
+}
+
 const coinBody = document.getElementById('coin-body');
 const coinMessage = document.getElementById('message');
 
@@ -103,4 +114,6 @@ document.getElementById('reload-streams').addEventListener('click', async event 
     }
 });
 
+const adminRefresh = document.getElementById('refresh');
+if (adminRefresh) adminRefresh.addEventListener('click', loadCoins);
 loadCoins();

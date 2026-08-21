@@ -1,1 +1,122 @@
-<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="refresh" content="0;url=/administration"><title>Administration</title></head><body><a href="/administration">Open Administration</a></body></html>
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Paper Wallet</title>
+<link rel="stylesheet" href="/css/dashboard.css"><link rel="stylesheet" href="/css/wallet.css"><link rel="stylesheet" href="/css/administration.css"><script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1"></script></head><body>
+<div class="app-shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">CT</span><div class="sidebar-label"><strong>Crypto Trader</strong><small>AI trading command center</small></div></div><nav class="sidebar-nav"><div class="nav-group"><span class="nav-group-label">OVERVIEW</span><a href="/dashboard" title="Dashboard"><span class="nav-icon">⌂</span><span class="nav-text">Dashboard</span></a></div><div class="nav-group"><span class="nav-group-label">MARKET</span><a href="/catching-market" title="Catching Market"><span class="nav-icon">⌁</span><span class="nav-text">Catching Market</span></a></div><div class="nav-group"><span class="nav-group-label">EXECUTION</span><a href="/opportunity-center" title="AI Opportunity Center"><span class="nav-icon">⚡</span><span class="nav-text">Opportunity Center</span></a><a class="active" href="/wallet" title="Paper Wallet"><span class="nav-icon">◫</span><span class="nav-text">Wallet</span></a><a href="/binance" title="Binance Account"><span class="nav-icon">₿</span><span class="nav-text">Binance</span></a></div><div class="nav-group"><span class="nav-group-label">ANALYSIS</span><a href="/trade-inspector" title="Trade Inspector"><span class="nav-icon">⌕</span><span class="nav-text">Trade Inspector</span></a><a href="/crypto-fundamentals" title="Crypto Fundamentals"><span class="nav-icon">ƒ</span><span class="nav-text">Crypto Fundamentals</span></a><a href="/proven-analyzed-trades" title="Proven Analyzed Trades"><span class="nav-icon">✓</span><span class="nav-text">Proven Analyzed Trades</span></a></div><div class="nav-group"><span class="nav-group-label">SYSTEM</span><a href="/administration" title="Administration"><span class="nav-icon">⚙</span><span class="nav-text">Administration</span></a><a href="/fix-registry" title="Fix Registry"><span class="nav-icon">•</span><span class="nav-text">Fix Registry</span></a><a href="/system-health" title="System Health"><span class="nav-icon">♥</span><span class="nav-text">System Health</span></a></div></nav></aside>
+<main><header class="topbar"><div><p class="eyebrow">SHADOW EXECUTION</p><h1>Paper Wallet</h1><p class="inspector-subtitle">The existing production trading brain executed in the internal wallet. No Binance funds.</p></div><div class="topbar-actions"><button id="refresh" type="button">Refresh</button></div></header><section id="message" class="error-banner hidden"></section>
+        <section class="metrics-grid wallet-metrics">
+            <article class="metric-card"><span>Portfolio status</span><strong id="status">—</strong><small id="total-return">—</small></article>
+            <article class="metric-card"><span>Portfolio value</span><strong id="portfolio">—</strong><small id="invested">—</small></article>
+            <article class="metric-card"><span>Total P&amp;L</span><strong id="total-pnl">—</strong><small id="change24h">—</small></article>
+            <article class="metric-card"><span>Available USDT</span><strong id="available">—</strong><small>Buying balance</small></article>
+            <article class="metric-card"><span>Today's BUY budget</span><strong id="daily-budget">—</strong><small id="budget-state">Calculated at first BUY</small></article>
+            <article class="metric-card"><span>Today's new positions</span><strong id="daily-buys">—</strong><small id="remaining-buys">— remaining</small></article>
+            <article class="metric-card"><span>Realized P&amp;L</span><strong id="realized">—</strong><small>Closed system trades</small></article>
+            <article class="metric-card"><span>Unrealized P&amp;L</span><strong id="unrealized">—</strong><small>Current holdings</small></article>
+        </section>
+
+
+        <section class="wallet-form-grid">
+            <article id="settings" class="panel">
+                <h2>Trading configuration</h2>
+                <form id="settings-form">
+                    <label class="toggle-row"><input id="daily-limit-enabled" type="checkbox"> Limit new positions per day</label>
+                    <label id="daily-limit-field">Maximum new positions per day<input id="maximum-daily-positions" type="number" min="1" max="1000" step="1" value="6"></label>
+                    <label>Trade amount per BUY when unlimited<input id="base-trade-amount" type="number" min="0.01" step="0.01" required></label>
+                    <label>Minimum USDT reserve<input id="minimum-reserve" type="number" min="0" step="0.01" required></label>
+                    <div class="performance-config">
+                        <h3>Entry validation</h3>
+                        <label>Execution profile
+                            <select id="execution-profile">
+                                <option value="CONSERVATIVE">Conservative — require bullish 5m confirmation</option>
+                                <option value="BALANCED" selected>Balanced — allow WATCH confirmation with reduced size</option>
+                                <option value="AGGRESSIVE">Aggressive — allow qualified 25% probe entries</option>
+                            </select>
+                        </label>
+                        <label class="toggle-row"><input id="require-new-buy-transition" type="checkbox" checked> Execute only on a new 1m BUY transition</label>
+                        <p class="form-note">1m remains the only execution timeframe. The profile changes only confirmation strictness and BUY size. Bearish 5m/1h context and existing risk vetoes still block the entry.</p>
+                    </div>
+                    <div class="performance-config">
+                        <h3>Dynamic Profit Lock</h3>
+                        <label class="toggle-row"><input id="dynamic-profit-lock-enabled" type="checkbox" checked> Protect profitable positions after they approach take profit</label>
+                        <label>Activate after % of take-profit distance<input id="profit-lock-activation-percent" type="number" min="1" max="99" step="1" value="70"></label>
+                        <label>Initial protected profit % of take-profit distance<input id="profit-lock-initial-percent" type="number" min="0" max="98" step="1" value="40"></label>
+                        <label>Trail step % of take-profit distance<input id="profit-lock-trail-step-percent" type="number" min="1" max="50" step="1" value="10"></label>
+                        <p class="form-note">Default: activate at 70% of the target, protect 40%, then raise the protected level by one trail step as the best price advances. Once active, normal SELL signals are suppressed above the protected level; stop-loss, take-profit and the profit-lock trigger remain immediate.</p>
+                    </div>
+                    <div class="performance-config">
+                        <h3>Dashboard header performance</h3>
+                        <label>Header trade period
+                            <select id="performance-window-type">
+                                <option value="LAST_TRADES">Last N closed trades</option>
+                                <option value="TODAY">Today</option>
+                                <option value="LAST_DAYS">Last N days</option>
+                                <option value="DATE_RANGE">Specific date range</option>
+                            </select>
+                        </label>
+                        <label id="performance-trade-count-field">Number of closed trades<input id="performance-trade-count" type="number" min="1" max="500" step="1" value="20"></label>
+                        <label id="performance-period-days-field" class="hidden">Number of days<input id="performance-period-days" type="number" min="1" max="3650" step="1" value="7"></label>
+                        <div id="performance-date-range-fields" class="performance-date-range hidden">
+                            <label>Start date<input id="performance-start-date" type="date"></label>
+                            <label>End date<input id="performance-end-date" type="date"></label>
+                        </div>
+                        <p class="form-note">This controls the frozen Dashboard header: net realized P&amp;L, wins/losses, win rate, Top Winner and Top Loser. Only executed closed wallet trades are included.</p>
+                    </div>
+                    <div class="performance-config dashboard-interval-config">
+                        <h3>Dashboard intervals</h3>
+                        <div class="interval-checkbox-grid">
+                            <label class="toggle-row"><input type="checkbox" class="dashboard-interval" value="1m" checked> 1 minute</label>
+                            <label class="toggle-row"><input type="checkbox" class="dashboard-interval" value="5m" checked> 5 minutes</label>
+                            <label class="toggle-row"><input type="checkbox" class="dashboard-interval" value="1h" checked> 1 hour</label>
+                            <label class="toggle-row"><input type="checkbox" class="dashboard-interval" value="4h" checked> 4 hours</label>
+                            <label class="toggle-row"><input type="checkbox" class="dashboard-interval" value="1d" checked> 1 day</label>
+                        </div>
+                        <p class="form-note">4h and 1 day are display-only views derived from stored 1h candles. The trading engine remains fixed at 1m / 5m / 1h.</p>
+                    </div>
+                    <p class="form-note">When the daily limit is enabled, the BUY budget is calculated from available USDT divided by the configured maximum. When Unlimited is selected, every BUY uses the configured trade amount until available USDT reaches the reserve. SELLs never count as new positions.</p>
+                    <button type="submit">Save configuration</button>
+                </form>
+            </article>
+
+            <article class="panel">
+                <h2>Deposit / withdraw USDT</h2>
+                <form id="cash-form">
+                    <label>Action<select id="flow-type"><option value="DEPOSIT">Deposit</option><option value="WITHDRAWAL">Withdrawal</option></select></label>
+                    <label>Amount USDT<input id="flow-amount" type="number" min="0.01" step="0.01" required></label>
+                    <label>Notes<input id="flow-notes"></label>
+                    <button type="submit">Save cash flow</button>
+                </form>
+            </article>
+
+            <article class="panel">
+                <h2>Initial holding / correction</h2>
+                <form id="asset-form">
+                    <label>Coin
+                        <select id="asset-symbol" required>
+                            <option value="">Choose a coin</option>
+                            <option value="BTC">BTC</option>
+                            <option value="ETH">ETH</option>
+                            <option value="BNB">BNB</option>
+                            <option value="XRP">XRP</option>
+                            <option value="PEPE">PEPE</option>
+                        </select>
+                    </label>
+                    <label>Quantity<input id="asset-quantity" type="number" min="0" step="0.00000001" required></label>
+                    <label>Average entry USDT<input id="asset-average" type="number" min="0" step="0.00000001" required></label>
+                    <p class="form-note">This is for initial balances and corrections only. Normal BUY/SELL executions are created automatically from signals.</p>
+                    <button type="submit">Save coin holding</button>
+                </form>
+            </article>
+        </section>
+
+
+
+        <section id="assets" class="panel">
+            <div class="section-heading"><div><p class="eyebrow">CURRENT HOLDINGS</p><h2>Assets</h2></div></div>
+            <div class="table-wrap"><table><thead><tr><th>Asset</th><th>Quantity</th><th>Avg entry</th><th>Current price</th><th>Cost basis</th><th>Value</th><th>Unrealized P&amp;L</th></tr></thead><tbody id="asset-body"></tbody></table></div>
+        </section>
+
+        <section id="history" class="panel">
+            <div class="section-heading"><div><p class="eyebrow">AUTOMATIC EXECUTIONS</p><h2>Wallet trades</h2></div></div>
+            <div class="table-wrap"><table><thead><tr><th>Time</th><th>Signal</th><th>Pair</th><th>Side</th><th>Quantity</th><th>Price</th><th>Net</th><th>Realized P&amp;L</th></tr></thead><tbody id="trade-body"></tbody></table></div>
+        </section>
+</main></div><script src="/js/time-utils.js"></script><script src="/js/wallet.js"></script><script src="/js/catching-market-badge.js"></script></body></html>

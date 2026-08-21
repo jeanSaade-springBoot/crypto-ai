@@ -11,5 +11,15 @@ public record CryptoAccountConfigurationRequest(
         BigDecimal maxOrderUsdt,
         BigDecimal maxTotalExposureUsdt,
         Integer maxOpenPositions,
-        BigDecimal maxDailyLossUsdt
+        BigDecimal maxDailyLossUsdt,
+        Boolean safetyEnabled,
+        Integer consecutiveLossPauseCount,
+        Integer consecutiveLossPauseMinutes,
+        Integer consecutiveLossManualStopCount,
+        Integer rollingLossWindowMinutes,
+        BigDecimal maxRollingLossUsdt,
+        Integer sameSymbolLossCount,
+        Integer sameSymbolQuarantineMinutes,
+        BigDecimal maxSlippagePercent,
+        Integer binanceFailurePauseCount
 ) {}

@@ -28,8 +28,9 @@ public class TradeInspectorController {
     @ResponseBody
     public TradeInspectorResponse inspect(
             @RequestParam(required = false, defaultValue = "ALL") String symbol,
+            @RequestParam(required = false, defaultValue = "ALL") String venue,
             @RequestParam(required = false, defaultValue = "20") int limit) {
-        return service.inspect(symbol, limit);
+        return service.inspect(symbol, venue, limit);
     }
     // FIX-024: read-only decision-state path for one Trade Inspector BUY -> SELL pair.
     @GetMapping("/api/trade-inspector/path")
