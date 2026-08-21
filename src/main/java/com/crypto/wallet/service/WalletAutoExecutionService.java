@@ -141,6 +141,19 @@ public class WalletAutoExecutionService {
 
     @Transactional
     public void executeSell(TradeSignal signal) {
+        executeSignalLinkedExit(signal, "SIGNAL_SELL",
+                signal == null || signal.getId() == null ? "Signal SELL"
+                        : "SELL decision from trade signal #" + signal.getId() + " applied to wallet for " + normalizePair(signal.getSymbol()));
+    }
+
+    /**
+     * FIX-028: execute the same signal-linked wallet liquidation while preserving the
+     * position engine's actual terminal reason. This method intentionally keeps the same
+     * idempotency key (signalId:SELL), quantities, balances and close mechanics as the
+     * legacy executeSell path; only audit metadata is corrected.
+     */
+    @Transactional
+    public synchronized void executeSignalLinkedExit(TradeSignal signal, String executionReason, String executionMessage) {
         if (signal == null || signal.getId() == null) return;
         String key = signal.getId() + ":SELL";
         if (tradeRepository.existsByExecutionKey(key)) return;
@@ -175,16 +188,19 @@ public class WalletAutoExecutionService {
         position.setUpdatedAt(Instant.now());
         managedPositionRepository.save(position);
 
+        String reason = executionReason == null || executionReason.isBlank()
+                ? "SIGNAL_SELL" : executionReason.trim().toUpperCase(Locale.ROOT);
         tradeRepository.save(WalletTrade.builder()
                 .signal(signal).executionKey(key).symbol(pair).side("SELL")
                 .quantity(quantity).priceUsdt(price).grossAmountUsdt(gross)
                 .feeUsdt(ZERO).netAmountUsdt(gross).costBasisUsdt(costBasis)
                 .realizedPnlUsdt(realized).realizedPnlPercent(realizedPercent)
-                .executionType("PAPER_AUTO").executionReason("SIGNAL_SELL")
+                .executionType("PAPER_AUTO").executionReason(reason)
                 .status("EXECUTED").executedAt(Instant.now())
-                .notes("Automatic paper SELL from exit signal")
-                .executionMessage("SELL decision from trade signal #" + signal.getId()
-                        + " applied to wallet for " + pair)
+                .notes("Automatic paper exit from persisted position trigger")
+                .executionMessage(executionMessage == null || executionMessage.isBlank()
+                        ? reason + " executed using trade signal #" + signal.getId() + " as market context"
+                        : executionMessage)
                 .build());
 
         dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneId.systemDefault()))

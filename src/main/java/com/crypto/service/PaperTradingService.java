@@ -1,5 +1,7 @@
 package com.crypto.service;
 
+import com.crypto.audit.service.ProductionExitAuditService;
+
 import com.crypto.config.TradingProperties;
 import com.crypto.domain.*;
 import com.crypto.repository.PaperPositionRepository;
@@ -37,6 +39,7 @@ public class PaperTradingService {
     private final TradeSignalRepository signalRepository;
     private final PaperPositionRepository positionRepository;
     private final WalletAutoExecutionService walletAutoExecutionService;
+    private final ProductionExitAuditService productionExitAuditService;
     private final WalletTradeRepository walletTradeRepository;
     private final WalletManagedPositionRepository walletManagedPositionRepository;
     private final TradeExecutionValidationService executionValidationService;
@@ -355,6 +358,8 @@ public class PaperTradingService {
         } catch (RuntimeException ex) {
             log.error("Dynamic Profit Lock wallet exit failed for signal {}: {}", signal.getId(), ex.getMessage(), ex);
         }
+        // FIX-028: profit-lock exits use the same immutable production audit trail.
+        productionExitAuditService.record(saved, signal, "PROFIT_LOCK", profitLock.explanation());
         return saved;
     }
 
@@ -384,11 +389,23 @@ public class PaperTradingService {
 
         if (exitSignal != null) {
             try {
-                walletAutoExecutionService.executeSell(exitSignal);
+                // FIX-028: keep execution behavior identical, but preserve the TRUE terminal
+                // reason in wallet history. A TAKE_PROFIT/STOP_LOSS may use the latest 1m
+                // signal as its price/context carrier even when that signal is WATCH. Calling
+                // executeSell(...) used to mislabel those exits as SIGNAL_SELL.
+                if ("SELL".equalsIgnoreCase(closeReason) || "STRONG_SELL".equalsIgnoreCase(closeReason)) {
+                    walletAutoExecutionService.executeSell(exitSignal);
+                } else {
+                    walletAutoExecutionService.executeSignalLinkedExit(exitSignal, closeReason, explanation);
+                }
             } catch (RuntimeException ex) {
-                log.error("Automatic wallet SELL failed for signal {}: {}", exitSignal.getId(), ex.getMessage(), ex);
+                log.error("Automatic wallet exit failed for signal {}: {}", exitSignal.getId(), ex.getMessage(), ex);
             }
         }
+
+        // FIX-028: immutable production audit records the actual close trigger separately
+        // from the latest market signal. This is diagnostic only and cannot alter execution.
+        productionExitAuditService.record(saved, exitSignal, closeReason, explanation);
         return saved;
     }
 

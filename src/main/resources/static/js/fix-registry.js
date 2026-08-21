@@ -620,6 +620,32 @@
             behavior: "View Path is now a one-look sequential trade story instead of a dashboard of separate cards. Recovery labels are diagnostic summaries only; they never create or modify a trading state. Ordinary trades use ENTRY/confirmation/position/deterioration/EXIT phases without inventing recovery states. All timestamps are KSA and holding/phase durations are visible directly between nodes.",
             regression: "UI/read-only verification: validate a FIX-026 recovery trade, a normal immediate BUY, an accumulated-evidence trade, a scout+add trade and a mechanical STOP_LOSS/TAKE_PROFIT. Confirm BUY pressure/volume comes from the exact persisted candle_open_time, no future candle is used, raw SELL->NEUTRAL transitions can explain pre-entry stabilization, the path always ends at actual wallet SELL, and no production/replay trading method is invoked by View Path."
         }
+        ,{
+            id: "FIX-028",
+            status: "IMPLEMENTED",
+            title: "Production exit audit preserves the real trigger",
+            scenario: "BTC TAKE_PROFIT was misleadingly displayed as SIGNAL_SELL from WATCH signal #105688",
+            symbol: "BTCUSDT",
+            entry: "73,156.13 from BUY signal #105616",
+            exit: "73,393.85; actual production trigger TAKE_PROFIT",
+            entryTime: "2026-08-21 03:03:47 KSA",
+            exitTime: "2026-08-21 03:15:09 KSA",
+            location: "Production exit audit + wallet audit metadata + Trade Inspector View Path",
+            classes: [
+                "com.crypto.audit.service.ProductionExitAuditService",
+                "com.crypto.audit.domain.ProductionExitAudit",
+                "com.crypto.wallet.service.WalletAutoExecutionService",
+                "com.crypto.service.PaperTradingService",
+                "com.crypto.position.service.LivePositionProtectionService",
+                "com.crypto.inspector.service.TradeInspectorService",
+                "src/main/resources/static/js/trade-inspector.js",
+                "V61__create_production_exit_audit.sql"
+            ],
+            cause: "The production position correctly closed as TAKE_PROFIT, while the latest signal was WATCH and Position Analysis was HOLD. PaperTradingService reused that signal as the execution carrier and called a wallet method whose audit metadata was hard-coded to SIGNAL_SELL, making history falsely imply that WATCH #105688 was a SELL decision.",
+            solution: "Keep every exit condition and liquidation mechanic unchanged, but preserve the real terminal trigger in wallet metadata and in a new immutable production_exit_audit row. Store the source signal's real decision and the latest Position Analysis recommendation separately. View Path now labels the real trigger first and explicitly identifies WATCH/BUY signals as MARKET_CONTEXT_AT_EXIT unless the trigger is a genuine SELL/STRONG_SELL.",
+            behavior: "Future TP/SL/Profit-Lock exits show their true production reason. Historical trades fall back to paper_position, so the investigated BTC trade renders TAKE_PROFIT @ 73,393.85 with context WATCH #105688 rather than SELL SIGNAL. No trading behavior changes.",
+            regression: "ProductionExitAuditServiceTest proves TAKE_PROFIT + WATCH source signal + HOLD Position Analysis remain three independent audit facts. JavaScript syntax validation passes. Replay is intentionally unchanged because this is diagnostic/audit-only."
+        }
 
 ];
 

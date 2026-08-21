@@ -589,6 +589,9 @@ function signalEvidenceHtml(s){
     ${phaseMetric('Volume',compactNumber(s.candleVolume),volumeInterpretation(s.candleVolume))}
     ${phaseMetric('RSI',`${s.rsi??'—'}/7`,Number(s.rsi)>=6?'Bullish / healthy':'Not strongly bullish')}
     ${phaseMetric('MACD',`${s.macd??'—'}/8`,Number(s.macd)>=7?'Bullish / improving':'Weak or mixed')}
+    ${s.actualExitTrigger?phaseMetric('REAL EXIT TRIGGER',s.actualExitTrigger,s.actualExitExplanation||'Production close trigger','primary'):''}
+    ${s.exitSourceSignalRole?phaseMetric('Signal role',s.exitSourceSignalRole,s.exitSourceSignalRole==='SELL_TRIGGER'?'This persisted SELL/STRONG_SELL triggered the exit':'This signal is market context at exit; it did NOT itself trigger SELL'):''}
+    ${s.positionRecommendation?phaseMetric('Position analysis',`${s.positionRecommendation}${s.positionAnalysisConfidence==null?'':` ${s.positionAnalysisConfidence}/100`}`,`Exit score ${s.positionExitScore??'—'} · advisory state at close`):''}
     ${phaseMetric('Decision',`${s.originalDecision&&s.originalDecision!==s.decision?`${s.originalDecision} → `:''}${s.decision||'—'}`,`${s.strategy||'—'} · ${s.regime||'—'}`)}
     ${phaseMetric('5m / 1h',s.pathFiveMinute||s.pathOneHour?`${s.pathFiveMinute?.decision||'—'} / ${s.pathOneHour?.decision||'—'}`:`${s.higherInterval||'HTF'} ${s.higherDecision||'—'}`,s.pathFiveMinute||s.pathOneHour?`Setup ${s.pathFiveMinute?.regime||'—'} · authority ${s.pathOneHour?.regime||'—'}`:`Confluence ${s.confluence||'—'}`)}
     ${phaseMetric('ATR',s.atrImmediateEntryAllowed===false?'WAIT':'ENTRY OK',atrInterpretation(s),s.atrImmediateEntryAllowed===false?'warn':'')}
@@ -660,8 +663,18 @@ function buildSimpleTradePhases(data){
   const deterioration=bestLifecycleSignal(signals,s=>new Date(s.generatedAt)>new Date(data.openedAt)&&String(s.interval).toLowerCase()==='1m'&&(String(s.originalDecision||'').includes('SELL')||Number(s.score)<50));
   if(deterioration)phases.push({name:'DETERIORATING',time:deterioration.generatedAt,s:deterioration,kind:'warn',subtitle:'Short-term thesis weakened'});
   const exitBase=data.exitSignal?.id?data.exitSignal:(data.exitOneMinute||latestBefore(signals,data.closedAt));
-  const exitSignal={...(exitBase||{}),pathFiveMinute:data.exitFiveMinute||{},pathOneHour:data.exitOneHour||{}};
-  phases.push({name:'EXIT',time:data.closedAt,s:exitSignal,kind:'sell',subtitle:`SELL ${price(data.exitPrice)} · ${data.exitExecutionReason||'SELL'} · ${pct(data.realizedPnlPercent)}`});
+  // FIX-028: the latest signal at an exit is context unless it is a persisted SELL/STRONG_SELL.
+  // Show the production close trigger from production_exit_audit/paper_position first so
+  // TAKE_PROFIT + WATCH can never be rendered as a misleading 'SELL signal'.
+  const exitSignal={...(exitBase||{}),pathFiveMinute:data.exitFiveMinute||{},pathOneHour:data.exitOneHour||{},
+    actualExitTrigger:data.actualExitTrigger||data.exitExecutionReason||'EXIT',
+    actualExitExplanation:data.actualExitExplanation||'',
+    exitSourceSignalRole:data.exitSourceSignalRole||'MARKET_CONTEXT_AT_EXIT',
+    positionRecommendation:data.exitPositionAnalysis?.recommendation||data.exitAudit?.positionRecommendation||null,
+    positionAnalysisConfidence:data.exitPositionAnalysis?.confidence??null,
+    positionExitScore:data.exitPositionAnalysis?.exitScore??null};
+  const contextText=exitBase?.id?` · context ${exitBase.decision||'—'} #${exitBase.id}`:'';
+  phases.push({name:'EXIT',time:data.closedAt,s:exitSignal,kind:'sell',subtitle:`${data.actualExitTrigger||data.exitExecutionReason||'EXIT'} @ ${price(data.exitPrice)}${contextText} · ${pct(data.realizedPnlPercent)}`});
   return phases.sort((a,b)=>new Date(a.time)-new Date(b.time));
 }
 function renderTradePath(data){
@@ -679,6 +692,7 @@ function renderTradePath(data){
       <div class="trade-path-one-look-head"><div><h3>Sequential decision & position path</h3><p>One-look state machine · all timestamps KSA · persisted Production evidence</p></div><div class="trade-path-hold"><span>Holding time</span><strong>${secondsLabel(data.holdingSeconds)}</strong></div></div>
       <div class="trade-path-phase-flow">${nodes}</div>
     </section>
+    <details class="trade-path-details"><summary>Production exit audit</summary>${data.exitAudit&&Object.keys(data.exitAudit).length?`<pre class="trade-path-json">${esc(JSON.stringify(data.exitAudit,null,2))}</pre>`:'<div class="empty">No dedicated audit row exists for this legacy trade; paper_position fallback is used.</div>'}</details>
     <details class="trade-path-details"><summary>Raw entry decision checks</summary>${rawChecks}</details>`;
 }
 async function showInspectedTradePath(t){

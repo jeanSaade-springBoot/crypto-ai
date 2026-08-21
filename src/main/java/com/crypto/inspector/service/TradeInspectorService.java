@@ -1,6 +1,9 @@
 package com.crypto.inspector.service;
 
+import com.crypto.audit.domain.ProductionExitAudit;
+import com.crypto.audit.repository.ProductionExitAuditRepository;
 import com.crypto.domain.Candle;
+import com.crypto.domain.PaperPosition;
 import com.crypto.domain.TradeSignal;
 import com.crypto.dto.TradeInspectorResponse;
 import com.crypto.dto.TradeInspectorSummary;
@@ -10,6 +13,8 @@ import com.crypto.repository.PaperPositionRepository;
 import com.crypto.repository.TradeSignalRepository;
 import com.crypto.execution.domain.ExecutionOpportunity;
 import com.crypto.execution.repository.ExecutionOpportunityRepository;
+import com.crypto.position.domain.PositionAnalysis;
+import com.crypto.position.repository.PositionAnalysisRepository;
 import com.crypto.wallet.domain.WalletTrade;
 import com.crypto.wallet.domain.WalletManagedPosition;
 import com.crypto.wallet.repository.WalletTradeRepository;
@@ -36,19 +41,25 @@ public class TradeInspectorService {
     private final WalletManagedPositionRepository walletManagedPositionRepository;
     private final TradeSignalRepository tradeSignalRepository;
     private final ExecutionOpportunityRepository executionOpportunityRepository;
+    private final ProductionExitAuditRepository productionExitAuditRepository;
+    private final PositionAnalysisRepository positionAnalysisRepository;
 
     public TradeInspectorService(WalletTradeRepository walletTradeRepository,
                                  CandleRepository candleRepository,
                                  PaperPositionRepository paperPositionRepository,
                                  WalletManagedPositionRepository walletManagedPositionRepository,
                                  TradeSignalRepository tradeSignalRepository,
-                                 ExecutionOpportunityRepository executionOpportunityRepository) {
+                                 ExecutionOpportunityRepository executionOpportunityRepository,
+                                 ProductionExitAuditRepository productionExitAuditRepository,
+                                 PositionAnalysisRepository positionAnalysisRepository) {
         this.walletTradeRepository = walletTradeRepository;
         this.candleRepository = candleRepository;
         this.paperPositionRepository = paperPositionRepository;
         this.walletManagedPositionRepository = walletManagedPositionRepository;
         this.tradeSignalRepository = tradeSignalRepository;
         this.executionOpportunityRepository = executionOpportunityRepository;
+        this.productionExitAuditRepository = productionExitAuditRepository;
+        this.positionAnalysisRepository = positionAnalysisRepository;
     }
 
     @Transactional(readOnly = true)
@@ -133,11 +144,11 @@ public class TradeInspectorService {
 
         TradeSignal entry = buy.getSignal();
         TradeSignal exit = sell.getSignal();
-        Long tradeHistoryId = null;
-        if (entry != null && exit != null) {
-            tradeHistoryId = paperPositionRepository.findBySignalPair(entry.getId(), exit.getId()).stream()
-                    .findFirst().map(p -> p.getId()).orElse(null);
-        }
+        // FIX-028: recover the production position itself so the Inspector displays the
+        // true terminal trigger. Legacy wallet rows may say SIGNAL_SELL even when the
+        // position was actually closed by TAKE_PROFIT using a WATCH signal as context.
+        PaperPosition paper = findPaperPosition(buy, sell);
+        Long tradeHistoryId = paper == null ? null : paper.getId();
 
         WalletManagedPosition managed = entry == null ? null : walletManagedPositionRepository
                 .findTopByEntrySignalIdOrderByOpenedAtDesc(entry.getId()).orElse(null);
@@ -164,11 +175,77 @@ public class TradeInspectorService {
                 exit == null || exit.getDecision() == null ? sell.getExecutionReason() : exit.getDecision().name(),
                 exit == null ? null : exit.getTotalScore(),
                 exit == null ? null : exit.getConfidenceScore(),
-                humanCloseReason(sell),
+                paper != null && paper.getCloseReason() != null
+                        ? paper.getCloseReason().replace('_', ' ')
+                        : humanCloseReason(sell),
                 bestPrice, percentChange(entryPrice, bestPrice),
                 worstPrice, percentChange(entryPrice, worstPrice),
                 p15, p30, p60, assessment.quality(), assessment.explanation()
         );
+    }
+
+    /**
+     * FIX-028: locate the production PaperPosition for both signal-linked and mechanical
+     * exits. Signal-pair lookup handles historical rows like BTC #145; the timestamp
+     * fallback covers exits that have no exit_signal_id at all.
+     */
+    private PaperPosition findPaperPosition(WalletTrade buy, WalletTrade sell) {
+        TradeSignal entry = buy == null ? null : buy.getSignal();
+        TradeSignal exit = sell == null ? null : sell.getSignal();
+        if (entry != null && exit != null) {
+            PaperPosition paired = paperPositionRepository.findBySignalPair(entry.getId(), exit.getId()).stream()
+                    .findFirst().orElse(null);
+            if (paired != null) return paired;
+        }
+        if (sell == null || sell.getSymbol() == null || sell.getExecutedAt() == null) return null;
+        return paperPositionRepository.findTop20BySymbolOrderByOpenedAtDesc(sell.getSymbol()).stream()
+                .filter(p -> p.getOpenedAt() != null && !p.getOpenedAt().isAfter(sell.getExecutedAt()))
+                .filter(p -> p.getClosedAt() != null
+                        && Duration.between(p.getClosedAt(), sell.getExecutedAt()).abs().compareTo(Duration.ofSeconds(5)) <= 0)
+                .findFirst().orElse(null);
+    }
+
+    private Map<String, Object> positionAnalysisView(PositionAnalysis analysis) {
+        if (analysis == null) return Map.of();
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", analysis.getId());
+        m.put("tradeSignalId", analysis.getTradeSignal() == null ? null : analysis.getTradeSignal().getId());
+        m.put("recommendation", analysis.getRecommendation() == null ? null : analysis.getRecommendation().name());
+        m.put("confidence", analysis.getConfidence());
+        m.put("exitScore", analysis.getExitScore());
+        m.put("explanation", analysis.getExplanation());
+        m.put("analyzedAt", analysis.getAnalyzedAt());
+        return m;
+    }
+
+    private Map<String, Object> exitAuditView(ProductionExitAudit audit, PaperPosition paper) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        if (audit != null) {
+            m.put("id", audit.getId());
+            m.put("paperPositionId", audit.getPaperPositionId());
+            m.put("walletPositionId", audit.getWalletPositionId());
+            m.put("closeTrigger", audit.getCloseTrigger());
+            m.put("sourceSignalId", audit.getSourceSignalId());
+            m.put("sourceSignalDecision", audit.getSourceSignalDecision());
+            m.put("sourceSignalOriginalDecision", audit.getSourceSignalOriginalDecision());
+            m.put("positionAnalysisId", audit.getPositionAnalysisId());
+            m.put("positionRecommendation", audit.getPositionRecommendation());
+            m.put("closeExplanation", audit.getCloseExplanation());
+            m.put("auditedAt", audit.getAuditedAt());
+            return m;
+        }
+        // Legacy fallback: expose the production position's real close reason even though
+        // older wallet_trade rows cannot be rewritten safely in place.
+        if (paper != null) {
+            m.put("paperPositionId", paper.getId());
+            m.put("closeTrigger", paper.getCloseReason());
+            m.put("sourceSignalId", paper.getExitSignal() == null ? null : paper.getExitSignal().getId());
+            m.put("sourceSignalDecision", paper.getExitSignal() == null || paper.getExitSignal().getDecision() == null
+                    ? null : paper.getExitSignal().getDecision().name());
+            m.put("closeExplanation", paper.getExitReason());
+            m.put("legacyFallback", true);
+        }
+        return m;
     }
 
     private String humanCloseReason(WalletTrade sell) {
@@ -249,6 +326,9 @@ public class TradeInspectorService {
 
         TradeSignal entry = buy.getSignal();
         TradeSignal exit = sell.getSignal();
+        PaperPosition paper = findPaperPosition(buy, sell);
+        ProductionExitAudit exitAudit = paper == null ? null : productionExitAuditRepository
+                .findTopByPaperPositionIdOrderByAuditedAtDesc(paper.getId()).orElse(null);
         Instant reference = buy.getExecutedAt();
         TradeSignal oneMinute = latestSignalAtOrBefore(buy.getSymbol(), "1m", reference);
         TradeSignal fiveMinute = latestSignalAtOrBefore(buy.getSymbol(), "5m", reference);
@@ -266,6 +346,8 @@ public class TradeInspectorService {
         }
         WalletManagedPosition managed = entry == null ? null : walletManagedPositionRepository
                 .findTopByEntrySignalIdOrderByOpenedAtDesc(entry.getId()).orElse(null);
+        PositionAnalysis exitPositionAnalysis = managed == null || managed.getId() == null ? null
+                : positionAnalysisRepository.findTopByWalletPositionIdOrderByAnalyzedAtDesc(managed.getId()).orElse(null);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("symbol", buy.getSymbol());
@@ -278,6 +360,29 @@ public class TradeInspectorService {
         result.put("exitPrice", sell.getPriceUsdt());
         result.put("entryExecutionReason", buy.getExecutionReason());
         result.put("exitExecutionReason", sell.getExecutionReason());
+
+        // FIX-028: actualExitTrigger is authoritative for the View Path. Prefer the new
+        // immutable audit table, then the production paper_position close reason, then
+        // fall back to the wallet ledger for pre-FIX-028 data. The linked TradeSignal is
+        // displayed as context unless its persisted decision is genuinely SELL/STRONG_SELL.
+        String actualExitTrigger = exitAudit != null && exitAudit.getCloseTrigger() != null
+                ? exitAudit.getCloseTrigger()
+                : paper != null && paper.getCloseReason() != null ? paper.getCloseReason() : sell.getExecutionReason();
+        String actualExitExplanation = exitAudit != null && exitAudit.getCloseExplanation() != null
+                ? exitAudit.getCloseExplanation()
+                : paper != null ? paper.getExitReason() : sell.getExecutionMessage();
+        boolean triggerIsSignalSell = actualExitTrigger != null
+                && ("SELL".equalsIgnoreCase(actualExitTrigger)
+                || "STRONG_SELL".equalsIgnoreCase(actualExitTrigger)
+                || "SIGNAL_SELL".equalsIgnoreCase(actualExitTrigger));
+        boolean sourceSignalIsSellTrigger = triggerIsSignalSell && exit != null && exit.getDecision() != null
+                && ("SELL".equalsIgnoreCase(exit.getDecision().name())
+                || "STRONG_SELL".equalsIgnoreCase(exit.getDecision().name()));
+        result.put("actualExitTrigger", actualExitTrigger);
+        result.put("actualExitExplanation", actualExitExplanation);
+        result.put("exitSourceSignalRole", sourceSignalIsSellTrigger ? "SELL_TRIGGER" : "MARKET_CONTEXT_AT_EXIT");
+        result.put("exitAudit", exitAuditView(exitAudit, paper));
+        result.put("exitPositionAnalysis", positionAnalysisView(exitPositionAnalysis));
         result.put("realizedPnlPercent", sell.getRealizedPnlPercent());
         result.put("opportunity", opportunityView(opportunity));
         result.put("oneMinute", signalPathView(oneMinute));
