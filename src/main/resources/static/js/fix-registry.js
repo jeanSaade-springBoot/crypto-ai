@@ -665,6 +665,29 @@
             solution: "Add a prominent 'What this means' sentence above every path evidence table. The sentence is derived only from the persisted decision and already-displayed evidence. Example: WATCH with supportive trend/momentum but weak volume becomes 'Direction and momentum look good, but participation/confirmation is not strong enough yet.' STRONG_BUY with strong trend/volume/momentum becomes a concise confirmation explanation. Blocked and ATR-wait states explain the actual blocker instead of sounding bullish.",
             behavior: "The sequential path now reads as a trader-friendly story: state + KSA time + one-line meaning + detailed evidence. The interpretation is diagnostic UI only and never writes a signal, changes a score, changes Replay, or changes execution.",
             regression: "PEPE #108246 should explain WATCH 66 as supportive direction/momentum with insufficient participation/confirmation. PEPE #108276 should explain STRONG_BUY 86 as strong aligned trend/participation/momentum. Verify blocked entries and ATR WAIT phases explain the blocker. node --check trade-inspector.js passes."
+        },
+        {
+            id: "FIX-031",
+            status: "IMPLEMENTED",
+            title: "Logged-in-user Crypto Account configuration",
+            scenario: "Prepare LIVE_MICRO safely without changing the proven trading engine; each authenticated user must own a separate Binance account configuration",
+            symbol: "ALL",
+            entry: "No trading entry logic changed; account configuration only",
+            exit: "No trading exit logic changed; account configuration only",
+            entryTime: "N/A",
+            exitTime: "N/A",
+            location: "Administration -> Crypto Account + /api/crypto-account + Flyway V62",
+            classes: [
+                "com.crypto.account.controller.CryptoAccountConfigurationController",
+                "com.crypto.account.service.CryptoAccountConfigurationService",
+                "com.crypto.account.service.CryptoCredentialCipher",
+                "com.crypto.account.domain.CryptoAccountConfiguration",
+                "src/main/resources/db/migration/V62__create_user_crypto_account_configuration.sql"
+            ],
+            cause: "The application had one authenticated login system but no user-owned exchange-account boundary. Future Binance LIVE_MICRO configuration would otherwise be global and could mix credentials/risk limits between users.",
+            solution: "Create one BINANCE crypto_account_configuration row per app_user and resolve ownership only from Principal.getName(). Store execution mode and micro-live safety limits per user. Encrypt API key/secret with AES-GCM using CRYPTO_ACCOUNT_MASTER_KEY; return only a masked key hint and never return the API secret. Keep shared market data, signal scoring, wallet strategy and all Production/Replay behavior unchanged.",
+            behavior: "Each logged-in user sees and edits only their own Crypto Account configuration. Defaults are PAPER, max order 10 USDT, max exposure 50 USDT, max 3 open positions and max 10 USDT daily loss. LIVE_MICRO is prepared as configuration metadata only; FIX-031 does not send Binance orders.",
+            regression: "Create two app_user accounts, GET /api/crypto-account under each session and confirm different rows/user_id values. Update one account and confirm the other is unchanged. Verify raw API secret is never returned. Verify saving credentials fails clearly when CRYPTO_ACCOUNT_MASTER_KEY is missing/invalid. Run existing Production/Replay tests unchanged."
         }
 
 ];

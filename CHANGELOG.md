@@ -1,5 +1,16 @@
 # Change Log
 
+## FIX-031 — Logged-in-user Crypto Account configuration
+
+- Added `crypto_account_configuration` (Flyway V62), uniquely scoped by `app_user` + exchange.
+- Added authenticated current-user API at `/api/crypto-account`; user ownership is derived from the Spring Security `Principal`, never from a client-supplied user id.
+- Added PAPER / LIVE_MICRO account mode and conservative micro-live limits: maximum order, maximum total exposure, maximum open positions and maximum daily loss.
+- Added AES-GCM encryption for Binance API key/secret using `CRYPTO_ACCOUNT_MASTER_KEY`; secrets are never returned to the browser and only a masked API-key hint is shown.
+- Added Administration -> Crypto Account UI.
+- LIVE_MICRO remains configuration-only in this release; no real Binance order adapter was enabled.
+- Shared market data, scoring, BUY/SELL logic, TP/SL, wallet strategy, Production and Replay behavior remain unchanged.
+- Added a focused service test proving authenticated-user ownership and encrypted/non-returned credentials.
+
 ## FIX-029 — Trade Path human-readable decision meaning
 
 - Added a prominent **What this means** sentence to every Trade Inspector View Path phase.

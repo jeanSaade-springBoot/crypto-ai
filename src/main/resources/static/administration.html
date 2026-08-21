@@ -67,6 +67,37 @@
             <article class="metric-card"><span>Unrealized P&amp;L</span><strong id="unrealized">—</strong><small>Current holdings</small></article>
         </section>
 
+        <section id="crypto-account" class="panel crypto-account-panel">
+            <div class="section-heading">
+                <div><p class="eyebrow">USER ACCOUNT</p><h2>Crypto Account</h2></div>
+                <span id="crypto-account-user" class="account-owner">Logged-in user</span>
+            </div>
+            <p class="form-note">FIX-031: this configuration belongs only to the authenticated user. Market data, scoring and trading strategy stay shared and unchanged. LIVE_MICRO is configuration-only in this release; no real Binance order path is enabled yet.</p>
+            <form id="crypto-account-form" class="crypto-account-form">
+                <label>Exchange<input id="crypto-account-exchange" value="BINANCE" disabled></label>
+                <label>Account label<input id="crypto-account-label" maxlength="100" placeholder="Primary account" required></label>
+                <label>Execution mode
+                    <select id="crypto-account-mode">
+                        <option value="PAPER">PAPER — current behavior</option>
+                        <option value="LIVE_MICRO">LIVE_MICRO — prepared, not executing real orders yet</option>
+                    </select>
+                </label>
+                <label>Maximum real order USDT<input id="crypto-account-max-order" type="number" min="0.01" step="0.01" value="10"></label>
+                <label>Maximum total live exposure USDT<input id="crypto-account-max-exposure" type="number" min="0.01" step="0.01" value="50"></label>
+                <label>Maximum open live positions<input id="crypto-account-max-positions" type="number" min="1" max="100" step="1" value="3"></label>
+                <label>Maximum daily live loss USDT<input id="crypto-account-max-daily-loss" type="number" min="0.01" step="0.01" value="10"></label>
+                <div class="crypto-credential-block">
+                    <h3>Binance credentials</h3>
+                    <p id="crypto-account-credential-state" class="form-note">No credentials saved.</p>
+                    <label>API key<input id="crypto-account-api-key" type="password" autocomplete="off" placeholder="Leave blank to keep existing"></label>
+                    <label>API secret<input id="crypto-account-api-secret" type="password" autocomplete="off" placeholder="Never returned after saving"></label>
+                    <label class="toggle-row"><input id="crypto-account-clear-credentials" type="checkbox"> Remove saved Binance credentials</label>
+                    <p class="form-note">Credentials are encrypted before database storage. Configure <code>CRYPTO_ACCOUNT_MASTER_KEY</code> as a Base64-encoded 32-byte AES key before saving API credentials. Binance API keys should have withdrawals disabled.</p>
+                </div>
+                <button type="submit">Save my Crypto Account</button>
+            </form>
+        </section>
+
         <section class="wallet-form-grid">
             <article id="settings" class="panel">
                 <h2>Trading configuration</h2>

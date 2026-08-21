@@ -393,3 +393,10 @@ fundamentals:
       ETHUSDT: ethereum
       BNBUSDT: binancecoin
       XRPUSDT: ripple
+
+# FIX-031: master key for encrypting per-user exchange credentials.
+# Generate a 32-byte random value, Base64 encode it, and provide it through the environment.
+# Example generation: openssl rand -base64 32
+crypto:
+  account:
+    master-key: ${CRYPTO_ACCOUNT_MASTER_KEY:}
