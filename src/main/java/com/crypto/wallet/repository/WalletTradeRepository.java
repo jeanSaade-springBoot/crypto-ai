@@ -88,5 +88,10 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
             """)
     long countProfitableClosedTradesSince(@Param("from") Instant from);
 
+    // FIX-025: Trade Inspector View Path needs the persisted wallet lifecycle between
+    // the selected BUY and SELL so confirmation adds / scale-ins are visible before exit.
+    List<WalletTrade> findBySymbolAndStatusAndExecutedAtBetweenOrderByExecutedAtAsc(
+            String symbol, String status, Instant from, Instant to);
+
     boolean existsByExecutionKey(String executionKey);
 }

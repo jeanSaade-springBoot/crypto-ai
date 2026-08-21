@@ -568,20 +568,44 @@ function decisionPathRows(raw){
     return `<div class="decision-check-list">${rows.map(r=>`<div class="decision-check ${String(r.type||'').toLowerCase()}"><span class="decision-check-seq">${esc(r.sequence??'')}</span><div><strong>${esc(r.source||r.type||'CHECK')} · ${esc(r.beforeDecision||'—')} → ${esc(r.afterDecision||'—')}</strong><p>${esc(r.reason||'')}</p></div><span class="decision-check-state">${r.entryAllowedAfter===false?'BLOCKED':'PASS'}</span></div>`).join('')}</div>`;
   }catch(_){return `<pre class="trade-path-json">${esc(raw)}</pre>`;}
 }
+function lifecycleSignalDetail(s){
+  const pieces=[`${s.interval||'1m'} ${s.originalDecision&&s.originalDecision!==s.decision?`${s.originalDecision}→`:''}${s.decision||'—'}`,`${s.score??'—'}/100`,`conf ${s.confidence??'—'}`,price(s.price)];
+  if(s.confluence)pieces.push(`MTF ${s.confluence}`);
+  if(s.liquidityStatus&&s.liquidityStatus!=='UNAVAILABLE')pieces.push(`OB ${s.liquidityStatus}`);
+  return pieces.join(' · ');
+}
 function renderTradePath(data){
   const one=data.oneMinute||{},five=data.fiveMinute||{},hour=data.oneHour||{},entry=data.entrySignal||one,opp=data.opportunity||{},mgmt=data.management||{};
+  const exitOne=data.exitOneMinute||{},exitFive=data.exitFiveMinute||{},exitHour=data.exitOneHour||{};
   $('inspected-trade-path-title').textContent=`${String(data.symbol||'').toUpperCase()} · BUY → SELL decision path`;
   $('inspected-trade-path-summary').innerHTML=`Opened <strong>${ksaDateTime(data.openedAt)}</strong> at <strong>${price(data.entryPrice)}</strong> · closed <strong>${ksaDateTime(data.closedAt)}</strong> at <strong>${price(data.exitPrice)}</strong> · holding <strong>${secondsLabel(data.holdingSeconds)}</strong> · P&amp;L <strong class="${cls(data.realizedPnlPercent)}">${pct(data.realizedPnlPercent)}</strong>`;
 
   const opportunityAge=opp.startedAt&&data.openedAt?Math.max(0,(new Date(data.openedAt)-new Date(opp.startedAt))/1000):null;
-  const flow=[
-    opp.startedAt?{name:'Opportunity started',time:opp.startedAt,detail:`#${opp.id} · ${opp.status||'—'} · evidence ${opp.evidenceScore??'—'} · health ${opp.health??'—'}`} : null,
-    entry.generatedAt?{name:'Entry signal',time:entry.generatedAt,detail:`${entry.interval||'1m'} ${entry.decision||'—'} ${entry.score??'—'}/100 · ${price(entry.price)}`} : null,
-    {name:'Wallet BUY',time:data.openedAt,detail:`${data.entryExecutionReason||'BUY'} · ${price(data.entryPrice)}`},
-    mgmt.profitLockActivatedAt?{name:'Profit lock activated',time:mgmt.profitLockActivatedAt,detail:`lock ${price(mgmt.profitLockPrice)} · progress ${pathValue(mgmt.profitLockProgressPercent,'%')}`} : null,
-    data.exitSignal?.generatedAt?{name:'Exit signal',time:data.exitSignal.generatedAt,detail:`${data.exitSignal.decision||data.exitExecutionReason||'SELL'} ${data.exitSignal.score??'—'}/100`} : null,
-    {name:'Wallet SELL',time:data.closedAt,detail:`${data.exitExecutionReason||'SELL'} · ${price(data.exitPrice)}`}
-  ].filter(Boolean).sort((a,b)=>new Date(a.time)-new Date(b.time));
+
+  // FIX-025: build one chronological lifecycle from the persisted wallet executions
+  // and signal states that occurred while the position was actually open. This is
+  // intentionally diagnostic only; it does not infer or recalculate trading actions.
+  const flow=[];
+  if(opp.startedAt)flow.push({name:'Opportunity started',time:opp.startedAt,detail:`#${opp.id} · ${opp.status||'—'} · evidence ${opp.evidenceScore??'—'} · health ${opp.health??'—'}`,order:0});
+  if(entry.generatedAt)flow.push({name:'Entry signal',time:entry.generatedAt,detail:lifecycleSignalDetail(entry),order:1});
+  (data.walletLifecycle||[]).forEach(w=>{
+    const isTerminal=String(w.side||'').toUpperCase()==='SELL';
+    flow.push({name:isTerminal?'Wallet SELL':'Wallet BUY / add',time:w.executedAt,detail:`${w.executionReason||w.side||'EXECUTION'} · ${price(w.price)}${w.realizedPnlPercent==null?'':` · P&L ${pct(w.realizedPnlPercent)}`}`,order:isTerminal?90:10});
+  });
+  (data.signalLifecycle||[]).forEach(s=>{
+    // Do not duplicate the exact entry signal; all later timing/setup/authority changes
+    // remain visible so the user can follow confirmation, HOLD and deterioration.
+    if(entry.id&&s.id===entry.id)return;
+    flow.push({name:`${s.interval||'1m'} market state`,time:s.generatedAt,detail:lifecycleSignalDetail(s),order:30});
+  });
+  if(mgmt.profitLockActivatedAt)flow.push({name:'Profit lock activated',time:mgmt.profitLockActivatedAt,detail:`lock ${price(mgmt.profitLockPrice)} · progress ${pathValue(mgmt.profitLockProgressPercent,'%')}`,order:50});
+  if(data.exitSignal?.generatedAt)flow.push({name:'Persisted exit signal',time:data.exitSignal.generatedAt,detail:lifecycleSignalDetail(data.exitSignal),order:80});
+  // Mechanical STOP_LOSS/TAKE_PROFIT exits often have no linked TradeSignal. Keep the
+  // latest 1m/5m/1h states at SELL visible before the terminal wallet event instead.
+  [exitOne,exitFive,exitHour].filter(s=>s&&s.id).forEach(s=>flow.push({name:`Exit context · ${s.interval}`,time:s.generatedAt,detail:lifecycleSignalDetail(s),order:85}));
+  if(!(data.walletLifecycle||[]).some(w=>String(w.side||'').toUpperCase()==='SELL'))flow.push({name:'Wallet SELL',time:data.closedAt,detail:`${data.exitExecutionReason||'SELL'} · ${price(data.exitPrice)} · P&L ${pct(data.realizedPnlPercent)}`,order:99});
+
+  flow.sort((a,b)=>{const t=new Date(a.time)-new Date(b.time);return t||a.order-b.order;});
   let previous=null;
   const timeline=flow.map(item=>{const elapsed=previous?Math.max(0,(new Date(item.time)-new Date(previous.time))/1000):null;previous=item;return `<div class="trade-path-step"><div class="trade-path-dot"></div><div class="trade-path-step-body"><div><strong>${esc(item.name)}</strong><span>${ksaDateTime(item.time)}</span></div><p>${esc(item.detail)}</p>${elapsed===null?'':`<small>+${secondsLabel(elapsed)} from previous state</small>`}</div></div>`}).join('');
 
@@ -594,10 +618,11 @@ function renderTradePath(data){
 
   $('inspected-trade-path-content').innerHTML=`
     <section class="trade-path-hero"><div><small>Holding time</small><strong>${secondsLabel(data.holdingSeconds)}</strong></div><div><small>Opportunity age</small><strong>${opportunityAge==null?'—':secondsLabel(opportunityAge)}</strong></div><div><small>Entry source</small><strong>${esc(data.entryExecutionReason||'—')}</strong></div><div><small>Exit source</small><strong>${esc(data.exitExecutionReason||'—')}</strong></div></section>
-    <section class="trade-path-section"><div class="trade-path-section-head"><h3>Timestamped lifecycle</h3><span>All times shown in KSA (UTC+3)</span></div><div class="trade-path-timeline">${timeline}</div></section>
+    <section class="trade-path-section"><div class="trade-path-section-head"><h3>Full BUY → SELL lifecycle</h3><span>Signals, adds and exit context · all times KSA (UTC+3)</span></div><div class="trade-path-timeline">${timeline}</div></section>
     <section class="trade-path-section"><div class="trade-path-section-head"><h3>1m / 5m / 1h state at entry</h3><span>Latest persisted state available at wallet execution</span></div><div class="trade-path-signal-grid">${pathSignalCard('Timing',one)}${pathSignalCard('Setup',five)}${pathSignalCard('Authority',hour)}</div></section>
-    <section class="trade-path-section"><div class="trade-path-section-head"><h3>Decision contributors</h3><span>What strengthened, reduced or blocked the entry</span></div><div class="trade-contributor-grid">${contributor('Technical statistics',`${entry.decision||'—'} ${entry.score??'—'}/100`,technicalBody)}${contributor('Opportunity',opp.status||'—',oppBody)}${contributor('ATR / volatility',entry.atrImmediateEntryAllowed?'PASS':'WAIT',atrBody,entry.atrImmediateEntryAllowed?'pass':'warn')}${contributor('BTC + MTF',`${entry.btcStatus||'—'} · ${entry.confluence||'—'}`,btcBody)}${contributor('Order book / liquidity',entry.liquidityStatus||'—',orderBody,entry.liquidityEntryAllowed?'pass':'warn')}${contributor('Derivatives',entry.derivativesStatus||'—',derivBody)}</div></section>
-    <section class="trade-path-section"><div class="trade-path-section-head"><h3>Final decision checks</h3><span>Persisted ordered decision path</span></div>${decisionPathRows(data.decisionPath)}</section>`;
+    <section class="trade-path-section"><div class="trade-path-section-head"><h3>1m / 5m / 1h state at exit</h3><span>What the system saw immediately before the SELL</span></div><div class="trade-path-signal-grid">${pathSignalCard('Exit timing',exitOne)}${pathSignalCard('Exit setup',exitFive)}${pathSignalCard('Exit authority',exitHour)}</div></section>
+    <section class="trade-path-section"><div class="trade-path-section-head"><h3>Entry decision contributors</h3><span>What strengthened, reduced or blocked the BUY</span></div><div class="trade-contributor-grid">${contributor('Technical statistics',`${entry.decision||'—'} ${entry.score??'—'}/100`,technicalBody)}${contributor('Opportunity',opp.status||'—',oppBody)}${contributor('ATR / volatility',entry.atrImmediateEntryAllowed?'PASS':'WAIT',atrBody,entry.atrImmediateEntryAllowed?'pass':'warn')}${contributor('BTC + MTF',`${entry.btcStatus||'—'} · ${entry.confluence||'—'}`,btcBody)}${contributor('Order book / liquidity',entry.liquidityStatus||'—',orderBody,entry.liquidityEntryAllowed?'pass':'warn')}${contributor('Derivatives',entry.derivativesStatus||'—',derivBody)}</div></section>
+    <section class="trade-path-section"><div class="trade-path-section-head"><h3>Entry final decision checks</h3><span>Persisted ordered decision path</span></div>${decisionPathRows(data.decisionPath)}</section>`;
 }
 async function showInspectedTradePath(t){
   const modal=$('inspected-trade-path-panel');

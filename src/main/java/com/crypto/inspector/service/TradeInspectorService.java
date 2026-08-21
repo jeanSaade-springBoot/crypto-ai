@@ -287,6 +287,26 @@ public class TradeInspectorService {
         result.put("exitSignal", signalPathView(exit));
         result.put("decisionPath", entry == null ? null : entry.getDecisionPath());
 
+        // FIX-025: FIX-024 explained why the BUY happened but jumped directly to the SELL.
+        // Return the complete persisted position window so Trade Inspector can show how
+        // the open trade evolved: confirmation adds, signal deterioration/recovery,
+        // continuation context and the exact state present when the terminal SELL fired.
+        List<WalletTrade> lifecycleTrades = walletTradeRepository
+                .findBySymbolAndStatusAndExecutedAtBetweenOrderByExecutedAtAsc(
+                        buy.getSymbol(), "EXECUTED", buy.getExecutedAt(), sell.getExecutedAt());
+        result.put("walletLifecycle", lifecycleTrades.stream().map(this::walletLifecycleView).toList());
+
+        List<TradeSignal> lifecycleSignals = tradeSignalRepository
+                .findBySymbolAndGeneratedAtBetweenOrderByGeneratedAtAsc(
+                        buy.getSymbol(), buy.getExecutedAt(), sell.getExecutedAt());
+        result.put("signalLifecycle", lifecycleSignals.stream()
+                .filter(this::isLifecycleSignal)
+                .map(this::signalPathView)
+                .toList());
+        result.put("exitOneMinute", signalPathView(latestSignalAtOrBefore(buy.getSymbol(), "1m", sell.getExecutedAt())));
+        result.put("exitFiveMinute", signalPathView(latestSignalAtOrBefore(buy.getSymbol(), "5m", sell.getExecutedAt())));
+        result.put("exitOneHour", signalPathView(latestSignalAtOrBefore(buy.getSymbol(), "1h", sell.getExecutedAt())));
+
         Map<String, Object> management = new LinkedHashMap<>();
         if (managed != null) {
             management.put("stopLoss", managed.getStopLossUsdt());
@@ -376,6 +396,30 @@ public class TradeInspectorService {
         m.put("atrImmediateEntryAllowed", s.isAtrImmediateEntryAllowed()); m.put("atrRecommendedPositionPercent", s.getAtrRecommendedPositionPercent());
         m.put("stopLoss", s.getStopLoss()); m.put("takeProfit", s.getTakeProfit());
         m.put("finalEntryAllowed", s.isFinalEntryAllowed()); m.put("finalExplanation", s.getFinalDecisionExplanation());
+        return m;
+    }
+
+    private boolean isLifecycleSignal(TradeSignal signal) {
+        if (signal == null || signal.getDecision() == null) return false;
+        // Keep the path readable: 1m carries timing while 5m/1h expose setup/authority
+        // changes. We persist every non-NEUTRAL 1m state and every 5m/1h state so the
+        // user can see exactly how confirmation strengthened or weakened before SELL.
+        if ("5m".equalsIgnoreCase(signal.getInterval()) || "1h".equalsIgnoreCase(signal.getInterval())) return true;
+        return !"NEUTRAL".equalsIgnoreCase(signal.getDecision().name());
+    }
+
+    private Map<String, Object> walletLifecycleView(WalletTrade trade) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", trade.getId());
+        m.put("signalId", trade.getSignal() == null ? null : trade.getSignal().getId());
+        m.put("side", trade.getSide());
+        m.put("executedAt", trade.getExecutedAt());
+        m.put("price", trade.getPriceUsdt());
+        m.put("quantity", trade.getQuantity());
+        m.put("grossAmount", trade.getGrossAmountUsdt());
+        m.put("executionReason", trade.getExecutionReason());
+        m.put("executionMessage", trade.getExecutionMessage());
+        m.put("realizedPnlPercent", trade.getRealizedPnlPercent());
         return m;
     }
 

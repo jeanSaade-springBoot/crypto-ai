@@ -551,6 +551,28 @@
             solution: "Add a View Path button beside View Chart. A read-only endpoint returns the persisted entry/exit signals, the latest 1m/5m/1h states available at wallet execution, the linked/overlapping execution opportunity, position-management snapshot and the original ordered decision_path. The overlay renders a timestamped state timeline in KSA, exact holding time, opportunity age, timeframe cards and contributor diagnostics including order-book statistics.",
             behavior: "Selecting View Path dims the Trade Inspector and opens a focused decision-state overlay for only that trade. All timestamps are displayed in KSA (UTC+3), elapsed time is shown between lifecycle states, and holding time is prominent. No score, decision, wallet, replay or execution state is recomputed or modified.",
             regression: "UI-only diagnostic regression: verify View Path opens beside View Chart for normal, accumulated-evidence and scout/progressive trades; confirm opportunity fallback works when latest_signal_id changed after the initial scout; verify 1m/5m/1h, ATR, BTC, order book, derivatives, decision checks, BUY/SELL timestamps and holding duration match persisted production records."
+        },
+        {
+            id: "FIX-025",
+            title: "Trade Inspector View Path continues through the full BUY -> SELL lifecycle",
+            status: "Implemented",
+            scenario: "Trade Inspector diagnostic path for completed trades, including adds, open-position signal states and mechanical exits",
+            symbol: "ALL",
+            entry: "Read-only visualization; no trading entry behavior changed",
+            exit: "Shows the actual wallet SELL plus the latest persisted 1m/5m/1h context immediately before exit",
+            entryTime: "Uses the selected wallet BUY timestamp",
+            exitTime: "Uses the selected wallet SELL timestamp and freezes the final holding duration",
+            replayWindow: "N/A - UI/diagnostic-only fix; no production/replay trading behavior changed",
+            location: "Trade Inspector -> View Path overlay",
+            classes: [
+                "com.crypto.inspector.service.TradeInspectorService",
+                "com.crypto.wallet.repository.WalletTradeRepository",
+                "src/main/resources/static/js/trade-inspector.js"
+            ],
+            cause: "FIX-024 explained the entry decision correctly but its timeline jumped from Wallet BUY to the terminal SELL. It did not return the wallet scale-ins/confirmation adds or the persisted 1m/5m/1h states observed while the position was open, so the visual path appeared to stop before the SELL decision lifecycle.",
+            solution: "Extend the read-only path endpoint across the exact BUY-to-SELL time window. Return all executed wallet events for the symbol, meaningful persisted trade signals while the position is open, and the latest 1m/5m/1h context at the SELL timestamp. Render them chronologically with elapsed time between states. Mechanical STOP_LOSS/TAKE_PROFIT exits remain visible even when wallet_trade.signal_id is null because exit-time context is resolved independently.",
+            behavior: "View Path now continues from opportunity/entry through confirmation or scale-in BUYs, changing 1m/5m/1h market states, profit-lock activation when present, exit context and the final wallet SELL. The overlay also shows separate entry and exit timeframe cards so the user can compare what changed during the holding period.",
+            regression: "Diagnostic-only protection. Verify a simple BUY->SELL trade, a scout plus confirmation-add trade, and a mechanical STOP_LOSS/TAKE_PROFIT trade. The final timeline must end at the selected wallet SELL, holding time must match BUY->SELL duration, and no production/replay decision code may be invoked or mutated by View Path."
         }
 
 ];
