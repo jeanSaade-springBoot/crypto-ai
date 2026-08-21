@@ -140,3 +140,7 @@ body.inspector-modal-open{overflow:hidden}
 .trade-path-details{border:1px solid var(--border);border-radius:10px;background:rgba(255,255,255,.018);padding:10px 12px}.trade-path-details summary{cursor:pointer;font-size:10px;font-weight:800;color:var(--muted)}.trade-path-details[open] summary{margin-bottom:10px}
 @media(max-width:760px){.trade-path-one-look-head{align-items:flex-start}.trade-path-phase-flow{display:grid;overflow:visible}.trade-path-phase{width:auto;flex:auto}.trade-path-arrow{width:auto;min-height:28px}.trade-path-arrow span{transform:rotate(90deg)}.trade-path-hold{text-align:left}.path-phase-metric{grid-template-columns:82px 72px 1fr}}
 .path-phase-metric.path-phase-columns{border-bottom:1px solid rgba(141,162,177,.22);padding-bottom:6px;margin-bottom:1px}.path-phase-metric.path-phase-columns span,.path-phase-metric.path-phase-columns strong,.path-phase-metric.path-phase-columns small{font-size:8px;text-transform:uppercase;letter-spacing:.06em;color:#6f8799;font-weight:800}
+/* FIX-029: one-sentence human explanation above each persisted path evidence table. */
+.path-phase-meaning{display:grid;gap:4px;padding:8px 9px;margin:0 0 5px;border:1px solid rgba(86,178,255,.22);border-radius:8px;background:rgba(86,178,255,.055)}
+.path-phase-meaning span{font-size:8px;text-transform:uppercase;letter-spacing:.07em;font-weight:900;color:#78bdf0}
+.path-phase-meaning strong{font-size:9px;line-height:1.4;color:#d8e8f3;font-weight:700}

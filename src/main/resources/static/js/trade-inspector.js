@@ -576,10 +576,57 @@ function vetoSummary(s){
   if(s.liquidityStatus&&s.liquidityStatus!=='UNAVAILABLE'&&s.liquidityStatus!=='LEARNING')return `Order book ${s.liquidityStatus}`;
   return 'No hard veto';
 }
+// FIX-029: Translate persisted scores into one concise trader-readable conclusion.
+// This is display-only: it never changes BUY/SELL logic. The wording intentionally uses
+// the same evidence already shown in the node (decision, trend, momentum, volume, HTF,
+// ATR and veto state) so Trade Inspector explains *why* a state is WATCH/BUY/STRONG_BUY
+// without forcing the user to mentally decode every score.
+function signalMeaning(s){
+  if(!s||!s.id)return 'No persisted evidence is available for this phase.';
+  const decision=String(s.decision||'').toUpperCase();
+  const original=String(s.originalDecision||'').toUpperCase();
+  const trend=Number(s.trend),volume=Number(s.volume),momentum=Number(s.momentum);
+  const htf=String(s.pathFiveMinute?.decision||s.higherDecision||'').toUpperCase();
+  const trendGood=Number.isFinite(trend)&&trend>=18;
+  const trendStrong=Number.isFinite(trend)&&trend>=21;
+  const momentumGood=Number.isFinite(momentum)&&momentum>=11;
+  const volumeGood=Number.isFinite(volume)&&volume>=10;
+  const volumeStrong=Number.isFinite(volume)&&volume>=14;
+  const htfBullish=['BUY','STRONG_BUY'].includes(htf);
+  const htfMixed=['WATCH','NEUTRAL',''].includes(htf);
+
+  if(s.finalEntryAllowed===false){
+    return `The technical setup may be ${['BUY','STRONG_BUY'].includes(original||decision)?'bullish':'interesting'}, but ${vetoSummary(s)} prevents a new entry.`;
+  }
+  if(s.atrImmediateEntryAllowed===false){
+    return `The setup has evidence, but ATR classifies the current price as ${s.atrEntryType||'extended'}; wait for a better entry instead of chasing.`;
+  }
+  if(decision==='STRONG_BUY'){
+    if(trendStrong&&volumeStrong&&momentumGood&&htfBullish)return 'Trend, momentum and participation align strongly, and the higher timeframe confirms the bullish move.';
+    if(trendStrong&&volumeStrong&&momentumGood)return 'Trend, momentum and participation align strongly; higher-timeframe context is not bearish, so the setup qualifies as STRONG_BUY.';
+    return 'The strategy-adjusted technical evidence is strong enough for STRONG_BUY, with no hard contextual veto.';
+  }
+  if(decision==='BUY'){
+    if(trendGood&&momentumGood&&volumeGood&&htfBullish)return 'Bullish structure, momentum and participation are confirmed by the higher timeframe, supporting a BUY.';
+    if(trendGood&&momentumGood&&volumeGood)return 'Technical evidence is bullish and participation is sufficient; higher-timeframe context does not invalidate the BUY.';
+    return 'The combined technical and contextual evidence is sufficient for a BUY, although not all components are at strong-buy strength.';
+  }
+  if(decision==='WATCH'){
+    if(trendGood&&momentumGood&&!volumeGood)return 'Direction and momentum look good, but participation/confirmation is not strong enough yet.';
+    if(trendGood&&momentumGood&&volumeGood&&htfMixed)return 'Technical evidence is bullish, but higher-timeframe confirmation is still mixed, so the engine remains on WATCH.';
+    if(trendGood&&momentumGood)return 'The bullish setup is developing, but one or more confirmation components are still incomplete.';
+    return 'Some evidence is constructive, but the combined setup is not strong enough for a BUY yet.';
+  }
+  if(decision==='NEUTRAL'&&['SELL','STRONG_SELL'].includes(original))return 'Short-term evidence turned bearish, but contextual checks neutralized the raw SELL instead of confirming an exit/short signal.';
+  if(decision==='NEUTRAL')return 'Evidence is mixed; neither buyers nor sellers have enough confirmed control for an actionable signal.';
+  if(decision==='SELL'||decision==='STRONG_SELL')return 'Trend/momentum evidence has deteriorated enough for a bearish decision; position context determines whether this becomes an actual exit.';
+  return 'The displayed state is the result of the persisted technical score plus strategy and contextual checks.';
+}
 function signalEvidenceHtml(s){
   if(!s||!s.id)return '<div class="path-phase-empty">No persisted signal snapshot</div>';
   const raw=`${s.rawScore??'—'}/${s.maximumAvailableScore??'—'}`;
   return `<div class="path-phase-evidence">
+    <div class="path-phase-meaning"><span>What this means</span><strong>${esc(signalMeaning(s))}</strong></div>
     <div class="path-phase-metric path-phase-columns"><span>Component</span><strong>Result</strong><small>Interpretation</small></div>
     ${phaseMetric('Displayed total',`${s.score??'—'}/100`,scoreInterpretation(s.score),'primary')}
     ${phaseMetric('Base technical',raw,technicalInterpretation(s))}

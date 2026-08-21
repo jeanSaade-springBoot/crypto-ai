@@ -645,6 +645,26 @@
             solution: "Keep every exit condition and liquidation mechanic unchanged, but preserve the real terminal trigger in wallet metadata and in a new immutable production_exit_audit row. Store the source signal's real decision and the latest Position Analysis recommendation separately. View Path now labels the real trigger first and explicitly identifies WATCH/BUY signals as MARKET_CONTEXT_AT_EXIT unless the trigger is a genuine SELL/STRONG_SELL.",
             behavior: "Future TP/SL/Profit-Lock exits show their true production reason. Historical trades fall back to paper_position, so the investigated BTC trade renders TAKE_PROFIT @ 73,393.85 with context WATCH #105688 rather than SELL SIGNAL. No trading behavior changes.",
             regression: "ProductionExitAuditServiceTest proves TAKE_PROFIT + WATCH source signal + HOLD Position Analysis remain three independent audit facts. JavaScript syntax validation passes. Replay is intentionally unchanged because this is diagnostic/audit-only."
+        },
+        {
+            id: "FIX-029",
+            status: "IMPLEMENTED",
+            title: "Trade Path human-readable decision meaning",
+            scenario: "PEPE #108246 WATCH 66 had supportive direction/momentum but insufficient participation; Trade Inspector showed the numbers without stating that conclusion",
+            symbol: "ALL",
+            entry: "Read-only explanation of persisted decision evidence; no BUY behavior changed",
+            exit: "Read-only explanation of persisted decision evidence; no SELL behavior changed",
+            entryTime: "Every Trade Inspector path phase uses its actual persisted KSA timestamp",
+            exitTime: "Every Trade Inspector path phase uses its actual persisted KSA timestamp",
+            location: "Trade Inspector -> View Path -> each sequential phase",
+            classes: [
+                "src/main/resources/static/js/trade-inspector.js",
+                "src/main/resources/static/css/trade-inspector.css"
+            ],
+            cause: "FIX-027 exposed the correct Component / Result / Interpretation evidence, but the user still had to mentally combine score, trend, momentum, volume, HTF, ATR and veto state to understand why a phase stayed WATCH or became BUY/STRONG_BUY.",
+            solution: "Add a prominent 'What this means' sentence above every path evidence table. The sentence is derived only from the persisted decision and already-displayed evidence. Example: WATCH with supportive trend/momentum but weak volume becomes 'Direction and momentum look good, but participation/confirmation is not strong enough yet.' STRONG_BUY with strong trend/volume/momentum becomes a concise confirmation explanation. Blocked and ATR-wait states explain the actual blocker instead of sounding bullish.",
+            behavior: "The sequential path now reads as a trader-friendly story: state + KSA time + one-line meaning + detailed evidence. The interpretation is diagnostic UI only and never writes a signal, changes a score, changes Replay, or changes execution.",
+            regression: "PEPE #108246 should explain WATCH 66 as supportive direction/momentum with insufficient participation/confirmation. PEPE #108276 should explain STRONG_BUY 86 as strong aligned trend/participation/momentum. Verify blocked entries and ATR WAIT phases explain the blocker. node --check trade-inspector.js passes."
         }
 
 ];

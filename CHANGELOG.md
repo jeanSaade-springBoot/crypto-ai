@@ -1,5 +1,14 @@
 # Change Log
 
+## FIX-029 — Trade Path human-readable decision meaning
+
+- Added a prominent **What this means** sentence to every Trade Inspector View Path phase.
+- The sentence summarizes the persisted score, trend, momentum, volume/participation, HTF confirmation, ATR state and veto state into one trader-readable conclusion.
+- PEPE #108246 WATCH 66 now explains that direction/momentum are supportive but participation/confirmation is insufficient.
+- PEPE #108276 STRONG_BUY 86 now explains that strong trend, participation and momentum align for the stronger decision.
+- Blocked and ATR-wait phases explicitly explain the blocker instead of sounding actionable.
+- Display-only change: Production, Replay, scoring, BUY/SELL, TP/SL and position-management behavior are unchanged.
+
 ## FIX-028 — Production exit audit truth
 
 - Added immutable `production_exit_audit` persistence (Flyway V61).
