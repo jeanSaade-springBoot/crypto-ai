@@ -216,6 +216,7 @@ public class ExecutionIntelligenceService {
     private final TradeSignalRepository signalRepository;
     private final ExecutionOpportunityRepository opportunityRepository;
     private final PressureReadinessService pressureReadinessService;
+    private final RecoveryTransitionService recoveryTransitionService;
     @Autowired(required = false)
     private ExecutionReplayScope replayScope;
 
@@ -632,6 +633,27 @@ public class ExecutionIntelligenceService {
                     pressureProbe.source(), pressureProbe.positionPercent(),
                     pressureProbe.code(), pressureProbe.explanation());
             return pressureProbe;
+        }
+
+        // FIX-026 / ENAUSDT 2026-08-20 12:55-13:04 KSA:
+        // The market can transition from a recently bearish 1m state into absorption and
+        // then a confirmed recovery before the ordinary strategy label leaves RANGE. The
+        // historical ENA regression moved from STRONG_SELL 15 -> WATCH 75 while three
+        // CLOSED candles printed 85.26%, 87.47% and 73.91% taker-buy pressure and rising
+        // closes. Waiting for a later conventional BUY gave away the early edge. This route
+        // does NOT lower BUY thresholds or rewrite RANGE: it allows only a 25% recovery probe
+        // after (a) a recent bearish state, (b) a closed-candle absorption/recovery sequence,
+        // (c) strong current technical recovery, and (d) all existing ATR/context hard gates.
+        // RecoveryTransitionService selects candles by close_time <= signal.generated_at, so
+        // Production and Proven/Replay cannot inspect the still-open or future candle.
+        ExecutionDecision recoveryTransition = recoveryTransitionDecision(signal, evidence);
+        if (recoveryTransition != null) {
+            recoveryTransition = applyInitialEntryQualityGuard(recoveryTransition, entryQuality);
+            saveOpportunity(signal, evidence,
+                    recoveryTransition.allowed() ? "CONFIRMED" : recoveryTransition.state(),
+                    recoveryTransition.source(), recoveryTransition.positionPercent(),
+                    recoveryTransition.code(), recoveryTransition.explanation());
+            return recoveryTransition;
         }
 
         // Intelligent evidence path: BUY and strong WATCH observations can build one opportunity.
@@ -1394,6 +1416,59 @@ public class ExecutionIntelligenceService {
      * sequence using only candles closed as-of the current signal timestamp. This does
      * not weaken the normal 1h veto for normal-sized trades.</p>
      */
+
+    /**
+     * FIX-026 recovery-transition probe. Normal direct BUY and the proven pressure-probe
+     * route already had priority before this method. This is intentionally a small,
+     * state-transition exception for WATCH/NEUTRAL only; it never converts a bearish
+     * current signal and it never bypasses a hard risk/context veto.
+     */
+    private ExecutionDecision recoveryTransitionDecision(TradeSignal current, Evidence evidence) {
+        if (current == null || current.getGeneratedAt() == null) return null;
+        if (current.getDecision() != SignalDecision.WATCH && current.getDecision() != SignalDecision.NEUTRAL) return null;
+        if (current.getTotalScore() < 72 || current.getConfidenceScore() < 68
+                || current.getTrendScore() < 20 || current.getMomentumScore() < 14) return null;
+
+        // Keep all production hard authorities intact. The ENA case had every one of these
+        // gates open; this probe must not manufacture permission when ATR, liquidity, BTC,
+        // derivatives, confluence, strategy or FinalDecision has already vetoed entry.
+        if (!current.isFinalEntryAllowed() || !current.isStrategyEntryAllowed()
+                || !current.isConfluenceEntryAllowed() || !current.isAtrImmediateEntryAllowed()
+                || !current.isBtcContextEntryAllowed() || !current.isLiquidityEntryAllowed()
+                || !current.isDerivativesEntryAllowed()) return null;
+
+        Instant bearishCutoff = current.getGeneratedAt().minus(Duration.ofMinutes(10));
+        TradeSignal recentBearish = recentSignals(current.getSymbol(), EXECUTION_INTERVAL, current.getGeneratedAt()).stream()
+                .filter(s -> s != null && s.getGeneratedAt() != null && s.getGeneratedAt().isBefore(current.getGeneratedAt()))
+                .filter(s -> !s.getGeneratedAt().isBefore(bearishCutoff))
+                .filter(s -> isBearish(strongerDecision(s.getDecision(), s.getOriginalDecision())))
+                .filter(s -> s.getTotalScore() <= 35)
+                .findFirst().orElse(null);
+        if (recentBearish == null) return null;
+
+        TradeSignal five = latestAtOrBefore(current, CONFIRMATION_INTERVAL, FIVE_MINUTE_MAX_AGE);
+        TradeSignal oneHour = latestAtOrBefore(current, TREND_INTERVAL, ONE_HOUR_MAX_AGE);
+        if (five == null || oneHour == null) return null;
+        SignalDecision fiveDecision = strongerDecision(five.getDecision(), five.getOriginalDecision());
+        SignalDecision oneHourDecision = strongerDecision(oneHour.getDecision(), oneHour.getOriginalDecision());
+        if (isBearish(fiveDecision) || isBearish(oneHourDecision)) return null;
+
+        RecoveryTransitionService.Result recovery = recoveryTransitionService.evaluate(current);
+        if (recovery == null || !recovery.probeReady()) return null;
+
+        return ExecutionDecision.allow(
+                "RECOVERY_TRANSITION_ENTRY",
+                "ABSORPTION_RECOVERY_PROBE",
+                25,
+                "Recovery-transition probe approved after recent bearish signal #" + recentBearish.getId()
+                        + " (score=" + recentBearish.getTotalScore() + ") recovered into current "
+                        + current.getDecision() + " " + current.getTotalScore()
+                        + " (trend=" + current.getTrendScore() + ", momentum=" + current.getMomentumScore()
+                        + "). " + recovery.explanation() + " 5m=" + fiveDecision
+                        + ", 1h=" + oneHourDecision + ". Exposure is capped at 25% until ordinary confirmation adds.",
+                evidence);
+    }
+
     private ExecutionDecision pressureProbeDecision(TradeSignal current, Evidence e) {
         if (current == null || current.getGeneratedAt() == null) return null;
 

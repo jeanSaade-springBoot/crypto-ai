@@ -113,6 +113,10 @@ public class ShadowProductionReplayService {
             if ("1m".equals(signal.getInterval())) {
                 int currentAllocation = open == null ? 0 : open.positionPercent();
                 String currentStage = replayStage(currentAllocation);
+                // FIX-026 parity: Recovery/Transition Entry is intentionally NOT reimplemented here.
+                // Replay enters the exact production ExecutionIntelligenceService, which delegates to
+                // RecoveryTransitionService using only candles closed as-of this historical signal.
+                // This protects the ENA 12:55-13:04 KSA regression from replay-only future leakage.
                 decision = executionIntelligenceService.evaluateBuy(signal, currentAllocation, currentStage);
             } else if ("5m".equals(signal.getInterval()) && open == null) {
                 ExecutionIntelligenceService.SetupWakeupEvaluation wakeup =

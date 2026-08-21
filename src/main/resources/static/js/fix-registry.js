@@ -573,6 +573,30 @@
             solution: "Extend the read-only path endpoint across the exact BUY-to-SELL time window. Return all executed wallet events for the symbol, meaningful persisted trade signals while the position is open, and the latest 1m/5m/1h context at the SELL timestamp. Render them chronologically with elapsed time between states. Mechanical STOP_LOSS/TAKE_PROFIT exits remain visible even when wallet_trade.signal_id is null because exit-time context is resolved independently.",
             behavior: "View Path now continues from opportunity/entry through confirmation or scale-in BUYs, changing 1m/5m/1h market states, profit-lock activation when present, exit context and the final wallet SELL. The overlay also shows separate entry and exit timeframe cards so the user can compare what changed during the holding period.",
             regression: "Diagnostic-only protection. Verify a simple BUY->SELL trade, a scout plus confirmation-add trade, and a mechanical STOP_LOSS/TAKE_PROFIT trade. The final timeline must end at the selected wallet SELL, holding time must match BUY->SELL duration, and no production/replay decision code may be invoked or mutated by View Path."
+        },
+        {
+            id: "FIX-026",
+            title: "Recovery transition probe catches absorption -> buyer-pressure recovery before normal BUY",
+            status: "Implemented",
+            scenario: "ENAUSDT 2026-08-20 12:55-13:04 KSA - STRONG_SELL recovery into WATCH 75 while taker buyers repeatedly absorbed supply",
+            symbol: "ENAUSDT",
+            entry: "Suggested recovery probe around 0.0971 at 13:04:51 KSA; initial exposure capped at 25%",
+            exit: "Not an exit-policy fix; ordinary position management remains authoritative after entry",
+            entryTime: "2026-08-20 13:04:51 KSA (DB/Binance 10:04:51 UTC)",
+            exitTime: "Scenario validation should continue through the later expansion/normal exit; this fix changes entry detection only",
+            replayWindow: "KSA 2026-08-20 12:45-13:15 (DB/Binance 09:45-10:15 UTC). Proven replay must reproduce Production using only closed candles as-of each signal.",
+            location: "Execution Intelligence early-entry routes -> RecoveryTransitionService",
+            classes: [
+                "com.crypto.execution.service.RecoveryTransitionService",
+                "com.crypto.execution.service.ExecutionIntelligenceService",
+                "com.crypto.regression.service.ShadowProductionReplayService",
+                "com.crypto.execution.service.RecoveryTransitionServiceTest",
+                "com.crypto.execution.service.ExecutionIntelligenceServiceTest"
+            ],
+            cause: "The normal strategy snapshot correctly remained RANGE_MEAN_REVERSION/WATCH at signal #101305, but it underweighted the speed of the state transition. ENA had recently been STRONG_SELL 15, then stabilized near 0.0963, printed strong taker-buy absorption, pulled back, and the last three fully closed candles before #101305 showed 85.26%, 87.47% and 73.91% taker-buy pressure while closes rose 0.0967 -> 0.0969 -> 0.0971. Trend recovered to 21/25 and momentum to 15/15, yet no reduced entry was available until conventional confirmation later.",
+            solution: "Add a separate Recovery Transition Entry path without lowering normal BUY thresholds or rewriting market regime. It requires WATCH/NEUTRAL current state with score >=72, confidence >=68, trend >=20 and momentum >=14; a recent <=35 bearish 1m state; non-bearish fresh 5m/1h context; all existing FinalDecision/strategy/confluence/ATR/BTC/liquidity/derivatives entry gates open; and a closed-candle sequence proving prior >=80% taker-buy absorption, a <=25% taker-buy pullback/test, then three consecutive >=70% taker-buy recovery candles with rising closes and >=0.30% price advance. Approved exposure is only 25% and later adds still require ordinary confirmation.",
+            behavior: "A fast bearish -> absorption -> recovery transition can open a small RECOVERY_TRANSITION_ENTRY probe while the static strategy remains WATCH. A single high taker-buy candle is never enough. Hard context/risk vetoes still block, current bearish signals never use the route, and normal BUY/Pressure Probe paths keep priority.",
+            regression: "ENA anchor: at #101305 around 13:04:51 KSA use only candles closed through 13:03 KSA; the still-open 13:04 candle and 13:06-13:07 expansion must be invisible. Expected source=RECOVERY_TRANSITION_ENTRY, code=ABSORPTION_RECOVERY_PROBE, size<=25%. Negative regression: three recovery candles below 70% taker buy must not trigger. Production and Proven/Replay call the same ExecutionIntelligenceService -> RecoveryTransitionService path; no replay-only formula is permitted."
         }
 
 ];

@@ -36,6 +36,7 @@ class ExecutionIntelligenceServiceTest {
     @Mock TradeSignalRepository signalRepository;
     @Mock ExecutionOpportunityRepository opportunityRepository;
     @Mock PressureReadinessService pressureReadinessService;
+    @Mock RecoveryTransitionService recoveryTransitionService;
 
     private ExecutionIntelligenceService service;
     private Instant now;
@@ -43,12 +44,14 @@ class ExecutionIntelligenceServiceTest {
     @BeforeEach
     void setUp() {
         service = new ExecutionIntelligenceService(properties, validationService, consolidationService,
-                signalRepository, opportunityRepository, pressureReadinessService);
+                signalRepository, opportunityRepository, pressureReadinessService, recoveryTransitionService);
         now = Instant.parse("2026-08-08T10:00:00Z");
         when(opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(any(), any(), any()))
                 .thenReturn(Optional.empty());
         // FIX-021 default: existing accumulated-evidence tests continue under an allowed
         // HTF authority unless the test explicitly models a profile rejection.
+        lenient().when(recoveryTransitionService.evaluate(any())).thenReturn(
+                new RecoveryTransitionService.Result(false, null, null, 0d, "test default"));
         lenient().when(validationService.validateBuyContext(any())).thenReturn(
                 TradeExecutionValidationService.ValidationResult.allow(50, "BALANCED_EARLY", "test authority"));
     }
@@ -1364,6 +1367,45 @@ class ExecutionIntelligenceServiceTest {
         assertThat(decision.allowed()).isTrue();
         assertThat(decision.source()).isEqualTo("IMMEDIATE_VALIDATION");
         assertThat(decision.code()).isEqualTo("NORMAL_BUY");
+    }
+
+
+    @Test
+    void recoveryTransitionProbeUsesCurrentWatchAfterRecentBearishStateWithoutChangingNormalBuyThresholds() {
+        TradeSignal current = signal(101305L, "ENAUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 75, 71);
+        current.setTrendScore(21);
+        current.setMomentumScore(15);
+        current.setVolumeScore(7);
+        current.setAtrImmediateEntryAllowed(true);
+        current.setFinalEntryAllowed(true);
+        current.setStrategyEntryAllowed(true);
+        current.setConfluenceEntryAllowed(true);
+        current.setBtcContextEntryAllowed(true);
+        current.setLiquidityEntryAllowed(true);
+        current.setDerivativesEntryAllowed(true);
+        current.setLatestPrice(new BigDecimal("0.0971"));
+        current.setStopLoss(new BigDecimal("0.0966"));
+        current.setTakeProfit(new BigDecimal("0.0982"));
+        current.setAtrAtSignal(new BigDecimal("0.000209"));
+
+        TradeSignal priorBearish = signal(101268L, "ENAUSDT", "1m", SignalDecision.NEUTRAL, SignalDecision.STRONG_SELL,
+                now.minusSeconds(6 * 60), 15, 61);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("ENAUSDT", "1m"))
+                .thenReturn(List.of(current, priorBearish));
+        context("ENAUSDT", "5m", SignalDecision.NEUTRAL, now.minusSeconds(60));
+        context("ENAUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));
+        when(recoveryTransitionService.evaluate(current)).thenReturn(
+                new RecoveryTransitionService.Result(true, now.minusSeconds(180), now.minusSeconds(1), 0.0041d,
+                        "closed-candle ENA recovery regression"));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.source()).isEqualTo("RECOVERY_TRANSITION_ENTRY");
+        assertThat(decision.code()).isEqualTo("ABSORPTION_RECOVERY_PROBE");
+        assertThat(decision.positionPercent()).isLessThanOrEqualTo(25);
+        assertThat(current.getDecision()).isEqualTo(SignalDecision.WATCH);
     }
 
 }
