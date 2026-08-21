@@ -157,3 +157,15 @@ body.inspector-modal-open{overflow:hidden}
 .venue-badge{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;font-size:10px;font-weight:900;letter-spacing:.08em;border:1px solid var(--border)}
 .venue-badge.wallet{background:rgba(85,167,255,.12);color:#8fc7ff}
 .venue-badge.binance{background:rgba(247,201,72,.14);color:#f7c948}
+
+/* FIX-033: expandable, read-only Base Technical scoring tree in Trade Inspector View Path. */
+.base-tech-details{margin:1px 0 4px;border:1px solid rgba(86,178,255,.16);border-radius:8px;background:rgba(7,18,29,.72);overflow:hidden}
+.base-tech-details summary{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;cursor:pointer;padding:7px 8px;list-style:none;font-size:9px;color:#9dc8e7}
+.base-tech-details summary::-webkit-details-marker{display:none}.base-tech-details summary:before{content:'▸';margin-right:5px;color:var(--accent)}.base-tech-details[open] summary:before{content:'▾'}
+.base-tech-details summary span{font-weight:800}.base-tech-details summary strong{color:var(--accent);font-variant-numeric:tabular-nums}
+.base-tech-body{display:grid;gap:7px;padding:0 8px 8px;border-top:1px solid rgba(141,162,177,.10)}
+.base-tech-group{display:grid;gap:2px;padding-top:7px}.base-tech-group+.base-tech-group{border-top:1px dashed rgba(141,162,177,.10)}
+.base-tech-group-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:2px}.base-tech-group-head strong{font-size:9px;color:#d8e8f3}.base-tech-group-head span{font-size:8px;color:var(--accent);font-weight:800}
+.base-tech-row{display:grid;grid-template-columns:88px 48px 1fr;gap:5px;align-items:start;padding:3px 0}.base-tech-row span{font-size:8px;color:var(--muted)}.base-tech-row strong{font-size:8px;color:var(--text);font-variant-numeric:tabular-nums}.base-tech-row small{font-size:7.5px;line-height:1.25;color:#7891a4}
+.base-tech-group.diagnostic{opacity:.84}.base-tech-group.diagnostic .base-tech-group-head span{color:#8fa1af}
+@media(max-width:760px){.base-tech-row{grid-template-columns:100px 54px 1fr}}

@@ -39,3 +39,10 @@
 - Moved Paper Wallet and Binance user account out of Administration into first-class left-menu pages.
 - Added user-scoped rolling/circuit-breaker configuration and Trade Inspector execution-venue tags/filter.
 - No trading behavior changed.
+## FIX-033 — Trade Path Base Technical scoring detail
+- Added an expandable Base Technical scoring tree to every Trade Inspector View Path signal phase.
+- Shows category totals and exact persisted criteria scores: Trend Direction/Structure/Strength/Price Location, Bollinger, Relative Volume, Volume SMA20, RSI and MACD.
+- Sentiment and Fundamentals show availability/exclusion state.
+- EMA cross / price-vs-EMA200 / EMA alignment / SMA20 are shown as diagnostics and explicitly marked not to be double-counted.
+- Diagnostic/UI only; no Production, Replay, scoring or execution behavior changed.
+

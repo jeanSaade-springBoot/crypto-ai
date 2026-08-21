@@ -565,6 +565,54 @@ function technicalInterpretation(s){
   if(!Number.isFinite(raw)||!Number.isFinite(max)||max<=0)return 'Persisted base technical evidence';
   const pct=raw/max*100;return pct>=72?'Strong raw technical evidence':pct>=60?'Supportive raw technical evidence':'Weak raw technical evidence';
 }
+// FIX-033: Base Technical must be auditable from the path itself. This renderer only
+// exposes persisted component scores already stored on trade_signal; it never recomputes
+// the signal or changes Production/Replay behavior. The scoring tree mirrors the engine's
+// base categories so the user can see exactly where every available technical point came from.
+function technicalScoreRow(label,score,max,interpretation=''){
+  const value=score===null||score===undefined?'—':`${score}/${max}`;
+  return `<div class="base-tech-row"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(interpretation||'Persisted score')}</small></div>`;
+}
+function baseTechnicalDetailsHtml(s){
+  if(!s||!s.id)return '';
+  const sentimentState=s.sentimentAvailable===false?'Excluded / unavailable':'Included';
+  const fundamentalState=s.fundamentalAvailable===false?'Excluded / unavailable':'Included';
+  return `<details class="base-tech-details">
+    <summary><span>Base technical detail</span><strong>${esc(`${s.rawScore??'—'}/${s.maximumAvailableScore??'—'}`)}</strong></summary>
+    <div class="base-tech-body">
+      <div class="base-tech-group">
+        <div class="base-tech-group-head"><strong>Trend</strong><span>${esc(`${s.trend??'—'}/25`)}</span></div>
+        ${technicalScoreRow('Trend direction',s.trendDirection,8,'Directional structure')}
+        ${technicalScoreRow('Trend structure',s.trendStructure,7,'Higher highs/lows and alignment')}
+        ${technicalScoreRow('Trend strength',s.trendStrength,6,'Strength / persistence')}
+        ${technicalScoreRow('Price location',s.trendPriceLocation,4,'Price location within trend')}
+      </div>
+      <div class="base-tech-group">
+        <div class="base-tech-group-head"><strong>Volume</strong><span>${esc(`${s.volume??'—'}/20`)}</span></div>
+        ${technicalScoreRow('Bollinger Bands',s.bollinger,6,'Price/volatility band evidence')}
+        ${technicalScoreRow('Relative volume',s.relativeVolume,8,'RVOL participation')}
+        ${technicalScoreRow('Volume vs SMA20',s.volumeSma20,6,'Volume confirmation vs baseline')}
+      </div>
+      <div class="base-tech-group">
+        <div class="base-tech-group-head"><strong>Momentum</strong><span>${esc(`${s.momentum??'—'}/15`)}</span></div>
+        ${technicalScoreRow('RSI',s.rsi,7,'RSI momentum contribution')}
+        ${technicalScoreRow('MACD',s.macd,8,'MACD confirmation contribution')}
+      </div>
+      <div class="base-tech-group compact">
+        <div class="base-tech-group-head"><strong>Optional categories</strong><span>availability-aware</span></div>
+        ${technicalScoreRow('Sentiment',s.sentiment,15,sentimentState)}
+        ${technicalScoreRow('Fundamentals',s.fundamental,10,fundamentalState)}
+      </div>
+      <div class="base-tech-group diagnostic">
+        <div class="base-tech-group-head"><strong>Trend diagnostics</strong><span>not extra points</span></div>
+        ${technicalScoreRow('EMA cross',s.emaCross,'—','Persisted diagnostic; do not add again to Trend total')}
+        ${technicalScoreRow('Price vs EMA200',s.priceEma200,'—','Persisted diagnostic; do not add again to Trend total')}
+        ${technicalScoreRow('EMA alignment',s.emaAlignment,'—','Persisted diagnostic; do not add again to Trend total')}
+        ${technicalScoreRow('SMA20',s.sma20,'—','Persisted diagnostic; do not add again to Trend total')}
+      </div>
+    </div>
+  </details>`;
+}
 function atrInterpretation(s){
   if(s.atrImmediateEntryAllowed===false)return `WAIT / ${s.atrEntryType||'ATR block'}`;
   return `${s.atrEntryType||'ENTRY'} · ${s.atrRecommendedPositionPercent??'—'}% allowed`;
@@ -630,6 +678,7 @@ function signalEvidenceHtml(s){
     <div class="path-phase-metric path-phase-columns"><span>Component</span><strong>Result</strong><small>Interpretation</small></div>
     ${phaseMetric('Displayed total',`${s.score??'—'}/100`,scoreInterpretation(s.score),'primary')}
     ${phaseMetric('Base technical',raw,technicalInterpretation(s))}
+    ${baseTechnicalDetailsHtml(s)}
     ${phaseMetric('Trend',`${s.trend??'—'}/25`,trendInterpretation(s.trend))}
     ${phaseMetric('Momentum',`${s.momentum??'—'}/15`,momentumInterpretation(s.momentum))}
     ${phaseMetric('BUY pressure',s.takerBuyPercent==null?'—':`${Number(s.takerBuyPercent).toFixed(2)}%`,pressureInterpretation(s.takerBuyPercent))}
