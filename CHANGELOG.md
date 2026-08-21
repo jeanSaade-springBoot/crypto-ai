@@ -18,3 +18,8 @@
 - Added legacy fallback through `paper_position`, so historical BTC #145 displays TAKE_PROFIT even though its old wallet row says SIGNAL_SELL.
 - Added focused `ProductionExitAuditServiceTest` for BTC #145 / signal #105688 / Position Analysis #1234.
 - Trading behavior, TP/SL thresholds, continuation logic, sizing, scoring, and Replay execution are unchanged.
+
+## FIX-030 — Trade Path Performance Context
+- Added Holding Time, Holding Efficiency (realized positive return / MFE), and latest-20-trade Profit Factor to Trade Inspector View Path.
+- Profit Factor is explicitly displayed as recent-system context rather than a per-trade metric.
+- Diagnostic/UI only; no Production or Replay trading behavior changed.

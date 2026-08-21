@@ -724,6 +724,19 @@ function buildSimpleTradePhases(data){
   phases.push({name:'EXIT',time:data.closedAt,s:exitSignal,kind:'sell',subtitle:`${data.actualExitTrigger||data.exitExecutionReason||'EXIT'} @ ${price(data.exitPrice)}${contextText} · ${pct(data.realizedPnlPercent)}`});
   return phases.sort((a,b)=>new Date(a.time)-new Date(b.time));
 }
+function pathProfitFactor(value){
+  const n=Number(value);
+  if(!Number.isFinite(n))return '—';
+  return n>=999?'∞':n.toFixed(2);
+}
+function holdingEfficiencyMeaning(value){
+  const n=Number(value||0);
+  if(n>=85)return 'Excellent capture of the favorable move';
+  if(n>=65)return 'Good capture; limited profit giveback';
+  if(n>=40)return 'Moderate capture; meaningful move was left on the table';
+  if(n>0)return 'Low capture; most favorable movement was given back';
+  return 'No positive favorable move was realized';
+}
 function renderTradePath(data){
   $('inspected-trade-path-title').textContent=`${String(data.symbol||'').toUpperCase()} · full trade path`;
   $('inspected-trade-path-summary').innerHTML=`BUY <strong>${price(data.entryPrice)}</strong> · ${ksaDateTime(data.openedAt)} → SELL <strong>${price(data.exitPrice)}</strong> · ${ksaDateTime(data.closedAt)} · holding <strong>${secondsLabel(data.holdingSeconds)}</strong> · P&amp;L <strong class="${cls(data.realizedPnlPercent)}">${pct(data.realizedPnlPercent)}</strong>`;
@@ -734,9 +747,17 @@ function renderTradePath(data){
   }).join('');
   const entry=data.entrySignal||data.oneMinute||{};
   const rawChecks=decisionPathRows(data.decisionPath);
+  const perf=data.performance||{};
+  const recent=data.recentPerformance||{};
+  const efficiency=Number(perf.holdingEfficiencyPercent||0);
   $('inspected-trade-path-content').innerHTML=`
     <section class="trade-path-one-look">
       <div class="trade-path-one-look-head"><div><h3>Sequential decision & position path</h3><p>One-look state machine · all timestamps KSA · persisted Production evidence</p></div><div class="trade-path-hold"><span>Holding time</span><strong>${secondsLabel(data.holdingSeconds)}</strong></div></div>
+      <div class="trade-path-performance">
+        <div><span>Holding time</span><strong>${secondsLabel(data.holdingSeconds)}</strong><small>BUY execution → real production exit</small></div>
+        <div><span>Holding efficiency</span><strong>${Number.isFinite(efficiency)?efficiency.toFixed(1):'—'}%</strong><small>${esc(holdingEfficiencyMeaning(efficiency))} · MFE ${pct(perf.mfePercent)}</small></div>
+        <div><span>Recent profit factor</span><strong>${pathProfitFactor(recent.profitFactor)}</strong><small>Latest ${esc(recent.windowTrades??0)} completed trades · WR ${pct(recent.winRate)}</small></div>
+      </div>
       <div class="trade-path-phase-flow">${nodes}</div>
     </section>
     <details class="trade-path-details"><summary>Production exit audit</summary>${data.exitAudit&&Object.keys(data.exitAudit).length?`<pre class="trade-path-json">${esc(JSON.stringify(data.exitAudit,null,2))}</pre>`:'<div class="empty">No dedicated audit row exists for this legacy trade; paper_position fallback is used.</div>'}</details>

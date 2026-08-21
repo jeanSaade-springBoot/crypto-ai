@@ -144,3 +144,11 @@ body.inspector-modal-open{overflow:hidden}
 .path-phase-meaning{display:grid;gap:4px;padding:8px 9px;margin:0 0 5px;border:1px solid rgba(86,178,255,.22);border-radius:8px;background:rgba(86,178,255,.055)}
 .path-phase-meaning span{font-size:8px;text-transform:uppercase;letter-spacing:.07em;font-weight:900;color:#78bdf0}
 .path-phase-meaning strong{font-size:9px;line-height:1.4;color:#d8e8f3;font-weight:700}
+
+/* FIX-030: compact performance strip inside View Path. Diagnostic only. */
+.trade-path-performance{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:12px 0 16px}
+.trade-path-performance>div{border:1px solid rgba(148,163,184,.22);border-radius:12px;padding:10px 12px;background:rgba(15,23,42,.42);display:flex;flex-direction:column;gap:3px}
+.trade-path-performance span{font-size:11px;text-transform:uppercase;letter-spacing:.06em;opacity:.72}
+.trade-path-performance strong{font-size:18px}
+.trade-path-performance small{font-size:11px;line-height:1.35;opacity:.75}
+@media(max-width:760px){.trade-path-performance{grid-template-columns:1fr}}

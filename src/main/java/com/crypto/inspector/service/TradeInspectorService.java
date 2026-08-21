@@ -288,6 +288,56 @@ public class TradeInspectorService {
         return new ExitAssessment("NEUTRAL_EXIT", "Price stayed within ±0.50% of the exit during the observed post-exit window.");
     }
 
+    /**
+     * FIX-030: read-only trade-level performance metrics for the one-look View Path.
+     * Holding efficiency intentionally uses MFE capture rather than a subjective time target:
+     * realized positive return / maximum favorable excursion, capped at 100%.
+     */
+    private Map<String, Object> tradePerformanceView(TradeInspectorTradeView trade) {
+        if (trade == null) return Map.of();
+        BigDecimal realized = nz(trade.realizedPnlPercent());
+        BigDecimal mfe = nz(trade.maximumFavorablePercent());
+        BigDecimal holdingEfficiency = BigDecimal.ZERO;
+        if (realized.signum() > 0 && mfe.signum() > 0) {
+            holdingEfficiency = realized.multiply(HUNDRED)
+                    .divide(mfe, 2, RoundingMode.HALF_UP)
+                    .min(HUNDRED).max(BigDecimal.ZERO);
+        }
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("holdingMinutes", trade.holdingMinutes());
+        m.put("mfePercent", trade.maximumFavorablePercent());
+        m.put("maePercent", trade.maximumAdversePercent());
+        m.put("holdingEfficiencyPercent", holdingEfficiency);
+        m.put("exitQuality", trade.exitQuality());
+        m.put("exitQualityExplanation", trade.exitQualityExplanation());
+        return m;
+    }
+
+    /**
+     * FIX-030: profit factor belongs to a sample of trades, not to one individual trade.
+     * The path therefore shows the latest N completed trades as context while keeping the
+     * individual node focused on its own holding time / MFE capture.
+     */
+    private Map<String, Object> recentPerformanceContext(int requestedWindow) {
+        int window = Math.max(1, Math.min(requestedWindow, 100));
+        List<WalletTrade> sells = walletTradeRepository.findRecentClosedTrades(PageRequest.of(0, window));
+        List<WalletTrade> ledger = walletTradeRepository.findTop100ByOrderByExecutedAtDesc();
+        List<TradeInspectorTradeView> recent = new ArrayList<>();
+        for (WalletTrade sell : sells) {
+            WalletTrade buy = findEntryTrade(sell, ledger);
+            if (buy != null) recent.add(toView(buy, sell));
+        }
+        TradeInspectorSummary s = summary(recent);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("windowTrades", s.trades());
+        m.put("profitFactor", s.profitFactor());
+        m.put("winRate", s.winRate());
+        m.put("wins", s.wins());
+        m.put("losses", s.losses());
+        m.put("netPnl", s.netPnl());
+        return m;
+    }
+
     private TradeInspectorSummary summary(List<TradeInspectorTradeView> trades) {
         int wins = (int) trades.stream().filter(t -> nz(t.realizedPnl()).signum() > 0).count();
         int losses = (int) trades.stream().filter(t -> nz(t.realizedPnl()).signum() < 0).count();
@@ -384,6 +434,14 @@ public class TradeInspectorService {
         result.put("exitAudit", exitAuditView(exitAudit, paper));
         result.put("exitPositionAnalysis", positionAnalysisView(exitPositionAnalysis));
         result.put("realizedPnlPercent", sell.getRealizedPnlPercent());
+
+        // FIX-030: Trade-path performance context is diagnostic only. Holding efficiency
+        // measures how much of the favorable move was actually captured by the exit;
+        // recent profit factor provides system context and is never used by execution.
+        TradeInspectorTradeView completedTrade = toView(buy, sell);
+        result.put("performance", tradePerformanceView(completedTrade));
+        result.put("recentPerformance", recentPerformanceContext(20));
+
         result.put("opportunity", opportunityView(opportunity));
         result.put("oneMinute", signalPathView(oneMinute));
         result.put("fiveMinute", signalPathView(fiveMinute));
