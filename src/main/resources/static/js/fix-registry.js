@@ -711,7 +711,25 @@
             behavior: "Administration contains system/market configuration only. Wallet remains the existing internal execution/shadow account. Binance contains only the logged-in user's credentials and LIVE_MICRO safety configuration. BINANCE Trade Inspector results remain empty until genuine Binance fills exist; shadow rows are never relabeled as real executions.",
             regression: "Verify /wallet preserves current wallet configuration/assets/trades; /binance persists only the authenticated user's V63 limits; /administration contains no wallet/binance account forms; Trade Inspector WALLET shows current trades and BINANCE shows none before the live bridge. Existing Production/Replay strategy tests must remain unchanged."
         }
-
+,
+        {
+            id: "FIX-035",
+            title: "Independent BUY/SELL signal refresh and execution filters",
+            status: "DONE",
+            scenario: "Dashboard BUY and SELL signal evidence needs its own cadence and short rolling windows without coupling to the heavy dashboard refresh.",
+            symbol: "ALL",
+            entry: "N/A",
+            exit: "N/A",
+            entryTime: "N/A",
+            exitTime: "N/A",
+            replayWindow: "No replay required; display/data-loading behavior only",
+            location: "Dashboard BUY and SELL signals panel + /api/dashboard/signals",
+            classes: ["DashboardApiController", "WalletTradeRepository", "dashboard.js", "dashboard.html"],
+            cause: "Signal evidence shared the dashboard lifecycle and offered broad day-based periods only. Executed and blocked BUY states could not be isolated for focused review.",
+            solution: "Give the signal evidence board its own timer and Load action; add KSA-aware Today/4h/2h/1h/all-time windows and batched execution-state filtering.",
+            behavior: "Users can review all actionable signals, wallet-executed BUY/SELL positions, or BUY positions blocked by the final entry gate using an independent Off/10s/1m/5m refresh cadence.",
+            regression: "Diagnostic/data-loading only. Production, Replay, scoring, BUY/SELL, Execution Intelligence, TP/SL, Wallet, Binance and position management remain unchanged."
+        }
 ];
 
     const list = document.getElementById("fix-registry-list");

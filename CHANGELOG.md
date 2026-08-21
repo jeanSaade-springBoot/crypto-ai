@@ -1,5 +1,16 @@
 # Change Log
 
+## FIX-035 — Independent BUY/SELL signal refresh and execution filters
+
+- Added an independent BUY/SELL signal refresh selector: Off/on-demand, 10 seconds, 1 minute, or 5 minutes.
+- Added a dedicated Load button flow; the normal dashboard refresh no longer silently reloads the signal evidence table.
+- Replaced the broad historical periods with Today, Last 4 hours, Last 2 hours, Last 1 hour, and All time. Today is resolved using Asia/Riyadh while persisted timestamps remain UTC.
+- Added execution-status filtering for all actionable BUY/SELL signals, wallet-executed BUY/SELL positions, and BUY positions blocked by the final entry gate.
+- BUY rows blocked by `final_entry_allowed=false` now display `BUY POSITION BLOCKED` instead of the generic `NOT EXECUTED` state.
+- Added batched wallet-execution lookup so filtering does not issue one database query per signal.
+- Display/data-loading only: scoring, Production, Replay, BUY/SELL decisions, Execution Intelligence, TP/SL, Wallet and Binance behavior are unchanged.
+
+
 ## FIX-031 — Logged-in-user Crypto Account configuration
 
 - Added `crypto_account_configuration` (Flyway V62), uniquely scoped by `app_user` + exchange.
@@ -46,3 +57,9 @@
 - EMA cross / price-vs-EMA200 / EMA alignment / SMA20 are shown as diagnostics and explicitly marked not to be double-counted.
 - Diagnostic/UI only; no Production, Replay, scoring or execution behavior changed.
 
+
+
+## FIX-034 — Remove automatic executions from Wallet page
+- Removed the `AUTOMATIC EXECUTIONS / Wallet trades` panel from Wallet.
+- Removed its frontend renderer while preserving all wallet-trade persistence and Trade Inspector history.
+- UI-only; no trading or execution behavior changed.

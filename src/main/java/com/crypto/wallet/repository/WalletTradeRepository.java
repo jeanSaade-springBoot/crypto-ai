@@ -22,6 +22,10 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
     java.util.Optional<WalletTrade> findTopBySignalIdAndStatusOrderByExecutedAtDesc(
             Long signalId, String status);
 
+    // FIX-035: Dashboard signal evidence resolves execution state in one batch so the
+    // EXECUTED / BUY_BLOCKED filters do not create one wallet query per signal row.
+    List<WalletTrade> findBySignal_IdInAndStatus(List<Long> signalIds, String status);
+
     @Query("select coalesce(sum(t.realizedPnlUsdt), 0) from WalletTrade t where t.status='EXECUTED'")
     BigDecimal totalRealizedPnl();
 

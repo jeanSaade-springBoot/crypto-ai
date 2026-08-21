@@ -82,17 +82,10 @@ async function load() {
                 <td class="${pnlClass(asset.unrealizedPnlUsdt)}">${money(asset.unrealizedPnlUsdt)} <small>${n(asset.unrealizedPnlPercent).toFixed(2)}%</small></td>
             </tr>`).join('') || '<tr><td colspan="7">No assets</td></tr>';
 
-        byId('trade-body').innerHTML = (data.trades || []).map(trade => `
-            <tr>
-                <td>${window.CryptoTime.formatLocal(trade.executedAt)}</td>
-                <td>${trade.signalId || '—'}</td>
-                <td>${trade.symbol}</td>
-                <td><span class="badge ${trade.side === 'BUY' ? 'positive' : 'negative'}">${trade.side}</span></td>
-                <td>${qty(trade.quantity)}</td>
-                <td>${money(trade.priceUsdt)}</td>
-                <td>${money(trade.netAmountUsdt)}</td>
-                <td class="${pnlClass(trade.realizedPnlUsdt)}">${trade.realizedPnlUsdt == null ? '—' : money(trade.realizedPnlUsdt)}</td>
-            </tr>`).join('') || '<tr><td colspan="8">No automatic trades yet</td></tr>';
+        // FIX-034: Wallet no longer renders the automatic execution ledger here.
+        // Trade history remains available in Trade Inspector, which is the single forensic view
+        // for execution venue, signal path, P&L and exit-audit analysis. Keeping this UI-only
+        // avoids changing any wallet persistence or trading behavior.
 
         renderChart(data.snapshots || []);
     } catch (error) {

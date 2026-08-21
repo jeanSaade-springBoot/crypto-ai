@@ -103,11 +103,13 @@ public class DashboardApiController {
             @RequestParam(defaultValue = "BTCUSDT") String symbol,
             @RequestParam(defaultValue = "1m") String interval,
             @RequestParam(defaultValue = "TODAY") String period,
+            @RequestParam(defaultValue = "ALL") String executionFilter,
             @RequestParam(defaultValue = "50") int limit
     ) {
         String normalizedSymbol = symbol.trim().toUpperCase();
         String normalizedInterval = interval.trim().toLowerCase();
         String normalizedPeriod = period == null ? "TODAY" : period.trim().toUpperCase();
+        String normalizedExecutionFilter = executionFilter == null ? "ALL" : executionFilter.trim().toUpperCase();
         int safeLimit = Math.max(1, Math.min(limit, 250));
         List<SignalDecision> actionable = List.of(
                 SignalDecision.BUY, SignalDecision.STRONG_BUY,
@@ -121,13 +123,32 @@ public class DashboardApiController {
                 : tradeSignalRepository.findBySymbolAndIntervalAndDecisionInAndGeneratedAtGreaterThanEqualOrderByGeneratedAtDesc(
                         normalizedSymbol, normalizedInterval, actionable, from, PageRequest.of(0, safeLimit));
 
+        // Resolve wallet execution once for all returned signal ids. BUY_BLOCKED is based
+        // on the immutable final_entry_allowed flag and therefore remains visible even
+        // when no wallet trade was ever created for the blocked signal.
+        List<Long> signalIds = rows.stream().map(TradeSignal::getId).toList();
+        Map<Long, WalletTrade> executionBySignalId = new LinkedHashMap<>();
+        if (!signalIds.isEmpty()) {
+            for (WalletTrade trade : walletTradeRepository.findBySignal_IdInAndStatus(signalIds, "EXECUTED")) {
+                if (trade.getSignal() == null || trade.getSignal().getId() == null) continue;
+                executionBySignalId.putIfAbsent(trade.getSignal().getId(), trade);
+            }
+        }
+
+        List<Map<String, Object>> filteredSignals = rows.stream()
+                .filter(signal -> signalEvidenceMatchesExecutionFilter(
+                        signal, executionBySignalId.get(signal.getId()), normalizedExecutionFilter))
+                .map(signal -> signalEvidenceDto(signal, executionBySignalId.get(signal.getId())))
+                .toList();
+
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("symbol", normalizedSymbol);
         response.put("interval", normalizedInterval);
         response.put("period", normalizedPeriod);
+        response.put("executionFilter", normalizedExecutionFilter);
         response.put("from", from);
-        response.put("count", rows.size());
-        response.put("signals", rows.stream().map(this::signalDto).toList());
+        response.put("count", filteredSignals.size());
+        response.put("signals", filteredSignals);
         return response;
     }
 
@@ -136,12 +157,41 @@ public class DashboardApiController {
         ZonedDateTime now = ZonedDateTime.now(riyadh);
         return switch (period) {
             case "TODAY" -> now.toLocalDate().atStartOfDay(riyadh).toInstant();
-            case "3D" -> now.minusDays(3).toInstant();
-            case "7D" -> now.minusDays(7).toInstant();
-            case "30D" -> now.minusDays(30).toInstant();
+            case "4H" -> now.minusHours(4).toInstant();
+            case "2H" -> now.minusHours(2).toInstant();
+            case "1H" -> now.minusHours(1).toInstant();
             case "ALL" -> null;
             default -> now.toLocalDate().atStartOfDay(riyadh).toInstant();
         };
+    }
+
+    private boolean signalEvidenceMatchesExecutionFilter(
+            TradeSignal signal,
+            WalletTrade execution,
+            String filter
+    ) {
+        String decision = signal.getDecision() == null ? "" : signal.getDecision().name();
+        boolean buy = "BUY".equals(decision) || "STRONG_BUY".equals(decision);
+        return switch (filter) {
+            case "EXECUTED" -> execution != null;
+            case "BUY_BLOCKED" -> buy && !signal.isFinalEntryAllowed();
+            default -> true;
+        };
+    }
+
+    private Map<String, Object> signalEvidenceDto(TradeSignal signal, WalletTrade execution) {
+        Map<String, Object> result = new LinkedHashMap<>(signalDto(signal));
+        result.put("executionState", execution == null ? "NOT_EXECUTED" : "EXECUTED");
+        result.put("executionId", execution == null ? null : execution.getId());
+        result.put("executedSide", execution == null ? null : execution.getSide());
+        result.put("executionReason", execution == null ? null : execution.getExecutionReason());
+        result.put("executedAt", execution == null ? null : execution.getExecutedAt());
+        result.put("executedPrice", execution == null ? null : execution.getPriceUsdt());
+        result.put("executedQuantity", execution == null ? null : execution.getQuantity());
+        result.put("executedAmountUsdt", execution == null ? null : execution.getGrossAmountUsdt());
+        boolean buy = signal.getDecision() == SignalDecision.BUY || signal.getDecision() == SignalDecision.STRONG_BUY;
+        result.put("buyPositionBlocked", buy && !signal.isFinalEntryAllowed());
+        return result;
     }
 
     @GetMapping("/score-diagnostics")

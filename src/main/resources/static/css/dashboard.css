@@ -1746,6 +1746,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .execution-state small,.execution-state span { color:var(--muted); font-size:9px; line-height:1.35; }
 .execution-state.executed { border-color:rgba(57,217,138,.35); background:rgba(57,217,138,.07); }
 .execution-state.waiting { border-color:rgba(247,201,72,.28); background:rgba(247,201,72,.055); }
+.execution-state.blocked { border-color:rgba(255,94,94,.34); background:rgba(255,94,94,.07); }
 .signal-live-plan-summary { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:8px; margin:0 0 14px; }
 .signal-live-plan-summary div { border:1px solid var(--border); border-radius:10px; padding:9px; background:rgba(255,255,255,.02); display:grid; gap:4px; }
 .signal-live-plan-summary span { color:var(--muted); font-size:9px; }
@@ -2793,7 +2794,7 @@ body.position-modal-open{overflow:hidden}
 /* Recent signal evidence: default to today's actionable BUY/SELL rows; older history loads on demand. */
 .signal-evidence-controls{display:flex;align-items:flex-end;justify-content:flex-end;gap:10px;flex-wrap:wrap}
 .signal-evidence-controls label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted,#8b93a7);font-weight:700;text-transform:uppercase;letter-spacing:.04em}
-.signal-evidence-controls select{min-width:135px;padding:8px 10px;border-radius:8px}
+.signal-evidence-controls select{min-width:150px;padding:8px 10px;border-radius:8px}
 .signal-evidence-controls #signal-evidence-status{align-self:center;white-space:nowrap}
 @media(max-width:760px){.signal-evidence-heading{align-items:flex-start}.signal-evidence-controls{justify-content:flex-start;width:100%}}
 

@@ -47,6 +47,11 @@ const signalAnalysisDetailCache = new Map();
 let pinnedSignalId = localStorage.getItem('cryptoPinnedSignalId');
 let aiPerformancePeriod = localStorage.getItem('cryptoAiPerformancePeriod') || 'ALL_TIME';
 let signalEvidenceAbortController = null;
+// FIX-035: BUY/SELL evidence owns its refresh lifecycle. The main dashboard refresh
+// must not silently reload this table because users can run it on demand or at an
+// independent 10s / 1m / 5m cadence.
+let signalEvidenceRefreshTimer = null;
+let signalEvidenceLoadedContextKey = null;
 let latestSignalEvidenceContext = null;
 
 // Dashboard chart navigation is deliberately presentation-only. It never feeds
@@ -305,17 +310,15 @@ function render(data) {
         openPositions: data.openPositions || [],
         closedPositions: data.closedPositions || []
     };
-    renderSignals(
-        data.signals || [],
-        data.displayOnlyInterval,
-        data.timeframeSnapshot || {},
-        data.executions || [],
-        data.openPositions || [],
-        data.closedPositions || []
-    );
-    // Replace the generic Top-20 overview rows with period-filtered actionable evidence.
-    // This fixes cases where recent NEUTRAL/WATCH rows hid valid BUY/SELL signals.
-    void refreshSignalEvidence(false);
+    // FIX-035: do not let the normal dashboard renderer overwrite the independently
+    // loaded BUY/SELL evidence table. A new symbol/timeframe gets one dedicated load;
+    // subsequent updates happen only via its Load button or its own refresh timer.
+    const signalContextKey = `${data.symbol}|${data.interval}`;
+    if (signalEvidenceLoadedContextKey !== signalContextKey) {
+        const signalBody = el('signals-body');
+        if (signalBody) signalBody.innerHTML = '<tr><td colspan="6" class="empty">Loading BUY/SELL evidence…</td></tr>';
+        void refreshSignalEvidence(false);
+    }
     renderTradeHistory(data.closedPositions || []);
     window.requestAnimationFrame(syncDashboardHeaderOffset);
 }
@@ -324,6 +327,7 @@ function render(data) {
 async function refreshSignalEvidence(showLoading = true) {
     const context = latestSignalEvidenceContext;
     const periodSelect = el('signal-evidence-period');
+    const executionFilterSelect = el('signal-evidence-execution-filter');
     const status = el('signal-evidence-status');
     const body = el('signals-body');
     if (!context || !periodSelect || !body) return;
@@ -339,20 +343,23 @@ async function refreshSignalEvidence(showLoading = true) {
     const requestedSymbol = context.symbol;
     const requestedInterval = context.interval;
     const period = periodSelect.value || 'TODAY';
+    const executionFilter = executionFilterSelect?.value || 'ALL';
     if (showLoading) body.innerHTML = '<tr><td colspan="6" class="empty">Loading BUY/SELL evidence…</td></tr>';
     if (status) status.textContent = 'Loading…';
 
     try {
-        const params = new URLSearchParams({symbol: requestedSymbol, interval: requestedInterval, period, limit: '100'});
+        const params = new URLSearchParams({symbol: requestedSymbol, interval: requestedInterval, period, executionFilter, limit: '250'});
         const response = await fetch(`/api/dashboard/signals?${params.toString()}`, {signal: signalEvidenceAbortController.signal});
         if (!response.ok) throw new Error(`Signal evidence API returned ${response.status}`);
         const result = await response.json();
         const current = latestSignalEvidenceContext;
         if (!current || current.symbol !== requestedSymbol || current.interval !== requestedInterval) return;
         renderSignals(result.signals || [], false, current.timeframeSnapshot, current.executions, current.openPositions, current.closedPositions);
+        signalEvidenceLoadedContextKey = `${requestedSymbol}|${requestedInterval}`;
         if (status) {
-            const labels = {TODAY:'Today', '3D':'Last 3 days', '7D':'Last 7 days', '30D':'Last 30 days', ALL:'All history'};
-            status.textContent = `${labels[period] || 'Today'} · ${Number(result.count || 0)} BUY/SELL signal${Number(result.count || 0) === 1 ? '' : 's'}`;
+            const labels = {TODAY:'Today', '4H':'Last 4 hours', '2H':'Last 2 hours', '1H':'Last 1 hour', ALL:'All time'};
+            const filterLabels = {ALL:'all actionable', EXECUTED:'executed positions', BUY_BLOCKED:'blocked BUY positions'};
+            status.textContent = `${labels[period] || 'Today'} · ${filterLabels[executionFilter] || 'all actionable'} · ${Number(result.count || 0)} signal${Number(result.count || 0) === 1 ? '' : 's'}`;
         }
     } catch (error) {
         if (error?.name === 'AbortError') return;
@@ -361,6 +368,18 @@ async function refreshSignalEvidence(showLoading = true) {
     } finally {
         signalEvidenceAbortController = null;
     }
+}
+
+function configureSignalEvidenceRefreshTimer() {
+    if (signalEvidenceRefreshTimer) {
+        clearInterval(signalEvidenceRefreshTimer);
+        signalEvidenceRefreshTimer = null;
+    }
+    const seconds = Number(el('signal-evidence-refresh-interval')?.value || 0);
+    if (!Number.isFinite(seconds) || seconds <= 0) return;
+    signalEvidenceRefreshTimer = window.setInterval(() => {
+        void refreshSignalEvidence(false);
+    }, seconds * 1000);
 }
 
 
@@ -1338,7 +1357,11 @@ function signalExecutionStatusHtml(signal, execution, position) {
         return `<div class="execution-state executed"><strong>WALLET EXECUTED</strong><small>Trade #${escapeHtml(execution.id ?? '—')} · ${money(execution.amountUsdt)}</small>${open ? '<span>Position Manager active</span>' : ''}</div>`;
     }
     const decision = String(signal.decision || '').toUpperCase();
-    const actionable = ['BUY','STRONG_BUY','SELL','STRONG_SELL'].includes(decision);
+    const buy = ['BUY','STRONG_BUY'].includes(decision);
+    const actionable = buy || ['SELL','STRONG_SELL'].includes(decision);
+    if (buy && (signal.buyPositionBlocked === true || signal.finalEntryAllowed === false)) {
+        return `<div class="execution-state blocked"><strong>BUY POSITION BLOCKED</strong><small>Final entry gate prevented wallet execution for this signal.</small></div>`;
+    }
     return `<div class="execution-state ${actionable ? 'waiting' : 'idle'}"><strong>${actionable ? 'NOT EXECUTED' : 'ANALYSIS ONLY'}</strong><small>${actionable ? 'Execution Intelligence / opportunity evidence decides next.' : 'No wallet action required.'}</small></div>`;
 }
 
@@ -1392,7 +1415,15 @@ function renderSignals(signals, displayOnlyInterval = false, timeframeSnapshot =
         const detailId = `signal-detail-${signalId}`;
         const isOpen = openSignalAnalysisIds.has(signalId) || pinnedSignalId === signalId;
         const isPinned = pinnedSignalId === signalId;
-        const execution = executionBySignal.get(signalId);
+        const execution = executionBySignal.get(signalId) || (String(s.executionState || '').toUpperCase() === 'EXECUTED' ? {
+            id: s.executionId,
+            side: s.executedSide,
+            price: s.executedPrice,
+            quantity: s.executedQuantity,
+            amountUsdt: s.executedAmountUsdt,
+            executionReason: s.executionReason,
+            executedAt: s.executedAt
+        } : null);
         const position = positionByEntrySignal.get(signalId);
         return `
             <tr class="signal-row decision-board-row" data-detail-id="${detailId}">
@@ -2419,9 +2450,14 @@ function setupSidebar() {
 }
 
 const signalEvidencePeriod = el('signal-evidence-period');
-if (signalEvidencePeriod) signalEvidencePeriod.addEventListener('change', () => refreshSignalEvidence(true));
+const signalEvidenceExecutionFilter = el('signal-evidence-execution-filter');
+const signalEvidenceRefreshInterval = el('signal-evidence-refresh-interval');
 const signalEvidenceRefresh = el('signal-evidence-refresh');
+// Filters are intentionally applied on Load / the dedicated auto-refresh timer. This
+// keeps the table predictable while the user is choosing multiple filter values.
 if (signalEvidenceRefresh) signalEvidenceRefresh.addEventListener('click', () => refreshSignalEvidence(true));
+if (signalEvidenceRefreshInterval) signalEvidenceRefreshInterval.addEventListener('change', configureSignalEvidenceRefreshTimer);
+configureSignalEvidenceRefreshTimer();
 
 el('refresh-button').addEventListener('click', refreshDashboard);
 el('analyze-sentiment-button').addEventListener('click', analyzeSentiment);

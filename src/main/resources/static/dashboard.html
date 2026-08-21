@@ -188,17 +188,32 @@
             <div class="section-heading signal-evidence-heading">
                 <div><p class="eyebrow">RECENT SIGNAL EVIDENCE</p><h2>BUY and SELL signals</h2></div>
                 <div class="signal-evidence-controls">
-                    <label>Period
+                    <label>Time window
                         <select id="signal-evidence-period">
                             <option value="TODAY" selected>Today</option>
-                            <option value="3D">Last 3 days</option>
-                            <option value="7D">Last 7 days</option>
-                            <option value="30D">Last 30 days</option>
-                            <option value="ALL">All history</option>
+                            <option value="4H">Last 4 hours</option>
+                            <option value="2H">Last 2 hours</option>
+                            <option value="1H">Last 1 hour</option>
+                            <option value="ALL">All time</option>
+                        </select>
+                    </label>
+                    <label>Execution status
+                        <select id="signal-evidence-execution-filter">
+                            <option value="ALL" selected>All BUY / SELL</option>
+                            <option value="EXECUTED">BUY / SELL position executed</option>
+                            <option value="BUY_BLOCKED">BUY position blocked</option>
+                        </select>
+                    </label>
+                    <label>Auto refresh
+                        <select id="signal-evidence-refresh-interval">
+                            <option value="0" selected>Off · on demand</option>
+                            <option value="10">10 sec</option>
+                            <option value="60">1 min</option>
+                            <option value="300">5 min</option>
                         </select>
                     </label>
                     <button id="signal-evidence-refresh" type="button" class="secondary-button">Load</button>
-                    <span id="signal-evidence-status">Today · actionable signals only</span>
+                    <span id="signal-evidence-status">Today · all actionable signals</span>
                 </div>
             </div>
             <div class="table-wrap signal-board-wrap"><table class="signal-board-table"><thead><tr><th>Signal</th><th>3-frame decision</th><th>Planned trade</th><th>Execution</th><th>Status</th><th>Details</th></tr></thead><tbody id="signals-body"></tbody></table></div>
