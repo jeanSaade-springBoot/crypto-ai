@@ -730,6 +730,26 @@
             behavior: "Users can review all actionable signals, wallet-executed BUY/SELL positions, or BUY positions blocked by the final entry gate using an independent Off/10s/1m/5m refresh cadence.",
             regression: "Diagnostic/data-loading only. Production, Replay, scoring, BUY/SELL, Execution Intelligence, TP/SL, Wallet, Binance and position management remain unchanged."
         }
+,
+        {
+            id: "FIX-037",
+            title: "Atomic wallet USDT balance mutations",
+            status: "DONE",
+            scenario: "Concurrent wallet executions could overwrite a just-completed USDT credit and make principal disappear from the paper wallet.",
+            symbol: "UNIUSDT / DOGEUSDT / PEPEUSDT",
+            entry: "DOGE $125 + PEPE $250",
+            exit: "UNI $251.970005083884",
+            entryTime: "2026-08-21 14:50:42–14:50:59 DB time",
+            exitTime: "2026-08-21 14:50:41 DB time",
+            replayWindow: "No strategy replay required; accounting-only concurrency regression",
+            location: "WalletAssetRepository + WalletAutoExecutionService + WalletService",
+            classes: ["WalletAssetRepository", "WalletAutoExecutionService", "WalletService", "WalletAssetRepositoryAtomicMutationTest"],
+            cause: "USDT used a read-modify-save entity pattern. A BUY could persist an older balance after a concurrent SELL credited proceeds, erasing the SELL credit. The Aug-21 incident erased exactly 251.970005083884 USDT, matching the UNI SELL proceeds.",
+            solution: "Use atomic database quantity +/- updates for every wallet USDT credit/debit, including automatic BUY/SELL exits, manual trades, deposits and withdrawals. Debit also checks sufficient funds in the same SQL statement.",
+            behavior: "Trading decisions, scoring, sizing, TP/SL and exit reasons are unchanged. Only wallet cash mutation semantics are hardened against lost updates.",
+            regression: "Exact incident arithmetic is covered: 9749.900237510953 + 251.970005083884 - 125 - 250 = 9626.870242594837. Repository tests also guard the atomic SQL contract. Replay behavior is intentionally unchanged because this is not a strategy change."
+        }
+
 ];
 
     const list = document.getElementById("fix-registry-list");

@@ -73,15 +73,19 @@ public class WalletAutoExecutionService {
         BigDecimal spend = sizing.spend();
         BigDecimal quantity = sizing.quantity();
 
+        // FIX-037: debit USDT atomically before mutating the purchased asset. A stale
+        // Java-side WalletAsset instance must never overwrite a concurrent SELL credit.
+        if (assetRepository.debitQuantityIfSufficient("USDT", spend) != 1) return false;
         WalletAsset coin = getOrCreate(assetSymbol);
         BigDecimal oldCost = coin.getQuantity().multiply(nvl(coin.getAverageBuyPriceUsdt()));
         BigDecimal newQuantity = coin.getQuantity().add(quantity);
         coin.setQuantity(newQuantity);
         coin.setAverageBuyPriceUsdt(oldCost.add(spend)
                 .divide(newQuantity, SCALE, RoundingMode.HALF_UP));
-        usdt.setQuantity(usdt.getQuantity().subtract(spend));
         assetRepository.save(coin);
-        assetRepository.save(usdt);
+        // clearAutomatically on the atomic update invalidates the stale persistence context;
+        // reload USDT so statistics/snapshots use the committed post-debit balance.
+        usdt = getOrCreate("USDT");
 
         WalletManagedPosition position = existingPosition != null
                 ? existingPosition
@@ -164,7 +168,6 @@ public class WalletAutoExecutionService {
 
         String assetSymbol = pair.substring(0, pair.length() - 4);
         WalletAsset coin = getOrCreate(assetSymbol);
-        WalletAsset usdt = getOrCreate("USDT");
         BigDecimal quantity = position.getQuantity().min(coin.getQuantity());
         if (quantity.signum() <= 0) return;
 
@@ -177,9 +180,14 @@ public class WalletAutoExecutionService {
 
         coin.setQuantity(coin.getQuantity().subtract(quantity));
         if (coin.getQuantity().signum() == 0) coin.setAverageBuyPriceUsdt(null);
-        usdt.setQuantity(usdt.getQuantity().add(gross));
         assetRepository.save(coin);
-        assetRepository.save(usdt);
+        // FIX-037: credit SELL proceeds atomically so a concurrent BUY cannot overwrite them.
+        if (assetRepository.creditQuantity("USDT", gross) != 1) {
+            throw new IllegalStateException("Unable to credit USDT wallet balance");
+        }
+        // FIX-037: keep a final post-credit balance snapshot for lambda-based daily-stat updates.
+        // Using a separate final variable also avoids capturing a reassigned local variable.
+        final BigDecimal endingUsdt = getOrCreate("USDT").getQuantity();
 
         position.setQuantity(ZERO);
         position.setTotalCostUsdt(ZERO);
@@ -205,7 +213,7 @@ public class WalletAutoExecutionService {
 
         dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneId.systemDefault()))
                 .ifPresent(daily -> {
-                    daily.setEndingUsdt(usdt.getQuantity());
+                    daily.setEndingUsdt(endingUsdt);
                     daily.setEndingPortfolioUsdt(walletService.currentPortfolioValue());
                     daily.setUpdatedAt(Instant.now());
                     dailyStatisticsRepository.save(daily);
@@ -238,7 +246,6 @@ public class WalletAutoExecutionService {
 
         String assetSymbol = pair.substring(0, pair.length() - 4);
         WalletAsset coin = getOrCreate(assetSymbol);
-        WalletAsset usdt = getOrCreate("USDT");
         BigDecimal quantity = position.getQuantity().min(coin.getQuantity());
         if (quantity.signum() <= 0) return false;
 
@@ -252,9 +259,14 @@ public class WalletAutoExecutionService {
 
         coin.setQuantity(coin.getQuantity().subtract(quantity));
         if (coin.getQuantity().signum() == 0) coin.setAverageBuyPriceUsdt(null);
-        usdt.setQuantity(usdt.getQuantity().add(gross));
         assetRepository.save(coin);
-        assetRepository.save(usdt);
+        // FIX-037: credit SELL proceeds atomically so a concurrent BUY cannot overwrite them.
+        if (assetRepository.creditQuantity("USDT", gross) != 1) {
+            throw new IllegalStateException("Unable to credit USDT wallet balance");
+        }
+        // FIX-037: keep a final post-credit balance snapshot for lambda-based daily-stat updates.
+        // Using a separate final variable also avoids capturing a reassigned local variable.
+        final BigDecimal endingUsdt = getOrCreate("USDT").getQuantity();
 
         position.setQuantity(ZERO);
         position.setTotalCostUsdt(ZERO);
@@ -290,7 +302,7 @@ public class WalletAutoExecutionService {
 
         dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneId.systemDefault()))
                 .ifPresent(daily -> {
-                    daily.setEndingUsdt(usdt.getQuantity());
+                    daily.setEndingUsdt(endingUsdt);
                     daily.setEndingPortfolioUsdt(walletService.currentPortfolioValue());
                     daily.setUpdatedAt(Instant.now());
                     dailyStatisticsRepository.save(daily);
@@ -324,7 +336,6 @@ public class WalletAutoExecutionService {
 
         String assetSymbol = pair.substring(0, pair.length() - 4);
         WalletAsset coin = getOrCreate(assetSymbol);
-        WalletAsset usdt = getOrCreate("USDT");
         BigDecimal quantity = position.getQuantity().min(coin.getQuantity());
         if (quantity.signum() <= 0) return false;
 
@@ -338,9 +349,14 @@ public class WalletAutoExecutionService {
 
         coin.setQuantity(coin.getQuantity().subtract(quantity));
         if (coin.getQuantity().signum() == 0) coin.setAverageBuyPriceUsdt(null);
-        usdt.setQuantity(usdt.getQuantity().add(gross));
         assetRepository.save(coin);
-        assetRepository.save(usdt);
+        // FIX-037: credit SELL proceeds atomically so a concurrent BUY cannot overwrite them.
+        if (assetRepository.creditQuantity("USDT", gross) != 1) {
+            throw new IllegalStateException("Unable to credit USDT wallet balance");
+        }
+        // FIX-037: keep a final post-credit balance snapshot for lambda-based daily-stat updates.
+        // Using a separate final variable also avoids capturing a reassigned local variable.
+        final BigDecimal endingUsdt = getOrCreate("USDT").getQuantity();
 
         position.setQuantity(ZERO);
         position.setTotalCostUsdt(ZERO);
@@ -374,7 +390,7 @@ public class WalletAutoExecutionService {
 
         dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneId.systemDefault()))
                 .ifPresent(daily -> {
-                    daily.setEndingUsdt(usdt.getQuantity());
+                    daily.setEndingUsdt(endingUsdt);
                     daily.setEndingPortfolioUsdt(walletService.currentPortfolioValue());
                     daily.setUpdatedAt(Instant.now());
                     dailyStatisticsRepository.save(daily);
@@ -412,7 +428,6 @@ public class WalletAutoExecutionService {
 
         String assetSymbol = pair.substring(0, pair.length() - 4);
         WalletAsset coin = getOrCreate(assetSymbol);
-        WalletAsset usdt = getOrCreate("USDT");
         BigDecimal quantity = position.getQuantity().min(coin.getQuantity());
         if (quantity.signum() <= 0) return false;
 
@@ -426,9 +441,14 @@ public class WalletAutoExecutionService {
 
         coin.setQuantity(coin.getQuantity().subtract(quantity));
         if (coin.getQuantity().signum() == 0) coin.setAverageBuyPriceUsdt(null);
-        usdt.setQuantity(usdt.getQuantity().add(gross));
         assetRepository.save(coin);
-        assetRepository.save(usdt);
+        // FIX-037: credit SELL proceeds atomically so a concurrent BUY cannot overwrite them.
+        if (assetRepository.creditQuantity("USDT", gross) != 1) {
+            throw new IllegalStateException("Unable to credit USDT wallet balance");
+        }
+        // FIX-037: keep a final post-credit balance snapshot for lambda-based daily-stat updates.
+        // Using a separate final variable also avoids capturing a reassigned local variable.
+        final BigDecimal endingUsdt = getOrCreate("USDT").getQuantity();
 
         position.setQuantity(ZERO);
         position.setTotalCostUsdt(ZERO);
@@ -459,7 +479,7 @@ public class WalletAutoExecutionService {
 
         dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneId.systemDefault()))
                 .ifPresent(daily -> {
-                    daily.setEndingUsdt(usdt.getQuantity());
+                    daily.setEndingUsdt(endingUsdt);
                     daily.setEndingPortfolioUsdt(walletService.currentPortfolioValue());
                     daily.setUpdatedAt(Instant.now());
                     dailyStatisticsRepository.save(daily);

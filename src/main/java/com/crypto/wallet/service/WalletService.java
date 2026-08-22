@@ -153,10 +153,15 @@ public class WalletService {
     public void addCashFlow(WalletCashFlowRequest request) {
         String type = requireOne(request.flowType(), Set.of("DEPOSIT","WITHDRAWAL"), "flow type");
         BigDecimal amount = positive(request.amountUsdt(), "Amount");
-        WalletAsset usdt = getOrCreate("USDT");
-        if ("WITHDRAWAL".equals(type) && usdt.getQuantity().compareTo(amount) < 0) throw new IllegalArgumentException("Insufficient USDT balance");
-        usdt.setQuantity("DEPOSIT".equals(type) ? usdt.getQuantity().add(amount) : usdt.getQuantity().subtract(amount));
-        assetRepository.save(usdt);
+        getOrCreate("USDT");
+        // FIX-037: cash-flow mutations share the same atomic balance primitive as trading,
+        // preventing deposits/withdrawals from racing with automatic executions.
+        if ("DEPOSIT".equals(type)) {
+            if (assetRepository.creditQuantity("USDT", amount) != 1)
+                throw new IllegalStateException("Unable to credit USDT wallet balance");
+        } else if (assetRepository.debitQuantityIfSufficient("USDT", amount) != 1) {
+            throw new IllegalArgumentException("Insufficient USDT balance");
+        }
         cashFlowRepository.save(WalletCashFlow.builder().flowType(type).amountUsdt(amount).occurredAt(Instant.now()).notes(request.notes()).build());
         captureSnapshot();
     }
@@ -534,20 +539,24 @@ public class WalletService {
         BigDecimal costBasis = null, realized = null, realizedPct = null, net;
         if ("BUY".equals(side)) {
             net = gross.add(fee);
-            if (usdt.getQuantity().compareTo(net) < 0) throw new IllegalArgumentException("Insufficient USDT balance");
+            // FIX-037: atomically reserve the BUY cash before changing the coin balance.
+            if (assetRepository.debitQuantityIfSufficient("USDT", net) != 1)
+                throw new IllegalArgumentException("Insufficient USDT balance");
             BigDecimal oldCost = coin.getQuantity().multiply(nvl(coin.getAverageBuyPriceUsdt()));
             BigDecimal newQty = coin.getQuantity().add(qty);
             coin.setAverageBuyPriceUsdt(oldCost.add(gross).divide(newQty, SCALE, RoundingMode.HALF_UP));
-            coin.setQuantity(newQty); usdt.setQuantity(usdt.getQuantity().subtract(net));
+            coin.setQuantity(newQty);
         } else {
             if (coin.getQuantity().compareTo(qty) < 0) throw new IllegalArgumentException("Insufficient " + assetSymbol + " balance");
             net = gross.subtract(fee); costBasis = qty.multiply(nvl(coin.getAverageBuyPriceUsdt()));
             realized = net.subtract(costBasis); realizedPct = percent(realized, costBasis);
             coin.setQuantity(coin.getQuantity().subtract(qty));
             if (coin.getQuantity().signum() == 0) coin.setAverageBuyPriceUsdt(null);
-            usdt.setQuantity(usdt.getQuantity().add(net));
+            // FIX-037: return SELL principal + P&L with an atomic credit.
+            if (assetRepository.creditQuantity("USDT", net) != 1)
+                throw new IllegalStateException("Unable to credit USDT wallet balance");
         }
-        assetRepository.save(coin); assetRepository.save(usdt);
+        assetRepository.save(coin);
         tradeRepository.save(WalletTrade.builder().signal(signal).symbol(pair).side(side).quantity(qty).priceUsdt(price)
                 .grossAmountUsdt(gross).feeUsdt(fee).netAmountUsdt(net).costBasisUsdt(costBasis)
                 .realizedPnlUsdt(realized).realizedPnlPercent(realizedPct)
