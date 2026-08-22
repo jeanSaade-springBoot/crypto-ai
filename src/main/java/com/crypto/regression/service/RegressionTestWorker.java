@@ -6,6 +6,7 @@ import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
 import com.crypto.dto.IndicatorSnapshot;
 import com.crypto.indicator.service.TechnicalIndicatorService;
+import com.crypto.market.service.MarketPriceEventService;
 import com.crypto.execution.service.ExecutionReplayScope;
 import com.crypto.service.AnalysisService;
 import com.crypto.repository.CandleRepository;
@@ -47,6 +48,7 @@ public class RegressionTestWorker {
     private final ShadowProductionReplayService shadowReplayService;
     private final ExecutionReplayScope replayScope;
     private final BtcContextProperties btcContextProperties;
+    private final MarketPriceEventService marketPriceEventService;
 
     @Async
     public void runAsync(long runId) {
@@ -97,8 +99,14 @@ public class RegressionTestWorker {
                     """, fresh.total(), fresh.buys(), fresh.watches(), fresh.sells(), fresh.strongSells(), runId);
 
             updateRun(runId, "RUNNING", 74, "Running full shadow-production execution flow", null);
+            // FIX-052: Replay position protection consumes the same canonical live 1m
+            // price observations that Production consumed. Historical windows before
+            // V64 was deployed naturally have no events and are explicitly degraded to
+            // signal/candle-close protection inside ShadowProductionReplayService.
+            List<MarketPriceEventService.PriceEvent> productionPriceEvents =
+                    marketPriceEventService.find(symbol, contextStart, end);
             ShadowProductionReplayService.ReplayStats shadow = shadowReplayService.replay(
-                    runId, symbol, start, end, fresh.generatedSignals());
+                    runId, symbol, start, end, fresh.generatedSignals(), productionPriceEvents);
 
             updateRun(runId, "RUNNING", 82, "Comparing historical decision authority", null);
             int authorityCorrections = 0;
@@ -197,13 +205,20 @@ public class RegressionTestWorker {
                 return s.getDecision() == null || effective == s.getDecision();
             });
             boolean generationPass = fresh.errors() == 0 && fresh.total() > 0;
-            boolean passed = cadencePass && authorityPass && generationPass;
+            // FIX-052: an "exact Production" replay must include the same live 1m price
+            // observations used by LivePositionProtectionService. Do not report a green
+            // parity result for older windows that only have candle-close approximations.
+            boolean livePriceParityPass = !productionPriceEvents.isEmpty();
+            boolean passed = cadencePass && authorityPass && generationPass && livePriceParityPass;
 
             String notes = "Fresh replay signals are generated from historical candles through TechnicalIndicatorService "
                     + "and the production AnalysisService scoring/final-decision path without trade_signal persistence. "
                     + "A three-hour context-only warm-up seeds 1m/5m/1h state before the requested execution window, and BTC reference signals are freshly replayed as-of each timestamp when BTC context is enabled. "
                     + "Historical signal counts are retained only as the pre-fix reference. "
                     + "Replayable event counts validate that each historical candle can now be resolved as-of its own close. "
+                    + (livePriceParityPass
+                        ? "FIX-052 exact protection parity is active: Replay consumed " + productionPriceEvents.size() + " persisted Production 1m live-price observations in UTC order. "
+                        : "FIX-052 exact protection parity is NOT available for this historical window because no persisted Production live-price observations exist; the run is intentionally not marked fully passed. ")
                     + "The decision replay validates that originalDecision is audit-only and cannot override a non-null final decision. "
                     + "Regression AnalysisService returns unsaved TradeSignal objects. Fresh signals then pass through an isolated shadow execution/position lifecycle that records exact simulated BUY/SELL points. Real wallet, trade_signal and production execution_opportunity tables are never written.";
 

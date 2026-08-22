@@ -16,6 +16,7 @@ import java.math.*;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.*;
 
@@ -241,7 +242,7 @@ public class WalletService {
         settings.setUpdatedAt(Instant.now());
         settingsRepository.save(settings);
 
-        LocalDate today = LocalDate.now(ZoneId.systemDefault());
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
         dailyStatisticsRepository.findForUpdateByTradeDate(today).ifPresent(statistics -> {
             BigDecimal available = assetRepository.findBySymbol("USDT")
                     .map(WalletAsset::getQuantity)
@@ -289,7 +290,7 @@ public class WalletService {
         String type = effective == null ? "LAST_TRADES" : normalizePerformanceWindowType(effective.getPerformanceWindowType());
         int tradeCount = effective == null || effective.getPerformanceTradeCount() <= 0 ? 20 : effective.getPerformanceTradeCount();
         int periodDays = effective == null || effective.getPerformancePeriodDays() <= 0 ? 1 : effective.getPerformancePeriodDays();
-        ZoneId zone = ZoneId.systemDefault();
+        ZoneId zone = ZoneOffset.UTC;
         Instant now = Instant.now();
 
         if ("TODAY".equals(type)) {
@@ -481,7 +482,7 @@ public class WalletService {
                 : nvl(settings.getBaseTradeAmountUsdt());
         BigDecimal reserve = settings == null ? ZERO : nvl(settings.getMinimumUsdtReserve());
         BigDecimal tradable = availableUsdt.subtract(reserve).max(ZERO);
-        LocalDate today = LocalDate.now(ZoneId.systemDefault());
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
 
         return dailyStatisticsRepository.findByTradeDate(today)
                 .<Map<String, Object>>map(statistics -> {

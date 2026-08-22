@@ -9,6 +9,7 @@ import com.crypto.position.service.PositionContinuationPolicy;
 import com.crypto.position.service.PositionExitPolicy;
 import com.crypto.position.service.ProfitLockPolicy;
 import com.crypto.position.service.PositionPriceAuthorityPolicy;
+import com.crypto.market.service.MarketPriceEventService;
 import com.crypto.service.TradeExecutionValidationService;
 import com.crypto.wallet.domain.WalletSettings;
 import com.crypto.wallet.repository.WalletSettingsRepository;
@@ -23,7 +24,7 @@ import java.math.RoundingMode;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.Comparator;
 import java.util.List;
 
@@ -44,7 +45,9 @@ public class ShadowProductionReplayService {
     private final WalletExecutionSizingPolicy executionSizingPolicy;
     private final PositionPriceAuthorityPolicy priceAuthorityPolicy;
 
-    public ReplayStats replay(long runId, String symbol, Instant executionStart, Instant executionEnd, List<TradeSignal> generatedSignals) {
+    public ReplayStats replay(long runId, String symbol, Instant executionStart, Instant executionEnd,
+                              List<TradeSignal> generatedSignals,
+                              List<MarketPriceEventService.PriceEvent> productionPriceEvents) {
         List<TradeSignal> timeline = generatedSignals.stream()
                 .filter(s -> s != null && s.getGeneratedAt() != null)
                 .sorted(Comparator.comparing(TradeSignal::getGeneratedAt)
@@ -64,6 +67,18 @@ public class ShadowProductionReplayService {
                 replayWalletSettings.getBaseTradeAmountUsdt(), replayWalletSettings.getMaximumDailyNewPositions());
         LocalDate replayTradeDate = null;
         int replayExecutedNewPositions = 0;
+        // FIX-052: when Production live-price events exist, Replay uses them as the
+        // authoritative mechanical-protection clock. Older windows created before V64
+        // transparently retain candle/signal-close fallback and are therefore not claimed
+        // as tick-exact parity runs.
+        List<MarketPriceEventService.PriceEvent> livePrices = productionPriceEvents == null
+                ? List.of()
+                : productionPriceEvents.stream()
+                    .filter(e -> e != null && e.observedAt() != null && e.price() != null)
+                    .sorted(Comparator.comparing(MarketPriceEventService.PriceEvent::observedAt))
+                    .toList();
+        boolean exactPriceReplay = !livePrices.isEmpty();
+        int livePriceIndex = 0;
 
         try (ExecutionReplayScope.Scope ignored = replayScope.open(runId, timeline,
                 opportunity -> {
@@ -75,12 +90,42 @@ public class ShadowProductionReplayService {
                     }
                 })) {
         for (TradeSignal signal : timeline) {
+            // FIX-052 exact ordering: BinanceKlineService invokes live position protection
+            // from the 1m price update BEFORE publishing the candle-close analysis event.
+            // Consume all persisted Production prices up to this signal timestamp before
+            // making the freshly generated signal visible to position management.
+            while (livePriceIndex < livePrices.size()
+                    && !livePrices.get(livePriceIndex).observedAt().isAfter(signal.getGeneratedAt())) {
+                MarketPriceEventService.PriceEvent live = livePrices.get(livePriceIndex++);
+                replayScope.reference(live.observedAt());
+                if (open != null && !live.observedAt().isBefore(executionStart) && !live.observedAt().isAfter(executionEnd)) {
+                    LivePriceEvaluation protection = evaluateLivePrice(runId, symbol, open, live, latest1m, latest5m, latest1h);
+                    open = protection.position();
+                    ExitDecision liveExit = protection.decision();
+                    if (liveExit.exit()) {
+                        BigDecimal proceeds = live.price().multiply(open.quantity(), MC);
+                        BigDecimal pnl = proceeds.subtract(open.cost(), MC);
+                        BigDecimal pnlPct = percentage(open.entryPrice(), live.price());
+                        cash = cash.add(proceeds, MC);
+                        realized = realized.add(pnl, MC);
+                        trades++;
+                        if (pnl.signum() > 0) wins++; else if (pnl.signum() < 0) losses++;
+                        persistSellAtPrice(runId, symbol, live, latest1m, open, liveExit, pnl, pnlPct);
+                        closePositionAtPrice(runId, open.positionId(), live, liveExit, pnl, pnlPct);
+                        executionIntelligenceService.completePositionOpportunity(symbol, latest1m, liveExit.reason());
+                        open = null;
+                    }
+                }
+            }
+
             replayScope.reference(signal.getGeneratedAt());
             if ("1m".equals(signal.getInterval())) latest1m = signal;
             if ("5m".equals(signal.getInterval())) latest5m = signal;
             if ("1h".equals(signal.getInterval())) latest1h = signal;
 
-            if (open != null) {
+            if (open != null && !exactPriceReplay) {
+                // Pre-V64 fallback only. Exact-parity runs receive mechanical protection from
+                // the persisted Production live-price stream above.
                 ExitDecision exit = evaluateExit(runId, open, signal, latest1m, latest5m, latest1h);
                 if (exit.exit()) {
                     BigDecimal proceeds = signal.getLatestPrice().multiply(open.quantity(), MC);
@@ -96,11 +141,36 @@ public class ShadowProductionReplayService {
                     // opportunity evidence boundary as production before any new BUY can form.
                     executionIntelligenceService.completePositionOpportunity(symbol, signal, exit.reason());
                     open = null;
+                    // Production PaperTradingService returns immediately after a signal-driven
+                    // terminal close; it cannot reopen from that same signal invocation.
+                    continue;
                 } else {
                     if (exit.newTakeProfit() != null) open = open.withTakeProfit(exit.newTakeProfit());
                     open = updateProfitLock(open, signal);
                     persistManagement(runId, signal, open.profitLockActive() ? "PROFIT_LOCK_ACTIVE" : "POSITION_HOLD",
                             open.takeProfit(), open.takeProfit(), open, exit.explanation());
+                }
+            }
+
+            if (open != null && exactPriceReplay && "1m".equals(signal.getInterval()) && bearish(signal.getDecision())) {
+                // Production's candle-close PaperTradingService has one additional SELL authority
+                // after live-price protection: validate the newly generated 1m bearish signal.
+                TradeExecutionValidationService.ValidationResult validatedSell = executionValidationService.validateSell(signal);
+                if (validatedSell.allowed()) {
+                    ExitDecision exit = new ExitDecision(true, validatedSell.code(), validatedSell.explanation());
+                    BigDecimal proceeds = signal.getLatestPrice().multiply(open.quantity(), MC);
+                    BigDecimal pnl = proceeds.subtract(open.cost(), MC);
+                    BigDecimal pnlPct = percentage(open.entryPrice(), signal.getLatestPrice());
+                    cash = cash.add(proceeds, MC);
+                    realized = realized.add(pnl, MC);
+                    trades++;
+                    if (pnl.signum() > 0) wins++; else if (pnl.signum() < 0) losses++;
+                    persistSell(runId, symbol, signal, open, exit, pnl, pnlPct);
+                    closePosition(runId, open.positionId(), signal, exit, pnl, pnlPct);
+                    executionIntelligenceService.completePositionOpportunity(symbol, signal, exit.reason());
+                    open = null;
+                    // Same production invocation cannot both SELL and immediately BUY again.
+                    continue;
                 }
             }
 
@@ -139,7 +209,7 @@ public class ShadowProductionReplayService {
             // the replay window; executionSignal owns price/risk just like production.
             boolean inExecutionWindow = !signal.getGeneratedAt().isBefore(executionStart)
                     && !signal.getGeneratedAt().isAfter(executionEnd);
-            LocalDate signalTradeDate = signal.getGeneratedAt().atZone(ZoneId.systemDefault()).toLocalDate();
+            LocalDate signalTradeDate = signal.getGeneratedAt().atZone(ZoneOffset.UTC).toLocalDate();
             if (!signalTradeDate.equals(replayTradeDate)) {
                 replayTradeDate = signalTradeDate;
                 replayExecutedNewPositions = 0;
@@ -213,6 +283,79 @@ public class ShadowProductionReplayService {
         return new ReplayStats(trades, wins, losses, realized, finalWallet);
     }
 
+    /**
+     * FIX-052: mechanical position protection evaluated from the exact Production
+     * 1m live-price observation stream. The order mirrors LivePositionProtectionService:
+     * TAKE_PROFIT -> STOP_LOSS -> PROFIT_LOCK -> normal HTF exit. The newly closed
+     * 1m signal is intentionally not visible yet; BinanceKlineService calls onPrice()
+     * before publishing the candle-close event in Production.
+     */
+    private LivePriceEvaluation evaluateLivePrice(long runId, String symbol, ShadowPosition p,
+                                                   MarketPriceEventService.PriceEvent event,
+                                                   TradeSignal oneMinute, TradeSignal five, TradeSignal one) {
+        BigDecimal price = event.price();
+        ShadowPosition current = p;
+
+        if (current.takeProfit() != null && price.compareTo(current.takeProfit()) >= 0) {
+            PositionContinuationPolicy.Evaluation continuation = continuationPolicy.evaluate(
+                    oneMinute, five, one,
+                    current.entryTrend(), current.entryStructure(), current.entryMomentum(), current.entryVolume(),
+                    current.entryConfidence(), current.entryScore());
+            if (continuation.extendTarget()) {
+                BigDecimal distance = current.takeProfit().subtract(current.entryPrice());
+                BigDecimal oldTarget = current.takeProfit();
+                BigDecimal newTarget = oldTarget.add(distance.multiply(BigDecimal.valueOf(0.50), MC), MC);
+                current = current.withTakeProfit(newTarget);
+                jdbcTemplate.update("UPDATE wallet_position_test SET take_profit_usdt=? WHERE id=?", newTarget, current.positionId());
+                persistManagementAtPrice(runId, symbol, event, "TAKE_PROFIT_EXTENDED", oldTarget, newTarget, current, continuation.explanation());
+                return new LivePriceEvaluation(ExitDecision.hold(), current);
+            }
+            persistManagementAtPrice(runId, symbol, event, "TAKE_PROFIT_EXIT", current.takeProfit(), current.takeProfit(), current, continuation.explanation());
+            return new LivePriceEvaluation(new ExitDecision(true, "TAKE_PROFIT", continuation.explanation()), current);
+        }
+
+        // Production stop-loss has priority over profit-lock evaluation.
+        if (current.stopLoss() != null && price.compareTo(current.stopLoss()) <= 0) {
+            return new LivePriceEvaluation(new ExitDecision(true, "STOP_LOSS",
+                    "Live price " + price + " reached stop loss " + current.stopLoss()), current);
+        }
+
+        ShadowPosition updated = profitLockState(current, price);
+        if (!equalsNullable(current.highest(), updated.highest())
+                || current.profitLockActive() != updated.profitLockActive()
+                || !equalsNullable(current.profitLockPrice(), updated.profitLockPrice())) {
+            jdbcTemplate.update("UPDATE wallet_position_test SET highest_price_usdt=?, profit_lock_active=?, profit_lock_price_usdt=? WHERE id=?",
+                    updated.highest(), updated.profitLockActive(), updated.profitLockPrice(), updated.positionId());
+        }
+        current = updated;
+
+        if (current.profitLockActive() && current.profitLockPrice() != null
+                && price.compareTo(current.profitLockPrice()) <= 0) {
+            BigDecimal hardProfitFloor = current.entryPrice().multiply(BigDecimal.valueOf(1.0005), MC);
+            if (price.compareTo(hardProfitFloor) < 0) {
+                String reason = "Profit-lock hard floor was breached; protected profit can no longer be preserved. "
+                        + profitLockConfigText();
+                persistManagementAtPrice(runId, symbol, event, "PROFIT_LOCK_HARD_EXIT", current.takeProfit(), current.takeProfit(), current, reason);
+                return new LivePriceEvaluation(new ExitDecision(true, "PROFIT_LOCK_HARD_EXIT", reason), current);
+            }
+            PositionExitPolicy.Evaluation lockDecision = exitPolicy.evaluateProfitLockBreach(oneMinute, five, one);
+            if (lockDecision.exit()) {
+                String reason = "Price retraced to the protected profit level after a profitable advance. "
+                        + lockDecision.explanation() + " " + profitLockConfigText();
+                persistManagementAtPrice(runId, symbol, event, "PROFIT_LOCK_EXIT", current.takeProfit(), current.takeProfit(), current, reason);
+                return new LivePriceEvaluation(new ExitDecision(true, lockDecision.code(), reason), current);
+            }
+            persistManagementAtPrice(runId, symbol, event, "PROFIT_LOCK_HOLD", current.takeProfit(), current.takeProfit(), current,
+                    lockDecision.explanation() + " " + profitLockConfigText());
+        }
+
+        PositionExitPolicy.Evaluation normalExit = exitPolicy.evaluateNormalExit(oneMinute, five, one);
+        if (normalExit.exit()) {
+            return new LivePriceEvaluation(new ExitDecision(true, normalExit.code(), normalExit.explanation()), current);
+        }
+        return new LivePriceEvaluation(ExitDecision.hold(), current);
+    }
+
     private ExitDecision evaluateExit(long runId, ShadowPosition p, TradeSignal s, TradeSignal oneMinute, TradeSignal five, TradeSignal one) {
         BigDecimal price = s.getLatestPrice();
         if (price == null) return ExitDecision.hold();
@@ -238,6 +381,12 @@ public class ShadowProductionReplayService {
             persistManagement(runId, s, "TAKE_PROFIT_EXIT", p.takeProfit(), p.takeProfit(), p, continuation.explanation());
             return new ExitDecision(true, "TAKE_PROFIT", continuation.explanation());
         }
+        // FIX-052 fallback ordering also mirrors Production: STOP_LOSS is absolute and
+        // is evaluated before profit-lock. Exact V64 runs normally take this path from
+        // persisted live-price events rather than from signal-carried prices.
+        if (authoritativePrice && p.stopLoss() != null && price.compareTo(p.stopLoss()) <= 0)
+            return new ExitDecision(true, "STOP_LOSS", "Price reached the stored stop loss.");
+
         ShadowPosition updated = authoritativePrice ? profitLockState(p, price) : p;
         BigDecimal minimumProfitableExit = p.entryPrice().multiply(BigDecimal.valueOf(1.0005));
         if (authoritativePrice && updated.profitLockActive() && updated.profitLockPrice() != null
@@ -260,9 +409,6 @@ public class ShadowProductionReplayService {
             persistManagement(runId, s, "PROFIT_LOCK_EXIT", p.takeProfit(), p.takeProfit(), updated, lockReason);
             return new ExitDecision(true, lockDecision.code(), lockReason);
         }
-        if (authoritativePrice && p.stopLoss() != null && price.compareTo(p.stopLoss()) <= 0)
-            return new ExitDecision(true, "STOP_LOSS", "Price reached the stored stop loss.");
-
         // Production has two SELL authorities: the live HTF PositionExitPolicy and the
         // 1m signal TradeExecutionValidationService. Replay executes both shared production
         // policies in the same order instead of carrying a test-only SELL rule.
@@ -309,6 +455,17 @@ public class ShadowProductionReplayService {
             (test_run_id,symbol,generated_at,action_code,current_price,old_take_profit,new_take_profit,highest_price,profit_lock_active,profit_lock_price,explanation)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)
             """, runId, s.getSymbol(), Timestamp.from(s.getGeneratedAt()), code, s.getLatestPrice(), oldTp, newTp,
+                p.highest(), p.profitLockActive(), p.profitLockPrice(), explanation);
+    }
+
+    private void persistManagementAtPrice(long runId, String symbol, MarketPriceEventService.PriceEvent event,
+                                          String code, BigDecimal oldTp, BigDecimal newTp,
+                                          ShadowPosition p, String explanation) {
+        jdbcTemplate.update("""
+            INSERT INTO position_management_test
+            (test_run_id,symbol,generated_at,action_code,current_price,old_take_profit,new_take_profit,highest_price,profit_lock_active,profit_lock_price,explanation)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, runId, symbol, Timestamp.from(event.observedAt()), code, event.price(), oldTp, newTp,
                 p.highest(), p.profitLockActive(), p.profitLockPrice(), explanation);
     }
 
@@ -394,6 +551,29 @@ public class ShadowProductionReplayService {
                 Timestamp.from(s.getGeneratedAt()),s.getLatestPrice(),e.reason(),e.explanation(),pnl,pnlPct,id,runId);
     }
 
+    private void persistSellAtPrice(long runId, String symbol, MarketPriceEventService.PriceEvent event,
+                                    TradeSignal contextSignal, ShadowPosition p, ExitDecision e,
+                                    BigDecimal pnl, BigDecimal pnlPct) {
+        BigDecimal notional = event.price().multiply(p.quantity(), MC);
+        jdbcTemplate.update("""
+            INSERT INTO wallet_execution_test
+            (test_run_id,symbol,side,execution_time,execution_price,quantity,notional_usdt,position_percent,signal_interval,signal_decision,execution_source,execution_code,execution_reason,realized_pnl_usdt,realized_pnl_percent)
+            VALUES (?,?,'SELL',?,?,?,?,0,?,?,?,?,?,?,?)
+            """, runId, symbol, Timestamp.from(event.observedAt()), event.price(), p.quantity(), notional,
+                contextSignal == null ? null : contextSignal.getInterval(),
+                contextSignal == null ? null : name(contextSignal.getDecision()),
+                "LIVE_PRICE_PROTECTION", e.reason(), e.explanation(), pnl, pnlPct);
+    }
+
+    private void closePositionAtPrice(long runId, long id, MarketPriceEventService.PriceEvent event,
+                                      ExitDecision e, BigDecimal pnl, BigDecimal pnlPct) {
+        jdbcTemplate.update("""
+            UPDATE wallet_position_test
+            SET status='CLOSED',exit_time=?,exit_price=?,exit_reason=?,exit_explanation=?,realized_pnl_usdt=?,realized_pnl_percent=?
+            WHERE id=? AND test_run_id=?
+            """, Timestamp.from(event.observedAt()), event.price(), e.reason(), e.explanation(), pnl, pnlPct, id, runId);
+    }
+
     private WalletSettings walletSettings() {
         return walletSettingsRepository.findById(1L).orElseGet(() -> WalletSettings.builder()
                 .id(1L)
@@ -421,6 +601,7 @@ public class ShadowProductionReplayService {
     private boolean equalsNullable(BigDecimal a,BigDecimal b){return a==null?b==null:b!=null&&a.compareTo(b)==0;}
 
     public record ReplayStats(int trades,int wins,int losses,BigDecimal realizedPnl,BigDecimal finalWallet){}
+    private record LivePriceEvaluation(ExitDecision decision, ShadowPosition position) {}
     private record ExitDecision(boolean exit,String reason,String explanation,BigDecimal newTakeProfit){
         ExitDecision(boolean exit,String reason,String explanation){this(exit,reason,explanation,null);}
         static ExitDecision hold(){return new ExitDecision(false,"HOLD","Position remains open.",null);}

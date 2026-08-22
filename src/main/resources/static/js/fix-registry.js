@@ -1003,8 +1003,25 @@
             solution: "Replace ts.interval with ts.interval_code in BUY/SELL, BLOCKED and EXECUTED Trade Activity queries. Preserve UTC database timestamps and leave timezone conversion to the frontend display layer.",
             behavior: "Trade Activity loads normally and shows the persisted timeframe without changing signal generation, Replay, Production execution, wallet accounting or strategy behavior. Database timestamps remain UTC; the page displays them in Asia/Riyadh for the current KSA UI requirement.",
             regression: "Verify BUY/SELL, BLOCKED and EXECUTED filters independently and together. Confirm no SQLSyntaxErrorException occurs, timeframe is populated, and a UTC event timestamp is displayed as KSA UTC+3 on Trade Activity."
+        },
+        {
+            id: "FIX-052",
+            title: "Exact Production live-price replay parity and UTC backend clock",
+            status: "DONE",
+            scenario: "Replay shared Production decision policies but mechanical TP/SL/profit-lock checks were driven by replay signal/candle-close prices, while Production protects positions on every live 1m Binance price update. Backend wallet/replay day boundaries also depended on JVM system timezone in several places.",
+            symbol: "ALL",
+            entry: "Production BUY logic unchanged",
+            exit: "Replay mechanical exits now consume persisted Production live-price observations when available",
+            entryTime: "UTC internally",
+            exitTime: "UTC internally; frontend remains responsible for KSA/local display",
+            replayWindow: "Any window after V64 deployment with persisted market_price_event rows",
+            location: "BinanceKlineService / MarketPriceEventService / RegressionTestWorker / ShadowProductionReplayService / WalletService / WalletAutoExecutionService",
+            classes: ["BinanceKlineService", "MarketPriceEventService", "RegressionTestWorker", "ShadowProductionReplayService", "WalletService", "WalletAutoExecutionService"],
+            cause: "Production calls LivePositionProtectionService for every canonical 1m kline live-price update before candle-close analysis. Replay previously saw only generated signal prices, so an intra-minute stop/profit-lock/TP event could differ. Replay fallback also evaluated profit lock before stop loss, unlike Production. ZoneId.systemDefault() could additionally shift wallet/replay trading-day boundaries by server timezone.",
+            solution: "Persist each canonical Production 1m live-price observation with its Binance UTC event timestamp, feed those observations into Replay before same-time candle-close signals, mirror Production protection order TP -> SL -> profit lock -> normal exit, prevent same-signal SELL->BUY reopen, and force backend wallet/replay day calculations to UTC. Exact-parity runs are not marked passed when the historical window predates persisted live-price events.",
+            behavior: "Production trading decisions are unchanged. Replay becomes materially closer to the actual Production event sequence and can reproduce live mechanical exits using the same observed prices. Database/backend timestamps remain UTC; KSA conversion stays in the presentation layer.",
+            regression: "After V64 deployment, run Production long enough to collect market_price_event rows, then replay the same UTC window. Verify the run reports live-price parity active, BUY decisions match, TP/SL/profit-lock/normal exits occur on persisted Production price timestamps, and signal-driven SELL cannot reopen on the same signal invocation."
         }
-
 
 ];
 

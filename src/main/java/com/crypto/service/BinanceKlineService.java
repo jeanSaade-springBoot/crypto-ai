@@ -4,6 +4,7 @@ import com.crypto.indicator.event.CandleClosedEvent;
 import com.crypto.repository.CandleRepository;
 import com.crypto.position.service.LivePositionProtectionService;
 import com.crypto.debug.monitor.service.PriceMoveMonitorService;
+import com.crypto.market.service.MarketPriceEventService;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import org.slf4j.Logger;
@@ -24,17 +25,20 @@ public class BinanceKlineService {
     private final ApplicationEventPublisher eventPublisher;
     private final LivePositionProtectionService livePositionProtectionService;
     private final PriceMoveMonitorService priceMoveMonitorService;
+    private final MarketPriceEventService marketPriceEventService;
 
     public BinanceKlineService(
             CandleRepository candleRepository,
             ApplicationEventPublisher eventPublisher,
             LivePositionProtectionService livePositionProtectionService,
-            PriceMoveMonitorService priceMoveMonitorService
+            PriceMoveMonitorService priceMoveMonitorService,
+            MarketPriceEventService marketPriceEventService
     ) {
         this.candleRepository = candleRepository;
         this.eventPublisher = eventPublisher;
         this.livePositionProtectionService = livePositionProtectionService;
         this.priceMoveMonitorService = priceMoveMonitorService;
+        this.marketPriceEventService = marketPriceEventService;
     }
 
     @Transactional
@@ -94,6 +98,19 @@ public class BinanceKlineService {
         // for a candle-close analysis signal. Use the 1m stream as the canonical live feed
         // to avoid duplicate checks from 5m/1h subscriptions.
         if ("1m".equals(intervalCode)) {
+            // FIX-052: persist the exact canonical live-price observation BEFORE
+            // Production position protection consumes it. Replay later uses this
+            // same UTC-timestamped event stream and ordering instead of candle-close
+            // approximations for TP/SL/profit-lock decisions.
+            Instant observedAt = data.path("E").asLong(0L) > 0
+                    ? Instant.ofEpochMilli(data.path("E").asLong())
+                    : Instant.now();
+            try {
+                marketPriceEventService.record(symbol, livePrice, observedAt);
+            } catch (RuntimeException ex) {
+                log.error("Unable to persist live price event for exact Replay parity: symbol={}, price={}, observedAt={}, error={}",
+                        symbol, livePrice, observedAt, ex.getMessage(), ex);
+            }
             try {
                 livePositionProtectionService.onPrice(symbol, livePrice);
             } catch (RuntimeException ex) {

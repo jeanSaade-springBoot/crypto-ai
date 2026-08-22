@@ -15,6 +15,7 @@ import java.math.*;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.Locale;
 
 @Service
@@ -211,7 +212,7 @@ public class WalletAutoExecutionService {
                         : executionMessage)
                 .build());
 
-        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneId.systemDefault()))
+        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneOffset.UTC))
                 .ifPresent(daily -> {
                     daily.setEndingUsdt(endingUsdt);
                     daily.setEndingPortfolioUsdt(walletService.currentPortfolioValue());
@@ -300,7 +301,7 @@ public class WalletAutoExecutionService {
                         + " at " + price + " USDT")
                 .build());
 
-        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneId.systemDefault()))
+        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneOffset.UTC))
                 .ifPresent(daily -> {
                     daily.setEndingUsdt(endingUsdt);
                     daily.setEndingPortfolioUsdt(walletService.currentPortfolioValue());
@@ -388,7 +389,7 @@ public class WalletAutoExecutionService {
                         + " USDT; protected level was " + protectedPrice + " USDT")
                 .build());
 
-        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneId.systemDefault()))
+        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneOffset.UTC))
                 .ifPresent(daily -> {
                     daily.setEndingUsdt(endingUsdt);
                     daily.setEndingPortfolioUsdt(walletService.currentPortfolioValue());
@@ -477,7 +478,7 @@ public class WalletAutoExecutionService {
                 .executionMessage(executionMessage == null ? reason + " triggered at " + price : executionMessage)
                 .build());
 
-        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneId.systemDefault()))
+        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneOffset.UTC))
                 .ifPresent(daily -> {
                     daily.setEndingUsdt(endingUsdt);
                     daily.setEndingPortfolioUsdt(walletService.currentPortfolioValue());
@@ -489,7 +490,7 @@ public class WalletAutoExecutionService {
     }
 
     private WalletDailyStatistics dailyStatistics(WalletSettings settings, WalletAsset usdt) {
-        LocalDate today = LocalDate.now(ZoneId.systemDefault());
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
         WalletDailyStatistics existing = dailyStatisticsRepository
                 .findForUpdateByTradeDate(today)
                 .orElse(null);
