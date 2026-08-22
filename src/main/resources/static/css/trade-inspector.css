@@ -169,3 +169,10 @@ body.inspector-modal-open{overflow:hidden}
 .base-tech-row{display:grid;grid-template-columns:88px 48px 1fr;gap:5px;align-items:start;padding:3px 0}.base-tech-row span{font-size:8px;color:var(--muted)}.base-tech-row strong{font-size:8px;color:var(--text);font-variant-numeric:tabular-nums}.base-tech-row small{font-size:7.5px;line-height:1.25;color:#7891a4}
 .base-tech-group.diagnostic{opacity:.84}.base-tech-group.diagnostic .base-tech-group-head span{color:#8fa1af}
 @media(max-width:760px){.base-tech-row{grid-template-columns:100px 54px 1fr}}
+
+
+/* FIX-038: compact forensic tables for blocked BUYs and truthful production exits. */
+.inspector-diagnostic-panel{overflow:hidden}.diagnostic-table-wrap{overflow:auto;border:1px solid var(--border);border-radius:10px;background:rgba(5,12,20,.30)}
+.diagnostic-table{width:100%;border-collapse:collapse;min-width:1080px}.diagnostic-table th,.diagnostic-table td{padding:9px 10px;text-align:left;vertical-align:top;border-bottom:1px solid rgba(141,162,177,.12);font-size:10px}
+.diagnostic-table th{position:sticky;top:0;background:#0b1722;color:#8da2b1;text-transform:uppercase;letter-spacing:.06em;font-size:9px;z-index:1}.diagnostic-table tbody tr:last-child td{border-bottom:0}.diagnostic-table td small{display:block;color:var(--muted);margin-top:3px}.diagnostic-reason{max-width:420px;line-height:1.45;color:#c5d4de}.empty-cell{text-align:center!important;color:var(--muted)!important;padding:18px!important}
+.blocker-badge,.exit-trigger-badge{display:inline-flex;padding:4px 7px;border-radius:999px;font-size:9px;font-weight:900;letter-spacing:.04em;white-space:nowrap}.blocker-badge{color:#ffbd70;background:rgba(255,183,77,.12);border:1px solid rgba(255,183,77,.28)}.exit-trigger-badge{color:#8fc7ff;background:rgba(85,167,255,.12);border:1px solid rgba(85,167,255,.28)}

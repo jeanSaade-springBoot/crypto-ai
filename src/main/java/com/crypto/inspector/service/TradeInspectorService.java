@@ -101,6 +101,104 @@ public class TradeInspectorService {
         return new TradeInspectorResponse(summary(views), views, symbols);
     }
 
+
+    /**
+     * FIX-038: returns persisted BUY/STRONG_BUY signals that final authority blocked.
+     * This is a diagnostic projection only; it never reruns scoring or execution logic.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> blockedBuys(String requestedSymbol, int requestedLimit) {
+        int limit = Math.max(1, Math.min(requestedLimit, 100));
+        String symbol = normalizeSymbol(requestedSymbol);
+        List<TradeSignal> rows = tradeSignalRepository.findRecentBlockedBuys(
+                com.crypto.domain.SignalDecision.BUY,
+                com.crypto.domain.SignalDecision.STRONG_BUY,
+                PageRequest.of(0, Math.min(300, limit * 5)));
+        if (symbol != null) {
+            rows = rows.stream().filter(s -> symbol.equalsIgnoreCase(s.getSymbol())).toList();
+        }
+        return rows.stream().limit(limit).map(this::blockedBuyView).toList();
+    }
+
+    /**
+     * FIX-038: separate production-exit audit feed. The table intentionally does not expose
+     * a generic signal "decision" column because that was misleading for TP/SL/mechanical exits.
+     * Instead it exposes the real close trigger plus the source signal id/recommendation as context.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> productionExits(String requestedSymbol, int requestedLimit) {
+        int limit = Math.max(1, Math.min(requestedLimit, 100));
+        String symbol = normalizeSymbol(requestedSymbol);
+        List<ProductionExitAudit> rows = productionExitAuditRepository
+                .findAllByOrderByAuditedAtDesc(PageRequest.of(0, Math.min(300, limit * 5)));
+        if (symbol != null) {
+            rows = rows.stream().filter(a -> symbol.equalsIgnoreCase(a.getSymbol())).toList();
+        }
+        return rows.stream().limit(limit).map(this::productionExitTableView).toList();
+    }
+
+    private Map<String, Object> blockedBuyView(TradeSignal signal) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("signalId", signal.getId());
+        m.put("symbol", signal.getSymbol());
+        m.put("interval", signal.getInterval());
+        m.put("generatedAt", signal.getGeneratedAt());
+        m.put("price", signal.getLatestPrice());
+        m.put("decision", signal.getDecision() == null ? null : signal.getDecision().name());
+        m.put("score", signal.getTotalScore());
+        m.put("confidence", signal.getConfidenceScore());
+        m.put("strategy", signal.getSelectedStrategy() == null ? null : signal.getSelectedStrategy().name());
+        m.put("regime", signal.getMarketRegime() == null ? null : signal.getMarketRegime().name());
+        m.put("blocker", primaryBlocker(signal));
+        m.put("blockerExplanation", primaryBlockerExplanation(signal));
+        m.put("finalExplanation", signal.getFinalDecisionExplanation());
+        m.put("decisionPath", signal.getDecisionPath());
+        return m;
+    }
+
+    private String primaryBlocker(TradeSignal s) {
+        if (!s.isStrategyEntryAllowed()) return "STRATEGY";
+        if (!s.isAtrImmediateEntryAllowed()) return "ATR / ENTRY TIMING";
+        if (!s.isConfluenceEntryAllowed()) return "MULTI-TIMEFRAME";
+        if (!s.isBtcContextEntryAllowed()) return "BTC CONTEXT";
+        if (!s.isDerivativesEntryAllowed()) return "DERIVATIVES";
+        if (!s.isLiquidityEntryAllowed()) return "ORDER BOOK / LIQUIDITY";
+        return "FINAL DECISION";
+    }
+
+    private String primaryBlockerExplanation(TradeSignal s) {
+        if (!s.isStrategyEntryAllowed()) return safeText(s.getStrategyExplanation(), s.getFinalDecisionExplanation());
+        if (!s.isAtrImmediateEntryAllowed()) return safeText(s.getAtrExplanation(), s.getFinalDecisionExplanation());
+        if (!s.isConfluenceEntryAllowed()) return safeText(s.getConfluenceExplanation(), s.getFinalDecisionExplanation());
+        if (!s.isBtcContextEntryAllowed()) return safeText(s.getBtcContextExplanation(), s.getFinalDecisionExplanation());
+        if (!s.isDerivativesEntryAllowed()) return safeText(s.getDerivativesExplanation(), s.getFinalDecisionExplanation());
+        if (!s.isLiquidityEntryAllowed()) return safeText(s.getLiquidityExplanation(), s.getFinalDecisionExplanation());
+        return safeText(s.getFinalDecisionExplanation(), "Entry was blocked by final decision authority.");
+    }
+
+    private String safeText(String preferred, String fallback) {
+        return preferred == null || preferred.isBlank() ? fallback : preferred;
+    }
+
+    private Map<String, Object> productionExitTableView(ProductionExitAudit a) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("auditId", a.getId());
+        m.put("paperPositionId", a.getPaperPositionId());
+        m.put("walletPositionId", a.getWalletPositionId());
+        m.put("symbol", a.getSymbol());
+        m.put("closeTrigger", a.getCloseTrigger());
+        m.put("sourceSignalId", a.getSourceSignalId());
+        m.put("positionAnalysisId", a.getPositionAnalysisId());
+        m.put("positionRecommendation", a.getPositionRecommendation());
+        m.put("entryPrice", a.getEntryPriceUsdt());
+        m.put("exitPrice", a.getExitPriceUsdt());
+        m.put("stopLoss", a.getStopLossUsdt());
+        m.put("takeProfit", a.getTakeProfitUsdt());
+        m.put("closeExplanation", a.getCloseExplanation());
+        m.put("auditedAt", a.getAuditedAt());
+        return m;
+    }
+
     private WalletTrade findEntryTrade(WalletTrade sell, List<WalletTrade> ledger) {
         return ledger.stream()
                 .filter(t -> t.getExecutedAt() != null && t.getExecutedAt().isBefore(sell.getExecutedAt()))

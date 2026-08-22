@@ -32,6 +32,23 @@ public class TradeInspectorController {
             @RequestParam(required = false, defaultValue = "20") int limit) {
         return service.inspect(symbol, venue, limit);
     }
+    // FIX-038: read-only blocked BUY diagnostics and truthful production-exit audit tables.
+    @GetMapping("/api/trade-inspector/blocked-buys")
+    @ResponseBody
+    public java.util.List<Map<String, Object>> blockedBuys(
+            @RequestParam(required = false, defaultValue = "ALL") String symbol,
+            @RequestParam(required = false, defaultValue = "20") int limit) {
+        return service.blockedBuys(symbol, limit);
+    }
+
+    @GetMapping("/api/trade-inspector/production-exits")
+    @ResponseBody
+    public java.util.List<Map<String, Object>> productionExits(
+            @RequestParam(required = false, defaultValue = "ALL") String symbol,
+            @RequestParam(required = false, defaultValue = "20") int limit) {
+        return service.productionExits(symbol, limit);
+    }
+
     // FIX-024: read-only decision-state path for one Trade Inspector BUY -> SELL pair.
     @GetMapping("/api/trade-inspector/path")
     @ResponseBody

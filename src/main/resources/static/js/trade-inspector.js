@@ -87,6 +87,48 @@ function tradeCard(t){
  </article>`;
 }
 
+
+// FIX-038: read-only diagnostic tables. These render persisted production evidence only;
+// no signal, score, blocker, or exit trigger is recalculated in the browser.
+function shortText(v,max=180){const t=String(v??'').trim();return t.length>max?`${t.slice(0,max-1)}…`:t||'—'}
+function blockedBuyRow(s){
+  return `<tr>
+    <td>${date(s.generatedAt)}</td><td><strong>${esc(s.symbol)}</strong><small>#${esc(s.signalId)}</small></td><td>${esc(s.interval||'—')}</td>
+    <td><span class="badge buy">${esc(s.decision||'BUY')}</span></td><td>${esc(s.score)}/100</td><td>${esc(s.confidence)}/100</td>
+    <td><span class="blocker-badge">${esc(s.blocker||'FINAL DECISION')}</span></td>
+    <td class="diagnostic-reason" title="${esc(s.blockerExplanation||s.finalExplanation||'')}">${esc(shortText(s.blockerExplanation||s.finalExplanation,220))}</td>
+  </tr>`;
+}
+function productionExitRow(x){
+  return `<tr>
+    <td>${date(x.auditedAt)}</td><td><strong>${esc(x.symbol)}</strong><small>${x.paperPositionId==null?'':`Position #${esc(x.paperPositionId)}`}</small></td>
+    <td><span class="exit-trigger-badge">${esc(String(x.closeTrigger||'UNKNOWN').replaceAll('_',' '))}</span></td>
+    <td>${price(x.entryPrice)}</td><td>${price(x.exitPrice)}</td>
+    <td>${x.sourceSignalId==null?'—':`#${esc(x.sourceSignalId)}`}</td><td>${esc(x.positionRecommendation||'—')}</td>
+    <td class="diagnostic-reason" title="${esc(x.closeExplanation||'')}">${esc(shortText(x.closeExplanation,220))}</td>
+  </tr>`;
+}
+async function loadInspectorDiagnostics(){
+  const symbol=encodeURIComponent($('symbol-filter').value||'ALL');
+  const limit=encodeURIComponent($('limit-filter').value||20);
+  try{
+    const [blockedResponse,exitResponse]=await Promise.all([
+      fetch(`/api/trade-inspector/blocked-buys?symbol=${symbol}&limit=${limit}`,{cache:'no-store'}),
+      fetch(`/api/trade-inspector/production-exits?symbol=${symbol}&limit=${limit}`,{cache:'no-store'})
+    ]);
+    if(!blockedResponse.ok)throw new Error(`Blocked BUY HTTP ${blockedResponse.status}`);
+    if(!exitResponse.ok)throw new Error(`Production exits HTTP ${exitResponse.status}`);
+    const blocked=await blockedResponse.json(),exits=await exitResponse.json();
+    $('blocked-buy-count').textContent=`${blocked.length} blocked`;
+    $('blocked-buy-rows').innerHTML=blocked.length?blocked.map(blockedBuyRow).join(''):'<tr><td colspan="8" class="empty-cell">No blocked BUY signals match this filter.</td></tr>';
+    $('production-exit-count').textContent=`${exits.length} exits`;
+    $('production-exit-rows').innerHTML=exits.length?exits.map(productionExitRow).join(''):'<tr><td colspan="8" class="empty-cell">No production exit audit rows match this filter.</td></tr>';
+  }catch(e){
+    $('blocked-buy-rows').innerHTML=`<tr><td colspan="8" class="empty-cell negative">${esc(e.message)}</td></tr>`;
+    $('production-exit-rows').innerHTML=`<tr><td colspan="8" class="empty-cell negative">${esc(e.message)}</td></tr>`;
+  }
+}
+
 async function load(){
  $('inspector-error').classList.add('hidden');
  try{
@@ -95,6 +137,7 @@ async function load(){
   const d=await r.json();window.__inspectorTrades=d.trades||[];renderSummary(d.summary);renderSymbols(d.symbols);
   $('trade-cards').innerHTML=d.trades?.length?d.trades.map(tradeCard).join(''):'<div class="empty">No completed trades match this filter.</div>';
   $('inspector-updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
+  await loadInspectorDiagnostics();
  }catch(e){$('inspector-error').textContent=`Trade Inspector could not load: ${e.message}`;$('inspector-error').classList.remove('hidden')}
 }
 $('refresh-inspector').addEventListener('click',load);$('symbol-filter').addEventListener('change',load);$('venue-filter').addEventListener('change',load);$('limit-filter').addEventListener('change',load);load();

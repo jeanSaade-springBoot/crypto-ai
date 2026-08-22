@@ -56,6 +56,21 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
             @Param("from") Instant from,
             @Param("buy") SignalDecision buy,
             @Param("strongBuy") SignalDecision strongBuy);
+
+    // FIX-038: Trade Inspector diagnostic feed for BUY/STRONG_BUY signals that were
+    // persisted but blocked by final decision authority. Read-only; no execution logic changes.
+    @Query("""
+            select s from TradeSignal s
+            where s.finalEntryAllowed = false
+              and (s.decision in (:buy, :strongBuy)
+                   or s.originalDecision in (:buy, :strongBuy))
+            order by s.generatedAt desc
+            """)
+    List<TradeSignal> findRecentBlockedBuys(
+            @Param("buy") SignalDecision buy,
+            @Param("strongBuy") SignalDecision strongBuy,
+            org.springframework.data.domain.Pageable pageable);
+
     List<TradeSignal> findBySymbolAndGeneratedAtBetweenOrderByGeneratedAtAsc(
             String symbol, Instant from, Instant to
     );

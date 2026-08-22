@@ -108,6 +108,36 @@
             </section>
         </div>
 
+
+        <!-- FIX-038: diagnostic-only tables. Blocked BUYs expose why final authority refused
+             execution; production exits show the true terminal trigger without a misleading
+             generic decision column. -->
+        <section class="panel inspector-diagnostic-panel">
+            <div class="section-heading">
+                <div><p class="eyebrow">BLOCKED BUY SIGNALS</p><h2>Why a BUY did not execute</h2></div>
+                <span id="blocked-buy-count">—</span>
+            </div>
+            <div class="diagnostic-table-wrap">
+                <table class="diagnostic-table">
+                    <thead><tr><th>Time</th><th>Symbol</th><th>TF</th><th>Signal</th><th>Score</th><th>Confidence</th><th>Primary blocker</th><th>Why</th></tr></thead>
+                    <tbody id="blocked-buy-rows"><tr><td colspan="8" class="empty-cell">Loading blocked BUY signals…</td></tr></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel inspector-diagnostic-panel">
+            <div class="section-heading">
+                <div><p class="eyebrow">PRODUCTION EXITS</p><h2>Real production close trigger</h2><p class="inspector-subtitle">The generic signal decision is intentionally hidden. The table shows what actually closed the position and which signal/position analysis supplied context.</p></div>
+                <span id="production-exit-count">—</span>
+            </div>
+            <div class="diagnostic-table-wrap">
+                <table class="diagnostic-table">
+                    <thead><tr><th>Time</th><th>Symbol</th><th>Close trigger</th><th>Entry</th><th>Exit</th><th>Source signal</th><th>Position advice</th><th>Explanation</th></tr></thead>
+                    <tbody id="production-exit-rows"><tr><td colspan="8" class="empty-cell">Loading production exits…</td></tr></tbody>
+                </table>
+            </div>
+        </section>
+
         <section class="panel">
             <div class="section-heading">
                 <div><p class="eyebrow">COMPLETED POSITIONS</p><h2>Recent inspected trades</h2></div>

@@ -732,6 +732,25 @@
         }
 ,
         {
+            id: "FIX-038",
+            title: "Blocked BUY diagnostics and truthful production exit table",
+            status: "DONE",
+            scenario: "Trade Inspector forensic visibility for non-executed BUY signals and real production close triggers.",
+            symbol: "ALL",
+            entry: "Blocked BUY/STRONG_BUY signals remain non-executed; display only",
+            exit: "Production exits show TAKE_PROFIT / STOP_LOSS / PROFIT_LOCK / SIGNAL_SELL or other real close trigger",
+            entryTime: "N/A",
+            exitTime: "N/A",
+            replayWindow: "No replay required; diagnostic/read-only feature only",
+            location: "Trade Inspector + read-only TradeSignal and ProductionExitAudit projections",
+            classes: ["TradeInspectorService", "TradeInspectorController", "TradeSignalRepository", "ProductionExitAuditRepository", "trade-inspector.html", "trade-inspector.js", "trade-inspector.css"],
+            cause: "A BUY could be visibly strong in scoring but never execute, while Trade Inspector had no dedicated place to show the exact persisted blocking gate. Completed exits could also look like generic SELL decisions even when production actually closed by TP, SL, Profit Lock or mechanical protection.",
+            solution: "Add a blocked-BUY table sourced from persisted final_entry_allowed=false BUY/STRONG_BUY signals, including score, confidence, strategy/regime, primary blocking authority and the persisted explanation. Add a separate production-exit table sourced from immutable production_exit_audit rows and intentionally omit the generic decision column, showing the true close trigger, source signal id, position recommendation and close explanation instead.",
+            behavior: "No signal is recalculated and no trading authority changes. BUY/SELL scoring, Execution Intelligence, sizing, TP/SL, position management, Wallet, Binance and Replay remain unchanged.",
+            regression: "Read-only/API/UI change. JavaScript syntax validation passes; endpoints use persisted production evidence only. Existing strategy/replay tests are expected to remain unchanged."
+        }
+,
+        {
             id: "FIX-037",
             title: "Atomic wallet USDT balance mutations",
             status: "DONE",
