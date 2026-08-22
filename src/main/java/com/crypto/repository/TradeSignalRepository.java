@@ -57,18 +57,41 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
             @Param("buy") SignalDecision buy,
             @Param("strongBuy") SignalDecision strongBuy);
 
-    // FIX-038: Trade Inspector diagnostic feed for BUY/STRONG_BUY signals that were
-    // persisted but blocked by final decision authority. Read-only; no execution logic changes.
+    // FIX-039: Blocked-signal diagnostics are filtered in the database by symbol and time
+    // so a narrow symbol/date search cannot be lost behind a generic recent-row limit.
     @Query("""
             select s from TradeSignal s
             where s.finalEntryAllowed = false
               and (s.decision in (:buy, :strongBuy)
                    or s.originalDecision in (:buy, :strongBuy))
+              and (:symbol is null or upper(s.symbol) = :symbol)
+              and s.generatedAt between :from and :to
             order by s.generatedAt desc
             """)
-    List<TradeSignal> findRecentBlockedBuys(
+    List<TradeSignal> findBlockedBuys(
             @Param("buy") SignalDecision buy,
             @Param("strongBuy") SignalDecision strongBuy,
+            @Param("symbol") String symbol,
+            @Param("from") Instant from,
+            @Param("to") Instant to,
+            org.springframework.data.domain.Pageable pageable);
+
+    // A blocked SELL means the isolated/base SELL or STRONG_SELL candidate was persisted,
+    // but the final decision pipeline changed it to a non-SELL state. This is audit-only.
+    @Query("""
+            select s from TradeSignal s
+            where s.originalDecision in (:sell, :strongSell)
+              and s.decision not in (:sell, :strongSell)
+              and (:symbol is null or upper(s.symbol) = :symbol)
+              and s.generatedAt between :from and :to
+            order by s.generatedAt desc
+            """)
+    List<TradeSignal> findBlockedSells(
+            @Param("sell") SignalDecision sell,
+            @Param("strongSell") SignalDecision strongSell,
+            @Param("symbol") String symbol,
+            @Param("from") Instant from,
+            @Param("to") Instant to,
             org.springframework.data.domain.Pageable pageable);
 
     List<TradeSignal> findBySymbolAndGeneratedAtBetweenOrderByGeneratedAtAsc(

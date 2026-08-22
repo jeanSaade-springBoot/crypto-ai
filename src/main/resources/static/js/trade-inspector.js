@@ -88,15 +88,40 @@ function tradeCard(t){
 }
 
 
-// FIX-038: read-only diagnostic tables. These render persisted production evidence only;
-// no signal, score, blocker, or exit trigger is recalculated in the browser.
+// FIX-039: read-only blocked-signal diagnostics. Database timestamps are UTC; these helpers
+// explicitly render and parse Asia/Riyadh (UTC+03:00) so the audit time never depends on browser zone.
 function shortText(v,max=180){const t=String(v??'').trim();return t.length>max?`${t.slice(0,max-1)}…`:t||'—'}
+function ksaDate(v){
+  const d=window.CryptoTime.parseUtc(v);if(!d)return '—';
+  return new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(d).replace(',','');
+}
+function ksaInputValue(dateObj){
+  const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).formatToParts(dateObj);
+  const get=t=>parts.find(p=>p.type===t)?.value||'';
+  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}`;
+}
+function ksaInputToUtcIso(value){
+  if(!value)return null;
+  const d=new Date(`${value}:00+03:00`);return Number.isNaN(d.getTime())?null:d.toISOString();
+}
+function setBlockedLast3Hours(){
+  const now=new Date(),from=new Date(now.getTime()-3*60*60*1000);
+  $('blocked-signal-from').value=ksaInputValue(from);$('blocked-signal-to').value=ksaInputValue(now);
+  $('blocked-signal-window-label').textContent='Last 3 hours · KSA';
+}
 function blockedBuyRow(s){
   return `<tr>
-    <td>${date(s.generatedAt)}</td><td><strong>${esc(s.symbol)}</strong><small>#${esc(s.signalId)}</small></td><td>${esc(s.interval||'—')}</td>
+    <td>${ksaDate(s.generatedAt)}</td><td><strong>${esc(s.symbol)}</strong><small>#${esc(s.signalId)}</small></td><td>${esc(s.interval||'—')}</td>
     <td><span class="badge buy">${esc(s.decision||'BUY')}</span></td><td>${esc(s.score)}/100</td><td>${esc(s.confidence)}/100</td>
     <td><span class="blocker-badge">${esc(s.blocker||'FINAL DECISION')}</span></td>
     <td class="diagnostic-reason" title="${esc(s.blockerExplanation||s.finalExplanation||'')}">${esc(shortText(s.blockerExplanation||s.finalExplanation,220))}</td>
+  </tr>`;
+}
+function blockedSellRow(s){
+  return `<tr>
+    <td>${ksaDate(s.generatedAt)}</td><td><strong>${esc(s.symbol)}</strong><small>#${esc(s.signalId)}</small></td><td>${esc(s.interval||'—')}</td>
+    <td><span class="badge sell">${esc(s.originalDecision||'SELL')}</span></td><td>${esc(s.decision||'—')}</td><td>${esc(s.score)}/100</td><td>${esc(s.confidence)}/100</td>
+    <td class="diagnostic-reason" title="${esc(s.blockerExplanation||'')}"><span class="blocker-badge">${esc(s.blocker||'FINAL DECISION')}</span><br>${esc(shortText(s.blockerExplanation,200))}</td>
   </tr>`;
 }
 function productionExitRow(x){
@@ -108,25 +133,39 @@ function productionExitRow(x){
     <td class="diagnostic-reason" title="${esc(x.closeExplanation||'')}">${esc(shortText(x.closeExplanation,220))}</td>
   </tr>`;
 }
-async function loadInspectorDiagnostics(){
-  const symbol=encodeURIComponent($('symbol-filter').value||'ALL');
-  const limit=encodeURIComponent($('limit-filter').value||20);
+async function loadBlockedSignalDiagnostics(){
+  const rawSymbol=String($('blocked-signal-symbol').value||'ALL').trim().toUpperCase();
+  const symbol=encodeURIComponent(rawSymbol||'ALL');
+  const from=ksaInputToUtcIso($('blocked-signal-from').value),to=ksaInputToUtcIso($('blocked-signal-to').value);
+  if(!from||!to){$('inspector-error').textContent='Blocked signal From/To must be valid KSA date/times.';$('inspector-error').classList.remove('hidden');return;}
+  if(new Date(from)>new Date(to)){$('inspector-error').textContent='Blocked signal From must be before To.';$('inspector-error').classList.remove('hidden');return;}
+  $('inspector-error').classList.add('hidden');
+  $('blocked-signal-window-label').textContent=`${rawSymbol&&rawSymbol!=='ALL'?rawSymbol+' · ':''}${$('blocked-signal-from').value.replace('T',' ')} → ${$('blocked-signal-to').value.replace('T',' ')} KSA`;
   try{
-    const [blockedResponse,exitResponse]=await Promise.all([
-      fetch(`/api/trade-inspector/blocked-buys?symbol=${symbol}&limit=${limit}`,{cache:'no-store'}),
-      fetch(`/api/trade-inspector/production-exits?symbol=${symbol}&limit=${limit}`,{cache:'no-store'})
+    const q=`symbol=${symbol}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=250`;
+    const [buyResponse,sellResponse]=await Promise.all([
+      fetch(`/api/trade-inspector/blocked-buys?${q}`,{cache:'no-store'}),
+      fetch(`/api/trade-inspector/blocked-sells?${q}`,{cache:'no-store'})
     ]);
-    if(!blockedResponse.ok)throw new Error(`Blocked BUY HTTP ${blockedResponse.status}`);
-    if(!exitResponse.ok)throw new Error(`Production exits HTTP ${exitResponse.status}`);
-    const blocked=await blockedResponse.json(),exits=await exitResponse.json();
-    $('blocked-buy-count').textContent=`${blocked.length} blocked`;
-    $('blocked-buy-rows').innerHTML=blocked.length?blocked.map(blockedBuyRow).join(''):'<tr><td colspan="8" class="empty-cell">No blocked BUY signals match this filter.</td></tr>';
-    $('production-exit-count').textContent=`${exits.length} exits`;
-    $('production-exit-rows').innerHTML=exits.length?exits.map(productionExitRow).join(''):'<tr><td colspan="8" class="empty-cell">No production exit audit rows match this filter.</td></tr>';
+    if(!buyResponse.ok)throw new Error(`Blocked BUY HTTP ${buyResponse.status}`);
+    if(!sellResponse.ok)throw new Error(`Blocked SELL HTTP ${sellResponse.status}`);
+    const blockedBuys=await buyResponse.json(),blockedSells=await sellResponse.json();
+    $('blocked-buy-count').textContent=`${blockedBuys.length} blocked`;
+    $('blocked-buy-rows').innerHTML=blockedBuys.length?blockedBuys.map(blockedBuyRow).join(''):'<tr><td colspan="8" class="empty-cell">No blocked BUY signals match this symbol/date filter.</td></tr>';
+    $('blocked-sell-count').textContent=`${blockedSells.length} blocked`;
+    $('blocked-sell-rows').innerHTML=blockedSells.length?blockedSells.map(blockedSellRow).join(''):'<tr><td colspan="8" class="empty-cell">No blocked SELL signals match this symbol/date filter.</td></tr>';
   }catch(e){
     $('blocked-buy-rows').innerHTML=`<tr><td colspan="8" class="empty-cell negative">${esc(e.message)}</td></tr>`;
-    $('production-exit-rows').innerHTML=`<tr><td colspan="8" class="empty-cell negative">${esc(e.message)}</td></tr>`;
+    $('blocked-sell-rows').innerHTML=`<tr><td colspan="8" class="empty-cell negative">${esc(e.message)}</td></tr>`;
   }
+}
+async function loadProductionExits(){
+  const symbol=encodeURIComponent($('symbol-filter').value||'ALL'),limit=encodeURIComponent($('limit-filter').value||20);
+  try{
+    const r=await fetch(`/api/trade-inspector/production-exits?symbol=${symbol}&limit=${limit}`,{cache:'no-store'});if(!r.ok)throw new Error(`Production exits HTTP ${r.status}`);
+    const exits=await r.json();$('production-exit-count').textContent=`${exits.length} exits`;
+    $('production-exit-rows').innerHTML=exits.length?exits.map(productionExitRow).join(''):'<tr><td colspan="8" class="empty-cell">No production exit audit rows match this filter.</td></tr>';
+  }catch(e){$('production-exit-rows').innerHTML=`<tr><td colspan="8" class="empty-cell negative">${esc(e.message)}</td></tr>`;}
 }
 
 async function load(){
@@ -137,10 +176,14 @@ async function load(){
   const d=await r.json();window.__inspectorTrades=d.trades||[];renderSummary(d.summary);renderSymbols(d.symbols);
   $('trade-cards').innerHTML=d.trades?.length?d.trades.map(tradeCard).join(''):'<div class="empty">No completed trades match this filter.</div>';
   $('inspector-updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
-  await loadInspectorDiagnostics();
+  await Promise.all([loadBlockedSignalDiagnostics(),loadProductionExits()]);
  }catch(e){$('inspector-error').textContent=`Trade Inspector could not load: ${e.message}`;$('inspector-error').classList.remove('hidden')}
 }
-$('refresh-inspector').addEventListener('click',load);$('symbol-filter').addEventListener('change',load);$('venue-filter').addEventListener('change',load);$('limit-filter').addEventListener('change',load);load();
+$('refresh-inspector').addEventListener('click',load);$('symbol-filter').addEventListener('change',load);$('venue-filter').addEventListener('change',load);$('limit-filter').addEventListener('change',load);
+$('blocked-signal-search').addEventListener('click',loadBlockedSignalDiagnostics);
+$('blocked-signal-reset').addEventListener('click',()=>{setBlockedLast3Hours();$('blocked-signal-symbol').value='ALL';loadBlockedSignalDiagnostics();});
+$('blocked-signal-symbol').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();loadBlockedSignalDiagnostics();}});
+setBlockedLast3Hours();load();
 
 
 function inspectorTradeKey(t){return String(t.tradeHistoryId??t.walletSellTradeId??'')}
@@ -166,10 +209,18 @@ function chartPriceLabel(value){
   return n.toFixed(digits).replace(/\.0+$/,'').replace(/(\.\d*?[1-9])0+$/,'$1');
 }
 
+// FIX-040: Trade-chart time is always presented in KSA using a 24-hour clock.
+// This is display-only: candle timestamps remain UTC internally for chart positioning.
 function chartTimeLabel(value, seconds=false){
   const d=new Date(Number(value));
   if(Number.isNaN(d.getTime()))return '';
-  return d.toLocaleString(undefined,{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit',second:seconds?'2-digit':undefined,hour12:false});
+  return new Intl.DateTimeFormat('en-GB',{
+    timeZone:'Asia/Riyadh',
+    month:'short',day:'2-digit',
+    hour:'2-digit',minute:'2-digit',
+    second:seconds?'2-digit':undefined,
+    hour12:false
+  }).format(d);
 }
 
 function chartNumber(value, digits=2){

@@ -176,3 +176,11 @@ body.inspector-modal-open{overflow:hidden}
 .diagnostic-table{width:100%;border-collapse:collapse;min-width:1080px}.diagnostic-table th,.diagnostic-table td{padding:9px 10px;text-align:left;vertical-align:top;border-bottom:1px solid rgba(141,162,177,.12);font-size:10px}
 .diagnostic-table th{position:sticky;top:0;background:#0b1722;color:#8da2b1;text-transform:uppercase;letter-spacing:.06em;font-size:9px;z-index:1}.diagnostic-table tbody tr:last-child td{border-bottom:0}.diagnostic-table td small{display:block;color:var(--muted);margin-top:3px}.diagnostic-reason{max-width:420px;line-height:1.45;color:#c5d4de}.empty-cell{text-align:center!important;color:var(--muted)!important;padding:18px!important}
 .blocker-badge,.exit-trigger-badge{display:inline-flex;padding:4px 7px;border-radius:999px;font-size:9px;font-weight:900;letter-spacing:.04em;white-space:nowrap}.blocker-badge{color:#ffbd70;background:rgba(255,183,77,.12);border:1px solid rgba(255,183,77,.28)}.exit-trigger-badge{color:#8fc7ff;background:rgba(85,167,255,.12);border:1px solid rgba(85,167,255,.28)}
+
+/* FIX-039: compact diagnostic search bar shared by blocked BUY and blocked SELL grids. */
+.blocked-signal-filters{display:grid;grid-template-columns:minmax(150px,.8fr) minmax(190px,1fr) minmax(190px,1fr) auto auto;gap:10px;align-items:end;margin-top:10px}
+.blocked-signal-filters label{display:flex;flex-direction:column;gap:5px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em}
+.blocked-signal-filters input{min-height:38px;border:1px solid var(--border);border-radius:8px;background:#08131d;color:var(--text);padding:8px 10px;font-size:12px}
+.blocked-signal-filters button{min-height:38px}.secondary-button{background:transparent!important;border:1px solid var(--border)!important;color:var(--text)!important}
+@media(max-width:900px){.blocked-signal-filters{grid-template-columns:1fr 1fr}.blocked-signal-filters label:first-child{grid-column:1/-1}}
+@media(max-width:560px){.blocked-signal-filters{grid-template-columns:1fr}.blocked-signal-filters label:first-child{grid-column:auto}}

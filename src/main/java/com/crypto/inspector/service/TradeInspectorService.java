@@ -103,21 +103,44 @@ public class TradeInspectorService {
 
 
     /**
-     * FIX-038: returns persisted BUY/STRONG_BUY signals that final authority blocked.
-     * This is a diagnostic projection only; it never reruns scoring or execution logic.
+     * FIX-039: returns persisted BUY/STRONG_BUY candidates blocked by final entry authority.
+     * The default window is the last three hours; caller-supplied timestamps are UTC instants.
      */
     @Transactional(readOnly = true)
-    public List<Map<String, Object>> blockedBuys(String requestedSymbol, int requestedLimit) {
-        int limit = Math.max(1, Math.min(requestedLimit, 100));
+    public List<Map<String, Object>> blockedBuys(String requestedSymbol, Instant requestedFrom, Instant requestedTo, int requestedLimit) {
+        TimeWindow window = blockedSignalWindow(requestedFrom, requestedTo);
+        int limit = Math.max(1, Math.min(requestedLimit, 250));
         String symbol = normalizeSymbol(requestedSymbol);
-        List<TradeSignal> rows = tradeSignalRepository.findRecentBlockedBuys(
-                com.crypto.domain.SignalDecision.BUY,
-                com.crypto.domain.SignalDecision.STRONG_BUY,
-                PageRequest.of(0, Math.min(300, limit * 5)));
-        if (symbol != null) {
-            rows = rows.stream().filter(s -> symbol.equalsIgnoreCase(s.getSymbol())).toList();
+        return tradeSignalRepository.findBlockedBuys(
+                        com.crypto.domain.SignalDecision.BUY,
+                        com.crypto.domain.SignalDecision.STRONG_BUY,
+                        symbol, window.from(), window.to(), PageRequest.of(0, limit))
+                .stream().map(this::blockedBuyView).toList();
+    }
+
+    /**
+     * FIX-039: a blocked SELL is an isolated/base SELL or STRONG_SELL whose persisted final
+     * decision became a non-SELL state. This exposes the existing audit evidence only.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> blockedSells(String requestedSymbol, Instant requestedFrom, Instant requestedTo, int requestedLimit) {
+        TimeWindow window = blockedSignalWindow(requestedFrom, requestedTo);
+        int limit = Math.max(1, Math.min(requestedLimit, 250));
+        String symbol = normalizeSymbol(requestedSymbol);
+        return tradeSignalRepository.findBlockedSells(
+                        com.crypto.domain.SignalDecision.SELL,
+                        com.crypto.domain.SignalDecision.STRONG_SELL,
+                        symbol, window.from(), window.to(), PageRequest.of(0, limit))
+                .stream().map(this::blockedSellView).toList();
+    }
+
+    private TimeWindow blockedSignalWindow(Instant requestedFrom, Instant requestedTo) {
+        Instant to = requestedTo == null ? Instant.now() : requestedTo;
+        Instant from = requestedFrom == null ? to.minus(Duration.ofHours(3)) : requestedFrom;
+        if (from.isAfter(to)) {
+            throw new IllegalArgumentException("Blocked-signal From time must be before To time.");
         }
-        return rows.stream().limit(limit).map(this::blockedBuyView).toList();
+        return new TimeWindow(from, to);
     }
 
     /**
@@ -152,6 +175,27 @@ public class TradeInspectorService {
         m.put("blocker", primaryBlocker(signal));
         m.put("blockerExplanation", primaryBlockerExplanation(signal));
         m.put("finalExplanation", signal.getFinalDecisionExplanation());
+        m.put("decisionPath", signal.getDecisionPath());
+        return m;
+    }
+
+    private Map<String, Object> blockedSellView(TradeSignal signal) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("signalId", signal.getId());
+        m.put("symbol", signal.getSymbol());
+        m.put("interval", signal.getInterval());
+        m.put("generatedAt", signal.getGeneratedAt());
+        m.put("price", signal.getLatestPrice());
+        m.put("originalDecision", signal.getOriginalDecision() == null ? null : signal.getOriginalDecision().name());
+        m.put("decision", signal.getDecision() == null ? null : signal.getDecision().name());
+        m.put("score", signal.getTotalScore());
+        m.put("confidence", signal.getConfidenceScore());
+        m.put("strategy", signal.getSelectedStrategy() == null ? null : signal.getSelectedStrategy().name());
+        m.put("regime", signal.getMarketRegime() == null ? null : signal.getMarketRegime().name());
+        m.put("blocker", "FINAL DECISION: " +
+                (signal.getOriginalDecision() == null ? "SELL" : signal.getOriginalDecision().name()) + " → " +
+                (signal.getDecision() == null ? "UNKNOWN" : signal.getDecision().name()));
+        m.put("blockerExplanation", safeText(signal.getFinalDecisionExplanation(), signal.getExplanation()));
         m.put("decisionPath", signal.getDecisionPath());
         return m;
     }
@@ -854,4 +898,8 @@ public class TradeInspectorService {
     private String normalizeSymbol(String symbol) { return symbol == null || symbol.isBlank() || "ALL".equalsIgnoreCase(symbol) ? null : symbol.trim().toUpperCase(Locale.ROOT); }
     private String formatPct(BigDecimal value) { return value.setScale(2, RoundingMode.HALF_UP).toPlainString() + "%"; }
     private record ExitAssessment(String quality, String explanation) {}
+
+    private record TimeWindow(Instant from, Instant to) {
+    }
+
 }

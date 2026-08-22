@@ -109,9 +109,22 @@
         </div>
 
 
-        <!-- FIX-038: diagnostic-only tables. Blocked BUYs expose why final authority refused
-             execution; production exits show the true terminal trigger without a misleading
-             generic decision column. -->
+        <!-- FIX-039: blocked-signal diagnostics share a KSA-aware symbol/date filter.
+             Default range is the last three hours and does not alter trading behavior. -->
+        <section class="panel inspector-diagnostic-panel">
+            <div class="section-heading">
+                <div><p class="eyebrow">BLOCKED SIGNAL DIAGNOSTICS</p><h2>BUY / SELL blockers</h2><p class="inspector-subtitle">Default: last 3 hours. Search one symbol, or one symbol inside a KSA date/time range.</p></div>
+                <span id="blocked-signal-window-label">Last 3 hours · KSA</span>
+            </div>
+            <div class="blocked-signal-filters">
+                <label>Symbol<input id="blocked-signal-symbol" type="text" maxlength="30" placeholder="ALL or PEPEUSDT"></label>
+                <label>From (KSA)<input id="blocked-signal-from" type="datetime-local" step="60"></label>
+                <label>To (KSA)<input id="blocked-signal-to" type="datetime-local" step="60"></label>
+                <button id="blocked-signal-search" type="button">Search</button>
+                <button id="blocked-signal-reset" type="button" class="secondary-button">Last 3 hours</button>
+            </div>
+        </section>
+
         <section class="panel inspector-diagnostic-panel">
             <div class="section-heading">
                 <div><p class="eyebrow">BLOCKED BUY SIGNALS</p><h2>Why a BUY did not execute</h2></div>
@@ -119,8 +132,21 @@
             </div>
             <div class="diagnostic-table-wrap">
                 <table class="diagnostic-table">
-                    <thead><tr><th>Time</th><th>Symbol</th><th>TF</th><th>Signal</th><th>Score</th><th>Confidence</th><th>Primary blocker</th><th>Why</th></tr></thead>
+                    <thead><tr><th>Blocked at (KSA)</th><th>Symbol</th><th>TF</th><th>Signal</th><th>Score</th><th>Confidence</th><th>Primary blocker</th><th>Why</th></tr></thead>
                     <tbody id="blocked-buy-rows"><tr><td colspan="8" class="empty-cell">Loading blocked BUY signals…</td></tr></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel inspector-diagnostic-panel">
+            <div class="section-heading">
+                <div><p class="eyebrow">BLOCKED SELL SIGNALS</p><h2>Why a SELL candidate did not remain SELL</h2><p class="inspector-subtitle">Shows persisted SELL/STRONG_SELL candidates changed to a non-SELL final decision.</p></div>
+                <span id="blocked-sell-count">—</span>
+            </div>
+            <div class="diagnostic-table-wrap">
+                <table class="diagnostic-table">
+                    <thead><tr><th>Blocked at (KSA)</th><th>Symbol</th><th>TF</th><th>Original</th><th>Final</th><th>Score</th><th>Confidence</th><th>Why</th></tr></thead>
+                    <tbody id="blocked-sell-rows"><tr><td colspan="8" class="empty-cell">Loading blocked SELL signals…</td></tr></tbody>
                 </table>
             </div>
         </section>

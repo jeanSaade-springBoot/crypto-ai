@@ -32,13 +32,26 @@ public class TradeInspectorController {
             @RequestParam(required = false, defaultValue = "20") int limit) {
         return service.inspect(symbol, venue, limit);
     }
-    // FIX-038: read-only blocked BUY diagnostics and truthful production-exit audit tables.
+    // FIX-039: blocked BUY/SELL diagnostics accept an explicit UTC window. When omitted,
+    // the service defaults to the last three hours. The UI presents the timestamps in KSA.
     @GetMapping("/api/trade-inspector/blocked-buys")
     @ResponseBody
     public java.util.List<Map<String, Object>> blockedBuys(
             @RequestParam(required = false, defaultValue = "ALL") String symbol,
-            @RequestParam(required = false, defaultValue = "20") int limit) {
-        return service.blockedBuys(symbol, limit);
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to,
+            @RequestParam(required = false, defaultValue = "100") int limit) {
+        return service.blockedBuys(symbol, from, to, limit);
+    }
+
+    @GetMapping("/api/trade-inspector/blocked-sells")
+    @ResponseBody
+    public java.util.List<Map<String, Object>> blockedSells(
+            @RequestParam(required = false, defaultValue = "ALL") String symbol,
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to,
+            @RequestParam(required = false, defaultValue = "100") int limit) {
+        return service.blockedSells(symbol, from, to, limit);
     }
 
     @GetMapping("/api/trade-inspector/production-exits")

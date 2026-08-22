@@ -1,6 +1,23 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-040",
+            status: "IMPLEMENTED",
+            title: "Trade graph uses explicit 24-hour KSA timestamps",
+            scenario: "Trade Inspector chart review should use one unambiguous time convention for analysis",
+            symbol: "ALL",
+            entry: "Chart X-axis and crosshair time labels",
+            exit: "Display-only formatting change; no execution behavior changed",
+            entryTime: "KSA 24-hour display",
+            exitTime: "KSA 24-hour display",
+            location: "Trade Inspector chart presentation",
+            classes: ["src/main/resources/static/js/trade-inspector.js"],
+            cause: "The trade chart disabled AM/PM but still formatted through the browser locale/time zone, so analysis could require manual UTC/browser-local to KSA conversion.",
+            solution: "Render Trade Inspector chart axis and crosshair timestamps explicitly in Asia/Riyadh using a 24-hour clock while preserving UTC timestamps internally for candle positioning.",
+            behavior: "Trade graph timestamps now display in KSA 24-hour format consistently with Trade Path and blocked-signal diagnostics.",
+            regression: "Open an inspected trade chart from any browser zone and verify axis/crosshair time matches KSA (UTC+03:00) in 24-hour format; candle positions and trading behavior remain unchanged."
+        },
+        {
             id: "FIX-001",
             status: "IMPLEMENTED",
             title: "Unconfirmed 1m Bollinger/RVOL breakout received full BREAKOUT BUY authority",
