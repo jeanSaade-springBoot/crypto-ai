@@ -13,6 +13,7 @@ import com.crypto.dto.MarketContextSnapshot;
 import com.crypto.dto.MarketRegimeAssessment;
 import com.crypto.dto.MultiTimeframeConfluenceResult;
 import com.crypto.dto.OrderBookLiquidityResult;
+import com.crypto.dto.RangeEntryLocationAssessment;
 import com.crypto.dto.StrategyProfile;
 import com.crypto.dto.DerivativesPositioningResult;
 import com.crypto.domain.DerivativesPositioningStatus;
@@ -30,6 +31,7 @@ public class FinalDecisionService {
             SignalDecision baseDecision,
             SignalDecision atrAdjustedDecision,
             AtrRiskAssessment atrRisk,
+            RangeEntryLocationAssessment rangeEntryLocation,
             StrategyProfile strategy,
             MarketRegimeAssessment regime,
             MarketContextSnapshot context,
@@ -90,6 +92,30 @@ public class FinalDecisionService {
                     sequence++, "ATR_RISK", DecisionAdjustmentType.PASS,
                     current, current, entryAllowed, entryAllowed,
                     atrRisk.explanation()
+            ));
+        }
+
+        // FIX-042: activate the previously orphaned FIX-036 RANGE entry-location guard.
+        // This is deliberately a one-way veto only: it never upgrades/downgrades the technical
+        // decision, never changes strategy scores, and is not applied to non-range strategies.
+        // Keeping it in FinalDecisionService makes the veto visible in the immutable decision path
+        // and guarantees Production/Replay parity through the shared AnalysisService pipeline.
+        if (rangeEntryLocation != null && rangeEntryLocation.applicable()) {
+            boolean before = entryAllowed;
+            boolean after = entryAllowed && rangeEntryLocation.entryAllowed();
+            path.add(new DecisionAdjustment(
+                    sequence++, "RANGE_ENTRY_LOCATION",
+                    before && !after ? DecisionAdjustmentType.VETO : DecisionAdjustmentType.PASS,
+                    current, current, before, after, rangeEntryLocation.explanation()
+            ));
+            entryAllowed = after;
+        } else {
+            path.add(new DecisionAdjustment(
+                    sequence++, "RANGE_ENTRY_LOCATION", DecisionAdjustmentType.PASS,
+                    current, current, entryAllowed, entryAllowed,
+                    rangeEntryLocation == null
+                            ? "Range entry-location guard was unavailable; no additional veto was applied."
+                            : rangeEntryLocation.explanation()
             ));
         }
 

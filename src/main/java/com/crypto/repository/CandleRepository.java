@@ -174,6 +174,50 @@ public interface CandleRepository extends JpaRepository<Candle, Long> {
             Pageable pageable
     );
 
+
+    /**
+     * FIX-043 production recovery source. Returns CLOSED candles whose analysis chain is incomplete
+     * (missing technical_indicator and/or trade_signal), oldest first.
+     *
+     * This query intentionally works from candle persistence rather than from the latest signal.
+     * Production incident ACEUSDT 22 Aug 2026 proved candle coverage was ~97-100% while 1m
+     * technical/signal coverage was only ~17-20%; the old five-minute recovery job jumped to the
+     * newest candle and permanently skipped the intervening closed candles.
+     */
+    @Query(
+            value = """
+                    SELECT c.*
+                    FROM candle c
+                    WHERE c.symbol = :symbol
+                      AND c.interval_code = :intervalCode
+                      AND c.closed = 1
+                      AND c.open_time BETWEEN :fromOpenTime AND :throughOpenTime
+                      AND (
+                            NOT EXISTS (
+                                SELECT 1 FROM technical_indicator ti
+                                WHERE ti.symbol = c.symbol
+                                  AND ti.interval_code = c.interval_code
+                                  AND ti.candle_open_time = c.open_time
+                            )
+                            OR NOT EXISTS (
+                                SELECT 1 FROM trade_signal ts
+                                WHERE ts.symbol = c.symbol
+                                  AND ts.interval_code = c.interval_code
+                                  AND ts.candle_open_time = c.open_time
+                            )
+                          )
+                    ORDER BY c.open_time ASC
+                    """,
+            nativeQuery = true
+    )
+    List<Candle> findClosedCandlesMissingAnalysisThrough(
+            @Param("symbol") String symbol,
+            @Param("intervalCode") String intervalCode,
+            @Param("fromOpenTime") Instant fromOpenTime,
+            @Param("throughOpenTime") Instant throughOpenTime,
+            Pageable pageable
+    );
+
     @Query("select distinct c.symbol from Candle c order by c.symbol")
     List<String> findDistinctSymbols();
 

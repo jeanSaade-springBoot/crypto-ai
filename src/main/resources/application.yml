@@ -87,7 +87,14 @@ trading:
   max-open-positions: 3
   paper-account-balance: 10000
   scheduled-analysis-enabled: true
-  analysis-delay-ms: 300000
+  # FIX-043: this is a one-minute recovery scan, NOT the production analysis cadence.
+  # Normal closed-candle analysis is asynchronous/event-driven; recovery only fills missing rows.
+  analysis-delay-ms: 60000
+  # FIX-043 worker sizing: parallelize independent symbol/timeframe lanes while FIFO ordering
+  # inside each lane is preserved by CandleAnalysisDispatcher. Tune only for server capacity.
+  analysis-worker-core-size: 8
+  analysis-worker-max-size: 16
+  analysis-worker-queue-capacity: 200
   # ATR is a risk engine, not a directional score.
   atr-risk:
     period: ${ATR_PERIOD:14}

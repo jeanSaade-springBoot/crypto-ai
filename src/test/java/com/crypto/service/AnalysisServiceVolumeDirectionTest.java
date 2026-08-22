@@ -15,7 +15,7 @@ class AnalysisServiceVolumeDirectionTest {
     private final AnalysisService service = new AnalysisService(
             null, null, null, null, null, null, null, null,
             new AnalysisScoringProperties(null, null, null),
-            null, null, null, null, null, null, null, null, null
+            null, null, null, null, null, null, null, null, null, null
     );
 
     @Test

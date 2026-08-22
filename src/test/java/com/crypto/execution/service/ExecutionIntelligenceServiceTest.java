@@ -1408,4 +1408,70 @@ class ExecutionIntelligenceServiceTest {
         assertThat(current.getDecision()).isEqualTo(SignalDecision.WATCH);
     }
 
+    @Test
+    void balancedEarlyDoesNotOpenWhenEntryQualityIsAlreadyLate() {
+        // FIX-041 regression: ACEUSDT entered at 13:28 KSA even though Entry Quality
+        // was 53/100 (LATE_ENTRY). BALANCED_EARLY must not contradict its own purpose.
+        TradeSignal current = signal(900L, "ACEUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 82, 72);
+        current.setLatestPrice(BigDecimal.valueOf(106.0));
+        current.setStopLoss(BigDecimal.valueOf(104.0));
+        current.setTakeProfit(BigDecimal.valueOf(108.2));
+        current.setAtrAtSignal(BigDecimal.valueOf(1.0));
+        current.setAtrImmediateEntryAllowed(true);
+        current.setFinalEntryAllowed(true);
+        current.setMarketRegime(MarketRegime.WEAK_UPTREND);
+
+        TradeSignal base = signal(899L, "ACEUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(25 * 60), 70, 72);
+        base.setLatestPrice(BigDecimal.valueOf(102.0));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("ACEUSDT", "1m"))
+                .thenReturn(List.of(current, base));
+        context("ACEUSDT", "5m", SignalDecision.WATCH, now.minusSeconds(60));
+        context("ACEUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));
+        when(properties.minimumBuyScore()).thenReturn(78);
+        when(validationService.validateBuy(current)).thenReturn(
+                TradeExecutionValidationService.ValidationResult.allow(50, "BALANCED_EARLY",
+                        "both 5m and 1h are WATCH"));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.state()).isEqualTo("BUILDING");
+        assertThat(decision.code()).isEqualTo("BALANCED_EARLY_LATE_ENTRY_BLOCKED");
+    }
+
+    @Test
+    void balancedEarlyStillOpensWhenEntryQualityIsAcceptableOrBetter() {
+        // FIX-041 control: only LATE_ENTRY is blocked. A genuinely early/acceptable
+        // BALANCED_EARLY setup keeps the proven reduced-entry behavior unchanged.
+        TradeSignal current = signal(910L, "ACEUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 82, 72);
+        current.setLatestPrice(BigDecimal.valueOf(101.0));
+        current.setStopLoss(BigDecimal.valueOf(99.0));
+        current.setTakeProfit(BigDecimal.valueOf(104.0));
+        current.setAtrAtSignal(BigDecimal.valueOf(2.0));
+        current.setAtrImmediateEntryAllowed(true);
+        current.setFinalEntryAllowed(true);
+        current.setMarketRegime(MarketRegime.WEAK_UPTREND);
+
+        TradeSignal base = signal(909L, "ACEUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(10 * 60), 70, 72);
+        base.setLatestPrice(BigDecimal.valueOf(100.0));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("ACEUSDT", "1m"))
+                .thenReturn(List.of(current, base));
+        context("ACEUSDT", "5m", SignalDecision.WATCH, now.minusSeconds(60));
+        context("ACEUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));
+        when(properties.minimumBuyScore()).thenReturn(78);
+        when(validationService.validateBuy(current)).thenReturn(
+                TradeExecutionValidationService.ValidationResult.allow(50, "BALANCED_EARLY",
+                        "both 5m and 1h are WATCH"));
+
+        var decision = service.evaluateBuy(current);
+
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.source()).isEqualTo("IMMEDIATE_VALIDATION");
+        assertThat(decision.code()).isEqualTo("BALANCED_EARLY");
+    }
+
 }

@@ -1,6 +1,80 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-043",
+            title: "Restore true per-candle production analysis and chronological missed-candle recovery",
+            status: "ACTIVE",
+            area: "Market Data / Technical Indicators / Analysis Cadence / Replay Parity",
+            scenario: "ACEUSDT and all enabled symbols · 22 Aug 2026 · nominal 1m engine was effectively analyzing only every ~5-6 minutes",
+            symbol: "ALL",
+            entry: "ACE example: underlying BUY 82 existed at 12:00 KSA near 0.2339, but technical analysis then skipped 12:01-12:07 while price accelerated",
+            exit: "No exit rule changed; this fix restores analysis delivery before any BUY/SELL decision is made",
+            entryTime: "Observed production window 12:00-13:30 KSA on 22 Aug 2026",
+            replayWindow: "Replay must generate every closed candle chronologically; never sample at the recovery scheduler cadence",
+            location: "Binance closed-candle event -> asynchronous indicator/signal pipeline + ScheduledAnalysisService chronological recovery",
+            classes: [
+                "com.crypto.config.CandleAnalysisAsyncConfig",
+                "com.crypto.indicator.event.CandleAnalysisDispatcher",
+                "com.crypto.indicator.event.CandleClosedAnalysisWorker",
+                "com.crypto.indicator.event.CandleClosedEventListener",
+                "com.crypto.service.ScheduledAnalysisService",
+                "com.crypto.repository.CandleRepository",
+                "com.crypto.service.AnalysisService",
+                "com.crypto.regression.service.RegressionTestWorker",
+                "com.crypto.service.CandleClosedEventListenerTest",
+                "com.crypto.service.CandleAnalysisDispatcherTest",
+                "com.crypto.service.CandleClosedAnalysisWorkerTest",
+                "com.crypto.service.ScheduledAnalysisServiceTest"
+            ],
+            cause: "Production database evidence proved candle ingestion was healthy (96.7-100% of 1m candles) while technical_indicator/trade_signal coverage was only ~17-20% across every enabled symbol. The heavy AFTER_COMMIT listener executed indicator, analysis and wallet work synchronously, while the five-minute recovery job calculated only the newest closed candle. When event processing fell behind, recovery jumped over all intervening candles, so a nominal 1m strategy behaved like a ~5m/6m strategy and missed the exact transition candles needed for early entries, opportunity memory and wake-up evidence.",
+            solution: "Hand committed candle-close events to a FIFO-per-symbol/timeframe dispatcher backed by a dedicated bounded executor, so Binance ingestion is not held hostage by indicator/scoring/wallet latency while adjacent candles can never be processed out of order. Convert ScheduledAnalysisService from latest-only calculation into a chronological missing-analysis scan sourced from persisted CLOSED candles. Reuse an existing technical_indicator when only trade_signal is missing. Recovered signals are rebuilt with AnalysisService as-of the original candle close so current/future context can never leak into historical production recovery. Scan every minute as a safety net. Historical recovered signals restore continuity/audit/context but are forbidden from executing at an old candle price; only the latest still-fresh recovered candle may reach PaperTradingService. Replay keeps its existing every-closed-candle chronological generation and is explicitly protected from scheduler-style sampling.",
+            protectedBehavior: "NO scoring or strategy thresholds changed. Preserve FIX-014 SETUP_CONFIRMATION_WAKEUP, FIX-020 evidence reset, FIX-021 ACCUMULATED_EVIDENCE, FIX-026 recovery probe, FIX-041 late BALANCED_EARLY guard, FIX-042 RANGE entry-location veto, BTC/MTF/ATR/derivatives/liquidity vetoes, all SELL/TP/SL/profit-lock logic, and the shared production ExecutionIntelligenceService used by Replay.",
+            behavior: "Normal production target is one indicator/signal evaluation for each eligible closed candle instead of ~17-20% coverage. If an event is temporarily missed, recovery fills the missing sequence oldest-to-newest rather than jumping directly to the latest candle. Recovery cannot create a stale historical BUY/SELL execution. Replay continues evaluating every candle in exact chronological order, so Production and Replay now share the same no-gap analysis contract.",
+            regression: "CandleClosedEventListenerTest asserts the production listener only dispatches and never runs heavy work inline. CandleAnalysisDispatcherTest asserts same-stream FIFO scheduling. ScheduledAnalysisServiceTest proves multiple missing candles are recovered in chronological order, historical backfill cannot execute at stale prices, and only a fresh latest recovered candle may execute. Post-deploy SQL acceptance: 1m technical_indicator/trade_signal coverage should move from ~17-20% toward candle coverage (~97-100%) for enabled symbols."
+        },
+        {
+            id: "FIX-042",
+            title: "Wire proven RANGE entry-location guard into production/replay decision path",
+            status: "ACTIVE",
+            area: "Analysis / Final Decision / RANGE_MEAN_REVERSION",
+            scenario: "ETHUSDT signal #109885 · 21 Aug 2026",
+            entry: "Historical bad entry 2391.22 while price was ~64.26% through the Bollinger range",
+            exit: "Historical position stopped out; this fix blocks the same high-range ordinary mean-reversion entry",
+            cause: "FIX-036 RangeEntryLocationService existed and had unit coverage but was never invoked by AnalysisService, so live and replay signals bypassed the protection.",
+            solution: "AnalysisService now evaluates RangeEntryLocationService after the final strategy score and FinalDecisionService records RANGE_ENTRY_LOCATION as a one-way veto stage. Scores and directional BUY/STRONG_BUY remain unchanged; only immediate entry authority is blocked when the proven range-location rule fails.",
+            protectedBehavior: "Do not apply this guard to TREND_FOLLOWING/BREAKOUT/DEFENSIVE strategies. Preserve the strict expansion exception, SETUP_CONFIRMATION_WAKEUP, ACCUMULATED_EVIDENCE, recovery/scout probes, SELL logic, ATR authority and all existing context vetoes. Production and Replay must continue sharing AnalysisService/FinalDecisionService.",
+            tests: "RangeEntryLocationServiceTest plus FinalDecisionServiceRangeEntryLocationTest: ETH #109885-style >55% range BUY blocks; lower/middle range BUY passes; strict expansion exception remains allowed.",
+            files: [
+                "AnalysisService.java",
+                "FinalDecisionService.java",
+                "RangeEntryLocationService.java",
+                "FinalDecisionServiceRangeEntryLocationTest.java",
+                "fix-registry.js"
+            ]
+        },
+        {
+            id: "FIX-041",
+            status: "IMPLEMENTED",
+            title: "BALANCED_EARLY cannot execute an already-late initial entry",
+            scenario: "ACEUSDT 2026-08-22 13:28 KSA entered at 0.2603 after a long opportunity build and was already classified LATE_ENTRY 53/100",
+            symbol: "ACEUSDT",
+            entry: "Blocked replacement for late BALANCED_EARLY initial BUY at 0.2603",
+            exit: "Historical trade stopped at 0.2540 (-2.42%); FIX-041 prevents this late initial entry path from opening",
+            entryTime: "2026-08-22 13:28 KSA",
+            exitTime: "2026-08-22 13:39 KSA",
+            replayWindow: "2026-08-22 11:20 KSA → 2026-08-22 13:45 KSA",
+            location: "Execution Intelligence direct BUY validation → BALANCED_EARLY entry-quality gate",
+            classes: [
+                "com.crypto.execution.service.ExecutionIntelligenceService",
+                "com.crypto.execution.service.ExecutionIntelligenceServiceTest",
+                "com.crypto.regression.service.ShadowProductionReplayService"
+            ],
+            cause: "BALANCED_EARLY correctly represents a reduced early entry when 5m and 1h are only WATCH, but the generic Entry Quality guard allowed a 50-54/100 LATE_ENTRY by merely capping size to 25%. ACE therefore opened at 0.2603 even though the same execution decision explicitly said LATE_ENTRY 53/100.",
+            solution: "Only for the direct IMMEDIATE_VALIDATION + BALANCED_EARLY route, keep the opportunity alive instead of executing when Entry Quality classification is LATE_ENTRY. CHASE_ENTRY remains blocked by the existing generic guard. ACCEPTABLE/GOOD/EXCELLENT BALANCED_EARLY entries continue unchanged. Setup-timeframe ATR authority, setup wake-up, accumulated evidence, pressure/recovery probes, SELL logic and all other existing routes are untouched.",
+            behavior: "A BALANCED_EARLY decision must now be early in both context and price. If price quality has already degraded to LATE_ENTRY, no new position is opened; opportunity memory remains available for a better price or later fresh confirmation.",
+            regression: "ACE regression asserts LATE_ENTRY BALANCED_EARLY returns BUILDING with BALANCED_EARLY_LATE_ENTRY_BLOCKED. A control test proves an acceptable-or-better BALANCED_EARLY entry still executes. Production and Replay share ExecutionIntelligenceService, so no replay-only rule was added."
+        },
+        {
             id: "FIX-040",
             status: "IMPLEMENTED",
             title: "Trade graph uses explicit 24-hour KSA timestamps",

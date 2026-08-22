@@ -22,6 +22,7 @@ import com.crypto.dto.MarketContextSnapshot;
 import com.crypto.dto.FinalDecisionResult;
 import com.crypto.dto.DerivativesPositioningResult;
 import com.crypto.dto.TrendStructureResult;
+import com.crypto.dto.RangeEntryLocationAssessment;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.crypto.indicator.service.TechnicalIndicatorService;
@@ -76,6 +77,9 @@ public class AnalysisService {
     private final DerivativesPositioningService derivativesPositioningService;
     private final FinalDecisionService finalDecisionService;
     private final TrendStructureService trendStructureService;
+    // FIX-042: wire the proven FIX-036 RANGE entry-location guard into the real production/replay pipeline.
+    // Do not move this logic into replay-only code; both paths must share the same AnalysisService decision flow.
+    private final RangeEntryLocationService rangeEntryLocationService;
 
     /**
      * Manual entry point used by controllers or recovery jobs.
@@ -100,6 +104,27 @@ public class AnalysisService {
     public TradeSignal analyze(TechnicalIndicator indicator) {
         IndicatorSnapshot snapshot = toSnapshot(indicator);
         TradeSignal signal = buildSignal(snapshot, Instant.now(), false);
+        return signalRepository.save(signal);
+    }
+
+    /**
+     * FIX-043 production recovery path. Persists a missing historical signal while forcing
+     * every time-sensitive context lookup (sentiment, fundamentals, MTF/BTC context, etc.)
+     * to the recovered candle's original close/evaluation time.
+     *
+     * This is deliberately NOT equivalent to analyze(indicator), which uses Instant.now().
+     * Using current context to reconstruct a 12:21 candle at 12:30 would create a synthetic
+     * signal that Production could never have produced at 12:21 and would break Replay parity.
+     * The same buildSignal(...) implementation is shared; only temporal authority differs.
+     */
+    @Transactional
+    public TradeSignal analyzeRecovered(TechnicalIndicator indicator, Instant evaluationTime) {
+        if (indicator == null) {
+            throw new IllegalArgumentException("Recovered technical indicator is required");
+        }
+        IndicatorSnapshot snapshot = toSnapshot(indicator);
+        Instant asOf = evaluationTime == null ? snapshot.candleOpenTime() : evaluationTime;
+        TradeSignal signal = buildSignal(snapshot, asOf, true);
         return signalRepository.save(signal);
     }
 
@@ -165,6 +190,14 @@ public class AnalysisService {
         strategyScore = marketStrategyService.promoteEarlyBreakout(
                 strategyProfile, strategyScore, marketContext, atrRisk, regimeAssessment, trendStructure);
 
+        // FIX-042 / FIX-036 integration: evaluate RANGE_MEAN_REVERSION entry location only after
+        // the final strategy score is known. This guard never rescales or changes the technical
+        // BUY/STRONG_BUY decision; it only supplies a one-way execution veto to FinalDecisionService.
+        // SETUP_CONFIRMATION_WAKEUP, ACCUMULATED_EVIDENCE, scout/recovery probes and SELL logic
+        // remain untouched because they consume the resulting immutable final-decision authority.
+        RangeEntryLocationAssessment rangeEntryLocation = rangeEntryLocationService.evaluate(
+                i, strategyProfile, strategyScore, trendStructure);
+
         int rawTotal = strategyScore.rawScore();
         int maximumAvailableScore = strategyScore.maximumScore();
         int total = strategyScore.normalizedScore();
@@ -201,6 +234,7 @@ public class AnalysisService {
                 baseDecision,
                 atrAdjustedDecision,
                 atrRisk,
+                rangeEntryLocation,
                 strategyProfile,
                 regimeAssessment,
                 marketContext,

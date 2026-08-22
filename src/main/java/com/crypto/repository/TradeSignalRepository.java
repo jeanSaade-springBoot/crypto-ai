@@ -15,6 +15,10 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
             String symbol, String interval, Instant candleOpenTime
     );
 
+    Optional<TradeSignal> findBySymbolAndIntervalAndCandleOpenTime(
+            String symbol, String interval, Instant candleOpenTime
+    );
+
     Optional<TradeSignal> findTopBySymbolOrderByGeneratedAtDesc(String symbol);
     Optional<TradeSignal> findTopBySymbolAndIntervalOrderByGeneratedAtDesc(String symbol, String interval);
     Optional<TradeSignal> findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(

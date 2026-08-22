@@ -308,6 +308,11 @@ public class RegressionTestWorker {
         java.util.List<TradeSignal> generatedSignals = new java.util.ArrayList<>();
 
         try (ExecutionReplayScope.Scope ignored = replayScope.open(runId, List.of(), o -> {})) {
+        // FIX-043 Replay parity: fresh Replay has always generated technical snapshots/signals
+        // chronologically for EVERY closed candle in the timeline. Production now restores the
+        // same no-gap contract with asynchronous close-event processing plus chronological recovery.
+        // Do not "optimize" Replay by sampling every Nth candle or by copying the production recovery
+        // scheduler cadence; that would recreate the exact 1m->~5m blind-gap incident FIX-043 fixes.
         for (int index = 0; index < timeline.size(); index++) {
             ReplayCandle replay = timeline.get(index);
             Candle candle = replay.candle();

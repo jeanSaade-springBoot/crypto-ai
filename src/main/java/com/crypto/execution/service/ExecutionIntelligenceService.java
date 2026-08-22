@@ -584,6 +584,28 @@ public class ExecutionIntelligenceService {
                     return postBearishGuard;
                 }
 
+                // FIX-041 / ACEUSDT 2026-08-22 13:28 KSA:
+                // BALANCED_EARLY is an early-entry profile by definition. If the independent
+                // Entry Quality model already classifies the price as LATE_ENTRY, executing
+                // this route would contradict its purpose and can turn a well-detected trend
+                // into a chase near exhaustion. Keep every other proven initial-entry route
+                // unchanged: setup-timeframe ATR authority, confirmation wake-up, accumulated
+                // evidence, recovery probes and normal non-BALANCED_EARLY BUYs still use the
+                // existing quality guard. Production and Replay share this exact method.
+                if ("BALANCED_EARLY".equals(validation.code())
+                        && "LATE_ENTRY".equals(entryQuality.classification())) {
+                    ExecutionDecision lateBalancedEarly = ExecutionDecision.building(
+                            "BALANCED_EARLY_LATE_ENTRY_BLOCKED",
+                            "BALANCED_EARLY requires an actually early price. Entry Quality is "
+                                    + entryQuality.score() + "/100 (" + entryQuality.classification()
+                                    + "), so the opportunity stays alive for a better price or fresh "
+                                    + "confirmation instead of opening a new late-stage position.",
+                            evidence);
+                    saveOpportunity(signal, evidence, lateBalancedEarly.state(),
+                            "OPPORTUNITY_MEMORY", 0, lateBalancedEarly.code(), lateBalancedEarly.explanation());
+                    return lateBalancedEarly;
+                }
+
                 ExecutionDecision guarded = applyInitialEntryQualityGuard(
                         ExecutionDecision.allow(
                                 "IMMEDIATE_VALIDATION",
