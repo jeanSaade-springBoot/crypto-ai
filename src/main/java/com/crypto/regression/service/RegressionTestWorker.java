@@ -217,8 +217,8 @@ public class RegressionTestWorker {
                     + "Historical signal counts are retained only as the pre-fix reference. "
                     + "Replayable event counts validate that each historical candle can now be resolved as-of its own close. "
                     + (livePriceParityPass
-                        ? "FIX-052 exact protection parity is active: Replay consumed " + productionPriceEvents.size() + " persisted Production 1m live-price observations in UTC order. "
-                        : "FIX-052 exact protection parity is NOT available for this historical window because no persisted Production live-price observations exist; the run is intentionally not marked fully passed. ")
+                        ? "FIX-052/FIX-056 exact price parity is active: Replay consumed " + productionPriceEvents.size() + " persisted Production 1m live-price observations in UTC order, exposes the latest event through the shared ExecutionPriceAuthorityService, and revalidates/sizes BUYs from that execution-time price. "
+                        : "FIX-052/FIX-056 exact price parity is NOT available for this historical window because no persisted Production live-price observations exist; the run is intentionally not marked fully passed. ")
                     + "The decision replay validates that originalDecision is audit-only and cannot override a non-null final decision. "
                     + "Regression AnalysisService returns unsaved TradeSignal objects. Fresh signals then pass through an isolated shadow execution/position lifecycle that records exact simulated BUY/SELL points. Real wallet, trade_signal and production execution_opportunity tables are never written.";
 

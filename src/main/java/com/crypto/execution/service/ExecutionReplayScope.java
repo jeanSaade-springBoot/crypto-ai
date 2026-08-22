@@ -39,6 +39,18 @@ public class ExecutionReplayScope {
 
     public void reference(Instant reference) { required().reference = reference; }
 
+    /** FIX-056: expose the exact latest replay market-price event to the shared execution-price authority. */
+    public void referencePrice(String symbol, Instant observedAt, java.math.BigDecimal price) {
+        State s = required();
+        s.reference = observedAt;
+        s.latestPrice = new ReplayPrice(symbol, observedAt, price);
+    }
+
+    public Optional<ReplayPrice> latestPrice() {
+        State s = required();
+        return Optional.ofNullable(s.latestPrice);
+    }
+
     /**
      * Adds a freshly generated replay signal to the as-of context stream. Signal generation
      * uses this incrementally so the production confluence/BTC services can resolve only
@@ -105,12 +117,15 @@ public class ExecutionReplayScope {
         return s;
     }
 
+    public record ReplayPrice(String symbol, Instant observedAt, java.math.BigDecimal price) {}
+
     private static final class State {
         final long runId;
         final List<TradeSignal> signals;
         final Consumer<ExecutionOpportunity> opportunitySink;
         Instant reference;
         ExecutionOpportunity opportunity;
+        ReplayPrice latestPrice;
         State(long runId, List<TradeSignal> signals, Consumer<ExecutionOpportunity> opportunitySink) {
             this.runId = runId;
             this.signals = new ArrayList<>(signals);

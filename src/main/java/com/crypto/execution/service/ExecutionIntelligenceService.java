@@ -42,9 +42,15 @@ public class ExecutionIntelligenceService {
     private static final String CONFIRMATION_INTERVAL = "5m";
     private static final String TREND_INTERVAL = "1h";
     private static final Duration EVIDENCE_WINDOW = Duration.ofMinutes(30);
+    // FIX-055: STOP_EXPOSED is a warning rather than a hard liquidity veto, but it
+    // must materially reduce price quality so a late breakout cannot still be called GOOD_ENTRY.
+    private static final int STOP_EXPOSED_ENTRY_QUALITY_PENALTY = 15;
     private static final Duration FIVE_MINUTE_MAX_AGE = Duration.ofMinutes(20);
     private static final Duration ONE_HOUR_MAX_AGE = Duration.ofHours(3);
-    private static final Duration SETUP_WAKEUP_1M_MAX_AGE = Duration.ofMinutes(2);
+    // FIX-056: a confirmation wake-up must use the current 1m cycle, not a prior-minute
+    // snapshot that can be 60-120 seconds old. 45 seconds tolerates normal dispatcher lag
+    // while rejecting SOL #617's 63-second-old signal.
+    private static final Duration SETUP_WAKEUP_1M_MAX_AGE = Duration.ofSeconds(45);
 
     private static final int WATCH_EVIDENCE_MIN_SCORE = 60;
     private static final int WATCH_EVIDENCE_MIN_CONFIDENCE = 60;
@@ -749,19 +755,32 @@ public class ExecutionIntelligenceService {
      * more certain while simultaneously becoming a worse price to enter.
      */
     public EntryQuality assessEntryQuality(TradeSignal current) {
-        return assessEntryQuality(current, current == null ? null : current.getAtrAtSignal());
+        return assessEntryQuality(current, current == null ? null : current.getAtrAtSignal(),
+                current == null ? null : current.getLatestPrice());
+    }
+
+    /**
+     * FIX-056: re-score entry quality against the actual execution-time market price.
+     * The immutable signal price remains decision evidence only.
+     */
+    public EntryQuality assessEntryQualityAtPrice(TradeSignal current, BigDecimal executionPrice) {
+        return assessEntryQuality(current, current == null ? null : current.getAtrAtSignal(), executionPrice);
     }
 
     private EntryQuality assessEntryQuality(TradeSignal current, BigDecimal authoritativeAtr) {
-        if (current == null || current.getGeneratedAt() == null || current.getLatestPrice() == null
-                || current.getLatestPrice().signum() <= 0) {
+        return assessEntryQuality(current, authoritativeAtr, current == null ? null : current.getLatestPrice());
+    }
+
+    private EntryQuality assessEntryQuality(TradeSignal current, BigDecimal authoritativeAtr, BigDecimal executionPrice) {
+        if (current == null || current.getGeneratedAt() == null || executionPrice == null
+                || executionPrice.signum() <= 0) {
             return new EntryQuality(0, "UNKNOWN", 0d, 0d, 0d, 0L);
         }
 
         Instant cutoff = current.getGeneratedAt().minus(EVIDENCE_WINDOW);
         List<TradeSignal> recent = recentSignals(current.getSymbol(), EXECUTION_INTERVAL, current.getGeneratedAt());
 
-        BigDecimal reference = current.getLatestPrice();
+        BigDecimal reference = executionPrice;
         for (TradeSignal s : recent) {
             if (s.getGeneratedAt() == null || s.getGeneratedAt().isAfter(current.getGeneratedAt())) continue;
             if (s.getGeneratedAt().isBefore(cutoff)) break;
@@ -771,7 +790,22 @@ public class ExecutionIntelligenceService {
             }
         }
 
-        double expansionPercent = current.getLatestPrice().subtract(reference)
+        // FIX-055 / PEPEUSDT 22 Aug 2026: a 71-minute opportunity started near
+        // 0.00000407 but the rolling window had advanced to roughly 0.00000413 by
+        // execution. That allowed 0.00000418 to remain GOOD_ENTRY even though most
+        // of the move had already happened. Use the persisted opportunity anchor/best
+        // price whenever it is cheaper than the rolling reference. Replay reaches the
+        // same object through ExecutionReplayScope, so Production and Replay stay aligned.
+        java.util.Optional<ExecutionOpportunity> activeOpportunity = currentOpportunity(
+                current.getSymbol(), List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"));
+        if (activeOpportunity.isPresent()) {
+            BigDecimal anchor = activeOpportunity.get().getAnchorEntryPrice();
+            BigDecimal best = activeOpportunity.get().getBestEntryPrice();
+            if (anchor != null && anchor.signum() > 0 && anchor.compareTo(reference) < 0) reference = anchor;
+            if (best != null && best.signum() > 0 && best.compareTo(reference) < 0) reference = best;
+        }
+
+        double expansionPercent = executionPrice.subtract(reference)
                 .divide(reference, 8, RoundingMode.HALF_UP)
                 .multiply(BigDecimal.valueOf(100)).doubleValue();
 
@@ -780,16 +814,16 @@ public class ExecutionIntelligenceService {
                 ? authoritativeAtr
                 : current.getAtrAtSignal();
         if (atrForExtension != null && atrForExtension.signum() > 0) {
-            atrExtension = current.getLatestPrice().subtract(reference).max(BigDecimal.ZERO)
+            atrExtension = executionPrice.subtract(reference).max(BigDecimal.ZERO)
                     .divide(atrForExtension, 8, RoundingMode.HALF_UP).doubleValue();
         }
 
-        long ageMinutes = currentOpportunity(current.getSymbol(), List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
+        long ageMinutes = activeOpportunity
                 .map(o -> o.getStartedAt() == null ? 0L
                         : Math.max(0L, Duration.between(o.getStartedAt(), current.getGeneratedAt()).toMinutes()))
                 .orElse(0L);
 
-        double rr = currentRewardRisk(current);
+        double rr = currentRewardRisk(current, executionPrice);
         int score = 100;
 
         if (expansionPercent > 8d) score -= 50;
@@ -810,6 +844,14 @@ public class ExecutionIntelligenceService {
         else if (rr >= 2d) score += 5;
 
         if ("HIGH_VOLATILITY".equals(String.valueOf(current.getMarketRegime()))) score -= 10;
+
+        // FIX-055: STOP_EXPOSED remains a soft warning (TARGET_BLOCKED is still the
+        // hard liquidity veto), but an exposed stop must reduce entry quality and
+        // therefore position size or block a chase through the existing quality guard.
+        if (current.getLiquidityStatus() == LiquidityContextStatus.STOP_EXPOSED) {
+            score -= STOP_EXPOSED_ENTRY_QUALITY_PENALTY;
+        }
+
         if ("BREAKOUT".equals(String.valueOf(current.getMarketRegime()))
                 && expansionPercent <= 3d && atrExtension <= 2.5d) score += 5;
 
@@ -925,6 +967,29 @@ public class ExecutionIntelligenceService {
             }
         }
         return null;
+    }
+
+    /**
+     * FIX-056: final execution-time revalidation. The signal decision remains immutable,
+     * but a wallet BUY must be re-checked against the current canonical market price before
+     * sizing/fill. This prevents a valid old signal from becoming a late chase by execution time.
+     */
+    public ExecutionDecision revalidateAtExecutionPrice(TradeSignal signal, ExecutionDecision approvedDecision, BigDecimal executionPrice) {
+        if (signal == null || approvedDecision == null || !approvedDecision.allowed()
+                || executionPrice == null || executionPrice.signum() <= 0) {
+            return ExecutionDecision.reject("EXECUTION_PRICE_INVALID",
+                    "A fresh positive execution price is required before wallet execution.");
+        }
+        if (signal.getStopLoss() != null && executionPrice.compareTo(signal.getStopLoss()) <= 0) {
+            return ExecutionDecision.reject("EXECUTION_PRICE_AT_OR_BELOW_STOP",
+                    "Current execution price is already at/below the signal stop; BUY cancelled.", approvedDecision.evidence());
+        }
+        if (signal.getTakeProfit() != null && executionPrice.compareTo(signal.getTakeProfit()) >= 0) {
+            return ExecutionDecision.reject("EXECUTION_PRICE_AT_OR_ABOVE_TARGET",
+                    "Current execution price has already reached/exceeded the signal target; BUY cancelled.", approvedDecision.evidence());
+        }
+        EntryQuality quality = assessEntryQualityAtPrice(signal, executionPrice);
+        return applyInitialEntryQualityGuard(approvedDecision, quality);
     }
 
     private ExecutionDecision applyInitialEntryQualityGuard(ExecutionDecision decision, EntryQuality q) {
@@ -1418,9 +1483,13 @@ public class ExecutionIntelligenceService {
     }
 
     private double currentRewardRisk(TradeSignal signal) {
-        if (signal.getLatestPrice() == null || signal.getStopLoss() == null || signal.getTakeProfit() == null) return 0d;
-        java.math.BigDecimal risk = signal.getLatestPrice().subtract(signal.getStopLoss()).abs();
-        java.math.BigDecimal reward = signal.getTakeProfit().subtract(signal.getLatestPrice());
+        return currentRewardRisk(signal, signal == null ? null : signal.getLatestPrice());
+    }
+
+    private double currentRewardRisk(TradeSignal signal, BigDecimal marketPrice) {
+        if (signal == null || marketPrice == null || signal.getStopLoss() == null || signal.getTakeProfit() == null) return 0d;
+        java.math.BigDecimal risk = marketPrice.subtract(signal.getStopLoss()).abs();
+        java.math.BigDecimal reward = signal.getTakeProfit().subtract(marketPrice);
         if (risk.signum() <= 0 || reward.signum() <= 0) return 0d;
         return reward.divide(risk, 8, java.math.RoundingMode.HALF_UP).doubleValue();
     }
@@ -1990,6 +2059,19 @@ public class ExecutionIntelligenceService {
         opportunity.setStatus(normalizeStatus(status));
         opportunity.setLastEvidenceAt(signal.getGeneratedAt());
         opportunity.setLatestSignal(signal);
+
+        // FIX-055: keep the opportunity's actual price history independent of the
+        // recent-signal lookup window. For a BUY opportunity, the first valid price
+        // is the anchor and the lowest valid observed price is the best entry reference.
+        if (signal.getLatestPrice() != null && signal.getLatestPrice().signum() > 0) {
+            if (opportunity.getAnchorEntryPrice() == null || opportunity.getAnchorEntryPrice().signum() <= 0) {
+                opportunity.setAnchorEntryPrice(signal.getLatestPrice());
+            }
+            if (opportunity.getBestEntryPrice() == null || opportunity.getBestEntryPrice().signum() <= 0
+                    || signal.getLatestPrice().compareTo(opportunity.getBestEntryPrice()) < 0) {
+                opportunity.setBestEntryPrice(signal.getLatestPrice());
+            }
+        }
         opportunity.setEvidenceCount(evidence.observationCount());
         opportunity.setBuyCount(evidence.buyCount());
         opportunity.setWatchCount(evidence.watchCount());

@@ -1061,6 +1061,64 @@
         }
 
 
+        ,
+        {
+            id: "FIX-055",
+            title: "Long-lived opportunity price memory and STOP_EXPOSED entry-quality penalty",
+            status: "IMPLEMENTED",
+            scenario: "PEPEUSDT 22 Aug 2026 · opportunity started 21:57 KSA and executed 23:08 KSA at 0.00000418 after earlier BUY/STRONG_BUY evidence around 0.00000411-0.00000416",
+            symbol: "PEPEUSDT",
+            entry: "Historical BUY 0.000004180000 · wallet trade #636 · IMMEDIATE_VALIDATION",
+            exit: "Historical SELL 0.000004140000 · STOP_LOSS · wallet trade #659",
+            entryTime: "2026-08-22 23:08:03 KSA (20:08:03 UTC)",
+            exitTime: "2026-08-22 23:16:08 KSA (20:16:08 UTC)",
+            replayWindow: "2026-08-22 21:50 KSA → 2026-08-22 23:20 KSA",
+            location: "Shared ExecutionIntelligenceService Entry Quality + execution_opportunity price memory",
+            classes: [
+                "com.crypto.execution.service.ExecutionIntelligenceService",
+                "com.crypto.execution.domain.ExecutionOpportunity",
+                "com.crypto.execution.service.ExecutionReplayScope",
+                "V66__execution_opportunity_entry_price_memory.sql",
+                "ExecutionIntelligenceServiceTest",
+                "fix-registry.js"
+            ],
+            cause: "Entry Quality used a rolling recent-signal reference, so a long-lived opportunity could forget substantially cheaper prices as the window moved upward with the market. STOP_EXPOSED was visible in liquidity diagnostics but did not reduce Entry Quality. PEPE therefore remained GOOD_ENTRY 75/100 at 0.00000418 even though the opportunity had existed for about 71 minutes and its stop was explicitly exposed.",
+            solution: "Persist the opportunity's first valid BUY price and best/lowest observed price. Entry Quality now uses those values when they are better than the rolling reference, so confirmation cannot erase earlier cheaper opportunity prices. STOP_EXPOSED applies a 15-point soft Entry Quality penalty; TARGET_BLOCKED remains the existing hard liquidity veto. The existing Entry Quality guard then reduces size or blocks CHASE_ENTRY without introducing a separate execution path.",
+            behavior: "A strengthening signal can still execute, but confirmation no longer makes a late price look artificially fresh. Long-lived breakouts that have moved several ATR from their opportunity base and also expose the stop can fall below the chase cutoff and remain unexecuted. Production and Replay use the same ExecutionIntelligenceService and replay-scoped ExecutionOpportunity state.",
+            regression: "PEPE-style regression asserts an opportunity anchored near 0.00000407, current price 0.00000418, ~71-minute age and STOP_EXPOSED produces CHASE_ENTRY quality below the execution cutoff. A control without opportunity memory/liquidity warning keeps ordinary Entry Quality behavior. V66 stores only prices; all database/Binance timestamps remain UTC and frontend display remains local/KSA."
+        }
+
+        ,
+        {
+            id: "FIX-056",
+            title: "Fresh execution-price authority and current-cycle setup wake-up",
+            status: "IMPLEMENTED",
+            scenario: "SOLUSDT wallet trade #617 exposed two coupled gaps: a 5m confirmation accepted 1m signal #133530 that was 63 seconds old, then WalletAutoExecutionService filled at that signal snapshot price instead of the current market price.",
+            symbol: "SOLUSDT / all BUY executions",
+            entry: "Historical SOL #617 decision snapshot 94.79; execution occurred ~65 seconds later",
+            exit: "N/A — execution correctness fix",
+            entryTime: "2026-08-22 22:45:08 KSA (19:45:08 UTC)",
+            exitTime: "N/A",
+            replayWindow: "SOL #617 exact UTC window plus PEPE FIX-055 execution-price revalidation regression",
+            location: "Shared execution-price authority, Production PaperTradingService, WalletAutoExecutionService, ExecutionIntelligenceService and ShadowProductionReplayService",
+            classes: [
+                "com.crypto.execution.service.ExecutionPriceAuthorityService",
+                "com.crypto.execution.service.ExecutionReplayScope",
+                "com.crypto.execution.service.ExecutionIntelligenceService",
+                "com.crypto.market.service.MarketPriceEventService",
+                "com.crypto.service.PaperTradingService",
+                "com.crypto.wallet.service.WalletAutoExecutionService",
+                "com.crypto.regression.service.ShadowProductionReplayService",
+                "com.crypto.wallet.domain.WalletTrade",
+                "V67__fresh_execution_price_authority.sql",
+                "ExecutionIntelligenceServiceTest",
+                "REPLAY_PRODUCTION_PARITY.md"
+            ],
+            cause: "TradeSignal.latestPrice is decision-time evidence, but wallet BUY execution reused it as the fill price. SETUP_CONFIRMATION_WAKEUP also allowed a prior 1m cycle up to two minutes old, so SOL #617 used a 63-second-old 1m signal when the 5m trigger arrived. Risk sizing was also calculated from that stale snapshot.",
+            solution: "Keep signal price immutable; resolve a fresh canonical Binance 1m market_price_event at execution time; reject missing/stale (>15s) execution prices; tighten confirmation wake-up 1m freshness to 45s; re-run Entry Quality and stop/target sanity against the actual execution price; size and persist the BUY from that same price; store decision_price_usdt and execution_price_observed_at for audit. Replay consumes the same persisted UTC market-price events through ExecutionReplayScope and runs the identical fresh-price revalidation/sizing path.",
+            behavior: "A valid signal can no longer fill at an old snapshot. If price moved to a poor/chase location, below stop, or above target before execution, the BUY is rejected or resized by the shared Entry Quality guard. SOL #617's 63-second-old confirmation authority is rejected. Production and exact Replay use the same execution-price source semantics while keeping wallet persistence isolated.",
+            regression: "Proven tests cover SOL #617 stale 63-second wake-up rejection and execution-time price revalidation while preserving TradeSignal.latestPrice. Replay parity documentation requires the same UTC market_price_event stream for exact execution-price parity. FIX-055 PEPE anchor/STOP_EXPOSED logic is recalculated again at the fresh execution price."
+        }
 
 ];
 
@@ -1075,6 +1133,13 @@
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
+
+    // FIX-055: the registry contains records from multiple generations. Some use
+    // `classes`, while documentation/UI-only fixes use `files`. Normalize here so
+    // one older/newer record shape can never crash the entire Bug Fixes page.
+    const codeLocations = fix => Array.isArray(fix.classes)
+        ? fix.classes
+        : (Array.isArray(fix.files) ? fix.files : []);
 
     const field = (label, value, wide = false) => `
         <div class="fix-field${wide ? " wide" : ""}">
@@ -1112,7 +1177,7 @@
                     ${field("Fix location", fix.location, true)}
                     <div class="fix-field wide">
                         <small>Java classes</small>
-                        <ul class="fix-class-list">${fix.classes.map(c => `<li>${esc(c)}</li>`).join("")}</ul>
+                        <ul class="fix-class-list">${codeLocations(fix).map(c => `<li>${esc(c)}</li>`).join("")}</ul>
                     </div>
                     ${field("Cause", fix.cause, true)}
                     ${field("Solution", fix.solution, true)}
@@ -1134,7 +1199,7 @@
             `Exit time: ${fix.exitTime}`,
             `Suggested Proven replay window: ${suggestedReplayWindow(fix)}`,
             `Fix location: ${fix.location}`,
-            `Java classes: ${fix.classes.join(", ")}`,
+            `Java classes/files: ${codeLocations(fix).join(", ")}`,
             `Cause: ${fix.cause}`,
             `Solution: ${fix.solution}`,
             `What the fix does: ${fix.behavior}`,

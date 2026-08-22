@@ -5,6 +5,7 @@ import com.crypto.domain.TradeSignal;
 import com.crypto.execution.domain.ExecutionOpportunity;
 import com.crypto.execution.service.ExecutionIntelligenceService;
 import com.crypto.execution.service.ExecutionReplayScope;
+import com.crypto.execution.service.ExecutionPriceAuthorityService;
 import com.crypto.position.service.PositionContinuationPolicy;
 import com.crypto.position.service.PositionExitPolicy;
 import com.crypto.position.service.ProfitLockPolicy;
@@ -37,6 +38,7 @@ public class ShadowProductionReplayService {
     private final JdbcTemplate jdbcTemplate;
     private final ExecutionIntelligenceService executionIntelligenceService;
     private final ExecutionReplayScope replayScope;
+    private final ExecutionPriceAuthorityService executionPriceAuthorityService;
     private final PositionContinuationPolicy continuationPolicy;
     private final PositionExitPolicy exitPolicy;
     private final ProfitLockPolicy profitLockPolicy;
@@ -97,7 +99,7 @@ public class ShadowProductionReplayService {
             while (livePriceIndex < livePrices.size()
                     && !livePrices.get(livePriceIndex).observedAt().isAfter(signal.getGeneratedAt())) {
                 MarketPriceEventService.PriceEvent live = livePrices.get(livePriceIndex++);
-                replayScope.reference(live.observedAt());
+                replayScope.referencePrice(symbol, live.observedAt(), live.price());
                 if (open != null && !live.observedAt().isBefore(executionStart) && !live.observedAt().isAfter(executionEnd)) {
                     LivePriceEvaluation protection = evaluateLivePrice(runId, symbol, open, live, latest1m, latest5m, latest1h);
                     open = protection.position();
@@ -223,43 +225,56 @@ public class ShadowProductionReplayService {
             if (!inExecutionWindow) continue;
 
             if (open == null && decision.allowed()) {
+                // FIX-056 Replay parity: resolve the same canonical execution-price authority
+                // after the same Production decision gates, then revalidate Entry Quality at
+                // that price before sizing. A replay without a fresh price event cannot claim
+                // exact execution parity and therefore does not open the position here.
+                ExecutionPriceAuthorityService.ExecutionPrice fresh = executionPriceAuthorityService
+                        .resolve(symbol, signal.getGeneratedAt()).orElse(null);
+                if (fresh == null) continue;
+                decision = executionIntelligenceService.revalidateAtExecutionPrice(executionSignal, decision, fresh.price());
+                if (!decision.allowed()) continue;
                 int atrPercent = executionSignal.getAtrRecommendedPositionPercent() <= 0 ? 100 : executionSignal.getAtrRecommendedPositionPercent();
                 int effectivePercent = Math.max(1, Math.min(100,
                         (int)Math.round(atrPercent * decision.positionPercent() / 100.0)));
                 WalletExecutionSizingPolicy.Plan sizing = executionSizingPolicy.plan(
                         cash, replayWalletSettings.getMinimumUsdtReserve(), replayDailyBudget,
                         effectivePercent, 0, true, replayWalletSettings.getMaximumDailyNewPositions(),
-                        replayExecutedNewPositions, executionSignal.getLatestPrice());
+                        replayExecutedNewPositions, fresh.price());
                 BigDecimal budget = sizing.spend();
                 if (sizing.allowed()) {
                     BigDecimal qty = sizing.quantity();
                     effectivePercent = sizing.normalizedPositionPercent();
-                    long positionId = openPosition(runId, symbol, executionSignal, qty, budget, effectivePercent);
-                    persistBuy(runId, symbol, executionSignal, qty, budget, effectivePercent, decision);
+                    long positionId = openPosition(runId, symbol, executionSignal, fresh, qty, budget, effectivePercent);
+                    persistBuy(runId, symbol, executionSignal, fresh, qty, budget, effectivePercent, decision);
                     executionIntelligenceService.markExecuted(executionSignal, decision);
                     cash = cash.subtract(budget, MC);
                     replayExecutedNewPositions++;
                     // Keep the complete immutable BUY thesis needed by production continuation.
                     // Replay must not drop entry structure and silently evaluate a different exit policy.
-                    open = new ShadowPosition(positionId, executionSignal.getGeneratedAt(), executionSignal.getLatestPrice(), qty, budget,
-                            effectivePercent, executionSignal.getStopLoss(), executionSignal.getTakeProfit(), executionSignal.getLatestPrice(), false, null,
+                    open = new ShadowPosition(positionId, executionSignal.getGeneratedAt(), fresh.price(), qty, budget,
+                            effectivePercent, executionSignal.getStopLoss(), executionSignal.getTakeProfit(), fresh.price(), false, null,
                             executionSignal.getTotalScore(), executionSignal.getConfidenceScore(), executionSignal.getTrendScore(), executionSignal.getTrendStructureScore(),
                             executionSignal.getMomentumScore(), executionSignal.getVolumeScore());
                 }
             } else if (open != null && decision.allowed()) {
-                // Exact production progressive-position semantics: decision.positionPercent()
-                // is the ADD allocation, not a new target allocation, and ATR percentage is
-                // not re-applied to confirmation/trend adds in production.
+                // FIX-056: progressive Replay adds use the same fresh execution price and
+                // execution-time Entry Quality revalidation as Production.
+                ExecutionPriceAuthorityService.ExecutionPrice fresh = executionPriceAuthorityService
+                        .resolve(symbol, signal.getGeneratedAt()).orElse(null);
+                if (fresh == null) continue;
+                decision = executionIntelligenceService.revalidateAtExecutionPrice(signal, decision, fresh.price());
+                if (!decision.allowed()) continue;
                 int addPercent = Math.max(1, Math.min(100 - open.positionPercent(), decision.positionPercent()));
                 WalletExecutionSizingPolicy.Plan sizing = executionSizingPolicy.plan(
                         cash, replayWalletSettings.getMinimumUsdtReserve(), replayDailyBudget,
                         addPercent, open.positionPercent(), false, replayWalletSettings.getMaximumDailyNewPositions(),
-                        replayExecutedNewPositions, signal.getLatestPrice());
+                        replayExecutedNewPositions, fresh.price());
                 BigDecimal budget = sizing.spend();
                 if (sizing.allowed()) {
                     addPercent = sizing.normalizedPositionPercent();
                     BigDecimal addedQty = sizing.quantity();
-                    persistBuy(runId, symbol, signal, addedQty, budget, addPercent, decision);
+                    persistBuy(runId, symbol, signal, fresh, addedQty, budget, addPercent, decision);
                     executionIntelligenceService.markExecuted(signal, decision);
                     cash = cash.subtract(budget, MC);
                     open = addToPosition(runId, open, signal, addedQty, budget, addPercent);
@@ -517,21 +532,21 @@ public class ShadowProductionReplayService {
                 o.getDecisionCode(), o.getDecisionExplanation());
     }
 
-    private void persistBuy(long runId,String symbol,TradeSignal s,BigDecimal qty,BigDecimal budget,int pct,ExecutionIntelligenceService.ExecutionDecision d){
+    private void persistBuy(long runId,String symbol,TradeSignal s,ExecutionPriceAuthorityService.ExecutionPrice fresh,BigDecimal qty,BigDecimal budget,int pct,ExecutionIntelligenceService.ExecutionDecision d){
         jdbcTemplate.update("""
             INSERT INTO wallet_execution_test
             (test_run_id,symbol,side,execution_time,execution_price,quantity,notional_usdt,position_percent,signal_interval,signal_decision,execution_source,execution_code,execution_reason)
             VALUES (?,?,'BUY',?,?,?,?,?,?,?,?,?,?)""",
-            runId,symbol,Timestamp.from(s.getGeneratedAt()),s.getLatestPrice(),qty,budget,pct,s.getInterval(),name(s.getDecision()),d.source(),d.code(),d.explanation());
+            runId,symbol,Timestamp.from(fresh.observedAt()),fresh.price(),qty,budget,pct,s.getInterval(),name(s.getDecision()),d.source(),d.code(),d.explanation() + " DecisionPrice=" + s.getLatestPrice() + ", executionPriceObservedAt=" + fresh.observedAt());
     }
 
-    private long openPosition(long runId,String symbol,TradeSignal s,BigDecimal qty,BigDecimal budget,int pct){
+    private long openPosition(long runId,String symbol,TradeSignal s,ExecutionPriceAuthorityService.ExecutionPrice fresh,BigDecimal qty,BigDecimal budget,int pct){
         org.springframework.jdbc.support.GeneratedKeyHolder kh=new org.springframework.jdbc.support.GeneratedKeyHolder();
         jdbcTemplate.update(c->{var ps=c.prepareStatement("""
             INSERT INTO wallet_position_test
             (test_run_id,symbol,status,entry_time,entry_price,quantity,total_cost_usdt,position_percent,stop_loss_usdt,take_profit_usdt,highest_price_usdt)
             VALUES (?,?,'OPEN',?,?,?,?,?,?,?,?)""",java.sql.Statement.RETURN_GENERATED_KEYS);
-            ps.setLong(1,runId);ps.setString(2,symbol);ps.setTimestamp(3,Timestamp.from(s.getGeneratedAt()));ps.setBigDecimal(4,s.getLatestPrice());ps.setBigDecimal(5,qty);ps.setBigDecimal(6,budget);ps.setInt(7,pct);ps.setBigDecimal(8,s.getStopLoss());ps.setBigDecimal(9,s.getTakeProfit());ps.setBigDecimal(10,s.getLatestPrice());return ps;},kh);
+            ps.setLong(1,runId);ps.setString(2,symbol);ps.setTimestamp(3,Timestamp.from(fresh.observedAt()));ps.setBigDecimal(4,fresh.price());ps.setBigDecimal(5,qty);ps.setBigDecimal(6,budget);ps.setInt(7,pct);ps.setBigDecimal(8,s.getStopLoss());ps.setBigDecimal(9,s.getTakeProfit());ps.setBigDecimal(10,fresh.price());return ps;},kh);
         if (kh.getKey() == null) throw new IllegalStateException("Could not create shadow position");
         return kh.getKey().longValue();
     }

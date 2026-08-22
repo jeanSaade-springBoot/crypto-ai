@@ -5,6 +5,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.time.Instant;
+import java.math.BigDecimal;
 
 @Entity
 @Table(name = "execution_opportunity", indexes = {
@@ -36,6 +37,15 @@ public class ExecutionOpportunity {
 
     @Column(name = "last_evidence_at", nullable = false)
     private Instant lastEvidenceAt;
+
+    // FIX-055: persist the original and best BUY prices for the lifetime of the
+    // opportunity. Entry Quality must not forget an earlier cheaper setup merely
+    // because its rolling recent-signal window has moved forward with price.
+    @Column(name = "anchor_entry_price", precision = 30, scale = 12)
+    private BigDecimal anchorEntryPrice;
+
+    @Column(name = "best_entry_price", precision = 30, scale = 12)
+    private BigDecimal bestEntryPrice;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "latest_signal_id")

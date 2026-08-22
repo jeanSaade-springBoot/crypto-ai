@@ -48,5 +48,22 @@ public class MarketPriceEventService {
                 symbol, Timestamp.from(startInclusive), Timestamp.from(endInclusive));
     }
 
+
+    /** FIX-056: newest canonical live-price observation at or before the execution clock. */
+    public java.util.Optional<PriceEvent> findLatestAtOrBefore(String rawSymbol, Instant reference) {
+        String symbol = rawSymbol == null ? "" : rawSymbol.trim().toUpperCase(Locale.ROOT);
+        List<PriceEvent> rows = jdbcTemplate.query("""
+                SELECT observed_at, price
+                FROM market_price_event
+                WHERE symbol = ? AND observed_at <= ?
+                ORDER BY observed_at DESC, id DESC
+                LIMIT 1
+                """, (rs, rowNum) -> new PriceEvent(
+                        rs.getTimestamp("observed_at").toInstant(),
+                        rs.getBigDecimal("price")),
+                symbol, Timestamp.from(reference));
+        return rows.stream().findFirst();
+    }
+
     public record PriceEvent(Instant observedAt, BigDecimal price) {}
 }

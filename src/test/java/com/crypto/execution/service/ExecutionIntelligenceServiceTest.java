@@ -889,6 +889,61 @@ class ExecutionIntelligenceServiceTest {
     }
 
     @Test
+    void sol617ConfirmationWakeupRejectsPriorMinuteOneMinuteAuthority() {
+        // FIX-056 regression: SOL #617 used signal #133530 generated 63 seconds before
+        // the 5m confirmation. That prior-cycle snapshot must no longer be executable.
+        TradeSignal staleOne = signal(133530L, "SOLUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now.minusSeconds(63), 81, 84);
+        staleOne.setLatestPrice(new BigDecimal("94.79"));
+        staleOne.setAtrAtSignal(new BigDecimal("0.080679302403"));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+                "SOLUSDT", "1m", now)).thenReturn(Optional.of(staleOne));
+
+        TradeSignal priorFive = signal(133463L, "SOLUSDT", "5m", SignalDecision.NEUTRAL, SignalDecision.NEUTRAL,
+                now.minusSeconds(300), 58, 72);
+        TradeSignal triggerFive = signal(133564L, "SOLUSDT", "5m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 80, 78);
+        triggerFive.setAtrAtSignal(new BigDecimal("0.10"));
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanOrderByGeneratedAtDesc(
+                "SOLUSDT", "5m", now)).thenReturn(Optional.of(priorFive));
+
+        var opportunity = com.crypto.execution.domain.ExecutionOpportunity.builder()
+                .id(16000L).symbol("SOLUSDT").direction("BUY").status("BUILDING")
+                .startedAt(now.minusSeconds(1200)).lastEvidenceAt(staleOne.getGeneratedAt())
+                .evidenceScore(6).opportunityHealth(90).createdAt(now.minusSeconds(1200)).updatedAt(now)
+                .build();
+        when(opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(
+                any(), any(), any())).thenReturn(Optional.of(opportunity));
+
+        var wakeup = service.evaluateConfirmedSetupWakeup(triggerFive, 0);
+
+        assertThat(wakeup.present()).isFalse();
+    }
+
+    @Test
+    void executionPriceRevalidationUsesFreshPriceNotDecisionSnapshot() {
+        // FIX-056: preserve signal.latestPrice as immutable evidence while scoring the
+        // actual market price that would be used for sizing/fill.
+        TradeSignal signal = signal(200001L, "TESTUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 82, 80);
+        signal.setLatestPrice(new BigDecimal("100.00"));
+        signal.setStopLoss(new BigDecimal("99.00"));
+        signal.setTakeProfit(new BigDecimal("102.00"));
+        signal.setAtrAtSignal(new BigDecimal("0.50"));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("TESTUSDT", "1m"))
+                .thenReturn(List.of(signal));
+
+        var approved = ExecutionIntelligenceService.ExecutionDecision.allow(
+                "TEST", "TEST", 50, "signal-time approval",
+                new ExecutionIntelligenceService.Evidence(0,0,0,0,0,0,0,0,0,0,0,null,null,null,List.of()));
+        var revalidated = service.revalidateAtExecutionPrice(signal, approved, new BigDecimal("102.10"));
+
+        assertThat(revalidated.allowed()).isFalse();
+        assertThat(revalidated.code()).isEqualTo("EXECUTION_PRICE_AT_OR_ABOVE_TARGET");
+        assertThat(signal.getLatestPrice()).isEqualByComparingTo("100.00");
+    }
+
+    @Test
     void terminalPositionCloseConsumesBuildingOpportunityEvidence() {
         TradeSignal exit = signal(103900L, "ENAUSDT", "1m", SignalDecision.NEUTRAL, SignalDecision.SELL,
                 now, 40, 60);
@@ -1336,6 +1391,45 @@ class ExecutionIntelligenceServiceTest {
         var decision = service.evaluateBuy(current);
 
         assertThat(decision.source()).isNotEqualTo("PRESSURE_PROBE_ENTRY");
+    }
+
+
+    @Test
+    void pepeLongLivedStopExposedOpportunityIsNoLongerRatedGoodEntryAtBreakoutHigh() {
+        // FIX-055 regression: PEPEUSDT had an opportunity alive for ~71 minutes.
+        // The rolling recent-price window moved upward with price and Entry Quality
+        // still rated 0.00000418 as GOOD_ENTRY even while liquidity was STOP_EXPOSED.
+        TradeSignal current = signal(134062L, "PEPEUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 83, 77);
+        current.setLatestPrice(new BigDecimal("0.000004180000"));
+        current.setStopLoss(new BigDecimal("0.000004142668"));
+        current.setTakeProfit(new BigDecimal("0.000004235998"));
+        current.setAtrAtSignal(new BigDecimal("0.000000018666"));
+        current.setMarketRegime(MarketRegime.BREAKOUT);
+        current.setLiquidityStatus(com.crypto.domain.LiquidityContextStatus.STOP_EXPOSED);
+
+        var opportunity = com.crypto.execution.domain.ExecutionOpportunity.builder()
+                .symbol("PEPEUSDT")
+                .direction("BUY")
+                .status("BUILDING")
+                .startedAt(now.minusSeconds(71 * 60))
+                .lastEvidenceAt(now.minusSeconds(60))
+                .anchorEntryPrice(new BigDecimal("0.000004070000"))
+                .bestEntryPrice(new BigDecimal("0.000004070000"))
+                .build();
+
+        when(opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(
+                any(), any(), any())).thenReturn(Optional.of(opportunity));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("PEPEUSDT", "1m"))
+                .thenReturn(List.of(current));
+
+        var quality = service.assessEntryQuality(current);
+
+        assertThat(quality.score()).isLessThan(50);
+        assertThat(quality.classification()).isEqualTo("CHASE_ENTRY");
+        assertThat(quality.expansionPercent()).isGreaterThan(2.5d);
+        assertThat(quality.atrExtension()).isGreaterThan(5d);
+        assertThat(quality.opportunityAgeMinutes()).isEqualTo(71L);
     }
 
     private PressureReadinessService.Result readyPressureResult() {

@@ -29,6 +29,12 @@ public class WalletTrade {
     private BigDecimal quantity;
     @Column(name = "price_usdt", nullable = false, precision = 30, scale = 12)
     private BigDecimal priceUsdt;
+    /** FIX-056 immutable signal-time price used for decision audit only. */
+    @Column(name = "decision_price_usdt", precision = 30, scale = 12)
+    private BigDecimal decisionPriceUsdt;
+    /** FIX-056 UTC timestamp of the canonical market event used as the fill authority. */
+    @Column(name = "execution_price_observed_at")
+    private Instant executionPriceObservedAt;
     @Column(name = "gross_amount_usdt", nullable = false, precision = 30, scale = 12)
     private BigDecimal grossAmountUsdt;
     @Column(name = "fee_usdt", nullable = false, precision = 30, scale = 12)

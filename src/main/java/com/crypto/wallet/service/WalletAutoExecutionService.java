@@ -46,6 +46,19 @@ public class WalletAutoExecutionService {
     @Transactional
     public synchronized boolean executeBuy(TradeSignal signal, int positionPercent, String executionExplanation,
                                            String entryStage, int entryQualityScore) {
+        // FIX-056 compatibility overload. Normal Production/Replay paths MUST call the
+        // explicit-price overload below; retaining this overload avoids breaking admin/tests.
+        return executeBuy(signal, signal == null ? null : signal.getLatestPrice(), Instant.now(), positionPercent,
+                executionExplanation, entryStage, entryQualityScore);
+    }
+
+    /**
+     * FIX-056: execute using an explicit execution-time market price. TradeSignal.latestPrice
+     * is the immutable decision snapshot and must not be reused as the wallet fill.
+     */
+    @Transactional
+    public synchronized boolean executeBuy(TradeSignal signal, BigDecimal executionPrice, Instant executionPriceObservedAt, int positionPercent,
+                                           String executionExplanation, String entryStage, int entryQualityScore) {
         if (signal == null || signal.getId() == null) return false;
         WalletSettings settings = settings();
         int requestedPositionPercent = Math.max(1, Math.min(100, positionPercent));
@@ -60,7 +73,7 @@ public class WalletAutoExecutionService {
         if (tradeRepository.existsByExecutionKey(key)) return true;
 
         String assetSymbol = pair.substring(0, pair.length() - 4);
-        BigDecimal price = positive(signal.getLatestPrice());
+        BigDecimal price = positive(executionPrice);
         WalletAsset usdt = getOrCreate("USDT");
         WalletDailyStatistics daily = dailyStatistics(settings, usdt);
 
@@ -90,7 +103,7 @@ public class WalletAutoExecutionService {
 
         WalletManagedPosition position = existingPosition != null
                 ? existingPosition
-                : newManagedPosition(pair, signal);
+                : newManagedPosition(pair, signal, price);
         position.setQuantity(position.getQuantity().add(quantity));
         position.setTotalCostUsdt(position.getTotalCostUsdt().add(spend));
         position.setAverageEntryPriceUsdt(position.getTotalCostUsdt()
@@ -120,6 +133,8 @@ public class WalletAutoExecutionService {
                 .side("BUY")
                 .quantity(quantity)
                 .priceUsdt(price)
+                .decisionPriceUsdt(signal.getLatestPrice())
+                .executionPriceObservedAt(executionPriceObservedAt)
                 .grossAmountUsdt(spend)
                 .feeUsdt(ZERO)
                 .netAmountUsdt(spend)
@@ -129,7 +144,8 @@ public class WalletAutoExecutionService {
                 .executedAt(Instant.now())
                 .notes("Automatic wallet BUY using " + normalizedPositionPercent + "% of the configured BUY budget")
                 .executionMessage("BUY decision from trade signal #" + signal.getId()
-                        + " applied to wallet for " + pair + " at " + normalizedPositionPercent
+                        + " (decisionPrice=" + signal.getLatestPrice() + ") applied to wallet for " + pair
+                        + " at executionPrice=" + price + " and " + normalizedPositionPercent
                         + "% size. " + (executionExplanation == null ? "" : executionExplanation))
                 .build());
 
@@ -549,7 +565,7 @@ public class WalletAutoExecutionService {
         return value;
     }
 
-    private WalletManagedPosition newManagedPosition(String pair, TradeSignal signal) {
+    private WalletManagedPosition newManagedPosition(String pair, TradeSignal signal, BigDecimal executionPrice) {
         Instant now = Instant.now();
         return WalletManagedPosition.builder()
                 .symbol(pair)
@@ -573,7 +589,7 @@ public class WalletAutoExecutionService {
                 .entryAnalysisSnapshotJson(entrySnapshotJson(signal))
                 .stopLossUsdt(signal.getStopLoss())
                 .takeProfitUsdt(signal.getTakeProfit())
-                .highestPriceUsdt(signal.getLatestPrice())
+                .highestPriceUsdt(executionPrice)
                 .profitLockActive(false)
                 .profitLockPriceUsdt(null)
                 .profitLockProgressPercent(BigDecimal.ZERO)

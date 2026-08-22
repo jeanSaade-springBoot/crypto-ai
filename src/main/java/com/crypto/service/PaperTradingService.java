@@ -13,6 +13,7 @@ import com.crypto.wallet.repository.WalletTradeRepository;
 import com.crypto.wallet.repository.WalletManagedPositionRepository;
 import com.crypto.wallet.domain.WalletManagedPosition;
 import com.crypto.execution.service.ExecutionIntelligenceService;
+import com.crypto.execution.service.ExecutionPriceAuthorityService;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.crypto.position.service.PositionManagementService;
@@ -44,6 +45,7 @@ public class PaperTradingService {
     private final WalletManagedPositionRepository walletManagedPositionRepository;
     private final TradeExecutionValidationService executionValidationService;
     private final ExecutionIntelligenceService executionIntelligenceService;
+    private final ExecutionPriceAuthorityService executionPriceAuthorityService;
     private final DynamicProfitLockService dynamicProfitLockService;
     private final PositionPriceAuthorityPolicy priceAuthorityPolicy;
 
@@ -156,13 +158,25 @@ public class PaperTradingService {
                             return Optional.of(position);
                         }
                         int addPercent = addDecision.positionPercent();
+                        // FIX-056: progressive adds use the same fresh canonical price authority
+                        // as initial entries. Signal.latestPrice remains decision-time evidence only.
+                        ExecutionPriceAuthorityService.ExecutionPrice fresh = executionPriceAuthorityService
+                                .resolve(symbol, Instant.now()).orElse(null);
+                        if (fresh == null) {
+                            log.info("Progressive BUY skipped: no fresh execution price for {}", symbol);
+                            return Optional.of(position);
+                        }
+                        ExecutionIntelligenceService.ExecutionDecision freshDecision =
+                                executionIntelligenceService.revalidateAtExecutionPrice(signal, addDecision, fresh.price());
+                        if (!freshDecision.allowed()) return Optional.of(position);
+                        addPercent = freshDecision.positionPercent();
                         ExecutionIntelligenceService.EntryQuality entryQuality =
-                                executionIntelligenceService.assessEntryQuality(signal);
+                                executionIntelligenceService.assessEntryQualityAtPrice(signal, fresh.price());
                         boolean walletAdded = walletAutoExecutionService.executeBuy(
-                                signal,
-                                addPercent,
-                                "Execution Intelligence [" + addDecision.source() + "] " + addDecision.explanation(),
-                                addDecision.source(),
+                                signal, fresh.price(), fresh.observedAt(), addPercent,
+                                "Execution Intelligence [" + freshDecision.source() + "] " + freshDecision.explanation()
+                                        + " FreshPrice=" + fresh.price() + "@" + fresh.observedAt(),
+                                freshDecision.source(),
                                 entryQuality.score());
                         if (walletAdded) {
                             BigDecimal addedQuantity = walletTradeRepository
@@ -173,7 +187,7 @@ public class PaperTradingService {
                                     .orElse(BigDecimal.ZERO);
                             if (addedQuantity.signum() > 0) {
                                 BigDecimal oldCost = position.getEntryPrice().multiply(position.getQuantity(), MC);
-                                BigDecimal addCost = signal.getLatestPrice().multiply(addedQuantity, MC);
+                                BigDecimal addCost = fresh.price().multiply(addedQuantity, MC);
                                 BigDecimal newQuantity = position.getQuantity().add(addedQuantity);
                                 position.setQuantity(newQuantity);
                                 position.setEntryPrice(oldCost.add(addCost, MC).divide(newQuantity, MC));
@@ -187,7 +201,7 @@ public class PaperTradingService {
                                 }
                                 position.setEntryReason(position.getEntryReason()
                                         + " | Progressive add [" + addDecision.source() + "] "
-                                        + addPercent + "% at " + signal.getLatestPrice()
+                                        + addPercent + "% at " + fresh.price()
                                         + "; Entry Quality=" + entryQuality.score() + "/100.");
                                 positionRepository.save(position);
                             }
@@ -249,7 +263,34 @@ public class PaperTradingService {
                 .multiply(properties.riskPerTradePercent(), MC)
                 .divide(BigDecimal.valueOf(100), MC)
                 .multiply(positionScale, MC);
-        BigDecimal riskPerUnit = executionSignal.getLatestPrice().subtract(executionSignal.getStopLoss(), MC).abs();
+        // FIX-056: resolve a canonical execution-time price AFTER all signal/HTF gates but
+        // BEFORE risk sizing and wallet persistence. Never size from a stale signal snapshot.
+        ExecutionPriceAuthorityService.ExecutionPrice freshExecutionPrice = executionPriceAuthorityService
+                .resolve(symbol, Instant.now()).orElse(null);
+        if (freshExecutionPrice == null) {
+            log.info("Execution Intelligence approved signal {} but no fresh canonical execution price was available; BUY skipped.",
+                    executionSignal.getId());
+            return Optional.empty();
+        }
+        executionDecision = executionIntelligenceService.revalidateAtExecutionPrice(
+                executionSignal, executionDecision, freshExecutionPrice.price());
+        if (!executionDecision.allowed()) {
+            log.info("BUY revalidation rejected signal {} at fresh price {}: {} - {}",
+                    executionSignal.getId(), freshExecutionPrice.price(), executionDecision.code(), executionDecision.explanation());
+            return Optional.empty();
+        }
+        // Recompute exposure after fresh-price Entry Quality because the final guard may
+        // reduce the approved allocation further than the signal-time decision did.
+        executionPercent = executionDecision.positionPercent();
+        effectivePositionPercent = Math.max(1,
+                Math.min(100, (int) Math.round(atrPercent * executionPercent / 100.0)));
+        positionScale = BigDecimal.valueOf(effectivePositionPercent)
+                .divide(BigDecimal.valueOf(100), MC);
+        riskAmount = properties.paperAccountBalance()
+                .multiply(properties.riskPerTradePercent(), MC)
+                .divide(BigDecimal.valueOf(100), MC)
+                .multiply(positionScale, MC);
+        BigDecimal riskPerUnit = freshExecutionPrice.price().subtract(executionSignal.getStopLoss(), MC).abs();
 
         if (riskPerUnit.signum() == 0) {
             throw new IllegalStateException("Invalid stop-loss distance");
@@ -260,9 +301,12 @@ public class PaperTradingService {
         final boolean walletExecuted;
         try {
             ExecutionIntelligenceService.EntryQuality entryQuality =
-                    executionIntelligenceService.assessEntryQuality(executionSignal);
-            walletExecuted = walletAutoExecutionService.executeBuy(executionSignal, effectivePositionPercent,
-                    "Execution Intelligence [" + executionDecision.source() + "] " + executionDecision.explanation(),
+                    executionIntelligenceService.assessEntryQualityAtPrice(executionSignal, freshExecutionPrice.price());
+            walletExecuted = walletAutoExecutionService.executeBuy(executionSignal, freshExecutionPrice.price(), freshExecutionPrice.observedAt(), effectivePositionPercent,
+                    "Execution Intelligence [" + executionDecision.source() + "] " + executionDecision.explanation()
+                            + " DecisionPrice=" + executionSignal.getLatestPrice()
+                            + ", executionPrice=" + freshExecutionPrice.price()
+                            + ", priceObservedAt=" + freshExecutionPrice.observedAt(),
                     executionDecision.source(),
                     entryQuality.score());
         } catch (RuntimeException ex) {
@@ -286,7 +330,7 @@ public class PaperTradingService {
                 .side(PositionSide.BUY)
                 .status(PositionStatus.OPEN)
                 .quantity(executedQuantity)
-                .entryPrice(executionSignal.getLatestPrice())
+                .entryPrice(freshExecutionPrice.price())
                 .stopLoss(executionSignal.getStopLoss())
                 .takeProfit(executionSignal.getTakeProfit())
                 .signal(executionSignal)

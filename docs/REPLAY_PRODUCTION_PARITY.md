@@ -19,3 +19,11 @@ Replay never writes to the real wallet or Production position tables. Wallet/pos
 ## Verification
 
 After V64 is deployed, allow Production to collect live price events. Replay the identical UTC interval and compare BUY signal/decision, allocation, entry price, TP/SL/profit-lock events, SELL reason, exit price and exit time. UI reports should convert timestamps to the user's local timezone only at presentation time.
+
+## FIX-056 — Execution-price parity
+Exact Replay now requires the same canonical price authority used by Production at BUY execution time. Replay advances `ExecutionReplayScope` with persisted UTC `market_price_event` observations before evaluating a signal. Both paths then run `revalidateAtExecutionPrice`, size from that price, and persist/use that price as the fill. The historical `TradeSignal.latestPrice` remains immutable decision evidence and is never rewritten to imitate the fill.
+
+Proven regression expectations:
+- SOL #617: a 1m signal 63 seconds older than the confirming 5m event is rejected by the 45-second current-cycle wake-up rule.
+- A BUY whose fresh execution price has already reached/exceeded its original target is rejected even if the signal-time decision was BUY.
+- PEPE FIX-055 anchor/STOP_EXPOSED Entry Quality remains active and is recalculated again at the fresh execution price.
