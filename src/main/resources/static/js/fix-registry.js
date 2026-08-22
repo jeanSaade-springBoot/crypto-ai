@@ -1,6 +1,22 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-050",
+            title: "Trade Activity natural mandatory-filter switching + compact menu",
+            status: "ACTIVE · UI/AUDIT ONLY",
+            scenario: "The final EXECUTED or BUY checkbox appeared impossible to clear because FIX-049 immediately re-checked the same box; the desktop left navigation was also slightly wider/spacier than desired.",
+            symbol: "ALL / any activity symbol", entry: "N/A", exit: "N/A",
+            entryTime: "2026-08-22 KSA observation", exitTime: "N/A",
+            replayWindow: "No replay required; frontend-only interaction/layout change",
+            location: "Trade Activity checkbox interaction + shared desktop sidebar CSS",
+            classes: ["trade-activity.js", "dashboard.css"],
+            cause: "FIX-049 preserved mandatory filter groups by restoring the checkbox that had just been unchecked. This met the backend rule but made EXECUTED/BLOCKED and BUY/SELL feel stuck. Desktop sidebar spacing also consumed more width than needed.",
+            solution: "When the last selected checkbox in a mandatory group is cleared, select its peer instead of re-checking the same box. Keep one-or-both selection in each group. Reduce expanded desktop sidebar width from 240px to 220px and slightly tighten navigation padding/gaps; collapsed width remains 76px.",
+            behavior: "Unchecking sole EXECUTED switches to BLOCKED; unchecking sole BLOCKED switches to EXECUTED. The same rule applies to BUY/SELL. Selecting both still works and either one can then be cleared. Filter semantics remain (BUY or SELL) AND (EXECUTED or BLOCKED) AND symbol. No trading behavior changes.",
+            regression: "Verify each group can switch naturally, can hold both values, and can never become empty. Verify Search still returns the strict FIX-049 backend semantics. Confirm desktop sidebar is slightly narrower while mobile/collapsed layouts remain unchanged."
+        },
+
+        {
             id: "FIX-049",
             title: "Trade Activity strict direction AND state filters",
             status: "ACTIVE · UI/AUDIT ONLY",

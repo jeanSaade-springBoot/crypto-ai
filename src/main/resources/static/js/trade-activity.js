@@ -32,16 +32,17 @@ async function search(){
 }
 $('activity-search').addEventListener('click',search);
 
-// FIX-049: a direction group can never become empty. If the operator tries to
-// uncheck the final BUY/SELL choice, restore it immediately rather than leaving
-// the UI in a state the backend rejects.
-document.querySelectorAll('.activity-side').forEach(box=>box.addEventListener('change',()=>{
-  if(!document.querySelector('.activity-side:checked')) box.checked=true;
-}));
-
-// FIX-049: EXECUTED/BLOCKED is also a mandatory group. Either one or both may be
-// selected, but the final checked state cannot be removed.
-document.querySelectorAll('.activity-state').forEach(box=>box.addEventListener('change',()=>{
-  if(!document.querySelector('.activity-state:checked')) box.checked=true;
-}));
+// FIX-050: each filter group must always keep at least one option selected, but
+// do not force the checkbox the operator just cleared back on. If the last
+// selected option is unchecked, switch the group to its peer instead. This lets
+// BUY <-> SELL and EXECUTED <-> BLOCKED be changed naturally while preserving the
+// strict backend contract: (BUY or SELL) AND (EXECUTED or BLOCKED) AND symbol.
+function keepOneSelected(box,selector){
+  if(document.querySelector(selector+':checked')) return;
+  const peer=[...document.querySelectorAll(selector)].find(x=>x!==box);
+  if(peer) peer.checked=true;
+  else box.checked=true;
+}
+document.querySelectorAll('.activity-side').forEach(box=>box.addEventListener('change',()=>keepOneSelected(box,'.activity-side')));
+document.querySelectorAll('.activity-state').forEach(box=>box.addEventListener('change',()=>keepOneSelected(box,'.activity-state')));
 loadSymbols();})();

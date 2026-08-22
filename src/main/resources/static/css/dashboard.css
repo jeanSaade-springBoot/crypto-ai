@@ -2810,3 +2810,15 @@ body.position-modal-open{overflow:hidden}
 .candle-hover-price{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
 .candle-hover-price span{color:var(--muted);font-size:11px}
 .candle-hover-price strong{color:var(--text);font-size:14px;font-weight:800}
+
+
+/* FIX-050: slightly more compact desktop navigation. UI-only; collapsed rail stays unchanged. */
+@media (min-width: 761px) {
+  body:not(.sidebar-collapsed) .sidebar { width:220px !important; padding-left:14px; padding-right:14px; }
+  body:not(.sidebar-collapsed) main { margin-left:220px !important; }
+  body:not(.sidebar-collapsed) main > .topbar { left:220px !important; }
+  body:not(.sidebar-collapsed) .sidebar .brand { margin-bottom:22px; }
+  body:not(.sidebar-collapsed) .sidebar-nav { gap:12px !important; }
+  body:not(.sidebar-collapsed) .nav-group { gap:3px; }
+  body:not(.sidebar-collapsed) .sidebar-nav a { padding:9px 10px; gap:8px; }
+}
