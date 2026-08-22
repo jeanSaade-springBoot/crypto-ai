@@ -1,6 +1,38 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-048",
+            title: "Trade Activity hierarchical filter semantics",
+            status: "ACTIVE · UI/AUDIT ONLY",
+            scenario: "Operator expects BUY + symbol to show all BUY signals, BUY + EXECUTED + symbol to show only real executed BUYs, EXECUTED alone to show all real wallet executions, and BLOCKED to show only blocked activity.",
+            symbol: "ALL / any activity symbol", entry: "N/A", exit: "N/A",
+            entryTime: "2026-08-22 KSA observation", exitTime: "N/A",
+            replayWindow: "No replay required; read-only activity-query semantics",
+            location: "Trade Activity backend filter semantics and frontend checkbox behavior",
+            classes: ["TradeActivityService", "trade-activity.js", "trade-activity.html"],
+            cause: "BUY, SELL, BLOCKED and EXECUTED were implemented as independent additive sources. That made combined filters ambiguous and did not let BUY distinguish matching wallet-executed signals from signals that were never executed.",
+            solution: "Make BLOCKED exclusive; make EXECUTED a wallet-ledger narrowing filter for BUY/SELL; make EXECUTED alone return all executed BUY/SELL wallet actions; make BUY/SELL alone return all side signals and mark each signal EXECUTED only when a matching wallet_trade exists for its signal_id.",
+            behavior: "BUY + PEPEUSDT shows every PEPE BUY signal with EXECUTED or SIGNAL status. BUY + EXECUTED + PEPEUSDT shows only real executed PEPE BUY wallet rows. EXECUTED + PEPEUSDT shows all executed PEPE BUY/SELL rows. BLOCKED + PEPEUSDT shows only blocked/cancelled PEPE execution opportunities. No trading behavior changes.",
+            regression: "Verify the four filter combinations against direct trade_signal, wallet_trade and execution_opportunity queries for the same symbol/time window. Database timestamps remain UTC and frontend display remains Asia/Riyadh."
+        },
+
+        {
+            id: "FIX-047",
+            title: "Trade Activity activity-type filter refresh",
+            status: "ACTIVE · UI/AUDIT ONLY",
+            scenario: "Operator searches BUY + EXECUTED, then unchecks BUY, but stale BUY SIGNAL rows remain visible and appear to be EXECUTED results.",
+            symbol: "ALL / any activity symbol", entry: "N/A", exit: "N/A",
+            entryTime: "2026-08-22 KSA observation", exitTime: "N/A",
+            replayWindow: "No replay required; read-only activity filtering regression",
+            location: "Trade Activity activity-type checkbox refresh",
+            classes: ["trade-activity.js"],
+            cause: "Changing BUY/SELL/BLOCKED/EXECUTED checkboxes did not trigger a new query, so previously rendered rows stayed on screen until Search was pressed again.",
+            solution: "Refresh immediately whenever an activity-type checkbox changes. When no activity type remains selected, clear the stale table and reset the result count.",
+            behavior: "With only EXECUTED selected, SIGNAL rows disappear immediately. If the symbol has no wallet_trade EXECUTED rows, Trade Activity shows no matching activity. No Production, Replay, scoring, entry, exit, sizing or wallet behavior changes.",
+            regression: "Search BUY + EXECUTED for PEPEUSDT, uncheck BUY and confirm all SIGNAL / INITIAL_SIGNAL rows disappear immediately. With only EXECUTED selected and zero PEPEUSDT wallet_trade rows, result must be empty."
+        },
+
+        {
             id: "FIX-046",
             title: "Trade Activity symbol filter source and refresh correction",
             status: "ACTIVE · UI/AUDIT ONLY",

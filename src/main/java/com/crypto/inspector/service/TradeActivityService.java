@@ -36,29 +36,13 @@ public class TradeActivityService {
         Instant from = Instant.now().minus(hours, ChronoUnit.HOURS);
         List<Map<String, Object>> rows = new ArrayList<>();
 
-        // BUY/SELL are signal events. They are intentionally not called EXECUTED unless a wallet row exists.
-        // FIX-039: trade_signal stores the timeframe in interval_code (the Java entity field is named interval).
-        // Keep persisted timestamps in UTC; the Trade Activity frontend converts event_time to the user's display timezone.
-        if (filters.contains("BUY") || filters.contains("SELL")) {
-            List<String> sides = new ArrayList<>();
-            if (filters.contains("BUY")) { sides.add("BUY"); sides.add("STRONG_BUY"); }
-            if (filters.contains("SELL")) { sides.add("SELL"); sides.add("STRONG_SELL"); }
-            String placeholders = String.join(",", Collections.nCopies(sides.size(), "?"));
-            String sql = """
-                    SELECT ts.generated_at event_time, ts.symbol, ts.interval_code timeframe,
-                           CASE WHEN ts.decision IN ('BUY','STRONG_BUY') THEN 'BUY' ELSE 'SELL' END action,
-                           'SIGNAL' status, 'INITIAL_SIGNAL' source,
-                           CASE WHEN ts.decision IN ('BUY','STRONG_BUY') THEN 'BUY_SIGNAL' ELSE 'SELL_SIGNAL' END reason
-                    FROM trade_signal ts
-                    WHERE ts.generated_at >= ? AND ts.decision IN (%s)
-                    """.formatted(placeholders) + (normalizedSymbol == null ? "" : " AND ts.symbol = ?") + " ORDER BY ts.generated_at DESC LIMIT 500";
-            List<Object> args = new ArrayList<>(); args.add(from); args.addAll(sides); if (normalizedSymbol != null) args.add(normalizedSymbol);
-            rows.addAll(jdbc.queryForList(sql, args.toArray()));
-        }
-
-        // BLOCKED is execution authority, not a signal side. decision_code is already the short persisted keyword.
-        // FIX-039: use the physical database column interval_code in native SQL, not the JPA field name interval.
+        // FIX-048: Trade Activity filters now follow operator intent instead of acting as
+        // independent additive database sources. BUY/SELL are broad signal-side filters;
+        // EXECUTED narrows those sides to actual wallet executions, and BLOCKED is exclusive.
+        // Database/Binance timestamps remain UTC; only the frontend converts them for display.
         if (filters.contains("BLOCKED")) {
+            // BLOCKED is exclusive by design: when requested, return only blocked/cancelled
+            // execution opportunities for the selected symbol and time window.
             String sql = """
                     SELECT eo.last_evidence_at event_time, eo.symbol, ts.interval_code timeframe,
                            eo.direction action, 'BLOCKED' status, 'EXECUTION_GATE' source,
@@ -66,13 +50,21 @@ public class TradeActivityService {
                     FROM execution_opportunity eo
                     LEFT JOIN trade_signal ts ON ts.id = eo.latest_signal_id
                     WHERE eo.last_evidence_at >= ? AND eo.status IN ('BLOCKED','CANCELLED')
-                    """ + (normalizedSymbol == null ? "" : " AND eo.symbol = ?") + " ORDER BY eo.last_evidence_at DESC LIMIT 500";
+                    """ + (normalizedSymbol == null ? "" : " AND eo.symbol = ?")
+                    + " ORDER BY eo.last_evidence_at DESC LIMIT 500";
             rows.addAll(normalizedSymbol == null ? jdbc.queryForList(sql, from) : jdbc.queryForList(sql, from, normalizedSymbol));
-        }
+        } else if (filters.contains("EXECUTED")) {
+            // EXECUTED means a real wallet ledger execution. BUY/SELL, when also selected,
+            // narrow the wallet result by side; EXECUTED alone returns both BUY and SELL.
+            List<String> executedSides = new ArrayList<>();
+            if (filters.contains("BUY")) executedSides.add("BUY");
+            if (filters.contains("SELL")) executedSides.add("SELL");
 
-        // EXECUTED comes only from the wallet ledger: this is the financial source of truth.
-        // FIX-039: use interval_code here too so every Trade Activity branch uses the same schema-safe timeframe source.
-        if (filters.contains("EXECUTED")) {
+            String sideClause = "";
+            if (!executedSides.isEmpty()) {
+                sideClause = " AND wt.side IN (" + String.join(",", Collections.nCopies(executedSides.size(), "?")) + ")";
+            }
+
             String sql = """
                     SELECT wt.executed_at event_time, wt.symbol, ts.interval_code timeframe,
                            wt.side action, 'EXECUTED' status,
@@ -88,8 +80,41 @@ public class TradeActivityService {
                     FROM wallet_trade wt
                     LEFT JOIN trade_signal ts ON ts.id = wt.signal_id
                     WHERE wt.executed_at >= ? AND wt.status = 'EXECUTED'
-                    """ + (normalizedSymbol == null ? "" : " AND wt.symbol = ?") + " ORDER BY wt.executed_at DESC LIMIT 500";
-            rows.addAll(normalizedSymbol == null ? jdbc.queryForList(sql, from) : jdbc.queryForList(sql, from, normalizedSymbol));
+                    """ + sideClause + (normalizedSymbol == null ? "" : " AND wt.symbol = ?")
+                    + " ORDER BY wt.executed_at DESC LIMIT 500";
+
+            List<Object> args = new ArrayList<>();
+            args.add(from);
+            args.addAll(executedSides);
+            if (normalizedSymbol != null) args.add(normalizedSymbol);
+            rows.addAll(jdbc.queryForList(sql, args.toArray()));
+        } else if (filters.contains("BUY") || filters.contains("SELL")) {
+            // BUY/SELL without EXECUTED means "show me all signals on this side".
+            // Mark a signal EXECUTED only when a matching wallet_trade exists for that signal;
+            // otherwise keep it as SIGNAL so the operator can distinguish executed vs not executed.
+            List<String> sides = new ArrayList<>();
+            if (filters.contains("BUY")) { sides.add("BUY"); sides.add("STRONG_BUY"); }
+            if (filters.contains("SELL")) { sides.add("SELL"); sides.add("STRONG_SELL"); }
+            String placeholders = String.join(",", Collections.nCopies(sides.size(), "?"));
+            String sql = """
+                    SELECT ts.generated_at event_time, ts.symbol, ts.interval_code timeframe,
+                           CASE WHEN ts.decision IN ('BUY','STRONG_BUY') THEN 'BUY' ELSE 'SELL' END action,
+                           CASE WHEN EXISTS (
+                               SELECT 1 FROM wallet_trade wt
+                               WHERE wt.signal_id = ts.id AND wt.status = 'EXECUTED'
+                                 AND wt.side = CASE WHEN ts.decision IN ('BUY','STRONG_BUY') THEN 'BUY' ELSE 'SELL' END
+                           ) THEN 'EXECUTED' ELSE 'SIGNAL' END status,
+                           'INITIAL_SIGNAL' source,
+                           CASE WHEN ts.decision IN ('BUY','STRONG_BUY') THEN 'BUY_SIGNAL' ELSE 'SELL_SIGNAL' END reason
+                    FROM trade_signal ts
+                    WHERE ts.generated_at >= ? AND ts.decision IN (%s)
+                    """.formatted(placeholders) + (normalizedSymbol == null ? "" : " AND ts.symbol = ?")
+                    + " ORDER BY ts.generated_at DESC LIMIT 500";
+            List<Object> args = new ArrayList<>();
+            args.add(from);
+            args.addAll(sides);
+            if (normalizedSymbol != null) args.add(normalizedSymbol);
+            rows.addAll(jdbc.queryForList(sql, args.toArray()));
         }
 
         rows.sort((a,b) -> ((Comparable)b.get("event_time")).compareTo(a.get("event_time")));

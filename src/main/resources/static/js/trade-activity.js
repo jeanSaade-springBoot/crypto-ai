@@ -10,4 +10,28 @@ $('activity-search').addEventListener('click',search);
 $('activity-symbol').addEventListener('change',()=>{
   if(document.querySelector('.activity-type:checked')) search();
 });
+// FIX-047: activity-type checkboxes must refresh the result set immediately.
+// Previously, unchecking BUY after a combined BUY + EXECUTED search left the old
+// BUY SIGNAL rows visible until Search was pressed again, which falsely made those
+// stale rows look like EXECUTED results. If no activity type remains selected, clear
+// the stale result set so the screen never implies that old rows match no filters.
+// FIX-048: filter semantics are hierarchical rather than additive.
+// BLOCKED is exclusive. EXECUTED narrows BUY/SELL when combined with them;
+// EXECUTED alone means all real wallet executions (BUY + SELL).
+document.querySelectorAll('.activity-type').forEach(box=>box.addEventListener('change',()=>{
+  const boxes=[...document.querySelectorAll('.activity-type')];
+  if(box.value==='BLOCKED' && box.checked){
+    boxes.filter(x=>x!==box).forEach(x=>x.checked=false);
+  } else if(box.checked){
+    const blocked=boxes.find(x=>x.value==='BLOCKED');
+    if(blocked) blocked.checked=false;
+  }
+
+  if(document.querySelector('.activity-type:checked')) {
+    search();
+  } else {
+    $('activity-rows').innerHTML='<tr><td colspan="7" class="empty-cell">Select at least one activity type.</td></tr>';
+    $('activity-count').textContent='Not loaded';
+  }
+}));
 loadSymbols();})();
