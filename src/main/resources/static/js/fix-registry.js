@@ -1118,9 +1118,35 @@
             solution: "Keep signal price immutable; resolve a fresh canonical Binance 1m market_price_event at execution time; reject missing/stale (>15s) execution prices; tighten confirmation wake-up 1m freshness to 45s; re-run Entry Quality and stop/target sanity against the actual execution price; size and persist the BUY from that same price; store decision_price_usdt and execution_price_observed_at for audit. Replay consumes the same persisted UTC market-price events through ExecutionReplayScope and runs the identical fresh-price revalidation/sizing path.",
             behavior: "A valid signal can no longer fill at an old snapshot. If price moved to a poor/chase location, below stop, or above target before execution, the BUY is rejected or resized by the shared Entry Quality guard. SOL #617's 63-second-old confirmation authority is rejected. Production and exact Replay use the same execution-price source semantics while keeping wallet persistence isolated.",
             regression: "Proven tests cover SOL #617 stale 63-second wake-up rejection and execution-time price revalidation while preserving TradeSignal.latestPrice. Replay parity documentation requires the same UTC market_price_event stream for exact execution-price parity. FIX-055 PEPE anchor/STOP_EXPOSED logic is recalculated again at the fresh execution price."
+        },
+        {
+            id: "FIX-057",
+            title: "Fix Registry numeric ascending order",
+            status: "ACTIVE · UI/DOCUMENTATION ONLY",
+            scenario: "Fix Registry records were stored in mixed insertion order, so newer fixes could appear before older fixes and the history was difficult to follow chronologically.",
+            symbol: "ALL / documentation only",
+            entry: "N/A",
+            exit: "N/A",
+            entryTime: "2026-08-23 KSA registry review",
+            exitTime: "N/A",
+            replayWindow: "No replay required; Fix Registry presentation only",
+            location: "Fix Registry ordering",
+            classes: ["fix-registry.js"],
+            cause: "The FIXES array contains records added at different times and was rendered in physical source order instead of by numeric FIX id.",
+            solution: "Sort registry records numerically by the number in FIX-### before rendering and before Copy all fixes output. This keeps existing records intact and places FIX-001 first through the latest available FIX id.",
+            behavior: "The Bug Fixes/Fix Registry page and copied registry output now show existing fixes in ascending numeric order. Missing historical IDs are not invented or renumbered.",
+            regression: "Open Fix Registry and verify FIX ids increase numerically from the earliest existing record through FIX-057; verify Copy all fixes uses the same ascending order. No Production, Replay, scoring, execution, wallet, database-time or KSA display behavior changes."
         }
 
 ];
+
+    // FIX-057: registry history must be chronological by FIX number, not by the
+    // physical insertion position in this source file. Numeric parsing also avoids
+    // lexical ordering surprises if the identifier width ever changes.
+    FIXES.sort((a, b) => {
+        const numberOf = fix => Number.parseInt(String(fix.id || "").replace(/\D/g, ""), 10) || 0;
+        return numberOf(a) - numberOf(b);
+    });
 
     const list = document.getElementById("fix-registry-list");
     const count = document.getElementById("fix-count");
