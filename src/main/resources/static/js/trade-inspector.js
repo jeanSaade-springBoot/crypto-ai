@@ -104,7 +104,17 @@ function ksaInputToUtcIso(value){
   if(!value)return null;
   const d=new Date(`${value}:00+03:00`);return Number.isNaN(d.getTime())?null:d.toISOString();
 }
+function hasBlockedSignalDiagnosticsUi(){
+  // FIX-045: Trade Activity was separated from Trade Inspector in FIX-044.
+  // Keep the legacy diagnostic helpers DOM-safe so an older/partial markup version
+  // can never prevent the primary Trade Inspector from loading.
+  return Boolean(
+    $('blocked-signal-from') && $('blocked-signal-to') && $('blocked-signal-window-label') &&
+    $('blocked-buy-count') && $('blocked-buy-rows') && $('blocked-sell-count') && $('blocked-sell-rows')
+  );
+}
 function setBlockedLast3Hours(){
+  if(!hasBlockedSignalDiagnosticsUi()) return;
   const now=new Date(),from=new Date(now.getTime()-3*60*60*1000);
   $('blocked-signal-from').value=ksaInputValue(from);$('blocked-signal-to').value=ksaInputValue(now);
   $('blocked-signal-window-label').textContent='Last 3 hours · KSA';
@@ -134,6 +144,7 @@ function productionExitRow(x){
   </tr>`;
 }
 async function loadBlockedSignalDiagnostics(){
+  if(!hasBlockedSignalDiagnosticsUi()) return;
   const symbol=encodeURIComponent(rawSymbol||'ALL');
   const from=ksaInputToUtcIso($('blocked-signal-from').value),to=ksaInputToUtcIso($('blocked-signal-to').value);
   if(!from||!to){$('inspector-error').textContent='Blocked signal From/To must be valid KSA date/times.';$('inspector-error').classList.remove('hidden');return;}
@@ -159,6 +170,8 @@ async function loadBlockedSignalDiagnostics(){
   }
 }
 async function loadProductionExits(){
+  // FIX-045: the production-exit grid is optional legacy diagnostics markup.
+  if(!$('production-exit-count') || !$('production-exit-rows')) return;
   const symbol=encodeURIComponent($('symbol-filter').value||'ALL'),limit=encodeURIComponent($('limit-filter').value||20);
   try{
     const r=await fetch(`/api/trade-inspector/production-exits?symbol=${symbol}&limit=${limit}`,{cache:'no-store'});if(!r.ok)throw new Error(`Production exits HTTP ${r.status}`);

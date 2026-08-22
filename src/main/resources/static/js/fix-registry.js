@@ -1,6 +1,22 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-045",
+            title: "Trade Inspector optional diagnostics DOM guard",
+            status: "ACTIVE · UI ONLY",
+            scenario: "Trade Inspector crashed on page load after Trade Activity was separated into its own page.",
+            symbol: "ALL", entry: "N/A", exit: "N/A",
+            entryTime: "2026-08-22 16:35 KSA observation", exitTime: "N/A",
+            replayWindow: "No replay required; frontend-only regression",
+            location: "Trade Inspector frontend initialization",
+            classes: ["trade-inspector.js", "trade-inspector.html"],
+            cause: "Legacy FIX-039 blocked-signal diagnostic JavaScript still initialized blocked-signal-from / blocked-signal-to controls even though FIX-044 moved Trade Activity away from Trade Inspector and the corresponding DOM controls are no longer present.",
+            solution: "Guard all optional blocked-signal and production-exit diagnostic helpers behind explicit DOM-presence checks. Missing optional panels now no-op instead of aborting the primary Trade Inspector load.",
+            behavior: "Trade Inspector loads its normal completed-trade inspection UI even when legacy diagnostic controls are absent. No Production, Replay, scoring, entry, exit, sizing, wallet, database timestamp, or timezone behavior changes.",
+            regression: "Open /trade-inspector and confirm there is no Cannot set properties of null error; completed trades load normally. UTC database timestamps continue to be parsed as UTC and rendered through the existing frontend time utilities."
+        },
+
+        {
             id: "FIX-044",
             title: "Trade Activity separated from Trade Inspector",
             status: "ACTIVE · UI/AUDIT ONLY",
