@@ -1040,7 +1040,26 @@
             solution: "Center the panel on OPEN wallet_managed_position only; add 15m/1h/4h/1d/1w analysis windows; return persisted position_analysis steps and decision paths; persist TAKE_PROFIT_EXTENDED old/new targets as position_management_event rows; draw ENTRY/SL/TP/LOCK levels and the OPEN point on the chart; replace the fixed OHLC hover card with a compact cursor-following price label.",
             behavior: "Dashboard now explains the live position lifecycle without changing BUY/SELL scoring, execution, sizing, exits or Replay. TP revisions after deployment are auditable as old target → new target. Database timestamps remain UTC and CryptoTime performs local/KSA presentation.",
             regression: "With no open position, panel must show no active position. With an open position, switch 15m/1h/4h/1d/1w and confirm only that position's analyses appear. Trigger/fixture a TP extension and verify old/new target history. Confirm chart shows position levels and hover displays only price near the cursor."
+        }        ,
+        {
+            id: "FIX-054",
+            title: "BUY/SELL analysis graph-only drill-down",
+            status: "DONE",
+            scenario: "Active-position BUY/SELL analysis should stay compact. Remove the duplicated Entry decision path and replace the per-row analysis-path details with a single View graph action that locates the exact persisted analysis price/time on the dashboard chart.",
+            symbol: "ALL active wallet positions",
+            entry: "No trading behavior change",
+            exit: "No trading behavior change",
+            entryTime: "Analysis timestamps remain UTC in backend/database and local/KSA in UI",
+            exitTime: "N/A",
+            replayWindow: "No Replay regression required; dashboard presentation only.",
+            location: "Dashboard active-position BUY/SELL analysis panel and chart deep-link presentation",
+            classes: ["dashboard.html", "dashboard.js", "dashboard.css"],
+            cause: "FIX-053 exposed the full entry decision path in the active-position summary and repeated detailed decision paths per analysis row. The user needs the dashboard to answer where the analysis happened on price first, without dense text obscuring the trading location.",
+            solution: "Remove Entry decision path from the summary, replace the final analysis-path column with View graph, and deep-link the dashboard to a focused 5m history window centered around the exact persisted UTC analysis timestamp/price. BUY, SELL and neutral analysis locations receive distinct graph markers.",
+            behavior: "Each active-position analysis row now provides one visual drill-down. Clicking View graph loads the relevant chart window and highlights the exact location. No signal scoring, execution, wallet, TP/SL, Production or Replay code is changed.",
+            regression: "Open an active position, choose any 15m/1h/4h/1d/1w analysis window, verify Entry decision path is absent, click View graph on BUY/SELL/neutral rows, and confirm the graph focuses on and highlights the correct stored timestamp/price while timestamps display in local/KSA time."
         }
+
 
 
 ];

@@ -2845,3 +2845,9 @@ body.position-modal-open{overflow:hidden}
 @media(max-width:1100px){.active-position-summary-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:700px){.active-position-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.take-profit-history>div{grid-template-columns:1fr}.active-position-path-table{min-width:980px}}
 .chart-panel .apexcharts-tooltip:has(.candle-cursor-price){background:transparent!important;border:0!important;box-shadow:none!important;overflow:visible!important}
+
+
+/* FIX-054: Keep BUY/SELL analysis compact; graph is the only drill-down action. */
+.analysis-view-graph{display:inline-flex;align-items:center;justify-content:center;min-height:32px;padding:6px 10px;border:1px solid #315369;border-radius:7px;background:#10212c;color:#b9d9eb;font-size:12px;font-weight:700;text-decoration:none;white-space:nowrap}
+.analysis-view-graph:hover{background:#173140;border-color:#4b7790;color:#e7f5fc}
+.analysis-view-graph:focus-visible{outline:2px solid #7bb8d5;outline-offset:2px}

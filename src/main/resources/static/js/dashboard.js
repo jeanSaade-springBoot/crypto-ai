@@ -80,6 +80,11 @@ const debugEntryTime = dashboardUrlParams.get('debugEntryTime');
 const debugEntryPrice = dashboardUrlParams.get('debugEntryPrice');
 const debugExitTime = dashboardUrlParams.get('debugExitTime');
 const debugExitPrice = dashboardUrlParams.get('debugExitPrice');
+// FIX-054: A generic analysis point lets View graph highlight WATCH/HOLD context without
+// mislabelling it as a BUY or SELL. Existing entry/exit deep links remain supported.
+const debugPointTime = dashboardUrlParams.get('debugPointTime');
+const debugPointPrice = dashboardUrlParams.get('debugPointPrice');
+const debugPointSide = String(dashboardUrlParams.get('debugPointSide') || 'ANALYSIS').trim().toUpperCase();
 const debugTradePoints = (() => {
     if (!debugTradeEnabled) return [];
     const points = [];
@@ -92,6 +97,7 @@ const debugTradePoints = (() => {
     };
     add('BUY', debugEntryTime, debugEntryPrice);
     add('SELL', debugExitTime, debugExitPrice);
+    add(debugPointSide, debugPointTime, debugPointPrice);
     return points;
 })();
 const debugMoveFocus = (() => {
@@ -381,7 +387,6 @@ function renderActivePositionAnalysis(result) {
     const tpChanged = initialTp > 0 && currentTp > 0 && Math.abs(initialTp - currentTp) > Math.max(1e-12, Math.abs(initialTp) * 1e-10);
     const management = result.managementEvents || [];
     const tpEvents = management.filter(e => e.type === 'TAKE_PROFIT_EXTENDED');
-    const entryPath = Array.isArray(p.entryDecisionPath) ? p.entryDecisionPath : [];
 
     summary.innerHTML = `
         <div class="active-position-summary-grid">
@@ -392,7 +397,6 @@ function renderActivePositionAnalysis(result) {
             <div class="${tpChanged ? 'target-revised' : ''}"><span>Take profit</span><strong class="positive">${money(p.takeProfit)}</strong><small>${tpChanged ? `Initial ${money(p.initialTakeProfit)} → current ${money(p.takeProfit)}` : 'Current target'}</small></div>
             <div><span>Profit lock</span><strong>${p.profitLockActive ? money(p.profitLockPrice) : 'Waiting'}</strong><small>${p.profitLockActive ? 'ACTIVE' : 'Not active'}</small></div>
         </div>
-        ${entryPath.length ? `<div class="entry-decision-path"><strong>Entry decision path</strong><div>${entryPath.map((step, i) => `<span><b>${i + 1}</b>${escapeHtml(String(step.stage || step.name || step.decision || step.action || JSON.stringify(step)))}</span>`).join('')}</div></div>` : ''}
         ${tpEvents.length ? `<div class="take-profit-history"><strong>Take-profit revisions</strong>${tpEvents.map(e => `<div><span>${dateTime(e.occurredAt)}</span><b>${money(e.oldValue)} → ${money(e.newValue)}</b><small>${escapeHtml(e.reason || 'Target extended by continuation policy')}</small></div>`).join('')}</div>` : (tpChanged ? '<div class="take-profit-history"><small>Current TP differs from the original entry target. Structured TP revision history starts after FIX-053 deployment.</small></div>' : '')}`;
 
     const path = result.analysisPath || [];
@@ -401,10 +405,11 @@ function renderActivePositionAnalysis(result) {
         return;
     }
     body.innerHTML = path.map(a => {
-        const decisionPath = Array.isArray(a.decisionPath) ? a.decisionPath : [];
-        const pathHtml = decisionPath.length
-            ? decisionPath.map((step, i) => `<span class="analysis-path-step"><b>${i + 1}</b>${escapeHtml(String(step.stage || step.name || step.decision || step.action || JSON.stringify(step)))}</span>`).join('')
-            : `<span class="analysis-explanation">${escapeHtml(a.explanation || 'No persisted decision-path detail')}</span>`;
+        // FIX-054: Keep the active-position analysis table visual and actionable instead of
+        // duplicating the full decision path. The graph deep-link uses the persisted UTC
+        // analysis timestamp and price, then the dashboard's existing local-time renderer
+        // presents that location in the user's timezone.
+        const graphUrl = activePositionAnalysisGraphUrl(p.symbol, a);
         return `<tr class="active-analysis-row">
             <td>${dateTime(a.analyzedAt)}</td>
             <td><strong>${escapeHtml(displayInterval(a.interval || '—'))}</strong></td>
@@ -412,9 +417,32 @@ function renderActivePositionAnalysis(result) {
             <td><strong>${escapeHtml(String(a.recommendation || 'HOLD').replaceAll('_',' '))}</strong></td>
             <td><strong>${escapeHtml(a.score ?? '—')}</strong><small>${escapeHtml(a.confidence ?? '—')}% confidence · exit ${escapeHtml(a.exitScore ?? '—')}/25</small></td>
             <td>${money(a.currentPrice)}<small>${Number(a.unrealizedPnlPercent || 0) >= 0 ? '+' : ''}${Number(a.unrealizedPnlPercent || 0).toFixed(2)}%</small></td>
-            <td><div class="analysis-path-inline">${pathHtml}</div></td>
+            <td><a class="analysis-view-graph" href="${escapeHtml(graphUrl)}">View graph</a></td>
         </tr>`;
     }).join('');
+}
+
+function activePositionAnalysisGraphUrl(symbol, analysis) {
+    // FIX-054: Reuse the dashboard's existing 5m focused-history endpoint purely for presentation.
+    // The source timestamp remains UTC from the backend; CryptoTime converts it only when rendered.
+    const at = window.CryptoTime.parseUtc(analysis?.analyzedAt);
+    const price = Number(analysis?.currentPrice);
+    if (!at || Number.isNaN(at.getTime()) || !Number.isFinite(price)) return '#market';
+    const rawDirection = String(analysis?.decision || analysis?.recommendation || 'ANALYSIS').toUpperCase();
+    const side = rawDirection.includes('SELL') ? 'SELL' : rawDirection.includes('BUY') ? 'BUY' : 'ANALYSIS';
+    const params = new URLSearchParams({
+        symbol: String(symbol || el('symbol-select')?.value || 'BTCUSDT').toUpperCase(),
+        interval: '5m',
+        focusStart: new Date(at.getTime() - 45 * 60 * 1000).toISOString(),
+        focusEnd: new Date(at.getTime() + 45 * 60 * 1000).toISOString(),
+        focusDirection: side === 'SELL' ? 'DOWN' : side === 'BUY' ? 'UP' : '',
+        debugTrade: '1',
+        debugTradeLabel: `${side === 'ANALYSIS' ? 'Analysis' : side} location`,
+        debugPointTime: at.toISOString(),
+        debugPointPrice: String(price),
+        debugPointSide: side
+    });
+    return `/dashboard?${params.toString()}#market`;
 }
 
 function configureSignalEvidenceRefreshTimer() {
@@ -1197,10 +1225,12 @@ function renderCharts(candles, executions = [], options = {}) {
     });
     debugTradePoints.forEach((point, index) => {
         const isBuy = point.side === 'BUY';
+        const isSell = point.side === 'SELL';
+        const markerColor = isBuy ? '#39d98a' : isSell ? '#ff6b72' : '#f4c95d';
         annotations.push({
             x: point.time.getTime(),
             y: point.price,
-            marker: { size: 6, fillColor: isBuy ? '#39d98a' : '#ff6b72', strokeColor: '#071018', strokeWidth: 2, radius: 6 },
+            marker: { size: 6, fillColor: markerColor, strokeColor: '#071018', strokeWidth: 2, radius: 6 },
             label: {
                 text: '',
                 borderColor: 'transparent',
