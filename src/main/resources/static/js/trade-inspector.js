@@ -134,7 +134,6 @@ function productionExitRow(x){
   </tr>`;
 }
 async function loadBlockedSignalDiagnostics(){
-  const rawSymbol=String($('blocked-signal-symbol').value||'ALL').trim().toUpperCase();
   const symbol=encodeURIComponent(rawSymbol||'ALL');
   const from=ksaInputToUtcIso($('blocked-signal-from').value),to=ksaInputToUtcIso($('blocked-signal-to').value);
   if(!from||!to){$('inspector-error').textContent='Blocked signal From/To must be valid KSA date/times.';$('inspector-error').classList.remove('hidden');return;}
@@ -176,13 +175,10 @@ async function load(){
   const d=await r.json();window.__inspectorTrades=d.trades||[];renderSummary(d.summary);renderSymbols(d.symbols);
   $('trade-cards').innerHTML=d.trades?.length?d.trades.map(tradeCard).join(''):'<div class="empty">No completed trades match this filter.</div>';
   $('inspector-updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
-  await Promise.all([loadBlockedSignalDiagnostics(),loadProductionExits()]);
+
  }catch(e){$('inspector-error').textContent=`Trade Inspector could not load: ${e.message}`;$('inspector-error').classList.remove('hidden')}
 }
 $('refresh-inspector').addEventListener('click',load);$('symbol-filter').addEventListener('change',load);$('venue-filter').addEventListener('change',load);$('limit-filter').addEventListener('change',load);
-$('blocked-signal-search').addEventListener('click',loadBlockedSignalDiagnostics);
-$('blocked-signal-reset').addEventListener('click',()=>{setBlockedLast3Hours();$('blocked-signal-symbol').value='ALL';loadBlockedSignalDiagnostics();});
-$('blocked-signal-symbol').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();loadBlockedSignalDiagnostics();}});
 setBlockedLast3Hours();load();
 
 

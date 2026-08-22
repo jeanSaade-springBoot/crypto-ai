@@ -10,7 +10,7 @@
 </head>
 <body>
 <div class="app-shell">
-    <aside class="sidebar"><div class="brand"><span class="brand-mark">CT</span><div class="sidebar-label"><strong>Crypto Trader</strong><small>AI trading command center</small></div></div><nav class="sidebar-nav"><div class="nav-group"><span class="nav-group-label">OVERVIEW</span><a href="/dashboard" title="Dashboard"><span class="nav-icon">⌂</span><span class="nav-text">Dashboard</span></a><a href="/catching-market" title="Catching Market"><span class="nav-icon">⌁</span><span class="nav-text">Catching Market</span></a></div><div class="nav-group"><span class="nav-group-label">EXECUTION</span><a href="/opportunity-center" title="AI Opportunity Center"><span class="nav-icon">⚡</span><span class="nav-text">Opportunity Center</span></a><a href="/wallet" title="Paper Wallet"><span class="nav-icon">◫</span><span class="nav-text">Wallet</span></a><a href="/binance" title="Binance Account"><span class="nav-icon">₿</span><span class="nav-text">Binance</span></a></div><div class="nav-group"><span class="nav-group-label">ANALYSIS</span><a class="active" href="/trade-inspector" title="Trade Inspector"><span class="nav-icon">⌕</span><span class="nav-text">Trade Inspector</span></a><a href="/crypto-fundamentals" title="Crypto Fundamentals"><span class="nav-icon">ƒ</span><span class="nav-text">Crypto Fundamentals</span></a>
+    <aside class="sidebar"><div class="brand"><span class="brand-mark">CT</span><div class="sidebar-label"><strong>Crypto Trader</strong><small>AI trading command center</small></div></div><nav class="sidebar-nav"><div class="nav-group"><span class="nav-group-label">OVERVIEW</span><a href="/dashboard" title="Dashboard"><span class="nav-icon">⌂</span><span class="nav-text">Dashboard</span></a><a href="/catching-market" title="Catching Market"><span class="nav-icon">⌁</span><span class="nav-text">Catching Market</span></a></div><div class="nav-group"><span class="nav-group-label">EXECUTION</span><a href="/opportunity-center" title="AI Opportunity Center"><span class="nav-icon">⚡</span><span class="nav-text">Opportunity Center</span></a><a href="/wallet" title="Paper Wallet"><span class="nav-icon">◫</span><span class="nav-text">Wallet</span></a><a href="/binance" title="Binance Account"><span class="nav-icon">₿</span><span class="nav-text">Binance</span></a></div><div class="nav-group"><span class="nav-group-label">ANALYSIS</span><a class="active" href="/trade-inspector" title="Trade Inspector"><span class="nav-icon">⌕</span><span class="nav-text">Trade Inspector</span></a><a href="/trade-activity" title="Trade Activity"><span class="nav-icon">↕</span><span class="nav-text">Trade Activity</span></a><a href="/crypto-fundamentals" title="Crypto Fundamentals"><span class="nav-icon">ƒ</span><span class="nav-text">Crypto Fundamentals</span></a>
                 <a href="/proven-analyzed-trades" title="Proven Analyzed Trades"><span class="nav-icon">✓</span><span class="nav-text">Proven Analyzed Trades</span></a></div><div class="nav-group"><span class="nav-group-label">SYSTEM</span><a href="/administration" title="Administration"><span class="nav-icon">⚙</span><span class="nav-text">Administration</span></a><a href="/fix-registry" title="Fix Registry"><span class="nav-icon">•</span><span class="nav-text">Fix Registry</span></a><a href="/system-health" title="System Health"><span class="nav-icon">♥</span><span class="nav-text">System Health</span></a></div></nav></aside>
 
     <main>
@@ -108,61 +108,6 @@
             </section>
         </div>
 
-
-        <!-- FIX-039: blocked-signal diagnostics share a KSA-aware symbol/date filter.
-             Default range is the last three hours and does not alter trading behavior. -->
-        <section class="panel inspector-diagnostic-panel">
-            <div class="section-heading">
-                <div><p class="eyebrow">BLOCKED SIGNAL DIAGNOSTICS</p><h2>BUY / SELL blockers</h2><p class="inspector-subtitle">Default: last 3 hours. Search one symbol, or one symbol inside a KSA date/time range.</p></div>
-                <span id="blocked-signal-window-label">Last 3 hours · KSA</span>
-            </div>
-            <div class="blocked-signal-filters">
-                <label>Symbol<input id="blocked-signal-symbol" type="text" maxlength="30" placeholder="ALL or PEPEUSDT"></label>
-                <label>From (KSA)<input id="blocked-signal-from" type="datetime-local" step="60"></label>
-                <label>To (KSA)<input id="blocked-signal-to" type="datetime-local" step="60"></label>
-                <button id="blocked-signal-search" type="button">Search</button>
-                <button id="blocked-signal-reset" type="button" class="secondary-button">Last 3 hours</button>
-            </div>
-        </section>
-
-        <section class="panel inspector-diagnostic-panel">
-            <div class="section-heading">
-                <div><p class="eyebrow">BLOCKED BUY SIGNALS</p><h2>Why a BUY did not execute</h2></div>
-                <span id="blocked-buy-count">—</span>
-            </div>
-            <div class="diagnostic-table-wrap">
-                <table class="diagnostic-table">
-                    <thead><tr><th>Blocked at (KSA)</th><th>Symbol</th><th>TF</th><th>Signal</th><th>Score</th><th>Confidence</th><th>Primary blocker</th><th>Why</th></tr></thead>
-                    <tbody id="blocked-buy-rows"><tr><td colspan="8" class="empty-cell">Loading blocked BUY signals…</td></tr></tbody>
-                </table>
-            </div>
-        </section>
-
-        <section class="panel inspector-diagnostic-panel">
-            <div class="section-heading">
-                <div><p class="eyebrow">BLOCKED SELL SIGNALS</p><h2>Why a SELL candidate did not remain SELL</h2><p class="inspector-subtitle">Shows persisted SELL/STRONG_SELL candidates changed to a non-SELL final decision.</p></div>
-                <span id="blocked-sell-count">—</span>
-            </div>
-            <div class="diagnostic-table-wrap">
-                <table class="diagnostic-table">
-                    <thead><tr><th>Blocked at (KSA)</th><th>Symbol</th><th>TF</th><th>Original</th><th>Final</th><th>Score</th><th>Confidence</th><th>Why</th></tr></thead>
-                    <tbody id="blocked-sell-rows"><tr><td colspan="8" class="empty-cell">Loading blocked SELL signals…</td></tr></tbody>
-                </table>
-            </div>
-        </section>
-
-        <section class="panel inspector-diagnostic-panel">
-            <div class="section-heading">
-                <div><p class="eyebrow">PRODUCTION EXITS</p><h2>Real production close trigger</h2><p class="inspector-subtitle">The generic signal decision is intentionally hidden. The table shows what actually closed the position and which signal/position analysis supplied context.</p></div>
-                <span id="production-exit-count">—</span>
-            </div>
-            <div class="diagnostic-table-wrap">
-                <table class="diagnostic-table">
-                    <thead><tr><th>Time</th><th>Symbol</th><th>Close trigger</th><th>Entry</th><th>Exit</th><th>Source signal</th><th>Position advice</th><th>Explanation</th></tr></thead>
-                    <tbody id="production-exit-rows"><tr><td colspan="8" class="empty-cell">Loading production exits…</td></tr></tbody>
-                </table>
-            </div>
-        </section>
 
         <section class="panel">
             <div class="section-heading">

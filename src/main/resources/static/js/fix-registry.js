@@ -1,6 +1,20 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-044",
+            title: "Trade Activity separated from Trade Inspector",
+            status: "ACTIVE · UI/AUDIT ONLY",
+            scenario: "Operator needs a compact on-demand view of BUY, SELL, BLOCKED and EXECUTED events without mixing operational activity into forensic Trade Inspector.",
+            symbol: "ALL", entry: "N/A", exit: "N/A", entryTime: "N/A", exitTime: "N/A",
+            location: "Trade Activity page / read-only API",
+            classes: ["TradeActivityController", "TradeActivityService", "trade-activity.html", "trade-activity.js"],
+            cause: "FIX-039 diagnostics made Trade Inspector carry operational signal/block/execution activity and loaded data automatically.",
+            solution: "Move operational activity to its own left-menu page. Query only after Search with BUY/SELL/BLOCKED/EXECUTED, symbol and 1/2/4/24-hour filters.",
+            behavior: "Read-only projection of persisted trade_signal, execution_opportunity and wallet_trade evidence. Reasons are short persisted keywords; wake-up versus initial execution source is normalized for fast diagnosis.",
+            regression: "MUST NOT change AnalysisService, FinalDecisionService, ExecutionIntelligenceService, wake-up logic, wallet execution, position management, Replay or any proven trading fix."
+        },
+
+        {
             id: "FIX-043",
             title: "Restore true per-candle production analysis and chronological missed-candle recovery",
             status: "ACTIVE",
