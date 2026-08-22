@@ -70,6 +70,20 @@
                 <thead><tr><th>Symbol</th><th>Type</th><th>Status</th><th>Actions</th></tr></thead>
                 <tbody id="coin-body"><tr><td colspan="4">Loading coins…</td></tr></tbody>
             </table></div>
+            <!-- FIX-051: client-side pagination keeps every configured coin reachable without changing the coin API or activation logic. -->
+            <div id="coin-pagination" class="coin-pagination" aria-label="Coin configuration pagination">
+                <div class="coin-page-summary"><span id="coin-page-range">0-0 of 0</span></div>
+                <label class="coin-page-size">Rows
+                    <select id="coin-page-size" aria-label="Coin rows per page">
+                        <option value="10" selected>10</option>
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                    </select>
+                </label>
+                <button id="coin-page-prev" type="button" class="secondary-button">Previous</button>
+                <span id="coin-page-number" class="coin-page-number">Page 1 of 1</span>
+                <button id="coin-page-next" type="button" class="secondary-button">Next</button>
+            </div>
         </section>
 
 

@@ -1,6 +1,22 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-051",
+            title: "Administration coin configuration pagination",
+            status: "ACTIVE · UI/ADMIN ONLY",
+            scenario: "A newly configured enabled coin such as SUIUSDT existed in coin_configuration but could be difficult to reach/verify in Administration because the coin table had no pagination controls.",
+            symbol: "SUIUSDT / all configured symbols", entry: "N/A", exit: "N/A",
+            entryTime: "2026-08-22 KSA administration review", exitTime: "N/A",
+            replayWindow: "No replay required; Administration UI-only change",
+            location: "Administration > Coin configuration table",
+            classes: ["administration.html", "administration.js", "administration.css"],
+            cause: "The /api/administration/coins endpoint returned the full sorted configuration list, but the browser rendered it as one unpaged tbody with no paging state or range indicator.",
+            solution: "Add client-side 10/25/50 row pagination with Previous/Next, page/range indicators, and automatic navigation to the page containing a newly added coin. Preserve the existing API and coin activation semantics.",
+            behavior: "All configured coins remain loaded from coin_configuration and are reachable through paging. A newly added pair such as SUIUSDT is brought into view immediately after a successful add. Enable/disable/remove continue refreshing the current valid page. No trading, Replay, wallet or timestamp behavior changes.",
+            regression: "With more than 10 coin_configuration rows, verify pages and range counts, change page size, add a new coin and confirm its page is shown, then enable/disable/remove and confirm pagination stays valid."
+        },
+
+        {
             id: "FIX-050",
             title: "Trade Activity natural mandatory-filter switching + compact menu",
             status: "ACTIVE · UI/AUDIT ONLY",

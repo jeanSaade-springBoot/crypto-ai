@@ -24,35 +24,98 @@ function showAdminMessage(message, error = false) {
     window.setTimeout(() => coinMessage.classList.add('hidden'), 5000);
 }
 
-async function loadCoins() {
+// FIX-051: Administration previously rendered the complete coin list with no paging state.
+// Keep pagination in the browser because the existing endpoint intentionally returns the full,
+// already-sorted configuration list and coin activation/removal semantics must remain untouched.
+let configuredCoins = [];
+let coinPage = 1;
+let coinPageSize = 10;
+
+const coinPageRange = document.getElementById('coin-page-range');
+const coinPageNumber = document.getElementById('coin-page-number');
+const coinPagePrev = document.getElementById('coin-page-prev');
+const coinPageNext = document.getElementById('coin-page-next');
+const coinPageSizeSelect = document.getElementById('coin-page-size');
+
+function coinPageCount() {
+    return Math.max(1, Math.ceil(configuredCoins.length / coinPageSize));
+}
+
+function clampCoinPage() {
+    coinPage = Math.min(Math.max(coinPage, 1), coinPageCount());
+}
+
+function renderCoinPage() {
+    clampCoinPage();
+    const start = (coinPage - 1) * coinPageSize;
+    const pageCoins = configuredCoins.slice(start, start + coinPageSize);
+
+    coinBody.innerHTML = pageCoins.map(coin => `
+        <tr>
+            <td><strong>${escapeHtml(coin.symbol)}</strong></td>
+            <td>${coin.systemDefault ? 'Default' : 'User added'}</td>
+            <td><span class="status-pill ${coin.enabled ? 'enabled' : 'disabled'}">${coin.enabled ? 'Enabled' : 'Disabled'}</span></td>
+            <td class="coin-actions">
+                <button type="button" class="secondary-button" data-action="toggle" data-id="${coin.id}" data-enabled="${!coin.enabled}">${coin.enabled ? 'Disable' : 'Enable'}</button>
+                ${coin.removable ? `<button type="button" class="danger-button" data-action="remove" data-id="${coin.id}" data-symbol="${escapeHtml(coin.symbol)}">Remove</button>` : ''}
+            </td>
+        </tr>`).join('') || '<tr><td colspan="4">No coins configured</td></tr>';
+
+    const total = configuredCoins.length;
+    const first = total === 0 ? 0 : start + 1;
+    const last = Math.min(start + coinPageSize, total);
+    if (coinPageRange) coinPageRange.textContent = `${first}-${last} of ${total}`;
+    if (coinPageNumber) coinPageNumber.textContent = `Page ${coinPage} of ${coinPageCount()}`;
+    if (coinPagePrev) coinPagePrev.disabled = coinPage <= 1 || total === 0;
+    if (coinPageNext) coinPageNext.disabled = coinPage >= coinPageCount() || total === 0;
+}
+
+async function loadCoins(options = {}) {
     try {
-        const coins = await api('/api/administration/coins');
-        coinBody.innerHTML = coins.map(coin => `
-            <tr>
-                <td><strong>${escapeHtml(coin.symbol)}</strong></td>
-                <td>${coin.systemDefault ? 'Default' : 'User added'}</td>
-                <td><span class="status-pill ${coin.enabled ? 'enabled' : 'disabled'}">${coin.enabled ? 'Enabled' : 'Disabled'}</span></td>
-                <td class="coin-actions">
-                    <button type="button" class="secondary-button" data-action="toggle" data-id="${coin.id}" data-enabled="${!coin.enabled}">${coin.enabled ? 'Disable' : 'Enable'}</button>
-                    ${coin.removable ? `<button type="button" class="danger-button" data-action="remove" data-id="${coin.id}" data-symbol="${escapeHtml(coin.symbol)}">Remove</button>` : ''}
-                </td>
-            </tr>`).join('') || '<tr><td colspan="4">No coins configured</td></tr>';
+        configuredCoins = await api('/api/administration/coins');
+
+        // FIX-051: after adding a coin, navigate directly to the page containing that symbol
+        // so a successfully-added pair such as SUIUSDT is immediately visible to the operator.
+        if (options.focusSymbol) {
+            const normalized = String(options.focusSymbol).toUpperCase();
+            const index = configuredCoins.findIndex(coin => coin.symbol === normalized);
+            if (index >= 0) coinPage = Math.floor(index / coinPageSize) + 1;
+        }
+        renderCoinPage();
     } catch (error) {
+        configuredCoins = [];
         coinBody.innerHTML = `<tr><td colspan="4">${escapeHtml(error.message)}</td></tr>`;
+        renderCoinPage();
         showAdminMessage(error.message, true);
     }
 }
+
+if (coinPagePrev) coinPagePrev.addEventListener('click', () => {
+    coinPage -= 1;
+    renderCoinPage();
+});
+
+if (coinPageNext) coinPageNext.addEventListener('click', () => {
+    coinPage += 1;
+    renderCoinPage();
+});
+
+if (coinPageSizeSelect) coinPageSizeSelect.addEventListener('change', event => {
+    coinPageSize = Number.parseInt(event.target.value, 10) || 10;
+    coinPage = 1;
+    renderCoinPage();
+});
 
 document.getElementById('add-coin-form').addEventListener('submit', async event => {
     event.preventDefault();
     const input = document.getElementById('new-coin-symbol');
     try {
-        await api('/api/administration/coins', {
+        const addedCoin = await api('/api/administration/coins', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({symbol: input.value})
         });
         input.value = '';
-        await loadCoins();
+        await loadCoins({focusSymbol: addedCoin.symbol});
         showAdminMessage('Coin added. Live stream reload and historical bootstrap started automatically.');
     } catch (error) {
         showAdminMessage(error.message, true);

@@ -299,3 +299,12 @@ body.proven-modal-open{overflow:hidden}
 .proven-popup-price-label{transform:translateY(-50%)}
 .proven-popup-time-label{transform:translateX(-50%)}
 @media(max-width:700px){.proven-trade-chart-modal{padding:10px}.proven-trade-chart-dialog{width:calc(100vw - 20px);max-height:calc(100vh - 20px);padding:12px}.proven-trade-chart-head{flex-direction:column}.proven-popup-chart-wrap,.proven-popup-chart{min-height:430px}}
+
+/* FIX-051: compact pagination for Administration > Coin configuration. UI-only. */
+.coin-pagination { display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap; margin-top:12px; }
+.coin-page-summary { margin-right:auto; color:#94a3b8; font-size:.86rem; }
+.coin-page-size { display:flex; align-items:center; gap:7px; color:#94a3b8; font-size:.82rem; }
+.coin-page-size select { min-width:64px; padding:7px 8px; border-radius:8px; }
+.coin-page-number { min-width:92px; text-align:center; font-size:.84rem; color:#cbd5e1; }
+.coin-pagination .secondary-button:disabled { opacity:.45; cursor:not-allowed; }
+@media (max-width:720px) { .coin-pagination { justify-content:flex-start; } .coin-page-summary { width:100%; margin-right:0; } }
