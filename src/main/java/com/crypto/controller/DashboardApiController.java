@@ -9,6 +9,10 @@ import com.crypto.domain.TechnicalIndicator;
 import com.crypto.domain.TradeSignal;
 import com.crypto.execution.domain.ExecutionOpportunity;
 import com.crypto.execution.repository.ExecutionOpportunityRepository;
+import com.crypto.position.domain.PositionAnalysis;
+import com.crypto.position.domain.PositionManagementEvent;
+import com.crypto.position.repository.PositionAnalysisRepository;
+import com.crypto.position.repository.PositionManagementEventRepository;
 import com.crypto.service.ScheduleConfigurationService;
 import com.crypto.service.ScoreDiagnosticsService;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -56,6 +60,8 @@ public class DashboardApiController {
     private final WalletTradeRepository walletTradeRepository;
     private final WalletManagedPositionRepository walletManagedPositionRepository;
     private final ExecutionOpportunityRepository executionOpportunityRepository;
+    private final PositionAnalysisRepository positionAnalysisRepository;
+    private final PositionManagementEventRepository positionManagementEventRepository;
     private final Map<String, AggregatedCandleCacheEntry> aggregatedCandleCache = new ConcurrentHashMap<>();
 
     public DashboardApiController(
@@ -69,7 +75,9 @@ public class DashboardApiController {
             CoinConfigurationService coinConfigurationService,
             WalletTradeRepository walletTradeRepository,
             WalletManagedPositionRepository walletManagedPositionRepository,
-            ExecutionOpportunityRepository executionOpportunityRepository
+            ExecutionOpportunityRepository executionOpportunityRepository,
+            PositionAnalysisRepository positionAnalysisRepository,
+            PositionManagementEventRepository positionManagementEventRepository
     ) {
         this.candleRepository = candleRepository;
         this.technicalIndicatorRepository = technicalIndicatorRepository;
@@ -82,6 +90,8 @@ public class DashboardApiController {
         this.walletTradeRepository = walletTradeRepository;
         this.walletManagedPositionRepository = walletManagedPositionRepository;
         this.executionOpportunityRepository = executionOpportunityRepository;
+        this.positionAnalysisRepository = positionAnalysisRepository;
+        this.positionManagementEventRepository = positionManagementEventRepository;
     }
 
     @GetMapping("/symbols")
@@ -236,6 +246,10 @@ public class DashboardApiController {
         response.put("updatedAt", Instant.now());
         response.put("candles", candles.stream().map(this::candleDto).toList());
         response.put("livePrice", currentLatestPrice(candles));
+        response.put("activePosition", walletManagedPositionRepository
+                .findTopBySymbolAndStatusOrderByOpenedAtDesc(normalizedSymbol, "OPEN")
+                .map(this::activePositionChartDto)
+                .orElse(null));
         return response;
     }
 
@@ -345,6 +359,10 @@ public class DashboardApiController {
         response.put("closedPositions", positionDtos.stream()
                 .filter(position -> !"OPEN".equals(position.get("status")))
                 .toList());
+        response.put("activePosition", walletManagedPositionRepository
+                .findTopBySymbolAndStatusOrderByOpenedAtDesc(normalizedSymbol, "OPEN")
+                .map(this::activePositionChartDto)
+                .orElse(null));
         return response;
     }
 
@@ -431,6 +449,142 @@ public class DashboardApiController {
                 .toList();
     }
 
+
+
+    /**
+     * FIX-053: Dashboard BUY/SELL evidence is now centered on the currently open
+     * wallet position. The selected window limits the visible management-analysis
+     * path; it does not alter Production analysis or execution behavior.
+     */
+    @GetMapping("/active-position-analysis")
+    @Transactional(readOnly = true)
+    public Map<String, Object> activePositionAnalysis(
+            @RequestParam(defaultValue = "BTCUSDT") String symbol,
+            @RequestParam(defaultValue = "1H") String window
+    ) {
+        String normalizedSymbol = symbol.trim().toUpperCase();
+        String normalizedWindow = normalizePositionAnalysisWindow(window);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("symbol", normalizedSymbol);
+        response.put("window", normalizedWindow);
+
+        WalletManagedPosition position = walletManagedPositionRepository
+                .findTopBySymbolAndStatusOrderByOpenedAtDesc(normalizedSymbol, "OPEN")
+                .orElse(null);
+        if (position == null) {
+            response.put("active", false);
+            response.put("position", null);
+            response.put("analysisPath", List.of());
+            response.put("managementEvents", List.of());
+            return response;
+        }
+
+        Instant windowFrom = positionAnalysisWindowFrom(normalizedWindow);
+        Instant from = windowFrom.isAfter(position.getOpenedAt()) ? windowFrom : position.getOpenedAt();
+        List<PositionAnalysis> analyses = positionAnalysisRepository
+                .findByWalletPositionIdAndAnalyzedAtGreaterThanEqualOrderByAnalyzedAtAsc(position.getId(), from);
+        List<PositionManagementEvent> events = positionManagementEventRepository
+                .findByWalletPositionIdAndOccurredAtGreaterThanEqualOrderByOccurredAtAsc(position.getId(), from);
+
+        TradeSignal entrySignal = position.getEntrySignalId() == null ? null
+                : tradeSignalRepository.findById(position.getEntrySignalId()).orElse(null);
+        BigDecimal latestPrice = candleRepository
+                .findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByCloseTimeDesc(normalizedSymbol, "1m")
+                .map(Candle::getClosePrice)
+                .orElse(position.getAverageEntryPriceUsdt());
+
+        Map<String, Object> positionDto = new LinkedHashMap<>();
+        positionDto.put("id", position.getId());
+        positionDto.put("symbol", position.getSymbol());
+        positionDto.put("entrySignalId", position.getEntrySignalId());
+        positionDto.put("openedAt", position.getOpenedAt());
+        positionDto.put("entryPrice", position.getAverageEntryPriceUsdt());
+        positionDto.put("currentPrice", latestPrice);
+        positionDto.put("quantity", position.getQuantity());
+        positionDto.put("stopLoss", position.getStopLossUsdt());
+        positionDto.put("takeProfit", position.getTakeProfitUsdt());
+        positionDto.put("initialTakeProfit", entrySignal == null ? null : entrySignal.getTakeProfit());
+        positionDto.put("profitLockActive", position.isProfitLockActive());
+        positionDto.put("profitLockPrice", position.getProfitLockPriceUsdt());
+        positionDto.put("highestPrice", position.getHighestPriceUsdt());
+        positionDto.put("entryStage", position.getEntryStage());
+        positionDto.put("allocatedPositionPercent", position.getAllocatedPositionPercent());
+        positionDto.put("entryDecision", position.getEntryDecision());
+        positionDto.put("entryDecisionPath", parseDecisionPath(position.getEntryDecisionPathJson()));
+        positionDto.put("entryAnalysisSnapshot", parseAnalysisBreakdown(position.getEntryAnalysisSnapshotJson()));
+
+        List<Map<String, Object>> path = analyses.stream().map(a -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("analysisId", a.getId());
+            item.put("analyzedAt", a.getAnalyzedAt());
+            item.put("interval", a.getIntervalCode());
+            item.put("recommendation", a.getRecommendation() == null ? null : a.getRecommendation().name());
+            item.put("confidence", a.getConfidence());
+            item.put("exitScore", a.getExitScore());
+            item.put("currentPrice", a.getCurrentPriceUsdt());
+            item.put("unrealizedPnlPercent", a.getUnrealizedPnlPercent());
+            item.put("explanation", a.getExplanation());
+            item.put("details", parseAnalysisBreakdown(a.getDetailsJson()));
+            TradeSignal signal = a.getTradeSignal();
+            item.put("signalId", signal == null ? null : signal.getId());
+            item.put("decision", signal == null || signal.getDecision() == null ? null : signal.getDecision().name());
+            item.put("score", signal == null ? null : signal.getTotalScore());
+            item.put("decisionPath", signal == null ? List.of() : parseDecisionPath(signal.getDecisionPath()));
+            return item;
+        }).toList();
+
+        List<Map<String, Object>> management = events.stream().map(e -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", e.getId());
+            item.put("type", e.getEventType());
+            item.put("oldValue", e.getOldValueUsdt());
+            item.put("newValue", e.getNewValueUsdt());
+            item.put("marketPrice", e.getMarketPriceUsdt());
+            item.put("reason", e.getReason());
+            item.put("occurredAt", e.getOccurredAt());
+            return item;
+        }).toList();
+
+        response.put("active", true);
+        response.put("from", from);
+        response.put("position", positionDto);
+        response.put("analysisPath", path);
+        response.put("managementEvents", management);
+        return response;
+    }
+
+    private String normalizePositionAnalysisWindow(String window) {
+        String normalized = window == null ? "1H" : window.trim().toUpperCase();
+        return switch (normalized) {
+            case "15M", "1H", "4H", "1D", "1W" -> normalized;
+            default -> "1H";
+        };
+    }
+
+    private Instant positionAnalysisWindowFrom(String window) {
+        Instant now = Instant.now();
+        return switch (window) {
+            case "15M" -> now.minus(Duration.ofMinutes(15));
+            case "4H" -> now.minus(Duration.ofHours(4));
+            case "1D" -> now.minus(Duration.ofDays(1));
+            case "1W" -> now.minus(Duration.ofDays(7));
+            default -> now.minus(Duration.ofHours(1));
+        };
+    }
+
+    private Map<String, Object> activePositionChartDto(WalletManagedPosition position) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", position.getId());
+        result.put("symbol", position.getSymbol());
+        result.put("openedAt", position.getOpenedAt());
+        result.put("entryPrice", position.getAverageEntryPriceUsdt());
+        result.put("stopLoss", position.getStopLossUsdt());
+        result.put("takeProfit", position.getTakeProfitUsdt());
+        result.put("profitLockActive", position.isProfitLockActive());
+        result.put("profitLockPrice", position.getProfitLockPriceUsdt());
+        result.put("highestPrice", position.getHighestPriceUsdt());
+        return result;
+    }
 
     private Map<String, Object> timeframeSnapshot(String symbol) {
         Map<String, Object> result = new LinkedHashMap<>();

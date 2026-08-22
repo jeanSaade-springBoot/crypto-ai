@@ -61,6 +61,7 @@ let chartHistoryLoading = false;
 let chartNavigationBound = false;
 let chartLoadedCandles = [];
 let chartLoadedExecutions = [];
+let chartLoadedActivePosition = null;
 let chartViewport = { min: null, max: null };
 let chartDragState = null;
 
@@ -232,7 +233,7 @@ function renderFastMarket(data) {
     el('header-live-price').textContent = headerMoney(latestPrice);
     // Avoid showing execution markers from the previously selected symbol while
     // the full dashboard payload is still loading.
-    renderCharts(data.candles || [], []);
+    renderCharts(data.candles || [], [], {activePosition: data.activePosition || null});
 }
 
 async function refreshDashboardWallet() {
@@ -300,7 +301,7 @@ function render(data) {
     renderSentiment(data.sentiment || {}, data.sentimentProviderStatuses || [], data.sentimentSystemStatus || {});
     renderSchedules(data.schedule || {});
     applyDashboardRefreshSchedule(data.schedule || {});
-    renderCharts(data.candles || [], data.executions || []);
+    renderCharts(data.candles || [], data.executions || [], {activePosition: data.activePosition || null});
     latestSignalEvidenceContext = {
         symbol: data.symbol,
         interval: data.interval,
@@ -313,10 +314,10 @@ function render(data) {
     // FIX-035: do not let the normal dashboard renderer overwrite the independently
     // loaded BUY/SELL evidence table. A new symbol/timeframe gets one dedicated load;
     // subsequent updates happen only via its Load button or its own refresh timer.
-    const signalContextKey = `${data.symbol}|${data.interval}`;
+    const signalContextKey = `${data.symbol}|${el('signal-evidence-period')?.value || '1H'}`;
     if (signalEvidenceLoadedContextKey !== signalContextKey) {
         const signalBody = el('signals-body');
-        if (signalBody) signalBody.innerHTML = '<tr><td colspan="6" class="empty">Loading BUY/SELL evidence…</td></tr>';
+        if (signalBody) signalBody.innerHTML = '<tr><td colspan="7" class="empty">Loading active-position analysis path…</td></tr>';
         void refreshSignalEvidence(false);
     }
     renderTradeHistory(data.closedPositions || []);
@@ -327,59 +328,98 @@ function render(data) {
 async function refreshSignalEvidence(showLoading = true) {
     const context = latestSignalEvidenceContext;
     const periodSelect = el('signal-evidence-period');
-    const executionFilterSelect = el('signal-evidence-execution-filter');
     const status = el('signal-evidence-status');
     const body = el('signals-body');
+    const summary = el('active-position-analysis-summary');
     if (!context || !periodSelect || !body) return;
-
-    if (context.displayOnlyInterval) {
-        renderSignals([], true, context.timeframeSnapshot, context.executions, context.openPositions, context.closedPositions);
-        if (status) status.textContent = 'Trading signals are generated only on 1m / 5m / 1h';
-        return;
-    }
 
     if (signalEvidenceAbortController) signalEvidenceAbortController.abort();
     signalEvidenceAbortController = new AbortController();
     const requestedSymbol = context.symbol;
-    const requestedInterval = context.interval;
-    const period = periodSelect.value || 'TODAY';
-    const executionFilter = executionFilterSelect?.value || 'ALL';
-    if (showLoading) body.innerHTML = '<tr><td colspan="6" class="empty">Loading BUY/SELL evidence…</td></tr>';
+    const windowValue = periodSelect.value || '1H';
+    if (showLoading) body.innerHTML = '<tr><td colspan="7" class="empty">Loading active-position analysis path…</td></tr>';
     if (status) status.textContent = 'Loading…';
 
     try {
-        const params = new URLSearchParams({symbol: requestedSymbol, interval: requestedInterval, period, executionFilter, limit: '250'});
-        const response = await fetch(`/api/dashboard/signals?${params.toString()}`, {signal: signalEvidenceAbortController.signal});
-        if (!response.ok) throw new Error(`Signal evidence API returned ${response.status}`);
+        const params = new URLSearchParams({symbol: requestedSymbol, window: windowValue});
+        const response = await fetch(`/api/dashboard/active-position-analysis?${params.toString()}`, {signal: signalEvidenceAbortController.signal});
+        if (!response.ok) throw new Error(`Active-position analysis API returned ${response.status}`);
         const result = await response.json();
         const current = latestSignalEvidenceContext;
-        if (!current || current.symbol !== requestedSymbol || current.interval !== requestedInterval) return;
-        renderSignals(result.signals || [], false, current.timeframeSnapshot, current.executions, current.openPositions, current.closedPositions);
-        signalEvidenceLoadedContextKey = `${requestedSymbol}|${requestedInterval}`;
+        if (!current || current.symbol !== requestedSymbol) return;
+        renderActivePositionAnalysis(result);
+        signalEvidenceLoadedContextKey = `${requestedSymbol}|${windowValue}`;
         if (status) {
-            const labels = {TODAY:'Today', '4H':'Last 4 hours', '2H':'Last 2 hours', '1H':'Last 1 hour', ALL:'All time'};
-            const filterLabels = {ALL:'all actionable', EXECUTED:'executed positions', BUY_BLOCKED:'blocked BUY positions'};
-            status.textContent = `${labels[period] || 'Today'} · ${filterLabels[executionFilter] || 'all actionable'} · ${Number(result.count || 0)} signal${Number(result.count || 0) === 1 ? '' : 's'}`;
+            const labels = {'15M':'15 minutes', '1H':'1 hour', '4H':'4 hours', '1D':'1 day', '1W':'1 week'};
+            status.textContent = result.active
+                ? `${labels[windowValue] || '1 hour'} · ${Number(result.analysisPath?.length || 0)} analysis step${Number(result.analysisPath?.length || 0) === 1 ? '' : 's'}`
+                : `No active ${requestedSymbol} position`;
         }
     } catch (error) {
         if (error?.name === 'AbortError') return;
-        if (status) status.textContent = 'Could not load signal evidence';
-        body.innerHTML = `<tr><td colspan="6" class="empty">${escapeHtml(error.message)}</td></tr>`;
+        if (status) status.textContent = 'Could not load active-position analysis';
+        if (summary) summary.innerHTML = '';
+        body.innerHTML = `<tr><td colspan="7" class="empty">${escapeHtml(error.message)}</td></tr>`;
     } finally {
         signalEvidenceAbortController = null;
     }
 }
 
-function configureSignalEvidenceRefreshTimer() {
-    if (signalEvidenceRefreshTimer) {
-        clearInterval(signalEvidenceRefreshTimer);
-        signalEvidenceRefreshTimer = null;
+function renderActivePositionAnalysis(result) {
+    const body = el('signals-body');
+    const summary = el('active-position-analysis-summary');
+    if (!body || !summary) return;
+    if (!result?.active || !result.position) {
+        summary.innerHTML = '<div class="empty">The selected symbol has no active wallet position.</div>';
+        body.innerHTML = '<tr><td colspan="7" class="empty">Only analysis for an active position is shown here.</td></tr>';
+        return;
     }
-    const seconds = Number(el('signal-evidence-refresh-interval')?.value || 0);
-    if (!Number.isFinite(seconds) || seconds <= 0) return;
-    signalEvidenceRefreshTimer = window.setInterval(() => {
-        void refreshSignalEvidence(false);
-    }, seconds * 1000);
+
+    const p = result.position;
+    const initialTp = Number(p.initialTakeProfit || 0);
+    const currentTp = Number(p.takeProfit || 0);
+    const tpChanged = initialTp > 0 && currentTp > 0 && Math.abs(initialTp - currentTp) > Math.max(1e-12, Math.abs(initialTp) * 1e-10);
+    const management = result.managementEvents || [];
+    const tpEvents = management.filter(e => e.type === 'TAKE_PROFIT_EXTENDED');
+    const entryPath = Array.isArray(p.entryDecisionPath) ? p.entryDecisionPath : [];
+
+    summary.innerHTML = `
+        <div class="active-position-summary-grid">
+            <div><span>Position</span><strong>${escapeHtml(p.symbol)} #${escapeHtml(p.id)}</strong><small>Opened ${dateTime(p.openedAt)}</small></div>
+            <div><span>Entry</span><strong>${money(p.entryPrice)}</strong><small>Signal #${escapeHtml(p.entrySignalId ?? '—')} · ${escapeHtml(p.entryDecision || 'BUY')}</small></div>
+            <div><span>Current</span><strong>${money(p.currentPrice)}</strong><small>${escapeHtml(p.entryStage || 'OPEN')} · ${Number(p.allocatedPositionPercent || 0)}%</small></div>
+            <div><span>Stop loss</span><strong class="negative">${money(p.stopLoss)}</strong></div>
+            <div class="${tpChanged ? 'target-revised' : ''}"><span>Take profit</span><strong class="positive">${money(p.takeProfit)}</strong><small>${tpChanged ? `Initial ${money(p.initialTakeProfit)} → current ${money(p.takeProfit)}` : 'Current target'}</small></div>
+            <div><span>Profit lock</span><strong>${p.profitLockActive ? money(p.profitLockPrice) : 'Waiting'}</strong><small>${p.profitLockActive ? 'ACTIVE' : 'Not active'}</small></div>
+        </div>
+        ${entryPath.length ? `<div class="entry-decision-path"><strong>Entry decision path</strong><div>${entryPath.map((step, i) => `<span><b>${i + 1}</b>${escapeHtml(String(step.stage || step.name || step.decision || step.action || JSON.stringify(step)))}</span>`).join('')}</div></div>` : ''}
+        ${tpEvents.length ? `<div class="take-profit-history"><strong>Take-profit revisions</strong>${tpEvents.map(e => `<div><span>${dateTime(e.occurredAt)}</span><b>${money(e.oldValue)} → ${money(e.newValue)}</b><small>${escapeHtml(e.reason || 'Target extended by continuation policy')}</small></div>`).join('')}</div>` : (tpChanged ? '<div class="take-profit-history"><small>Current TP differs from the original entry target. Structured TP revision history starts after FIX-053 deployment.</small></div>' : '')}`;
+
+    const path = result.analysisPath || [];
+    if (!path.length) {
+        body.innerHTML = '<tr><td colspan="7" class="empty">No position-management analysis was produced inside this window.</td></tr>';
+        return;
+    }
+    body.innerHTML = path.map(a => {
+        const decisionPath = Array.isArray(a.decisionPath) ? a.decisionPath : [];
+        const pathHtml = decisionPath.length
+            ? decisionPath.map((step, i) => `<span class="analysis-path-step"><b>${i + 1}</b>${escapeHtml(String(step.stage || step.name || step.decision || step.action || JSON.stringify(step)))}</span>`).join('')
+            : `<span class="analysis-explanation">${escapeHtml(a.explanation || 'No persisted decision-path detail')}</span>`;
+        return `<tr class="active-analysis-row">
+            <td>${dateTime(a.analyzedAt)}</td>
+            <td><strong>${escapeHtml(displayInterval(a.interval || '—'))}</strong></td>
+            <td><span class="badge ${String(a.decision || '').includes('BUY') ? 'positive' : String(a.decision || '').includes('SELL') ? 'negative' : 'neutral'}">${escapeHtml(String(a.decision || 'CONTEXT').replaceAll('_',' '))}</span></td>
+            <td><strong>${escapeHtml(String(a.recommendation || 'HOLD').replaceAll('_',' '))}</strong></td>
+            <td><strong>${escapeHtml(a.score ?? '—')}</strong><small>${escapeHtml(a.confidence ?? '—')}% confidence · exit ${escapeHtml(a.exitScore ?? '—')}/25</small></td>
+            <td>${money(a.currentPrice)}<small>${Number(a.unrealizedPnlPercent || 0) >= 0 ? '+' : ''}${Number(a.unrealizedPnlPercent || 0).toFixed(2)}%</small></td>
+            <td><div class="analysis-path-inline">${pathHtml}</div></td>
+        </tr>`;
+    }).join('');
+}
+
+function configureSignalEvidenceRefreshTimer() {
+    // FIX-053: Active-position analysis is refreshed by the dashboard itself or on demand.
+    // No second independent timer is needed for this focused panel.
 }
 
 
@@ -933,6 +973,17 @@ function candleTooltipHtml(point) {
         </div>`;
 }
 
+function candlePriceTooltipHtml(point) {
+    if (!point) return '';
+    const y = Array.isArray(point.y) ? point.y : [];
+    const price = point.close ?? y[3] ?? point.y;
+    return `<div class="candle-cursor-price">${candleTooltipPrice(price)}</div>`;
+}
+
+function formatChartPrice(value) {
+    return candleTooltipPrice(value);
+}
+
 function normalizeChartCandle(c) {
     return {
         ...c,
@@ -1108,15 +1159,17 @@ function bindChartNavigation() {
 }
 
 function renderCharts(candles, executions = [], options = {}) {
-    const { force = false, preserveViewport = false } = options;
+    const { force = false, preserveViewport = false, activePosition = undefined } = options;
     // While the user is inspecting history, periodic dashboard refreshes must
     // not snap the chart back to the newest candles.
     if (chartHistoryActive && !force) return;
 
     chartLoadedCandles = mergeChartCandles(force ? chartLoadedCandles : [], candles || []);
     if (!force) chartLoadedExecutions = executions || [];
+    if (activePosition !== undefined) chartLoadedActivePosition = activePosition;
     const renderCandlesList = chartLoadedCandles;
     const renderExecutions = force ? chartLoadedExecutions : (executions || []);
+    const renderPosition = activePosition === undefined ? chartLoadedActivePosition : activePosition;
 
     const candleSeries = renderCandlesList.map(c => ({
         x: window.CryptoTime.parseUtc(c.time),
@@ -1156,6 +1209,37 @@ function renderCharts(candles, executions = [], options = {}) {
             }
         });
     });
+    // FIX-053: Show the currently active Production position directly on the price chart.
+    // These are presentation-only annotations; they never feed back into analysis/execution.
+    const positionYAnnotations = [];
+    if (renderPosition) {
+        const levels = [
+            ['ENTRY', renderPosition.entryPrice, '#8da2b1'],
+            ['SL', renderPosition.stopLoss, '#ff6b72'],
+            ['TP', renderPosition.takeProfit, '#39d98a'],
+            ['LOCK', renderPosition.profitLockActive ? renderPosition.profitLockPrice : null, '#f4c95d']
+        ];
+        levels.forEach(([label, value, color]) => {
+            const y = Number(value);
+            if (!Number.isFinite(y) || y <= 0) return;
+            positionYAnnotations.push({
+                y,
+                borderColor: color,
+                strokeDashArray: label === 'ENTRY' ? 3 : 5,
+                label: {text: `${label} ${formatChartPrice(y)}`, borderColor: color, style: {background: '#0d1820', color, fontSize: '10px', fontWeight: 700}}
+            });
+        });
+        const openedAt = window.CryptoTime.parseUtc(renderPosition.openedAt);
+        const entry = Number(renderPosition.entryPrice);
+        if (openedAt && Number.isFinite(entry)) {
+            annotations.push({
+                x: openedAt.getTime(), y: entry,
+                marker: {size: 5, fillColor: '#39d98a', strokeColor: '#071018', strokeWidth: 2, radius: 4},
+                label: {text: 'OPEN', borderColor: '#39d98a', offsetY: 14, style: {background: '#39d98a', color: '#071018', fontSize: '9px', fontWeight: 900}}
+            });
+        }
+    }
+
     const debugZoneAnnotations = debugMoveFocus ? [{
         x: debugMoveFocus.start.getTime(),
         x2: debugMoveFocus.end.getTime(),
@@ -1185,15 +1269,15 @@ function renderCharts(candles, executions = [], options = {}) {
             }
         }
     };
-    const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime', labels: { datetimeUTC: false }, tooltip: { enabled: true, formatter: value => { const d = new Date(Number(value)); return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(); } } }, noData: { text: 'Waiting for closed candles' } };
+    const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime', labels: { datetimeUTC: false }, tooltip: { enabled: false } }, noData: { text: 'Waiting for closed candles' } };
     if (!candleChart) {
-        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390, events: candleEvents }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations }, tooltip: { shared:false, followCursor:false, fixed:{enabled:true,position:'topRight',offsetX:-12,offsetY:12}, custom: ({ seriesIndex, dataPointIndex, w }) => candleTooltipHtml(w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex]) }, yaxis: { tooltip: { enabled: true }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
+        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390, events: candleEvents }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: positionYAnnotations }, tooltip: { shared:false, followCursor:true, intersect:false, custom: ({ seriesIndex, dataPointIndex, w }) => candlePriceTooltipHtml(w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex]) }, yaxis: { tooltip: { enabled: false }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
         candleChart.render().then(() => { bindExecutionMarkerClicks(); bindDebugTradeDotTitles(); bindChartNavigation(); });
         volumeChart = new ApexCharts(el('volume-chart'), { ...common, chart: { ...common.chart, type: 'bar', height: 150 }, series: [{ name: 'Volume', data: volumeSeries }], dataLabels: { enabled: false }, yaxis: { labels: { formatter: v => Number(v).toLocaleString(undefined, { notation: 'compact' }) } } });
         volumeChart.render();
     } else {
         candleChart.updateSeries([{ name: 'Price', data: candleSeries }], false);
-        candleChart.updateOptions({ chart: { events: candleEvents }, annotations: { points: annotations, xaxis: debugZoneAnnotations } }, false, true, false).then(async () => {
+        candleChart.updateOptions({ chart: { events: candleEvents }, annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: positionYAnnotations }, tooltip: { shared:false, followCursor:true, intersect:false, custom: ({ seriesIndex, dataPointIndex, w }) => candlePriceTooltipHtml(w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex]) } }, false, true, false).then(async () => {
             bindExecutionMarkerClicks();
             bindDebugTradeDotTitles();
             if (preserveViewport && Number.isFinite(chartViewport.min) && Number.isFinite(chartViewport.max)) {
@@ -2450,13 +2534,11 @@ function setupSidebar() {
 }
 
 const signalEvidencePeriod = el('signal-evidence-period');
-const signalEvidenceExecutionFilter = el('signal-evidence-execution-filter');
-const signalEvidenceRefreshInterval = el('signal-evidence-refresh-interval');
 const signalEvidenceRefresh = el('signal-evidence-refresh');
 // Filters are intentionally applied on Load / the dedicated auto-refresh timer. This
 // keeps the table predictable while the user is choosing multiple filter values.
 if (signalEvidenceRefresh) signalEvidenceRefresh.addEventListener('click', () => refreshSignalEvidence(true));
-if (signalEvidenceRefreshInterval) signalEvidenceRefreshInterval.addEventListener('change', configureSignalEvidenceRefreshTimer);
+if (signalEvidencePeriod) signalEvidencePeriod.addEventListener('change', () => refreshSignalEvidence(true));
 configureSignalEvidenceRefreshTimer();
 
 el('refresh-button').addEventListener('click', refreshDashboard);

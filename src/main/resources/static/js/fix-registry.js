@@ -1022,6 +1022,26 @@
             behavior: "Production trading decisions are unchanged. Replay becomes materially closer to the actual Production event sequence and can reproduce live mechanical exits using the same observed prices. Database/backend timestamps remain UTC; KSA conversion stays in the presentation layer.",
             regression: "After V64 deployment, run Production long enough to collect market_price_event rows, then replay the same UTC window. Verify the run reports live-price parity active, BUY decisions match, TP/SL/profit-lock/normal exits occur on persisted Production price timestamps, and signal-driven SELL cannot reopen on the same signal invocation."
         }
+,
+        {
+            id: "FIX-053",
+            title: "Active-position analysis path and chart position overlay",
+            status: "DONE",
+            scenario: "Dashboard BUY/SELL panel should focus only on the selected symbol's active wallet position, show its recent management analysis path, preserve every future take-profit extension, and display the open position directly on the price chart without an obstructive hover card.",
+            symbol: "ALL active wallet positions",
+            entry: "Current wallet_managed_position average entry",
+            exit: "N/A — active position monitoring",
+            entryTime: "Position opened_at (UTC in DB, local/KSA in UI)",
+            exitTime: "N/A",
+            replayWindow: "No trading-behavior replay required; this is dashboard/audit persistence only. Verify Production TP revision persistence independently.",
+            location: "Dashboard active-position panel + LivePositionProtectionService TP-extension audit",
+            classes: ["DashboardApiController", "LivePositionProtectionService", "PositionManagementEvent", "PositionManagementEventRepository", "dashboard.js", "dashboard.css"],
+            cause: "The previous dashboard mixed unrelated recent BUY/SELL signals, exposed broad signal filters, showed only the latest TP value, and used a fixed hover tooltip that obscured chart candles. Production TP extensions existed only in logs, so the UI could not reconstruct the real target path reliably.",
+            solution: "Center the panel on OPEN wallet_managed_position only; add 15m/1h/4h/1d/1w analysis windows; return persisted position_analysis steps and decision paths; persist TAKE_PROFIT_EXTENDED old/new targets as position_management_event rows; draw ENTRY/SL/TP/LOCK levels and the OPEN point on the chart; replace the fixed OHLC hover card with a compact cursor-following price label.",
+            behavior: "Dashboard now explains the live position lifecycle without changing BUY/SELL scoring, execution, sizing, exits or Replay. TP revisions after deployment are auditable as old target → new target. Database timestamps remain UTC and CryptoTime performs local/KSA presentation.",
+            regression: "With no open position, panel must show no active position. With an open position, switch 15m/1h/4h/1d/1w and confirm only that position's analyses appear. Trigger/fixture a TP extension and verify old/new target history. Confirm chart shows position levels and hover displays only price near the cursor."
+        }
+
 
 ];
 

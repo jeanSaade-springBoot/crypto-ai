@@ -1,6 +1,8 @@
 package com.crypto.position.service;
 
 import com.crypto.audit.service.ProductionExitAuditService;
+import com.crypto.position.domain.PositionManagementEvent;
+import com.crypto.position.repository.PositionManagementEventRepository;
 
 import com.crypto.domain.PaperPosition;
 import com.crypto.domain.PositionStatus;
@@ -38,6 +40,7 @@ public class LivePositionProtectionService {
     private final TradeSignalRepository tradeSignalRepository;
     private final WalletAutoExecutionService walletAutoExecutionService;
     private final ProductionExitAuditService productionExitAuditService;
+    private final PositionManagementEventRepository positionManagementEventRepository;
 
     @Transactional
     public void onPrice(String symbolValue, BigDecimal price) {
@@ -65,9 +68,22 @@ public class LivePositionProtectionService {
                 BigDecimal distance = managed.getTakeProfitUsdt().subtract(managed.getAverageEntryPriceUsdt());
                 BigDecimal oldTarget = managed.getTakeProfitUsdt();
                 BigDecimal newTarget = oldTarget.add(distance.multiply(BigDecimal.valueOf(0.50), MC), MC);
+                Instant changedAt = Instant.now();
                 managed.setTakeProfitUsdt(newTarget);
-                managed.setUpdatedAt(Instant.now());
+                managed.setUpdatedAt(changedAt);
                 managedPositionRepository.save(managed);
+                // FIX-053: Persist every TP revision so Dashboard can show the actual
+                // Production management path instead of only the latest target value.
+                positionManagementEventRepository.save(PositionManagementEvent.builder()
+                        .walletPositionId(managed.getId())
+                        .symbol(symbol)
+                        .eventType("TAKE_PROFIT_EXTENDED")
+                        .oldValueUsdt(oldTarget)
+                        .newValueUsdt(newTarget)
+                        .marketPriceUsdt(price)
+                        .reason(continuation.explanation())
+                        .occurredAt(changedAt)
+                        .build());
                 log.info("Live TAKE_PROFIT extended: symbol={}, oldTarget={}, newTarget={}, reason={}", symbol, oldTarget, newTarget, continuation.explanation());
             } else if (walletAutoExecutionService.executeMechanicalExit(
                     symbol, price, "TAKE_PROFIT", continuation.explanation())) {

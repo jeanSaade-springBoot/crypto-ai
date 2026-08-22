@@ -11,6 +11,7 @@ public interface PositionAnalysisRepository extends JpaRepository<PositionAnalys
     boolean existsByWalletPositionIdAndTradeSignalId(Long walletPositionId, Long tradeSignalId);
     Optional<PositionAnalysis> findTopByWalletPositionIdOrderByAnalyzedAtDesc(Long walletPositionId);
     List<PositionAnalysis> findTop100ByOrderByAnalyzedAtDesc();
+    List<PositionAnalysis> findByWalletPositionIdAndAnalyzedAtGreaterThanEqualOrderByAnalyzedAtAsc(Long walletPositionId, Instant from);
     List<PositionAnalysis> findBySymbolAndAnalyzedAtBetweenOrderByAnalyzedAtAsc(
             String symbol, Instant from, Instant to
     );

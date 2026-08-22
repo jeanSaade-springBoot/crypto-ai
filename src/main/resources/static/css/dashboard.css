@@ -2822,3 +2822,26 @@ body.position-modal-open{overflow:hidden}
   body:not(.sidebar-collapsed) .nav-group { gap:3px; }
   body:not(.sidebar-collapsed) .sidebar-nav a { padding:9px 10px; gap:8px; }
 }
+
+/* FIX-053: Active-position dashboard path and non-obstructive chart hover. */
+.active-position-analysis-summary{margin:12px 0 16px}
+.active-position-summary-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+.active-position-summary-grid>div{padding:10px 12px;border:1px solid var(--border,#203342);border-radius:10px;background:rgba(10,22,30,.55);min-width:0}
+.active-position-summary-grid span,.active-position-summary-grid small{display:block;color:var(--muted,#8da2b1);font-size:11px}
+.active-position-summary-grid strong{display:block;margin:3px 0;font-size:14px;overflow-wrap:anywhere}
+.active-position-summary-grid .target-revised{border-color:rgba(57,217,138,.55)}
+.entry-decision-path,.take-profit-history{margin-top:10px;padding:10px 12px;border:1px solid var(--border,#203342);border-radius:10px;background:rgba(10,22,30,.38)}
+.entry-decision-path>div{display:flex;gap:7px;flex-wrap:wrap;margin-top:7px}
+.entry-decision-path span,.analysis-path-step{display:inline-flex;align-items:center;gap:5px;padding:4px 7px;border-radius:999px;background:#132430;color:#dce9f2;font-size:11px}
+.entry-decision-path b,.analysis-path-step b{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;background:#203746;font-size:10px}
+.take-profit-history>div{display:grid;grid-template-columns:150px minmax(150px,auto) 1fr;gap:10px;align-items:center;padding:7px 0;border-top:1px solid rgba(141,162,177,.15)}
+.take-profit-history>div:first-of-type{margin-top:7px}
+.take-profit-history small{color:var(--muted,#8da2b1)}
+.active-analysis-row td{vertical-align:top}
+.active-analysis-row td small{display:block;margin-top:3px;color:var(--muted,#8da2b1)}
+.analysis-path-inline{display:flex;gap:5px;flex-wrap:wrap;max-width:680px}
+.analysis-explanation{display:block;max-width:680px;white-space:normal;color:#c9d7e0;font-size:12px;line-height:1.45}
+.candle-cursor-price{padding:2px 6px;border-radius:5px;background:#0d1820;border:1px solid #314958;color:#eef7fb;font-size:11px;font-weight:800;line-height:1.25;white-space:nowrap;pointer-events:none}
+@media(max-width:1100px){.active-position-summary-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:700px){.active-position-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.take-profit-history>div{grid-template-columns:1fr}.active-position-path-table{min-width:980px}}
+.chart-panel .apexcharts-tooltip:has(.candle-cursor-price){background:transparent!important;border:0!important;box-shadow:none!important;overflow:visible!important}
