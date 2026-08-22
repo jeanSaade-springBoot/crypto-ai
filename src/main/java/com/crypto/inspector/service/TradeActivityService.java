@@ -37,13 +37,15 @@ public class TradeActivityService {
         List<Map<String, Object>> rows = new ArrayList<>();
 
         // BUY/SELL are signal events. They are intentionally not called EXECUTED unless a wallet row exists.
+        // FIX-039: trade_signal stores the timeframe in interval_code (the Java entity field is named interval).
+        // Keep persisted timestamps in UTC; the Trade Activity frontend converts event_time to the user's display timezone.
         if (filters.contains("BUY") || filters.contains("SELL")) {
             List<String> sides = new ArrayList<>();
             if (filters.contains("BUY")) { sides.add("BUY"); sides.add("STRONG_BUY"); }
             if (filters.contains("SELL")) { sides.add("SELL"); sides.add("STRONG_SELL"); }
             String placeholders = String.join(",", Collections.nCopies(sides.size(), "?"));
             String sql = """
-                    SELECT ts.generated_at event_time, ts.symbol, ts.interval timeframe,
+                    SELECT ts.generated_at event_time, ts.symbol, ts.interval_code timeframe,
                            CASE WHEN ts.decision IN ('BUY','STRONG_BUY') THEN 'BUY' ELSE 'SELL' END action,
                            'SIGNAL' status, 'INITIAL_SIGNAL' source,
                            CASE WHEN ts.decision IN ('BUY','STRONG_BUY') THEN 'BUY_SIGNAL' ELSE 'SELL_SIGNAL' END reason
@@ -55,9 +57,10 @@ public class TradeActivityService {
         }
 
         // BLOCKED is execution authority, not a signal side. decision_code is already the short persisted keyword.
+        // FIX-039: use the physical database column interval_code in native SQL, not the JPA field name interval.
         if (filters.contains("BLOCKED")) {
             String sql = """
-                    SELECT eo.last_evidence_at event_time, eo.symbol, ts.interval timeframe,
+                    SELECT eo.last_evidence_at event_time, eo.symbol, ts.interval_code timeframe,
                            eo.direction action, 'BLOCKED' status, 'EXECUTION_GATE' source,
                            COALESCE(NULLIF(eo.decision_code,''),'BLOCKED') reason
                     FROM execution_opportunity eo
@@ -68,9 +71,10 @@ public class TradeActivityService {
         }
 
         // EXECUTED comes only from the wallet ledger: this is the financial source of truth.
+        // FIX-039: use interval_code here too so every Trade Activity branch uses the same schema-safe timeframe source.
         if (filters.contains("EXECUTED")) {
             String sql = """
-                    SELECT wt.executed_at event_time, wt.symbol, ts.interval timeframe,
+                    SELECT wt.executed_at event_time, wt.symbol, ts.interval_code timeframe,
                            wt.side action, 'EXECUTED' status,
                            CASE
                              WHEN wt.execution_reason = 'SETUP_CONFIRMATION_WAKEUP' THEN 'WAKE_UP'

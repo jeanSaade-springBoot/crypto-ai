@@ -873,6 +873,26 @@
             behavior: "Trading decisions, scoring, sizing, TP/SL and exit reasons are unchanged. Only wallet cash mutation semantics are hardened against lost updates.",
             regression: "Exact incident arithmetic is covered: 9749.900237510953 + 251.970005083884 - 125 - 250 = 9626.870242594837. Repository tests also guard the atomic SQL contract. Replay behavior is intentionally unchanged because this is not a strategy change."
         }
+,
+        {
+            id: "FIX-039",
+            title: "Trade Activity interval_code schema correction",
+            status: "DONE",
+            scenario: "Trade Activity API failed with MySQL Unknown column ts.interval after the Trade Activity UI was introduced.",
+            symbol: "ALL / ACEUSDT observed",
+            entry: "N/A — read-only activity feed",
+            exit: "N/A — read-only activity feed",
+            entryTime: "2026-08-22 16:27 KSA observation",
+            exitTime: "N/A",
+            replayWindow: "No replay required; read-only SQL/UI regression",
+            location: "TradeActivityService",
+            classes: ["TradeActivityService", "trade-activity.js"],
+            cause: "Native SQL selected ts.interval, but trade_signal physically stores the timeframe in interval_code. The Java TradeSignal field is named interval only through JPA mapping, so that field name cannot be used as a MySQL column in JdbcTemplate SQL.",
+            solution: "Replace ts.interval with ts.interval_code in BUY/SELL, BLOCKED and EXECUTED Trade Activity queries. Preserve UTC database timestamps and leave timezone conversion to the frontend display layer.",
+            behavior: "Trade Activity loads normally and shows the persisted timeframe without changing signal generation, Replay, Production execution, wallet accounting or strategy behavior. Database timestamps remain UTC; the page displays them in Asia/Riyadh for the current KSA UI requirement.",
+            regression: "Verify BUY/SELL, BLOCKED and EXECUTED filters independently and together. Confirm no SQLSyntaxErrorException occurs, timeframe is populated, and a UTC event timestamp is displayed as KSA UTC+3 on Trade Activity."
+        }
+
 
 ];
 
