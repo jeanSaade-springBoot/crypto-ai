@@ -1,6 +1,22 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-046",
+            title: "Trade Activity symbol filter source and refresh correction",
+            status: "ACTIVE · UI/AUDIT ONLY",
+            scenario: "Selecting a specific symbol in Trade Activity appeared not to work and some valid activity symbols could be missing from the dropdown.",
+            symbol: "ALL / any activity symbol", entry: "N/A", exit: "N/A",
+            entryTime: "2026-08-22 KSA observation", exitTime: "N/A",
+            replayWindow: "No replay required; read-only activity filtering regression",
+            location: "Trade Activity symbol metadata and frontend filter refresh",
+            classes: ["TradeActivityService", "trade-activity.js"],
+            cause: "The symbol selector was populated only from enabled wallet_asset rows even though Trade Activity reads trade_signal, execution_opportunity and wallet_trade. In addition, changing the dropdown had no change handler, so stale All-symbol results remained visible until Search was pressed again.",
+            solution: "Build the dropdown from the union of symbols actually present in Trade Activity evidence sources and refresh the current query when the selected symbol changes and at least one activity type is selected.",
+            behavior: "Selecting ACEUSDT, BTCUSDT or another activity symbol now immediately applies that symbol to the read-only activity query. No Production, Replay, scoring, entry, exit, sizing or wallet behavior changes. UTC database timestamps remain UTC and frontend display remains Asia/Riyadh.",
+            regression: "Search with BUY/SELL/BLOCKED/EXECUTED, then switch between All symbols and a specific symbol and confirm every returned row matches the selected symbol. Confirm activity-only symbols not currently held in wallet_asset still appear in the dropdown."
+        },
+
+        {
             id: "FIX-045",
             title: "Trade Inspector optional diagnostics DOM guard",
             status: "ACTIVE · UI ONLY",

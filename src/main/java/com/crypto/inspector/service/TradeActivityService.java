@@ -97,7 +97,24 @@ public class TradeActivityService {
     }
 
     @Transactional(readOnly = true)
+    /**
+     * FIX-046: Trade Activity symbols must come from the activity evidence itself, not only
+     * from wallet_asset. A symbol can have signals or blocked opportunities before it ever
+     * becomes a wallet holding, so limiting this dropdown to wallet_asset made valid symbols
+     * appear unsearchable. This query is read-only and does not alter trading behavior.
+     */
     public List<String> symbols() {
-        return jdbc.queryForList("SELECT symbol FROM wallet_asset WHERE enabled=1 AND symbol <> 'USDT' ORDER BY symbol", String.class);
+        return jdbc.queryForList("""
+                SELECT symbol
+                FROM (
+                    SELECT DISTINCT symbol FROM trade_signal WHERE symbol IS NOT NULL AND symbol <> ''
+                    UNION
+                    SELECT DISTINCT symbol FROM execution_opportunity WHERE symbol IS NOT NULL AND symbol <> ''
+                    UNION
+                    SELECT DISTINCT symbol FROM wallet_trade WHERE symbol IS NOT NULL AND symbol <> ''
+                ) activity_symbols
+                WHERE symbol <> 'USDT'
+                ORDER BY symbol
+                """, String.class);
     }
 }
