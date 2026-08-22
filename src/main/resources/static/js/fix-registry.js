@@ -1,6 +1,22 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-049",
+            title: "Trade Activity strict direction AND state filters",
+            status: "ACTIVE · UI/AUDIT ONLY",
+            scenario: "Trade Activity filters were inconsistent because BUY/SELL and EXECUTED/BLOCKED behaved as additive or exclusive sources instead of two required filter dimensions.",
+            symbol: "ALL / any activity symbol", entry: "N/A", exit: "N/A",
+            entryTime: "2026-08-22 KSA observation", exitTime: "N/A",
+            replayWindow: "No replay required; read-only activity-query semantics",
+            location: "Trade Activity frontend/backend filtering + Dashboard connection-status cleanup",
+            classes: ["TradeActivityService", "trade-activity.js", "trade-activity.html", "dashboard.js", "dashboard.html"],
+            cause: "The UI allowed empty direction/state combinations and the backend treated BLOCKED/EXECUTED as alternate source modes. This did not match the operator's intended boolean filter: (BUY OR SELL) AND (BLOCKED OR EXECUTED) AND symbol.",
+            solution: "Split filters into mandatory Direction and State groups. Require BUY and/or SELL, require EXECUTED and/or BLOCKED, apply the selected direction to both wallet executions and blocked opportunities, union the selected states, and apply the selected symbol to every branch. Prevent either checkbox group from becoming empty. Remove the dashboard 'API connected / Auto refresh every 10s' status and keep its refresh helper DOM-safe.",
+            behavior: "BUY + EXECUTED returns executed BUYs only. SELL + BLOCKED returns blocked SELL opportunities only. BUY+SELL + EXECUTED+BLOCKED returns all matching executed and blocked activity. Symbol ALL keeps all symbols; a selected symbol restricts every result. Database timestamps remain UTC and frontend display remains Asia/Riyadh.",
+            regression: "Verify all direction/state combinations against wallet_trade and execution_opportunity for one symbol and ALL. Confirm neither Direction nor State can become empty, no signal-only rows appear, and the dashboard no longer shows API connected / Auto refresh every 10s. No Production/Replay trading behavior changes."
+        },
+
+        {
             id: "FIX-048",
             title: "Trade Activity hierarchical filter semantics",
             status: "ACTIVE · UI/AUDIT ONLY",

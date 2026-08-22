@@ -2379,8 +2379,8 @@ async function collectSentimentProviders() {
 }
 
 function updateConnection(online) {
-    el('connection-dot').className = online ? 'online' : 'offline';
-    el('connection-label').textContent = online ? 'API connected' : 'API unavailable';
+    // FIX-049: the sidebar connection-status widget was intentionally removed.
+    // Keep the refresh hook as a no-op so existing dashboard health calls stay safe.
 }
 
 function displayInterval(value, fallback = 'Unavailable at creation') {

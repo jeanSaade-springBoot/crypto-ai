@@ -2,36 +2,46 @@
 const short=v=>String(v??'—').trim().toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/^_+|_+$/g,'')||'—';
 const time=v=>{if(!v)return '—';try{return new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(v));}catch(e){return v;}};
 async function loadSymbols(){try{const r=await fetch('/api/trade-activity/symbols',{cache:'no-store'});if(!r.ok)return;(await r.json()).forEach(s=>{const o=document.createElement('option');o.value=s;o.textContent=s;$('activity-symbol').appendChild(o);});}catch(e){/* Symbol metadata is optional; activity data still remains on-demand. */}}
-async function search(){const filters=[...document.querySelectorAll('.activity-type:checked')].map(x=>x.value);const err=$('activity-error');err.classList.add('hidden');if(!filters.length){err.textContent='Select at least one: BUY, SELL, BLOCKED or EXECUTED.';err.classList.remove('hidden');return;}const p=new URLSearchParams({symbol:$('activity-symbol').value,hours:$('activity-hours').value});filters.forEach(v=>p.append('filter',v));$('activity-rows').innerHTML='<tr><td colspan="7" class="empty-cell">Loading…</td></tr>';$('activity-count').textContent='Loading…';try{const r=await fetch('/api/trade-activity?'+p,{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const rows=await r.json();$('activity-count').textContent=rows.length+' rows';$('activity-rows').innerHTML=rows.length?rows.map(x=>`<tr><td>${esc(time(x.event_time||x.eventTime))}</td><td><strong>${esc(x.symbol)}</strong></td><td>${esc(x.timeframe||'—')}</td><td><span class="activity-pill ${String(x.action||'').toLowerCase()}">${esc(x.action)}</span></td><td>${esc(x.status)}</td><td>${esc(short(x.source))}</td><td><code>${esc(short(x.reason))}</code></td></tr>`).join(''):'<tr><td colspan="7" class="empty-cell">No activity matches these filters.</td></tr>';}catch(e){$('activity-rows').innerHTML='<tr><td colspan="7" class="empty-cell">Could not load activity.</td></tr>';err.textContent='Trade Activity could not load: '+e.message;err.classList.remove('hidden');$('activity-count').textContent='Error';}}
+async function search(){
+  // FIX-049: Trade Activity has two mandatory filter groups. At least one direction
+  // (BUY/SELL) and at least one state (EXECUTED/BLOCKED) must always be selected.
+  // The backend applies them as (direction) AND (state) AND (symbol).
+  const sides=[...document.querySelectorAll('.activity-side:checked')].map(x=>x.value);
+  const states=[...document.querySelectorAll('.activity-state:checked')].map(x=>x.value);
+  const err=$('activity-error');
+  err.classList.add('hidden');
+  if(!sides.length){err.textContent='Select BUY, SELL, or both.';err.classList.remove('hidden');return;}
+  if(!states.length){err.textContent='Select EXECUTED, BLOCKED, or both.';err.classList.remove('hidden');return;}
+  const p=new URLSearchParams({symbol:$('activity-symbol').value,hours:$('activity-hours').value});
+  sides.forEach(v=>p.append('filter',v));
+  states.forEach(v=>p.append('filter',v));
+  $('activity-rows').innerHTML='<tr><td colspan="7" class="empty-cell">Loading…</td></tr>';
+  $('activity-count').textContent='Loading…';
+  try{
+    const r=await fetch('/api/trade-activity?'+p,{cache:'no-store'});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const rows=await r.json();
+    $('activity-count').textContent=rows.length+' rows';
+    $('activity-rows').innerHTML=rows.length?rows.map(x=>`<tr><td>${esc(time(x.event_time||x.eventTime))}</td><td><strong>${esc(x.symbol)}</strong></td><td>${esc(x.timeframe||'—')}</td><td><span class="activity-pill ${String(x.action||'').toLowerCase()}">${esc(x.action)}</span></td><td>${esc(x.status)}</td><td>${esc(short(x.source))}</td><td><code>${esc(short(x.reason))}</code></td></tr>`).join(''):'<tr><td colspan="7" class="empty-cell">No activity matches these filters.</td></tr>';
+  }catch(e){
+    $('activity-rows').innerHTML='<tr><td colspan="7" class="empty-cell">Could not load activity.</td></tr>';
+    err.textContent='Trade Activity could not load: '+e.message;
+    err.classList.remove('hidden');
+    $('activity-count').textContent='Error';
+  }
+}
 $('activity-search').addEventListener('click',search);
-// FIX-046: once the operator has selected at least one activity type, changing the
-// symbol immediately refreshes the result set. Previously the dropdown changed visually
-// while stale All-symbol results remained on screen, which made the symbol filter appear broken.
-$('activity-symbol').addEventListener('change',()=>{
-  if(document.querySelector('.activity-type:checked')) search();
-});
-// FIX-047: activity-type checkboxes must refresh the result set immediately.
-// Previously, unchecking BUY after a combined BUY + EXECUTED search left the old
-// BUY SIGNAL rows visible until Search was pressed again, which falsely made those
-// stale rows look like EXECUTED results. If no activity type remains selected, clear
-// the stale result set so the screen never implies that old rows match no filters.
-// FIX-048: filter semantics are hierarchical rather than additive.
-// BLOCKED is exclusive. EXECUTED narrows BUY/SELL when combined with them;
-// EXECUTED alone means all real wallet executions (BUY + SELL).
-document.querySelectorAll('.activity-type').forEach(box=>box.addEventListener('change',()=>{
-  const boxes=[...document.querySelectorAll('.activity-type')];
-  if(box.value==='BLOCKED' && box.checked){
-    boxes.filter(x=>x!==box).forEach(x=>x.checked=false);
-  } else if(box.checked){
-    const blocked=boxes.find(x=>x.value==='BLOCKED');
-    if(blocked) blocked.checked=false;
-  }
 
-  if(document.querySelector('.activity-type:checked')) {
-    search();
-  } else {
-    $('activity-rows').innerHTML='<tr><td colspan="7" class="empty-cell">Select at least one activity type.</td></tr>';
-    $('activity-count').textContent='Not loaded';
-  }
+// FIX-049: a direction group can never become empty. If the operator tries to
+// uncheck the final BUY/SELL choice, restore it immediately rather than leaving
+// the UI in a state the backend rejects.
+document.querySelectorAll('.activity-side').forEach(box=>box.addEventListener('change',()=>{
+  if(!document.querySelector('.activity-side:checked')) box.checked=true;
+}));
+
+// FIX-049: EXECUTED/BLOCKED is also a mandatory group. Either one or both may be
+// selected, but the final checked state cannot be removed.
+document.querySelectorAll('.activity-state').forEach(box=>box.addEventListener('change',()=>{
+  if(!document.querySelector('.activity-state:checked')) box.checked=true;
 }));
 loadSymbols();})();
