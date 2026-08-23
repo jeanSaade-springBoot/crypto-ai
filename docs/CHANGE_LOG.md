@@ -49,3 +49,13 @@
 - If the SELL is blocked or has no completed pair, the graph focuses the SELL event and surrounding persisted analyses instead.
 - Read-only/UI audit change only. Production, Replay, scoring, execution, and wallet behavior are unchanged.
 - Database timestamps remain UTC; UI rendering remains KSA/Asia-Riyadh.
+
+
+## FIX-061 — Trade Activity readable forensic price/indicator timeline
+- Added persisted 1m `technical_indicator` snapshots to the Trade Activity forensic read model; the browser does not recalculate indicators.
+- Graph now overlays close-price line, EMA20/50/200, SMA20, Bollinger upper/middle/lower and persisted ATR retracement levels against the real closed 1m candle path.
+- Added an explicit KSA timeline label plus graph range metadata showing start/end in `Asia/Riyadh`; MySQL/Binance timestamps remain UTC internally.
+- Completed BUY→SELL couples now show START and END labels directly on the graph and display WIN/FAIL percentage from persisted realized P/L divided by committed BUY gross.
+- SELL **View on graph** preserves the pair START/END labels while focusing the selected trade.
+- Reworked the Trade Activity grid to a responsive fixed-layout table with wrapping and selective low-priority column hiding, removing horizontal grid scrolling.
+- Read-only UI/audit change only: no Production, Replay, scoring, execution, wallet, or indicator-calculation behavior changed.

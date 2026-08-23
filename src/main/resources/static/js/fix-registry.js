@@ -1185,6 +1185,25 @@
             regression: "Verify an executed SELL with a known closed wallet_managed_position focuses the exact pair by wallet_trade id, the BUY and SELL markers match persisted fills, all trade_signal analyses in the focus window remain plotted, KSA display is UTC+3 from DB timestamps, and the action performs no trading/Replay writes."
         }
 
+        ,{
+            id: "FIX-061",
+            title: "Trade Activity readable forensic price/indicator timeline",
+            status: "IMPLEMENTED · UI/AUDIT ONLY",
+            scenario: "Trade Activity forensic chart was difficult to interpret because the price/timeline context and persisted EMA/Bollinger/retracement evidence were not drawn as continuous series, completed trades did not show start/end KSA labels or failure percentage directly on the graph, and the activity grid required horizontal scrolling.",
+            symbol: "One selected Trade Activity symbol",
+            entry: "Real wallet BUY fill with START marker",
+            exit: "Real wallet SELL fill with END marker and WIN/FAIL percentage",
+            entryTime: "MySQL/Binance UTC; rendered explicitly in Asia/Riyadh",
+            exitTime: "MySQL/Binance UTC; rendered explicitly in Asia/Riyadh",
+            replayWindow: "No replay required; persisted Production evidence visualization only",
+            location: "Trade Activity graph read model + page-scoped chart/grid presentation",
+            classes: ["TradeActivityService", "trade-activity.html", "trade-activity.js", "trade-activity.css"],
+            cause: "FIX-059/060 plotted candles and analysis markers but did not expose the persisted 1m technical_indicator series. The operator therefore could not visually follow EMA20/50/200, SMA20, Bollinger Bands or the persisted ATR retracement level against price. Trade couples also lacked explicit KSA start/end labels and realized percentage on the plot, while nowrap table cells forced a horizontal grid scrollbar.",
+            solution: "Return persisted 1m technical_indicator snapshots and atr_retracement_entry_price in the read-only graph payload. Overlay a price-close line, EMA20/50/200, SMA20, Bollinger upper/middle/lower and persisted ATR retracement on the existing candle timeline. Label each completed pair with START/END KSA time and wallet realized return percentage, and make the grid fixed-layout/responsive with wrapping and selective low-priority column hiding instead of horizontal scrolling.",
+            behavior: "The Trade Activity-only chart now visibly explains price versus EMA/Bollinger/retracement context on an explicit KSA timeline. Completed trades show START BUY and END SELL markers plus WIN/FAIL percentage calculated from persisted realized P/L over committed BUY gross. Marker detail still exposes the full persisted analyses. The grid fits the viewport without a horizontal scroller. No indicators are recalculated and no trading/Replay behavior changes.",
+            regression: "For a selected symbol with technical_indicator data and a completed trade, verify indicator lines match persisted 1m rows, retracement points match trade_signal.atr_retracement_entry_price, chart start/end labels are KSA conversions of UTC DB timestamps, WIN/FAIL percentage matches realized_pnl_usdt / BUY gross, SELL View on graph retains START/END labels, and the activity grid fits desktop/mobile width without horizontal scrolling."
+        }
+
 ];
 
     // FIX-057: registry history must be chronological by FIX number, not by the

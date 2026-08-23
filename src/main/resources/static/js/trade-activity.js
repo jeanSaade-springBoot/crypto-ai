@@ -8,6 +8,7 @@ const time=v=>{const d=utcDate(v);if(!d||Number.isNaN(d.getTime()))return '—';
 const axisTime=v=>{const d=new Date(Number(v));return new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',hour:'2-digit',minute:'2-digit',hour12:false}).format(d);};
 const epoch=v=>{const d=utcDate(v);return d&&!Number.isNaN(d.getTime())?d.getTime():null;};
 const num=v=>v===null||v===undefined||v===''?null:Number(v);
+const pct=v=>{const n=num(v);return Number.isFinite(n)?`${n>=0?'+':''}${n.toFixed(2)}%`:'—';};
 let activityChart=null;
 let lastGraphData=null;
 let currentGraphXRanges=[];
@@ -66,6 +67,7 @@ function clearGraph(message='Choose a specific symbol to display its activity gr
   $('activity-graph-count').textContent='Select a symbol';
   $('activity-chart-detail').innerHTML='<strong>Marker details</strong><span>Click an analysis point or BUY/SELL trade marker.</span>';
   $('activity-couple-summary').innerHTML='';
+  if($('activity-chart-meta'))$('activity-chart-meta').innerHTML='<span>Select a symbol to load the KSA timeline.</span>';
 }
 
 function decisionGroup(v){const d=short(v);if(d.includes('BUY'))return 'BUY';if(d.includes('SELL'))return 'SELL';if(d==='WATCH')return 'WATCH';return 'NEUTRAL';}
@@ -74,7 +76,7 @@ function showAnalysisDetail(a){
   $('activity-chart-detail').innerHTML=`<strong>Technical analysis #${esc(a.id)} · ${esc(a.interval_code)} · ${esc(short(a.decision))}</strong><div class="activity-detail-grid">
     ${detailField('Time (KSA)',time(a.generated_at))}${detailField('Price',a.latest_price)}${detailField('Score / confidence',`${a.total_score??'—'} / ${a.confidence_score??'—'}`)}${detailField('Original → final',`${short(a.original_decision)} → ${short(a.decision)}`)}
     ${detailField('Trend / volume / momentum',`${a.trend_score??'—'} / ${a.volume_score??'—'} / ${a.momentum_score??'—'}`)}${detailField('Regime',`${short(a.market_regime)} (${a.market_regime_confidence??'—'})`)}${detailField('Strategy',short(a.selected_strategy))}${detailField('Entry allowed',a.final_entry_allowed?'YES':'NO')}
-    ${detailField('Confluence',`${short(a.confluence_status)} · ${a.confluence_higher_interval||'—'}=${short(a.confluence_higher_decision)}`)}${detailField('ATR entry',`${short(a.atr_entry_type)} · overextended=${a.atr_overextended?'YES':'NO'}`)}${detailField('BTC',short(a.btc_context_status))}${detailField('Liquidity',short(a.liquidity_status))}${detailField('Derivatives',short(a.derivatives_status))}${detailField('SL / TP',`${a.stop_loss??'—'} / ${a.take_profit??'—'}`)}
+    ${detailField('Confluence',`${short(a.confluence_status)} · ${a.confluence_higher_interval||'—'}=${short(a.confluence_higher_decision)}`)}${detailField('ATR entry',`${short(a.atr_entry_type)} · overextended=${a.atr_overextended?'YES':'NO'}`)}${detailField('Retracement level',a.atr_retracement_entry_price??'—')}${detailField('BTC',short(a.btc_context_status))}${detailField('Liquidity',short(a.liquidity_status))}${detailField('Derivatives',short(a.derivatives_status))}${detailField('SL / TP',`${a.stop_loss??'—'} / ${a.take_profit??'—'}`)}
   </div><div class="activity-detail-explanation"><strong>Final decision:</strong> ${esc(a.final_decision_explanation||'—')}</div><div class="activity-detail-explanation"><strong>Confluence:</strong> ${esc(a.confluence_explanation||'—')}</div><div class="activity-detail-explanation"><strong>ATR:</strong> ${esc(a.atr_explanation||'—')}</div><div class="activity-detail-explanation"><strong>Liquidity:</strong> ${esc(a.liquidity_explanation||'—')}</div>`;
 }
 function showCoupleDetail(c,leg,relatedAnalyses=[]){
@@ -83,7 +85,7 @@ function showCoupleDetail(c,leg,relatedAnalyses=[]){
   $('activity-chart-detail').innerHTML=`<strong>Couple #${esc(c.pair_id)} · ${esc(c.outcome)} · selected ${esc(leg)}</strong><div class="activity-detail-grid">
     ${detailField('BUY time (KSA)',time(c.buy_time))}${detailField('BUY price',c.buy_price)}${detailField('Decision price',c.buy_decision_price)}${detailField('BUY reason',short(c.buy_reason))}
     ${detailField('SELL time (KSA)',time(c.sell_time))}${detailField('SELL price',c.sell_price)}${detailField('SELL reason',short(c.sell_reason))}${detailField('Realized P/L',pnl===null?'—':pnl.toFixed(6)+' USDT')}
-    ${detailField('Entry TF',c.entry_timeframe||'—')}${detailField('Quantity',c.buy_quantity)}${detailField('Gross BUY',c.buy_gross)}${detailField('BUY signal',c.buy_signal_id||'—')}
+    ${detailField('Trade return',pct(c.trade_return_percent))}${detailField('Failure %',num(c.trade_return_percent)<0?Math.abs(num(c.trade_return_percent)).toFixed(2)+'%':'0.00%')}${detailField('Entry TF',c.entry_timeframe||'—')}${detailField('Quantity',c.buy_quantity)}${detailField('Gross BUY',c.buy_gross)}${detailField('BUY signal',c.buy_signal_id||'—')}
   </div>${related}`;
 }
 function showCandleDetail(c){
@@ -91,7 +93,7 @@ function showCandleDetail(c){
 }
 
 function renderCoupleSummary(couples){
-  $('activity-couple-summary').innerHTML=couples.length?couples.map(c=>{const pnl=num(c.realized_pnl_usdt);const cls=c.outcome==='WIN'?'activity-outcome-win':'activity-outcome-lost';return `<div class="activity-couple-card" data-pair-id="${esc(c.pair_id)}"><strong><span>Couple #${esc(c.pair_id)}</span><span class="${cls}">${esc(c.outcome)}</span></strong><small>BUY ${esc(time(c.buy_time))} @ ${esc(c.buy_price)} · ${esc(short(c.buy_reason))}</small><small>SELL ${esc(time(c.sell_time))} @ ${esc(c.sell_price)} · ${esc(short(c.sell_reason))}</small><small>Realized P/L: ${esc(pnl===null?'—':pnl.toFixed(6)+' USDT')}</small></div>`;}).join(''):'<div class="empty-cell">No completed BUY→SELL couples in this time range.</div>';
+  $('activity-couple-summary').innerHTML=couples.length?couples.map(c=>{const pnl=num(c.realized_pnl_usdt);const cls=c.outcome==='WIN'?'activity-outcome-win':'activity-outcome-lost';return `<div class="activity-couple-card" data-pair-id="${esc(c.pair_id)}"><strong><span>Couple #${esc(c.pair_id)}</span><span class="${cls}">${esc(c.outcome)}</span></strong><small>BUY ${esc(time(c.buy_time))} @ ${esc(c.buy_price)} · ${esc(short(c.buy_reason))}</small><small>SELL ${esc(time(c.sell_time))} @ ${esc(c.sell_price)} · ${esc(short(c.sell_reason))}</small><small>Realized P/L: ${esc(pnl===null?'—':pnl.toFixed(6)+' USDT')} · Return ${esc(pct(c.trade_return_percent))}${num(c.trade_return_percent)<0?' · Failure '+esc(Math.abs(num(c.trade_return_percent)).toFixed(2)+'%'):''}</small></div>`;}).join(''):'<div class="empty-cell">No completed BUY→SELL couples in this time range.</div>';
 }
 
 
@@ -117,7 +119,11 @@ async function viewSellOnGraph(row){
     const from=(buyMs||eventMs)-10*60000,to=(sellMs||eventMs)+5*60000;
     activityChart.zoomX(from,to);
     // Highlight the exact persisted SELL fill without hiding the candle/analysis path.
-    await activityChart.updateOptions({annotations:{xaxis:currentGraphXRanges,points:[{x:sellMs,y:num(couple.sell_price),marker:{size:9,strokeWidth:3},label:{text:'SELL · '+short(couple.sell_reason),offsetY:-12}}]}},false,false);
+    const ret=num(couple.trade_return_percent);
+    await activityChart.updateOptions({annotations:{xaxis:currentGraphXRanges,points:[
+      {x:buyMs,y:num(couple.buy_price),marker:{size:7,strokeWidth:2},label:{text:`START ${axisTime(buyMs)} KSA`,offsetY:18}},
+      {x:sellMs,y:num(couple.sell_price),marker:{size:9,strokeWidth:3},label:{text:`END ${axisTime(sellMs)} KSA · ${ret<0?'FAIL ':'WIN '}${pct(ret)}`,offsetY:-14}}
+    ]}},false,false);
     const related=(lastGraphData.analyses||[]).filter(a=>{const t=epoch(a.generated_at);return t&&t>=from&&t<=to;});
     showCoupleDetail(couple,'SELL',related);
   }else if(eventMs){
@@ -140,16 +146,39 @@ async function loadGraph(){
     const data=await r.json();
     lastGraphData=data;
     const candles=(data.candles||[]).map(c=>({x:epoch(c.open_time),y:[num(c.open_price),num(c.high_price),num(c.low_price),num(c.close_price)],meta:{kind:'candle',record:c}})).filter(p=>p.x&&p.y.every(Number.isFinite));
-    const analyses=data.analyses||[],couples=data.couples||[];
+    const closeLine=(data.candles||[]).map(c=>({x:epoch(c.open_time),y:num(c.close_price)})).filter(p=>p.x&&Number.isFinite(p.y));
+    const analyses=data.analyses||[],indicators=data.indicators||[],couples=data.couples||[];
+    const lineSeries=(key)=>indicators.map(i=>({x:epoch(i.candle_open_time),y:num(i[key])})).filter(p=>p.x&&Number.isFinite(p.y));
+    // FIX-061: retracement is not recomputed. Plot exactly the ATR retracement level persisted
+    // on each trade_signal, preserving the decision-time evidence that Production actually used.
+    const retracement=analyses.map(a=>({x:epoch(a.generated_at),y:num(a.atr_retracement_entry_price),meta:{kind:'analysis',record:a}})).filter(p=>p.x&&Number.isFinite(p.y));
     const grouped={BUY:[],SELL:[],WATCH:[],NEUTRAL:[]};
     analyses.forEach(a=>{const x=epoch(a.generated_at),y=num(a.latest_price);if(x&&Number.isFinite(y))grouped[decisionGroup(a.decision)].push({x,y,meta:{kind:'analysis',record:a}});});
-    const coupleBuy=[],coupleSell=[],xRanges=[];
-    couples.forEach(c=>{const bx=epoch(c.buy_time),sx=epoch(c.sell_time),bp=num(c.buy_price),sp=num(c.sell_price);if(bx&&Number.isFinite(bp))coupleBuy.push({x:bx,y:bp,meta:{kind:'couple',leg:'BUY',record:c}});if(sx&&Number.isFinite(sp))coupleSell.push({x:sx,y:sp,meta:{kind:'couple',leg:'SELL',record:c}});if(bx&&sx)xRanges.push({x:bx,x2:sx,fillColor:c.outcome==='WIN'?'#20a36a':'#d75a5a',opacity:.055,borderColor:'transparent'});});
+    const coupleBuy=[],coupleSell=[],xRanges=[],tradeLabels=[];
+    couples.forEach(c=>{
+      const bx=epoch(c.buy_time),sx=epoch(c.sell_time),bp=num(c.buy_price),sp=num(c.sell_price),ret=num(c.trade_return_percent);
+      if(bx&&Number.isFinite(bp))coupleBuy.push({x:bx,y:bp,meta:{kind:'couple',leg:'BUY',record:c}});
+      if(sx&&Number.isFinite(sp))coupleSell.push({x:sx,y:sp,meta:{kind:'couple',leg:'SELL',record:c}});
+      if(bx&&sx){
+        xRanges.push({x:bx,x2:sx,fillColor:c.outcome==='WIN'?'#20a36a':'#d75a5a',opacity:.045,borderColor:'transparent'});
+        tradeLabels.push({x:bx,y:bp,marker:{size:6,strokeWidth:2},label:{text:`START ${axisTime(bx)} KSA`,offsetY:18}});
+        tradeLabels.push({x:sx,y:sp,marker:{size:7,strokeWidth:2},label:{text:`END ${axisTime(sx)} KSA · ${ret<0?'FAIL ':'WIN '}${pct(ret)}`,offsetY:-16}});
+      }
+    });
     currentGraphXRanges=xRanges;
     if(activityChart){activityChart.destroy();activityChart=null;}
     $('activity-chart').innerHTML='';
     const series=[
       {name:'Real 1m candles',type:'candlestick',data:candles},
+      {name:'Price close',type:'line',data:closeLine},
+      {name:'EMA20',type:'line',data:lineSeries('ema_20')},
+      {name:'EMA50',type:'line',data:lineSeries('ema_50')},
+      {name:'EMA200',type:'line',data:lineSeries('ema_200')},
+      {name:'SMA20',type:'line',data:lineSeries('sma_20')},
+      {name:'Bollinger upper',type:'line',data:lineSeries('bollinger_upper')},
+      {name:'Bollinger middle',type:'line',data:lineSeries('bollinger_middle')},
+      {name:'Bollinger lower',type:'line',data:lineSeries('bollinger_lower')},
+      {name:'ATR retracement',type:'line',data:retracement},
       {name:'Analysis BUY',type:'scatter',data:grouped.BUY},
       {name:'Analysis SELL',type:'scatter',data:grouped.SELL},
       {name:'Analysis WATCH',type:'scatter',data:grouped.WATCH},
@@ -158,20 +187,22 @@ async function loadGraph(){
       {name:'Executed SELL',type:'scatter',data:coupleSell}
     ];
     activityChart=new ApexCharts($('activity-chart'),{
-      chart:{type:'candlestick',height:470,animations:{enabled:false},zoom:{enabled:true},toolbar:{show:true,tools:{download:false,selection:true,zoom:true,zoomin:true,zoomout:true,pan:true,reset:true}},events:{dataPointSelection:(event,ctx,opts)=>{const point=ctx?.w?.config?.series?.[opts.seriesIndex]?.data?.[opts.dataPointIndex];const meta=point?.meta;if(!meta)return;if(meta.kind==='analysis')showAnalysisDetail(meta.record);else if(meta.kind==='couple'){const bx=epoch(meta.record.buy_time),sx=epoch(meta.record.sell_time);const related=(lastGraphData?.analyses||[]).filter(a=>{const t=epoch(a.generated_at);return t&&bx&&sx&&t>=bx-5*60000&&t<=sx+60000;});showCoupleDetail(meta.record,meta.leg,related);}else if(meta.kind==='candle')showCandleDetail(meta.record);}}},
+      chart:{type:'candlestick',height:520,animations:{enabled:false},zoom:{enabled:true},toolbar:{show:true,tools:{download:false,selection:true,zoom:true,zoomin:true,zoomout:true,pan:true,reset:true}},events:{dataPointSelection:(event,ctx,opts)=>{const point=ctx?.w?.config?.series?.[opts.seriesIndex]?.data?.[opts.dataPointIndex];const meta=point?.meta;if(!meta)return;if(meta.kind==='analysis')showAnalysisDetail(meta.record);else if(meta.kind==='couple'){const bx=epoch(meta.record.buy_time),sx=epoch(meta.record.sell_time);const related=(lastGraphData?.analyses||[]).filter(a=>{const t=epoch(a.generated_at);return t&&bx&&sx&&t>=bx-5*60000&&t<=sx+60000;});showCoupleDetail(meta.record,meta.leg,related);}else if(meta.kind==='candle')showCandleDetail(meta.record);}}},
       series,
-      colors:['#7f8c8d','#20a36a','#d75a5a','#d1a43b','#8090a0','#32d583','#ff6b72'],
-      stroke:{width:[1,0,0,0,0,0,0]},markers:{size:[0,4,4,3,3,8,8],strokeWidth:1},
-      plotOptions:{candlestick:{colors:{upward:'#39d98a',downward:'#ff6b72'},wick:{useFillColor:true}}},
-      xaxis:{type:'datetime',labels:{formatter:(value,timestamp)=>axisTime(timestamp??value)},tooltip:{enabled:false}},
-      yaxis:{opposite:true,tooltip:{enabled:true},labels:{formatter:v=>Number(v).toLocaleString(undefined,{maximumSignificantDigits:8})}},
-      tooltip:{enabled:false},legend:{show:true,position:'top'},grid:{borderColor:'rgba(128,128,128,.12)'},
-      annotations:{xaxis:xRanges},noData:{text:'No real 1m candle data in this window.'}
+      stroke:{width:[1,2,1.5,1.5,1.5,1.2,1,1,1,2,0,0,0,0,0,0],curve:'straight',dashArray:[0,0,0,0,0,0,5,3,5,6,0,0,0,0,0,0]},
+      markers:{size:[0,0,0,0,0,0,0,0,0,0,4,4,3,3,8,8],strokeWidth:1},
+      plotOptions:{candlestick:{wick:{useFillColor:true}}},
+      xaxis:{type:'datetime',tickAmount:8,labels:{datetimeUTC:false,rotate:0,formatter:(value,timestamp)=>axisTime(timestamp??value)},title:{text:'KSA time (Asia/Riyadh)'},tooltip:{enabled:false}},
+      yaxis:{opposite:true,title:{text:'Price'},tooltip:{enabled:true},labels:{formatter:v=>Number(v).toLocaleString(undefined,{maximumSignificantDigits:8})}},
+      tooltip:{enabled:false},legend:{show:true,position:'top',horizontalAlign:'left'},grid:{borderColor:'rgba(128,128,128,.12)'},
+      annotations:{xaxis:xRanges,points:tradeLabels},noData:{text:'No real 1m candle data in this window.'}
     });
     await activityChart.render();
+    const start=data.chartFrom||data.requestedFrom,end=data.to;
+    if($('activity-chart-meta'))$('activity-chart-meta').innerHTML=`<span>${esc(symbol)}</span><span>Start ${esc(time(start))} KSA</span><span>End ${esc(time(end))} KSA</span><span>${candles.length} candles</span><span>${indicators.length} indicator snapshots</span><span>${analyses.length} analyses</span><span>${couples.length} couples</span>`;
     $('activity-graph-count').textContent=`${candles.length} candles · ${analyses.length} analyses · ${couples.length} couples`;
     renderCoupleSummary(couples);
-    $('activity-chart-detail').innerHTML='<strong>Marker details</strong><span>Click any technical-analysis marker, executed BUY/SELL marker, or candle. Times are displayed in KSA; database timestamps remain UTC.</span>';
+    $('activity-chart-detail').innerHTML='<strong>Marker details</strong><span>Price, EMA20/50/200, SMA20, Bollinger Bands and persisted ATR retracement are drawn on the KSA timeline. Click an analysis, BUY/SELL marker, or candle for details.</span>';
   }catch(e){clearGraph('Could not load Trade Activity graph: '+e.message);$('activity-graph-count').textContent='Error';}
 }
 

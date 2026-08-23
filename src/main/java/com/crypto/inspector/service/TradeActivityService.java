@@ -255,6 +255,7 @@ public class TradeActivityService {
                        market_regime, market_regime_confidence, selected_strategy,
                        final_entry_allowed, confluence_status, confluence_higher_interval,
                        confluence_higher_decision, atr_entry_type, atr_overextended,
+                       atr_retracement_entry_price,
                        btc_context_status, liquidity_status, derivatives_status,
                        final_decision_explanation, confluence_explanation, atr_explanation,
                        btc_context_explanation, liquidity_explanation, derivatives_explanation
@@ -265,6 +266,22 @@ public class TradeActivityService {
                 LIMIT 5000
                 """, normalizedSymbol, chartFrom, to);
 
+        // FIX-061: Read persisted indicator values instead of recalculating them in the browser.
+        // This keeps the forensic graph faithful to what Production actually calculated for each
+        // closed 1m candle. The UI can therefore draw EMA/SMA/Bollinger context and compare it with
+        // the real execution path without creating a second indicator implementation.
+        List<Map<String, Object>> indicators = jdbc.queryForList("""
+                SELECT candle_open_time, close_price, sma_20, ema_20, ema_50, ema_200,
+                       bollinger_middle, bollinger_upper, bollinger_lower, bollinger_bandwidth,
+                       atr_14, rsi_14, macd, macd_signal, macd_histogram, relative_volume
+                FROM technical_indicator
+                WHERE symbol = ?
+                  AND interval_code = '1m'
+                  AND candle_open_time BETWEEN ? AND ?
+                ORDER BY candle_open_time ASC
+                LIMIT 2000
+                """, normalizedSymbol, chartFrom, to);
+
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("symbol", normalizedSymbol);
         response.put("requestedFrom", requestedFrom);
@@ -273,6 +290,7 @@ public class TradeActivityService {
         response.put("candleInterval", "1m");
         response.put("candles", candles);
         response.put("analyses", analyses);
+        response.put("indicators", indicators);
         response.put("couples", couples);
         return response;
     }
@@ -315,6 +333,12 @@ public class TradeActivityService {
                        s.id sell_trade_id, s.signal_id sell_signal_id, s.executed_at sell_time,
                        s.price_usdt sell_price, s.execution_reason sell_reason,
                        s.realized_pnl_usdt realized_pnl_usdt,
+                       /* FIX-061: use persisted realized P/L over committed BUY gross so the chart's
+                          WIN/FAIL percentage reflects the wallet result (including execution costs)
+                          instead of a price-only approximation. */
+                       CASE WHEN b.gross_amount_usdt IS NOT NULL AND b.gross_amount_usdt <> 0
+                            THEN (s.realized_pnl_usdt / b.gross_amount_usdt) * 100
+                            ELSE NULL END trade_return_percent,
                        COALESCE(entry_ts.interval_code, buy_ts.interval_code) entry_timeframe
                 FROM completed c
                 JOIN wallet_trade b ON b.id=c.buy_trade_id
