@@ -1152,6 +1152,38 @@
             behavior: "COUPLE + LOST returns the BUY and SELL rows for completed losing positions; COUPLE + WIN returns both rows for completed winners; WIN+LOST returns both outcome classes. Normal mode remains (BUY or SELL) AND (EXECUTED or BLOCKED) AND symbol. Database timestamps remain UTC and frontend display remains Asia/Riyadh.",
             regression: "For a known completed winner and loser, verify each couple returns exactly two adjacent rows (BUY then SELL), the outcome agrees with wallet_trade.realized_pnl_usdt, symbol/time filters apply, and normal BUY/SELL EXECUTED/BLOCKED searches remain unchanged. No trading, wallet execution, Replay or scoring behavior changes."
         }
+        ,{
+            id: "FIX-059",
+            title: "Trade Activity forensic technical-analysis graph",
+            status: "ACTIVE · UI/AUDIT ONLY",
+            scenario: "Operator wants to see the real market path, every persisted technical analysis and completed BUY→SELL couples together on a chart inside Trade Activity.",
+            symbol: "One selected symbol", entry: "Real executed BUY marker", exit: "Real executed SELL marker",
+            entryTime: "Selected Trade Activity window", exitTime: "Selected Trade Activity window",
+            replayWindow: "No replay required; read-only persisted Production evidence visualization",
+            location: "Trade Activity graph endpoint, page, JS and CSS",
+            classes: ["TradeActivityController", "TradeActivityService", "trade-activity.html", "trade-activity.js", "trade-activity.css"],
+            cause: "Trade Activity exposed filtered rows but did not provide a single visual timeline showing what the market did, what the technical engine concluded at every persisted analysis point, and where completed wallet BUY/SELL lifecycles actually occurred.",
+            solution: "Add a Trade Activity-only read endpoint that returns real closed 1m candles, every persisted trade_signal analysis across timeframes, and completed wallet_managed_position BUY/SELL pairs resolved from real wallet_trade fills. Render a mixed candlestick/scatter forensic chart; keep permanent labels off the plot and show full persisted details when the operator clicks a marker.",
+            behavior: "Selecting one symbol loads its real 1m candle path for the chosen time range. BUY/SELL/WATCH/NEUTRAL analysis markers show score, confidence, regime, strategy, confluence, ATR, BTC, liquidity, derivatives and explanations. Executed BUY/SELL couple markers show entry/exit prices, reasons and realized P/L, with the holding interval visually highlighted. Grid filters remain independent so the chart preserves surrounding context. UTC database timestamps are explicitly parsed as UTC and displayed in KSA.",
+            regression: "Select a symbol with known signals and a completed trade. Verify candle OHLC matches the candle table, every signal in the range appears once at its persisted generated_at/latest_price, couple markers match wallet_trade fills and realized P/L, clicking markers shows persisted details, ALL-symbol mode does not attempt a misleading multi-symbol price chart, and no Production/Replay/trading writes occur."
+        }
+        ,{
+            id: "FIX-060",
+            title: "SELL row View on graph forensic focus",
+            status: "IMPLEMENTED",
+            scenario: "Trade Activity operator wants to click a SELL row and immediately inspect the exact completed trade on the forensic chart together with the technical-analysis path around entry and exit.",
+            symbol: "ALL",
+            entry: "Persisted wallet BUY fill",
+            exit: "Persisted wallet SELL fill",
+            entryTime: "UTC in DB; KSA on UI",
+            exitTime: "UTC in DB; KSA on UI",
+            location: "Trade Activity grid + forensic graph",
+            classes: ["TradeActivityService", "trade-activity.html", "trade-activity.js", "trade-activity.css"],
+            cause: "FIX-059 exposed the forensic graph, but SELL rows in the activity grid had no direct navigation to the exact trade lifecycle. Operators had to manually locate the SELL marker on the chart, which is difficult when many analyses/trades exist in the same window.",
+            solution: "Expose persisted wallet trade/pair identifiers in the read-only activity projection and add a View on graph action to SELL rows. Resolve the exact completed pair by sell_trade_id/pair_id, zoom from pre-entry setup through exit, highlight the SELL fill, and keep all persisted technical-analysis markers visible in the focused interval.",
+            behavior: "Clicking View on graph on an executed SELL selects the row symbol, loads the Trade Activity forensic chart, focuses the matching BUY→SELL lifecycle, highlights the SELL and shows persisted pair details plus the related analyses. Non-paired/blocked SELL rows fall back to a focused event window with surrounding persisted analyses. No Dashboard/Inspector chart behavior changes.",
+            regression: "Verify an executed SELL with a known closed wallet_managed_position focuses the exact pair by wallet_trade id, the BUY and SELL markers match persisted fills, all trade_signal analyses in the focus window remain plotted, KSA display is UTC+3 from DB timestamps, and the action performs no trading/Replay writes."
+        }
 
 ];
 

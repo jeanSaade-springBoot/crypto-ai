@@ -14,6 +14,8 @@ import java.util.*;
  * This screen deliberately does NOT participate in signal generation or execution. It only
  * projects already-persisted trade_signal, execution_opportunity, wallet_trade and completed
  * wallet_managed_position evidence into a compact operator view.
+ * FIX-060 also exposes persisted trade/pair identifiers so the UI can focus an exact SELL
+ * on the read-only forensic graph without guessing by timestamp or price.
  */
 @Service
 public class TradeActivityService {
@@ -73,7 +75,18 @@ public class TradeActivityService {
                              WHEN wt.side = 'SELL' AND wt.signal_id IS NULL THEN 'POSITION_EXIT'
                              ELSE 'SIGNAL'
                            END source,
-                           COALESCE(NULLIF(wt.execution_reason,''), CASE WHEN wt.side='BUY' THEN 'BUY_EXECUTED' ELSE 'SELL_EXECUTED' END) reason
+                           COALESCE(NULLIF(wt.execution_reason,''), CASE WHEN wt.side='BUY' THEN 'BUY_EXECUTED' ELSE 'SELL_EXECUTED' END) reason,
+                           wt.id trade_id,
+                           CASE WHEN wt.side = 'SELL' THEN (
+                               SELECT p.id
+                               FROM wallet_managed_position p
+                               WHERE p.symbol = wt.symbol
+                                 AND p.status = 'CLOSED'
+                                 AND wt.executed_at >= p.opened_at
+                                 AND wt.executed_at <= p.updated_at + INTERVAL 60 SECOND
+                               ORDER BY ABS(TIMESTAMPDIFF(MICROSECOND, wt.executed_at, p.updated_at))
+                               LIMIT 1
+                           ) ELSE NULL END pair_id
                     FROM wallet_trade wt
                     LEFT JOIN trade_signal ts ON ts.id = wt.signal_id
                     WHERE wt.executed_at >= ? AND wt.status = 'EXECUTED'
@@ -170,6 +183,7 @@ public class TradeActivityService {
                        COALESCE(NULLIF(wt.execution_reason,''),
                                 CASE WHEN wt.side='BUY' THEN 'BUY_EXECUTED' ELSE 'SELL_EXECUTED' END) reason,
                        p.position_id pair_id,
+                       wt.id trade_id,
                        p.sell_time pair_time,
                        CASE WHEN wt.side='BUY' THEN 0 ELSE 1 END pair_order
                 FROM pairs p
@@ -184,6 +198,140 @@ public class TradeActivityService {
         args.add(from);
         if (normalizedSymbol != null) args.add(normalizedSymbol);
         return jdbc.queryForList(sql, args.toArray());
+    }
+
+    /**
+     * FIX-059 Trade Activity forensic graph.
+     *
+     * This endpoint intentionally lives in Trade Activity instead of reusing Dashboard chart state:
+     * - candles are the real CLOSED 1m candles persisted from Binance;
+     * - analyses are every persisted trade_signal evaluation in the selected period, across all TFs;
+     * - couples come from CLOSED wallet_managed_position lifecycle authority and real wallet_trade fills.
+     *
+     * No signal is regenerated and no trading policy is called here. This is a read-only audit projection.
+     * All database timestamps remain UTC; conversion to KSA/local time is presentation-only in JS.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> graph(String symbol, int hours) {
+        if (!ALLOWED_HOURS.contains(hours)) {
+            throw new IllegalArgumentException("Time range must be 1, 2, 4 or 24 hours.");
+        }
+        String normalizedSymbol = symbol == null ? null : symbol.trim().toUpperCase(Locale.ROOT);
+        if (normalizedSymbol == null || normalizedSymbol.isBlank() || "ALL".equals(normalizedSymbol)) {
+            throw new IllegalArgumentException("Select one symbol to display the Trade Activity graph.");
+        }
+
+        Instant requestedFrom = Instant.now().minus(hours, ChronoUnit.HOURS);
+        Instant to = Instant.now();
+        List<Map<String, Object>> couples = graphCompletedCouples(normalizedSymbol, requestedFrom);
+
+        // If a completed pair closed inside the selected window but opened just before it, expand the
+        // chart enough to show the full real BUY→SELL lifecycle. We never synthesize missing candles.
+        Instant chartFrom = requestedFrom;
+        for (Map<String, Object> couple : couples) {
+            Instant buyTime = asInstant(couple.get("buy_time"));
+            if (buyTime != null && buyTime.isBefore(chartFrom)) {
+                chartFrom = buyTime.minus(5, ChronoUnit.MINUTES);
+            }
+        }
+
+        List<Map<String, Object>> candles = jdbc.queryForList("""
+                SELECT open_time, close_time, open_price, high_price, low_price, close_price, volume
+                FROM candle
+                WHERE symbol = ?
+                  AND interval_code = '1m'
+                  AND closed = 1
+                  AND open_time BETWEEN ? AND ?
+                ORDER BY open_time ASC
+                LIMIT 2000
+                """, normalizedSymbol, chartFrom, to);
+
+        // Keep every persisted analysis point, not only BUY/SELL. WATCH and NEUTRAL are important
+        // because they reveal the real path the engine followed before/inside/after a trade.
+        List<Map<String, Object>> analyses = jdbc.queryForList("""
+                SELECT id, generated_at, candle_open_time, interval_code,
+                       original_decision, decision, total_score, confidence_score, latest_price,
+                       stop_loss, take_profit, trend_score, volume_score, momentum_score,
+                       market_regime, market_regime_confidence, selected_strategy,
+                       final_entry_allowed, confluence_status, confluence_higher_interval,
+                       confluence_higher_decision, atr_entry_type, atr_overextended,
+                       btc_context_status, liquidity_status, derivatives_status,
+                       final_decision_explanation, confluence_explanation, atr_explanation,
+                       btc_context_explanation, liquidity_explanation, derivatives_explanation
+                FROM trade_signal
+                WHERE symbol = ?
+                  AND generated_at BETWEEN ? AND ?
+                ORDER BY generated_at ASC, id ASC
+                LIMIT 5000
+                """, normalizedSymbol, chartFrom, to);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("symbol", normalizedSymbol);
+        response.put("requestedFrom", requestedFrom);
+        response.put("chartFrom", chartFrom);
+        response.put("to", to);
+        response.put("candleInterval", "1m");
+        response.put("candles", candles);
+        response.put("analyses", analyses);
+        response.put("couples", couples);
+        return response;
+    }
+
+    /**
+     * FIX-059 graph pair projection. Uses the same lifecycle authority as FIX-058, but returns one
+     * rich object per completed position so the chart can connect the real BUY fill to the real SELL
+     * fill and display persisted entry/exit reasons plus realized P/L.
+     */
+    private List<Map<String, Object>> graphCompletedCouples(String symbol, Instant from) {
+        return jdbc.queryForList("""
+                WITH completed AS (
+                    SELECT p.id position_id, p.symbol, p.entry_signal_id, p.opened_at, p.updated_at,
+                           (
+                             SELECT b.id FROM wallet_trade b
+                             WHERE b.symbol = p.symbol AND b.side='BUY' AND b.status='EXECUTED'
+                               AND b.executed_at BETWEEN p.opened_at - INTERVAL 10 SECOND
+                                                     AND p.opened_at + INTERVAL 60 SECOND
+                             ORDER BY CASE WHEN b.signal_id = p.entry_signal_id THEN 0 ELSE 1 END,
+                                      ABS(TIMESTAMPDIFF(MICROSECOND,b.executed_at,p.opened_at))
+                             LIMIT 1
+                           ) buy_trade_id,
+                           (
+                             SELECT s.id FROM wallet_trade s
+                             WHERE s.symbol = p.symbol AND s.side='SELL' AND s.status='EXECUTED'
+                               AND s.executed_at >= p.opened_at
+                               AND s.executed_at <= p.updated_at + INTERVAL 60 SECOND
+                             ORDER BY ABS(TIMESTAMPDIFF(MICROSECOND,s.executed_at,p.updated_at))
+                             LIMIT 1
+                           ) sell_trade_id
+                    FROM wallet_managed_position p
+                    WHERE p.status='CLOSED' AND p.symbol=? AND p.updated_at>=?
+                )
+                SELECT c.position_id pair_id,
+                       CASE WHEN s.realized_pnl_usdt > 0 THEN 'WIN'
+                            WHEN s.realized_pnl_usdt < 0 THEN 'LOST' ELSE 'FLAT' END outcome,
+                       b.id buy_trade_id, b.signal_id buy_signal_id, b.executed_at buy_time,
+                       b.price_usdt buy_price, b.decision_price_usdt buy_decision_price,
+                       b.execution_reason buy_reason, b.quantity buy_quantity, b.gross_amount_usdt buy_gross,
+                       s.id sell_trade_id, s.signal_id sell_signal_id, s.executed_at sell_time,
+                       s.price_usdt sell_price, s.execution_reason sell_reason,
+                       s.realized_pnl_usdt realized_pnl_usdt,
+                       COALESCE(entry_ts.interval_code, buy_ts.interval_code) entry_timeframe
+                FROM completed c
+                JOIN wallet_trade b ON b.id=c.buy_trade_id
+                JOIN wallet_trade s ON s.id=c.sell_trade_id
+                LEFT JOIN trade_signal entry_ts ON entry_ts.id=c.entry_signal_id
+                LEFT JOIN trade_signal buy_ts ON buy_ts.id=b.signal_id
+                WHERE c.buy_trade_id IS NOT NULL AND c.sell_trade_id IS NOT NULL
+                ORDER BY s.executed_at ASC, c.position_id ASC
+                LIMIT 200
+                """, symbol, from);
+    }
+
+    private Instant asInstant(Object value) {
+        if (value instanceof java.sql.Timestamp ts) return ts.toInstant();
+        if (value instanceof Instant instant) return instant;
+        if (value instanceof java.time.LocalDateTime local) return local.toInstant(java.time.ZoneOffset.UTC);
+        return null;
     }
 
     @Transactional(readOnly = true)

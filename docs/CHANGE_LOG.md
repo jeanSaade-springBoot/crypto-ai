@@ -31,3 +31,21 @@
 - Both BUY and SELL rows are returned adjacent in the existing seven-column Trade Activity grid.
 - Normal Trade Activity semantics remain `(BUY OR SELL) AND (EXECUTED OR BLOCKED) AND symbol`.
 - Read-only audit feature only: no Production execution, Replay, scoring, wallet mutation or UTC/KSA architecture change.
+
+
+## FIX-059 — Trade Activity forensic technical-analysis graph
+- Added a chart only to the Trade Activity page; Dashboard, Trade Inspector and trading behavior are unchanged.
+- The graph reads real CLOSED Binance 1m candles from `candle` and overlays every persisted `trade_signal` analysis in the selected symbol/time window, including BUY, SELL, WATCH and NEUTRAL across all analyzed timeframes.
+- Added completed BUY→SELL lifecycle markers from CLOSED `wallet_managed_position` + real EXECUTED `wallet_trade` fills, with WIN/LOST outcome and realized P/L details.
+- Trade pairs are visually highlighted across their real holding interval; clicking any analysis/trade marker opens persisted technical or execution details without covering the candle chart with permanent labels.
+- The graph follows selected symbol + time range independently of grid filters so filtered couples retain their surrounding technical-analysis context.
+- Database/MySQL/Binance timestamps remain UTC; Trade Activity parses them explicitly as UTC and displays chart/detail timestamps in KSA (`Asia/Riyadh`).
+- Read-only audit feature: no signal generation, execution, wallet mutation, Replay or scoring logic changed.
+
+## FIX-060 — Trade Activity SELL View on graph
+- Added a **View on graph** action to Trade Activity SELL rows.
+- Executed SELL rows now carry persisted `wallet_trade.id` and resolved `wallet_managed_position.id` so the UI can locate the exact completed lifecycle without timestamp/price guessing.
+- Clicking the action loads the Trade Activity-only forensic graph, zooms from setup context through the SELL, highlights the persisted SELL fill, and keeps the related technical-analysis markers visible.
+- If the SELL is blocked or has no completed pair, the graph focuses the SELL event and surrounding persisted analyses instead.
+- Read-only/UI audit change only. Production, Replay, scoring, execution, and wallet behavior are unchanged.
+- Database timestamps remain UTC; UI rendering remains KSA/Asia-Riyadh.
