@@ -1,6 +1,7 @@
 package com.crypto.regression.service;
 
 import com.crypto.regression.dto.RegressionTestRunRequest;
+import com.crypto.regression.dto.RegressionInvestigationCaseRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.http.HttpStatus;
@@ -25,6 +26,79 @@ public class RegressionTestService {
 
     private final JdbcTemplate jdbcTemplate;
     private final RegressionTestWorker worker;
+
+    /**
+     * FIX-065: save multiple historical incidents/winning controls as a durable Investigation Queue.
+     * This is metadata only; no production trading table is read or written by this operation.
+     */
+    @Transactional
+    public synchronized List<Map<String, Object>> addInvestigationCases(List<RegressionInvestigationCaseRequest> requests) {
+        if (requests == null || requests.isEmpty()) {
+            throw new IllegalArgumentException("At least one investigation case is required.");
+        }
+        for (RegressionInvestigationCaseRequest request : requests) {
+            validateInvestigationCase(request);
+            String symbol = request.symbol().trim().toUpperCase(Locale.ROOT);
+            String caseName = request.caseName() == null || request.caseName().isBlank()
+                    ? symbol + " investigation" : request.caseName().trim();
+            jdbcTemplate.update("""
+                    INSERT INTO regression_investigation_case
+                        (case_name, symbol, start_time, end_time, wallet_id, expected_action, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, caseName, symbol, Timestamp.from(request.startTime()), Timestamp.from(request.endTime()),
+                    request.walletId(), blankToNull(request.expectedAction()), blankToNull(request.notes()));
+        }
+        return investigationCases();
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> investigationCases() {
+        return jdbcTemplate.queryForList("""
+                SELECT c.id, c.case_name, c.symbol, c.start_time, c.end_time, c.wallet_id,
+                       c.expected_action, c.notes, c.last_run_id,
+                       r.status AS last_run_status, r.progress_percent AS last_run_progress,
+                       r.completed_at AS last_run_completed_at, c.created_at, c.updated_at
+                FROM regression_investigation_case c
+                LEFT JOIN analysis_test_run r ON r.id = c.last_run_id
+                ORDER BY c.id ASC
+                """);
+    }
+
+    /**
+     * FIX-065: running a saved case delegates to the exact same start() method as the manual form.
+     * Therefore the existing single-active-run backend lock and isolated replay tables stay authoritative.
+     */
+    public synchronized long startInvestigationCase(long caseId) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
+                SELECT id, case_name, symbol, start_time, end_time
+                FROM regression_investigation_case WHERE id = ?
+                """, caseId);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Investigation case #" + caseId + " not found.");
+        Map<String, Object> row = rows.get(0);
+        long runId = start(new RegressionTestRunRequest(
+                String.valueOf(row.get("case_name")), String.valueOf(row.get("symbol")),
+                ((Timestamp) row.get("start_time")).toInstant(), ((Timestamp) row.get("end_time")).toInstant()));
+        jdbcTemplate.update("UPDATE regression_investigation_case SET last_run_id=? WHERE id=?", runId, caseId);
+        return runId;
+    }
+
+    @Transactional
+    public synchronized void deleteInvestigationCase(long caseId) {
+        int deleted = jdbcTemplate.update("DELETE FROM regression_investigation_case WHERE id=?", caseId);
+        if (deleted == 0) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Investigation case #" + caseId + " not found.");
+    }
+
+    private void validateInvestigationCase(RegressionInvestigationCaseRequest request) {
+        if (request == null || request.symbol() == null || request.symbol().isBlank()
+                || request.startTime() == null || request.endTime() == null
+                || !request.endTime().isAfter(request.startTime())) {
+            throw new IllegalArgumentException("Each investigation case requires symbol/start/end and end must be after start.");
+        }
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
 
     public synchronized long start(RegressionTestRunRequest request) {
         if (request == null || request.symbol() == null || request.symbol().isBlank()

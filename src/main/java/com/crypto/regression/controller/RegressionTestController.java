@@ -1,6 +1,7 @@
 package com.crypto.regression.controller;
 
 import com.crypto.regression.dto.RegressionTestRunRequest;
+import com.crypto.regression.dto.RegressionInvestigationCaseRequest;
 import com.crypto.regression.service.RegressionTestService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -16,6 +17,28 @@ import java.util.Map;
 public class RegressionTestController {
 
     private final RegressionTestService service;
+
+    // FIX-065: persistent Investigation Queue. These endpoints only manage replay metadata
+    // and start the same isolated RegressionTestService used by the existing single-run UI.
+    @GetMapping("/investigation-cases")
+    public List<Map<String, Object>> investigationCases() { return service.investigationCases(); }
+
+    @PostMapping("/investigation-cases/batch")
+    @ResponseStatus(HttpStatus.CREATED)
+    public List<Map<String, Object>> addInvestigationCases(@RequestBody List<RegressionInvestigationCaseRequest> requests) {
+        return service.addInvestigationCases(requests);
+    }
+
+    @PostMapping("/investigation-cases/{id}/run")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public Map<String, Object> runInvestigationCase(@PathVariable long id) {
+        long runId = service.startInvestigationCase(id);
+        return Map.of("id", runId, "status", "PENDING", "caseId", id);
+    }
+
+    @DeleteMapping("/investigation-cases/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteInvestigationCase(@PathVariable long id) { service.deleteInvestigationCase(id); }
 
     @PostMapping("/runs")
     @ResponseStatus(HttpStatus.ACCEPTED)

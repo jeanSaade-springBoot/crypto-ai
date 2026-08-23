@@ -308,3 +308,14 @@ body.proven-modal-open{overflow:hidden}
 .coin-page-number { min-width:92px; text-align:center; font-size:.84rem; color:#cbd5e1; }
 .coin-pagination .secondary-button:disabled { opacity:.45; cursor:not-allowed; }
 @media (max-width:720px) { .coin-pagination { justify-content:flex-start; } .coin-page-summary { width:100%; margin-right:0; } }
+
+
+/* FIX-065: full-width persistent Investigation Queue for uploaded replay batches. */
+.regression-batch-panel{margin:1rem 0 1.25rem;padding:1rem;border:1px solid var(--border,#203342);border-radius:12px;background:rgba(15,23,42,.22)}
+.investigation-upload-button{display:inline-flex;align-items:center;cursor:pointer}
+.investigation-actions{display:flex;gap:.55rem;align-items:center;flex-wrap:wrap;margin:.75rem 0}
+.investigation-table{width:100%;table-layout:fixed}
+.investigation-table th,.investigation-table td{white-space:normal;overflow-wrap:anywhere;vertical-align:top}
+.investigation-table th:nth-child(1){width:48px}.investigation-table th:nth-child(3){width:95px}.investigation-table th:nth-child(6){width:72px}.investigation-table th:nth-child(8){width:110px}.investigation-table th:nth-child(10){width:150px}
+.investigation-row-actions{display:flex;gap:.35rem;flex-wrap:wrap}.investigation-row-actions button{padding:.4rem .55rem}
+@media(max-width:900px){.investigation-table th:nth-child(6),.investigation-table td:nth-child(6),.investigation-table th:nth-child(9),.investigation-table td:nth-child(9){display:none}}

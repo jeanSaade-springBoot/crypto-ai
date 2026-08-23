@@ -98,17 +98,40 @@
                 </div>
             </div>
             <form id="regression-test-form" class="regression-test-form">
-                <label>Test name<input id="regression-test-name" type="text" value="BNB Rally 09-Aug" maxlength="150" required></label>
+                <label>Test name<input id="regression-test-name" type="text" placeholder="Example: ENA #703 re-test" maxlength="150" required></label>
                 <label>Symbol
                     <select id="regression-symbol" required>
                         <option value="">Loading configured coins…</option>
                     </select>
                 </label>
-                <label>From (browser local time)<input id="regression-start" type="datetime-local" value="2026-08-09T07:00" required></label>
-                <label>To (browser local time)<input id="regression-end" type="datetime-local" value="2026-08-09T16:00" required></label><small id="regression-browser-zone" class="muted">Times display in your browser time zone.</small>
+                <label>From (browser local time)<input id="regression-start" type="datetime-local" required></label>
+                <label>To (browser local time)<input id="regression-end" type="datetime-local" required></label><small id="regression-browser-zone" class="muted">Times display in your browser time zone.</small>
                 <button id="regression-run" type="submit">Run Full Production Replay</button>
             </form>
             <p id="regression-window-note" class="form-note">Select the exact historical From/To window. The replay simulates production decisions and trades without touching the real wallet.</p>
+
+            <section class="regression-batch-panel" aria-labelledby="investigation-queue-title">
+                <div class="section-heading">
+                    <div><p class="eyebrow">FIX-065 · REPEATABLE INCIDENT REGRESSION</p><h3 id="investigation-queue-title">Investigation Queue</h3></div>
+                    <div class="section-actions">
+                        <button id="investigation-template" type="button" class="secondary-button">Download CSV template</button>
+                        <label class="secondary-button investigation-upload-button">Upload CSV<input id="investigation-file" type="file" accept=".csv,text/csv" hidden></label>
+                    </div>
+                </div>
+                <p class="form-note">CSV timestamps are interpreted explicitly as KSA (Asia/Riyadh) and converted to UTC before replay. Required columns: <code>symbol,start_ksa,end_ksa</code>. Optional: <code>case_name,wallet_id,expected_action,notes</code>.</p>
+                <div class="investigation-actions">
+                    <button id="investigation-select-all" type="button" class="secondary-button">Select all</button>
+                    <button id="investigation-clear-selection" type="button" class="secondary-button">Clear selection</button>
+                    <button id="investigation-run-selected" type="button">Run selected</button>
+                    <span id="investigation-batch-status" class="muted">No batch running</span>
+                </div>
+                <div class="table-wrap investigation-table-wrap">
+                    <table class="investigation-table">
+                        <thead><tr><th>Run</th><th>Case</th><th>Symbol</th><th>Start KSA</th><th>End KSA</th><th>Wallet</th><th>Expected</th><th>Last run</th><th>Notes</th><th>Action</th></tr></thead>
+                        <tbody id="investigation-cases-body"><tr><td colspan="10">No saved investigation cases yet.</td></tr></tbody>
+                    </table>
+                </div>
+            </section>
 
             <div id="regression-active" class="regression-active hidden">
                 <div class="regression-progress-heading">

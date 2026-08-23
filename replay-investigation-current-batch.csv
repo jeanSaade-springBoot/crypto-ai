@@ -1,0 +1,10 @@
+case_name,symbol,start_ksa,end_ksa,wallet_id,expected_action,notes
+ENA-703,ENAUSDT,2026-08-23 15:29:27,2026-08-23 15:31:18,703,WAIT,FIX-064 immediate price action re-test
+PEPE-756,PEPEUSDT,2026-08-23 18:46:04,2026-08-23 18:48:20,756,WAIT,FIX-064 exhausted-pop re-test
+SUI-802,SUIUSDT,2026-08-23 20:19:04,2026-08-23 20:29:22,802,WAIT,FIX-064 fresh impulse/exhaustion re-test
+EDU-748,EDUUSDT,2026-08-23 18:27:02,2026-08-23 18:55:04,748,REVIEW,Continuation freshness investigation
+EDU-774,EDUUSDT,2026-08-23 19:18:02,2026-08-23 21:58:16,774,REVIEW,Idle-position management investigation
+BNB-776-CONTROL,BNBUSDT,2026-08-23 19:35:02,2026-08-23 19:43:01,776,BUY,Winning control - must remain executable
+BNB-788-CONTROL,BNBUSDT,2026-08-23 19:48:01,2026-08-23 20:06:42,788,BUY,Winning control - must remain executable
+PEPE-833-CONTROL,PEPEUSDT,2026-08-23 23:48:03,2026-08-24 00:03:02,833,BUY,Winning SCOUT control
+XLM-859-CONTROL,XLMUSDT,2026-08-24 00:17:02,2026-08-24 00:25:18,859,BUY,Winning immediate validation control

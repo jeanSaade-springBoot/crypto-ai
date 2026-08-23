@@ -54,7 +54,7 @@ function regressionUtcLocalValue(date) {
 async function loadRegressionSymbols() {
     const select = document.getElementById('regression-symbol');
     if (!select) return;
-    const previous = select.value || 'BNBUSDT';
+    const previous = select.value;
     try {
         const coins = await api('/api/administration/coins');
         select.innerHTML = coins.map(coin => `
@@ -63,7 +63,7 @@ async function loadRegressionSymbols() {
             </option>`).join('') || '<option value="">No configured coins</option>';
         if (![...select.options].some(option => option.selected) && select.options.length) select.selectedIndex = 0;
     } catch (error) {
-        select.innerHTML = '<option value="BNBUSDT">BNBUSDT</option>';
+        select.innerHTML = '<option value="">Configured coins unavailable</option>';
         showAdminMessage(`Could not load regression symbols: ${error.message}`, true);
     }
 }
@@ -226,7 +226,7 @@ function regressionTradeChartUrl(symbol, trade, index = 0) {
     const entry = window.CryptoTime.parseUtc(trade.entry_time);
     const exit = trade.exit_time ? window.CryptoTime.parseUtc(trade.exit_time) : new Date(entry.getTime() + 60 * 60 * 1000);
     const params = new URLSearchParams({
-        symbol: String(symbol || 'BNBUSDT').toUpperCase(),
+        symbol: String(symbol || '').toUpperCase(),
         interval: '5m',
         focusStart: entry.toISOString(),
         focusEnd: exit.toISOString(),
@@ -253,7 +253,7 @@ function regressionSignalChartUrl(symbol, signal, index = 0) {
     const end = new Date(at.getTime() + 40 * 60 * 1000);
     const decision = String(signal.final_decision || signal.execution_effective_decision || 'BUY').replaceAll('_', ' ');
     const params = new URLSearchParams({
-        symbol: String(symbol || signal.symbol || 'BNBUSDT').toUpperCase(),
+        symbol: String(symbol || signal.symbol || '').toUpperCase(),
         interval: '5m',
         focusStart: start.toISOString(),
         focusEnd: end.toISOString(),
@@ -660,6 +660,131 @@ function pollRegressionRun(runId) {
         }
     }, 1200);
 }
+
+// -----------------------------------------------------------------------------
+// FIX-065 INVESTIGATION QUEUE
+// Uploaded CSV cases are persisted server-side, then each Run action delegates to
+// the existing isolated regression runner. Run Selected is intentionally sequential
+// because the backend correctly allows only one PENDING/RUNNING replay at a time.
+// -----------------------------------------------------------------------------
+let investigationBatchRunning = false;
+
+function investigationKsaToUtcIso(value) {
+    const raw = String(value || '').trim().replace(' ', 'T');
+    if (!raw) throw new Error('Missing KSA timestamp.');
+    const normalized = raw.length === 16 ? `${raw}:00` : raw;
+    const date = new Date(`${normalized}+03:00`);
+    if (Number.isNaN(date.getTime())) throw new Error(`Invalid KSA timestamp: ${value}`);
+    return date.toISOString();
+}
+
+function investigationKsaDisplay(value) {
+    if (!value) return '—';
+    const d = window.CryptoTime.parseUtc(value);
+    if (!d) return String(value);
+    return new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(d);
+}
+
+function parseInvestigationCsv(text) {
+    const lines = String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/).filter(line => line.trim());
+    if (lines.length < 2) throw new Error('CSV must contain a header and at least one case.');
+    const split = line => {
+        const out=[]; let cur=''; let quoted=false;
+        for(let i=0;i<line.length;i++){ const c=line[i]; if(c==='"'){ if(quoted && line[i+1]==='"'){cur+='"';i++;} else quoted=!quoted; } else if(c===',' && !quoted){out.push(cur.trim());cur='';} else cur+=c; }
+        out.push(cur.trim()); return out;
+    };
+    const headers = split(lines[0]).map(h => h.toLowerCase());
+    const required = ['symbol','start_ksa','end_ksa'];
+    required.forEach(h => { if(!headers.includes(h)) throw new Error(`Missing CSV column: ${h}`); });
+    return lines.slice(1).map((line,index) => {
+        const values=split(line); const row=Object.fromEntries(headers.map((h,i)=>[h,values[i] ?? '']));
+        return {
+            caseName: row.case_name || `${row.symbol} investigation ${index+1}`,
+            symbol: String(row.symbol || '').trim().toUpperCase(),
+            startTime: investigationKsaToUtcIso(row.start_ksa),
+            endTime: investigationKsaToUtcIso(row.end_ksa),
+            walletId: row.wallet_id ? Number(row.wallet_id) : null,
+            expectedAction: row.expected_action || null,
+            notes: row.notes || null
+        };
+    });
+}
+
+async function loadInvestigationCases() {
+    const body=document.getElementById('investigation-cases-body'); if(!body) return [];
+    try {
+        const rows=await api('/api/administration/regression-tests/investigation-cases');
+        body.innerHTML=rows.map(row=>`<tr>
+            <td><input type="checkbox" data-investigation-select="${row.id}" aria-label="Select ${escapeHtml(row.case_name)}"></td>
+            <td><strong>${escapeHtml(row.case_name)}</strong></td>
+            <td>${escapeHtml(row.symbol)}</td>
+            <td>${escapeHtml(investigationKsaDisplay(row.start_time))}</td>
+            <td>${escapeHtml(investigationKsaDisplay(row.end_time))}</td>
+            <td>${row.wallet_id ?? '—'}</td>
+            <td>${escapeHtml(row.expected_action || '—')}</td>
+            <td>${row.last_run_id ? `#${row.last_run_id} · ${escapeHtml(row.last_run_status || '—')}` : 'Never'}</td>
+            <td>${escapeHtml(row.notes || '')}</td>
+            <td><div class="investigation-row-actions"><button type="button" class="secondary-button" data-investigation-run="${row.id}">Run</button><button type="button" class="secondary-button" data-investigation-delete="${row.id}">Remove</button></div></td>
+        </tr>`).join('') || '<tr><td colspan="10">No saved investigation cases yet.</td></tr>';
+        return rows;
+    } catch(error){body.innerHTML=`<tr><td colspan="10">${escapeHtml(error.message)}</td></tr>`;return [];}
+}
+
+async function waitForInvestigationRun(runId) {
+    while (true) {
+        const run=await api(`/api/administration/regression-tests/runs/${runId}`);
+        if (['PASSED','FAILED','ERROR'].includes(String(run.status))) return run;
+        await new Promise(resolve=>setTimeout(resolve,1200));
+    }
+}
+
+async function runInvestigationCase(caseId, showResult=true) {
+    const created=await api(`/api/administration/regression-tests/investigation-cases/${caseId}/run`,{method:'POST'});
+    if(showResult){ await loadRegressionDetail(created.id,false); }
+    const result=await waitForInvestigationRun(created.id);
+    if(showResult){ await loadRegressionDetail(created.id,true); }
+    await Promise.all([loadRegressionRuns(),loadInvestigationCases()]);
+    return result;
+}
+
+const investigationFile=document.getElementById('investigation-file');
+if(investigationFile) investigationFile.addEventListener('change',async()=>{
+    const file=investigationFile.files?.[0]; if(!file)return;
+    try{
+        const cases=parseInvestigationCsv(await file.text());
+        await api('/api/administration/regression-tests/investigation-cases/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cases)});
+        showAdminMessage(`${cases.length} investigation case(s) uploaded.`); await loadInvestigationCases();
+    }catch(error){showAdminMessage(error.message,true);} finally{investigationFile.value='';}
+});
+
+document.getElementById('investigation-template')?.addEventListener('click',()=>{
+    const csv='case_name,symbol,start_ksa,end_ksa,wallet_id,expected_action,notes\nENA-703,ENAUSDT,2026-08-23 15:29:27,2026-08-23 15:31:18,703,WAIT,FIX-064 re-test\n';
+    const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='replay-investigation-template.csv';a.click();URL.revokeObjectURL(a.href);
+});
+
+document.getElementById('investigation-select-all')?.addEventListener('click',()=>document.querySelectorAll('[data-investigation-select]').forEach(c=>c.checked=true));
+document.getElementById('investigation-clear-selection')?.addEventListener('click',()=>document.querySelectorAll('[data-investigation-select]').forEach(c=>c.checked=false));
+
+const investigationBody=document.getElementById('investigation-cases-body');
+if(investigationBody) investigationBody.addEventListener('click',async event=>{
+    const run=event.target.closest('[data-investigation-run]');
+    const del=event.target.closest('[data-investigation-delete]');
+    try{
+        if(run){ if(investigationBatchRunning)return; investigationBatchRunning=true; run.disabled=true; await runInvestigationCase(run.dataset.investigationRun,true); showAdminMessage('Investigation replay completed.'); }
+        if(del){ await api(`/api/administration/regression-tests/investigation-cases/${del.dataset.investigationDelete}`,{method:'DELETE'}); await loadInvestigationCases(); }
+    }catch(error){showAdminMessage(error.message,true);} finally{investigationBatchRunning=false;if(run)run.disabled=false;}
+});
+
+document.getElementById('investigation-run-selected')?.addEventListener('click',async event=>{
+    const ids=[...document.querySelectorAll('[data-investigation-select]:checked')].map(c=>c.dataset.investigationSelect);
+    if(!ids.length){showAdminMessage('Select at least one investigation case.',true);return;}
+    if(investigationBatchRunning)return; investigationBatchRunning=true; event.currentTarget.disabled=true;
+    const status=document.getElementById('investigation-batch-status');
+    try{
+        for(let i=0;i<ids.length;i++){ status.textContent=`Running ${i+1}/${ids.length}…`; await runInvestigationCase(ids[i],i===ids.length-1); }
+        status.textContent=`Completed ${ids.length}/${ids.length}`; showAdminMessage(`${ids.length} investigation replay(s) completed sequentially.`);
+    }catch(error){status.textContent='Batch stopped';showAdminMessage(error.message,true);} finally{investigationBatchRunning=false;event.currentTarget.disabled=false;await loadInvestigationCases();}
+});
 
 const regressionForm = document.getElementById('regression-test-form');
 if (regressionForm) {
@@ -1138,6 +1263,7 @@ document.getElementById('proven-chart-interval')?.addEventListener('change',()=>
 (async function initializeRegressionUi() {
     await loadRegressionSymbols();
     await loadProvenTradesGraph();
+    await loadInvestigationCases();
     const runs = await loadRegressionRuns();
     const active = runs?.find(run => ['PENDING', 'RUNNING'].includes(String(run.status)));
     if (active) {

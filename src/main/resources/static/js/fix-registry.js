@@ -1259,7 +1259,25 @@
             solution: "Add a separate category-agnostic immediatePriceAction() guard alongside the existing supportive-signal check. It reads only fully CLOSED 1m candles with close_time <= signal.generated_at, uses ATR-normalized bearish-body and recent-high-fade measurements, fails open when candle/ATR data is unavailable, and returns WAIT/BUILDING rather than cancelling the opportunity when immediate price action has rejected. WEAK_UPTREND, ACCUMULATED_EVIDENCE, BUY thresholds and market-regime classifications are unchanged.",
             behavior: "A supportive BUY/WATCH classification is no longer sufficient for SCOUT, DEFERRED_CONTINUATION or ACCUMULATED_EVIDENCE when the latest fully closed price action already shows a material rejection/exhausted fade. The opportunity remains alive for fresh support. Healthy continuation near the candle high and small normal red pullbacks remain eligible.",
             regression: "Synthetic regression tests prove material bearish rejection and upper-wick/recent-high exhaustion are rejected while a healthy BNB-style continuation and a small normal red pullback remain supportive. The repository query is bounded by signal.generated_at, so Production and Replay use the same historical information and cannot inspect future/open candles. Run the supplied SQL against the latest 10-12 hour trade sample before deployment to verify the thresholds separate #703/#756/#802 from the winning controls."
+        }        ,{
+            id: "FIX-065",
+            title: "Persistent replay Investigation Queue + batch upload",
+            status: "UI / REPLAY ONLY",
+            scenario: "Upload and rerun exact historical incidents/winning controls without retyping Symbol/From/To; remove stale static BNB defaults from Replay UI",
+            symbol: "MULTI-SYMBOL",
+            entry: "N/A",
+            exit: "N/A",
+            entryTime: "N/A",
+            exitTime: "N/A",
+            replayWindow: "Per uploaded case; CSV timestamps are KSA and converted to UTC before replay",
+            location: "Proven Analyzed Trades / Safe Replay / Investigation Queue",
+            files: ["RegressionTestController", "RegressionTestService", "RegressionInvestigationCaseRequest", "V68__create_regression_investigation_queue.sql", "proven-analyzed-trades.html", "proven-analyzed-trades.js", "administration.css"],
+            cause: "The regression UI required repeated manual Symbol/From/To entry and still contained BNB-specific placeholder/fallback values from the original BNB incident. That made repeatable multi-symbol incident regression cumbersome and risked confusing the selected replay symbol.",
+            solution: "Persist an Investigation Queue, accept CSV batches with exact KSA start/end timestamps, allow Run per case or sequential Run Selected, retain last replay run/status, and remove all hard-coded BNB/BNBUSDT defaults from the replay UI/chart URL fallbacks.",
+            behavior: "No Production trading behavior changes. Every queued case delegates to the same isolated regression start() path and existing single-active-run backend lock. Batch runs are sequential by design and continue to use analysis_test_*/shadow tables only.",
+            regression: "Verify CSV upload, KSA→UTC conversion, per-row Run, sequential Run Selected, last-run linking, deletion, no static BNB UI fallback, and that Production wallet/trade tables remain untouched."
         }
+
 
 ];
 
