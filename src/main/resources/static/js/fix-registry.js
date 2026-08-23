@@ -1202,6 +1202,24 @@
             solution: "Return persisted 1m technical_indicator snapshots and atr_retracement_entry_price in the read-only graph payload. Overlay a price-close line, EMA20/50/200, SMA20, Bollinger upper/middle/lower and persisted ATR retracement on the existing candle timeline. Label each completed pair with START/END KSA time and wallet realized return percentage, and make the grid fixed-layout/responsive with wrapping and selective low-priority column hiding instead of horizontal scrolling.",
             behavior: "The Trade Activity-only chart now visibly explains price versus EMA/Bollinger/retracement context on an explicit KSA timeline. Completed trades show START BUY and END SELL markers plus WIN/FAIL percentage calculated from persisted realized P/L over committed BUY gross. Marker detail still exposes the full persisted analyses. The grid fits the viewport without a horizontal scroller. No indicators are recalculated and no trading/Replay behavior changes.",
             regression: "For a selected symbol with technical_indicator data and a completed trade, verify indicator lines match persisted 1m rows, retracement points match trade_signal.atr_retracement_entry_price, chart start/end labels are KSA conversions of UTC DB timestamps, WIN/FAIL percentage matches realized_pnl_usdt / BUY gross, SELL View on graph retains START/END labels, and the activity grid fits desktop/mobile width without horizontal scrolling."
+        },
+        {
+            id: "FIX-062",
+            title: "Trade Activity forensic cockpit redesign",
+            status: "IMPLEMENTED · UI/AUDIT ONLY",
+            scenario: "Trade Activity contained the required forensic data but the chart was visually opaque, BUY/SELL labels covered candles, technical context was hard to scan, and the result grid did not resemble a compact operator cockpit.",
+            symbol: "One selected Trade Activity symbol",
+            entry: "Persisted wallet BUY fill shown as full-width horizontal BUY price authority",
+            exit: "Persisted wallet SELL fill shown as full-width horizontal SELL price authority",
+            entryTime: "UTC database timestamp rendered in KSA",
+            exitTime: "UTC database timestamp rendered in KSA",
+            replayWindow: "No replay required; read-only visualization of persisted Production evidence",
+            location: "Trade Activity read model and page-scoped HTML/CSS/ApexCharts presentation",
+            classes: ["TradeActivityService", "trade-activity.html", "trade-activity.js", "trade-activity.css"],
+            cause: "Permanent START/END point labels and low-contrast chart defaults obscured the candle path. The screen also lacked a compact selected-trade header, volume strip, entry/exit technical summaries and a concise activity list with persisted fill/P&L values.",
+            solution: "Rebuild Trade Activity as a responsive forensic cockpit. Use explicit high-contrast ApexCharts colors, real candlesticks plus persisted price/EMA/SMA/Bollinger/retracement series, a synchronized real-volume chart, clean analysis markers, horizontal BUY/SELL price annotations on the y-axis, vertical start/end guides without floating text boxes, selected-trade KSA/result cards, a persisted execution-facts strip, a window win-rate indicator, and entry/exit technical summaries derived from persisted trade_signal rows. Extend the read-only activity projection with persisted fill price and realized P/L fields for the compact list.",
+            behavior: "Selecting a completed trade makes BUY/SELL price levels immediately visible without covering candles. Start/end KSA times, duration, realized P/L and WIN/FAIL percentage appear in dedicated cards. The price chart and volume timeline remain readable, analysis markers stay clickable, and the activity list fits the screen without horizontal scrolling. All technical values remain persisted Production evidence; nothing is recalculated for trading.",
+            regression: "Verify BUY/SELL horizontal lines equal wallet_trade.price_usdt, result percentage equals persisted realized P/L divided by BUY gross, START/END cards are UTC-to-KSA conversions, entry/exit technical cards resolve persisted trade_signal evidence, volume bars use real candle.volume, indicator lines use technical_indicator values, SELL View on graph focuses the exact lifecycle, and no Production/Replay service is invoked by the graph endpoint."
         }
 
 ];

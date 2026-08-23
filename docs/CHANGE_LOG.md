@@ -59,3 +59,16 @@
 - SELL **View on graph** preserves the pair START/END labels while focusing the selected trade.
 - Reworked the Trade Activity grid to a responsive fixed-layout table with wrapping and selective low-priority column hiding, removing horizontal grid scrolling.
 - Read-only UI/audit change only: no Production, Replay, scoring, execution, wallet, or indicator-calculation behavior changed.
+
+
+## FIX-062 — Trade Activity forensic cockpit redesign
+- Rebuilt only the Trade Activity presentation into a responsive operator cockpit; Dashboard/Inspector/trading behavior are unchanged.
+- Replaced opaque/default chart styling with explicit high-contrast dark-mode colors for candles, price, EMA20/50/200, SMA20, Bollinger bands, ATR retracement and analysis/execution markers.
+- Removed floating BUY/SELL START/END text boxes from the candle area. The selected completed trade now uses full-width horizontal BUY/SELL price lines with compact y-axis labels plus vertical start/end guides.
+- Added selected-trade cards for START KSA, END KSA, duration, WIN/FAIL percentage and realized P/L, plus a persisted execution-facts strip and completed-window win-rate indicator.
+- Added a synchronized real 1m volume chart below the price chart.
+- Added entry and exit technical-summary cards resolved from persisted `trade_signal` evidence; mechanical exits use the nearest persisted pre-exit analysis rather than invented values.
+- Added persisted fill price/P&L fields to the read-only Trade Activity projection so the compact list can show actual wallet values.
+- Activity list is compact/responsive and fits the screen without horizontal scrolling.
+- Database/Binance timestamps remain UTC; all visible Trade Activity times are rendered explicitly in KSA (`Asia/Riyadh`).
+- Read-only audit/UI change only: no Production, Replay, scoring, indicator calculation, execution or wallet mutation behavior changed.

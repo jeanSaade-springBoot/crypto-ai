@@ -76,6 +76,10 @@ public class TradeActivityService {
                              ELSE 'SIGNAL'
                            END source,
                            COALESCE(NULLIF(wt.execution_reason,''), CASE WHEN wt.side='BUY' THEN 'BUY_EXECUTED' ELSE 'SELL_EXECUTED' END) reason,
+                           /* FIX-062: expose persisted fill/result fields so the compact Trade Activity
+                              list can show the same factual prices/P&L as the forensic chart. */
+                           wt.price_usdt price_usdt,
+                           wt.realized_pnl_usdt realized_pnl_usdt,
                            wt.id trade_id,
                            CASE WHEN wt.side = 'SELL' THEN (
                                SELECT p.id
@@ -184,10 +188,16 @@ public class TradeActivityService {
                                 CASE WHEN wt.side='BUY' THEN 'BUY_EXECUTED' ELSE 'SELL_EXECUTED' END) reason,
                        p.position_id pair_id,
                        wt.id trade_id,
+                       wt.price_usdt price_usdt,
+                       p.realized_pnl_usdt realized_pnl_usdt,
+                       CASE WHEN entry_buy.gross_amount_usdt IS NOT NULL AND entry_buy.gross_amount_usdt <> 0
+                            THEN (p.realized_pnl_usdt / entry_buy.gross_amount_usdt) * 100
+                            ELSE NULL END pair_return_percent,
                        p.sell_time pair_time,
                        CASE WHEN wt.side='BUY' THEN 0 ELSE 1 END pair_order
                 FROM pairs p
                 JOIN wallet_trade wt ON wt.id IN (p.buy_trade_id, p.sell_trade_id)
+                JOIN wallet_trade entry_buy ON entry_buy.id = p.buy_trade_id
                 LEFT JOIN trade_signal ts ON ts.id = wt.signal_id
                 LEFT JOIN trade_signal entry_ts ON entry_ts.id = p.entry_signal_id
                 ORDER BY p.sell_time DESC, p.position_id DESC, pair_order ASC
