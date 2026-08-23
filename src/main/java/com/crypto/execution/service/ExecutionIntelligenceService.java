@@ -1,6 +1,7 @@
 package com.crypto.execution.service;
 
 import com.crypto.config.TradingProperties;
+import com.crypto.domain.Candle;
 import com.crypto.domain.LiquidityContextStatus;
 import com.crypto.domain.MarketRegime;
 import com.crypto.domain.SignalDecision;
@@ -8,12 +9,14 @@ import com.crypto.domain.TradeSignal;
 import com.crypto.domain.TradingStrategy;
 import com.crypto.execution.domain.ExecutionOpportunity;
 import com.crypto.execution.repository.ExecutionOpportunityRepository;
+import com.crypto.repository.CandleRepository;
 import com.crypto.repository.TradeSignalRepository;
 import com.crypto.service.OpportunityConsolidationService;
 import com.crypto.service.TradeExecutionValidationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -54,6 +57,16 @@ public class ExecutionIntelligenceService {
 
     private static final int WATCH_EVIDENCE_MIN_SCORE = 60;
     private static final int WATCH_EVIDENCE_MIN_CONFIDENCE = 60;
+
+    // FIX-064: execution-time raw-candle freshness guard. These thresholds are intentionally
+    // conservative and category-agnostic: WEAK_UPTREND / ACCUMULATED_EVIDENCE remain untouched.
+    // The guard only refuses a fresh entry when the latest fully CLOSED 1m candle has already
+    // rejected materially from price strength while the derived signal still looks supportive.
+    private static final double IMMEDIATE_PRICE_ACTION_MIN_BEARISH_BODY_ATR = 0.25d;
+    private static final double IMMEDIATE_PRICE_ACTION_MAX_CLOSE_LOCATION_FOR_BEARISH_REJECTION = 0.45d;
+    private static final double IMMEDIATE_PRICE_ACTION_MIN_RECENT_HIGH_FADE_ATR = 0.75d;
+    private static final double IMMEDIATE_PRICE_ACTION_MAX_CLOSE_LOCATION_FOR_EXHAUSTED_POP = 0.55d;
+    private static final int IMMEDIATE_PRICE_ACTION_LOOKBACK_CANDLES = 4;
     private static final int MIN_EVIDENCE_SCORE = 7;
     private static final int STRONG_EVIDENCE_SCORE = 11;
     private static final int WEAK_SELL_EVIDENCE_PENALTY = 2;
@@ -220,6 +233,7 @@ public class ExecutionIntelligenceService {
     private final TradeExecutionValidationService validationService;
     private final OpportunityConsolidationService consolidationService;
     private final TradeSignalRepository signalRepository;
+    private final CandleRepository candleRepository;
     private final ExecutionOpportunityRepository opportunityRepository;
     private final PressureReadinessService pressureReadinessService;
     private final RecoveryTransitionService recoveryTransitionService;
@@ -881,7 +895,9 @@ public class ExecutionIntelligenceService {
                 && (oneHour.getDecision() == SignalDecision.WATCH || isBullish(oneHour.getDecision()));
 
         if (currentAllocationPercent <= 0) {
+            ImmediatePriceAction priceAction = immediatePriceAction(current);
             boolean scout = isSupportiveCurrentSignal(current)
+                    && priceAction.supportive()
                     && current.isAtrImmediateEntryAllowed()
                     && current.getTotalScore() >= SCOUT_MIN_SIGNAL_SCORE
                     && current.getConfidenceScore() >= SCOUT_MIN_CONFIDENCE
@@ -901,6 +917,7 @@ public class ExecutionIntelligenceService {
                                 + q.score() + "/100 (" + q.classification() + "). Price expansion="
                                 + format(q.expansionPercent()) + "%, ATR extension=" + format(q.atrExtension())
                                 + ", current R/R=" + format(q.rewardRisk())
+                                + ". Immediate closed-candle price action=" + priceAction.summary()
                                 + ". Capital remains deliberately small until confirmation improves.",
                         e);
             }
@@ -1412,6 +1429,15 @@ public class ExecutionIntelligenceService {
 
     private ExecutionDecision deferredContinuationDecision(TradeSignal current, Evidence e) {
         if (!isSupportiveCurrentSignal(current)) return null;
+        ImmediatePriceAction priceAction = immediatePriceAction(current);
+        if (!priceAction.supportive()) {
+            return ExecutionDecision.building(
+                    "IMMEDIATE_PRICE_ACTION_REVALIDATION_REQUIRED",
+                    "Deferred continuation stayed technically supportive, but the latest fully closed 1m price action "
+                            + "already rejected the impulse (" + priceAction.summary() + "). Wait for fresh price "
+                            + "support instead of chasing stale derived evidence.",
+                    e);
+        }
         // Do not require finalEntryAllowed/atrImmediateEntryAllowed here. The aggregate final
         // entry flag may be false solely because ATR requested a pullback; that is exactly
         // the condition this continuation route is designed to reassess. All non-ATR hard
@@ -1644,6 +1670,15 @@ public class ExecutionIntelligenceService {
             return ExecutionDecision.observe("NO_BULLISH_EVIDENCE",
                     "Current 1m signal does not add BUY/WATCH evidence.", e);
         }
+        ImmediatePriceAction priceAction = immediatePriceAction(current);
+        if (!priceAction.supportive()) {
+            return ExecutionDecision.building(
+                    "IMMEDIATE_PRICE_ACTION_REVALIDATION_REQUIRED",
+                    "Accumulated evidence remains valid, but the latest fully closed 1m candle no longer confirms an "
+                            + "immediate entry (" + priceAction.summary() + "). The opportunity stays alive and must "
+                            + "wait for fresh price support; WEAK_UPTREND and ACCUMULATED_EVIDENCE are not reclassified.",
+                    e);
+        }
         if (e.fiveMinute() == null || e.oneHour() == null) {
             return ExecutionDecision.building("MISSING_CONTEXT",
                     "Opportunity is building, but fresh 5m/1h context is not yet available.", e);
@@ -1798,6 +1833,74 @@ public class ExecutionIntelligenceService {
                 && signal.isAtrImmediateEntryAllowed()
                 && signal.getTotalScore() >= properties.minimumBuyScore()
                 && isBullish(signal.getDecision());
+    }
+
+    /**
+     * FIX-064 / ENA #703, PEPE #756, SUI #802:
+     * Derived BUY/WATCH fields can lag an exhausted or rejected price impulse. Before the three
+     * affected entry routes (SCOUT, DEFERRED_CONTINUATION and ACCUMULATED_EVIDENCE) open fresh
+     * risk, inspect only candles that were fully CLOSED at signal.generatedAt. This deliberately
+     * does not alter market-regime categories, scores, BUY thresholds or accumulated-evidence
+     * semantics. Missing candle/ATR data fails open so data gaps cannot silently disable proven
+     * winning routes. Production and Replay use the same timestamp-bounded repository query.
+     */
+    private ImmediatePriceAction immediatePriceAction(TradeSignal signal) {
+        if (signal == null || signal.getGeneratedAt() == null || signal.getAtrAtSignal() == null
+                || signal.getAtrAtSignal().signum() <= 0) {
+            return ImmediatePriceAction.supportive("raw candle/ATR unavailable; existing behavior preserved");
+        }
+
+        List<Candle> candles = candleRepository.findClosedCandlesClosedAtOrBefore(
+                signal.getSymbol(), EXECUTION_INTERVAL, signal.getGeneratedAt(),
+                PageRequest.of(0, IMMEDIATE_PRICE_ACTION_LOOKBACK_CANDLES));
+        if (candles == null || candles.size() < 2) {
+            return ImmediatePriceAction.supportive("insufficient closed-candle history; existing behavior preserved");
+        }
+
+        Candle latest = candles.get(0);
+        Candle previous = candles.get(1);
+        if (latest.getOpenPrice() == null || latest.getHighPrice() == null || latest.getLowPrice() == null
+                || latest.getClosePrice() == null || previous.getClosePrice() == null) {
+            return ImmediatePriceAction.supportive("incomplete closed-candle OHLC; existing behavior preserved");
+        }
+
+        BigDecimal atr = signal.getAtrAtSignal();
+        BigDecimal range = latest.getHighPrice().subtract(latest.getLowPrice()).abs();
+        double closeLocation = range.signum() == 0 ? 0.5d
+                : latest.getClosePrice().subtract(latest.getLowPrice())
+                        .divide(range, 12, RoundingMode.HALF_UP).doubleValue();
+        closeLocation = Math.max(0d, Math.min(1d, closeLocation));
+
+        double bearishBodyAtr = latest.getOpenPrice().subtract(latest.getClosePrice())
+                .max(BigDecimal.ZERO).divide(atr, 12, RoundingMode.HALF_UP).doubleValue();
+        BigDecimal recentHigh = candles.stream()
+                .map(Candle::getHighPrice)
+                .filter(Objects::nonNull)
+                .max(BigDecimal::compareTo)
+                .orElse(latest.getHighPrice());
+        double recentHighFadeAtr = recentHigh.subtract(latest.getClosePrice())
+                .max(BigDecimal.ZERO).divide(atr, 12, RoundingMode.HALF_UP).doubleValue();
+
+        boolean closeBelowPrevious = latest.getClosePrice().compareTo(previous.getClosePrice()) < 0;
+        boolean bearishRejection = latest.getClosePrice().compareTo(latest.getOpenPrice()) < 0
+                && closeBelowPrevious
+                && bearishBodyAtr >= IMMEDIATE_PRICE_ACTION_MIN_BEARISH_BODY_ATR
+                && closeLocation <= IMMEDIATE_PRICE_ACTION_MAX_CLOSE_LOCATION_FOR_BEARISH_REJECTION;
+        boolean exhaustedPop = closeBelowPrevious
+                && recentHighFadeAtr >= IMMEDIATE_PRICE_ACTION_MIN_RECENT_HIGH_FADE_ATR
+                && closeLocation <= IMMEDIATE_PRICE_ACTION_MAX_CLOSE_LOCATION_FOR_EXHAUSTED_POP;
+
+        String summary = "closeLocation=" + format(closeLocation * 100d) + "%"
+                + ", bearishBody=" + format(bearishBodyAtr) + " ATR"
+                + ", fadeFromRecentHigh=" + format(recentHighFadeAtr) + " ATR"
+                + ", closeVsPrevious=" + (closeBelowPrevious ? "LOWER" : "NOT_LOWER");
+
+        if (bearishRejection || exhaustedPop) {
+            return ImmediatePriceAction.rejected(summary
+                    + (bearishRejection ? ", bearish rejection" : "")
+                    + (exhaustedPop ? ", exhausted-pop fade" : ""));
+        }
+        return ImmediatePriceAction.supportive(summary);
     }
 
     private boolean isSupportiveCurrentSignal(TradeSignal signal) {
@@ -2223,6 +2326,16 @@ public class ExecutionIntelligenceService {
             double rewardRisk,
             long opportunityAgeMinutes
     ) {}
+
+    private record ImmediatePriceAction(boolean supportive, String summary) {
+        static ImmediatePriceAction supportive(String summary) {
+            return new ImmediatePriceAction(true, summary);
+        }
+
+        static ImmediatePriceAction rejected(String summary) {
+            return new ImmediatePriceAction(false, summary);
+        }
+    }
 
     private record HardRiskBlock(boolean blocked, String code, String explanation) {
         static HardRiskBlock none() { return new HardRiskBlock(false, "NONE", ""); }

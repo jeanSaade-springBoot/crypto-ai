@@ -1241,6 +1241,26 @@
             regression: "Verify desktop and mobile layouts never split Activity and Graph into side-by-side columns, selected symbol is visible in the graph header, BUY/SELL text exists only on right-side y-axis annotations, start/end vertical guides contain no labels, chart/volume series still map to the same persisted data, and no Production/Replay write path is invoked."
         }
 
+
+        ,{
+            id: "FIX-064",
+            title: "Immediate closed-candle price-action revalidation",
+            status: "IMPLEMENTED · PRODUCTION + REPLAY SHARED PATH",
+            scenario: "ENA wallet #703, PEPE wallet #756 and SUI wallet #802 all opened after the derived 1m BUY/WATCH classification remained supportive even though the latest fully closed candle had already rejected or materially faded from the recent price impulse. The affected routes were ACCUMULATED_EVIDENCE and SCOUT_ENTRY; the categories themselves are not changed.",
+            symbol: "ENAUSDT / PEPEUSDT / SUIUSDT",
+            entry: "ENA 0.175400; PEPE 0.000004120; SUI 0.828100",
+            exit: "ENA 0.174900 STOP_LOSS; PEPE 0.000004090 STOP_LOSS; SUI 0.824200 STOP_LOSS",
+            entryTime: "ENA 2026-08-23 15:29:27 KSA; PEPE 2026-08-23 18:46:04 KSA; SUI 2026-08-23 20:19:04 KSA",
+            exitTime: "ENA 2026-08-23 15:31:18 KSA; PEPE 2026-08-23 18:48:20 KSA; SUI 2026-08-23 20:29:22 KSA",
+            replayWindow: "Replay each failing entry with at least 10 minutes before entry through exit; also replay winning controls BNB #776/#788/#790, PEPE #833, XLM #811/#859 and SHIB #814/#869.",
+            location: "ExecutionIntelligenceService shared entry-support validation for SCOUT_ENTRY, DEFERRED_CONTINUATION and ACCUMULATED_EVIDENCE",
+            classes: ["ExecutionIntelligenceService", "CandleRepository", "ExecutionIntelligenceServiceTest"],
+            cause: "isSupportiveCurrentSignal() only evaluated derived decision/originalDecision/score/confidence. A supportive derived signal could therefore lag immediate raw price action. ENA showed a material bearish closed-candle rejection; PEPE/SUI showed exhausted-pop behavior after expansion. The execution layer did not inspect the latest fully closed 1m OHLC/recent high before these entry routes opened fresh risk.",
+            solution: "Add a separate category-agnostic immediatePriceAction() guard alongside the existing supportive-signal check. It reads only fully CLOSED 1m candles with close_time <= signal.generated_at, uses ATR-normalized bearish-body and recent-high-fade measurements, fails open when candle/ATR data is unavailable, and returns WAIT/BUILDING rather than cancelling the opportunity when immediate price action has rejected. WEAK_UPTREND, ACCUMULATED_EVIDENCE, BUY thresholds and market-regime classifications are unchanged.",
+            behavior: "A supportive BUY/WATCH classification is no longer sufficient for SCOUT, DEFERRED_CONTINUATION or ACCUMULATED_EVIDENCE when the latest fully closed price action already shows a material rejection/exhausted fade. The opportunity remains alive for fresh support. Healthy continuation near the candle high and small normal red pullbacks remain eligible.",
+            regression: "Synthetic regression tests prove material bearish rejection and upper-wick/recent-high exhaustion are rejected while a healthy BNB-style continuation and a small normal red pullback remain supportive. The repository query is bounded by signal.generated_at, so Production and Replay use the same historical information and cannot inspect future/open candles. Run the supplied SQL against the latest 10-12 hour trade sample before deployment to verify the thresholds separate #703/#756/#802 from the winning controls."
+        }
+
 ];
 
     // FIX-057: registry history must be chronological by FIX number, not by the

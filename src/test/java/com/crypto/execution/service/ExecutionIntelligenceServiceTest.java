@@ -1,11 +1,13 @@
 package com.crypto.execution.service;
 
 import com.crypto.config.TradingProperties;
+import com.crypto.domain.Candle;
 import com.crypto.domain.MarketRegime;
 import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
 import com.crypto.domain.TradingStrategy;
 import com.crypto.execution.repository.ExecutionOpportunityRepository;
+import com.crypto.repository.CandleRepository;
 import com.crypto.repository.TradeSignalRepository;
 import com.crypto.service.OpportunityConsolidationService;
 import com.crypto.service.TradeExecutionValidationService;
@@ -34,6 +36,7 @@ class ExecutionIntelligenceServiceTest {
     @Mock TradeExecutionValidationService validationService;
     @Mock OpportunityConsolidationService consolidationService;
     @Mock TradeSignalRepository signalRepository;
+    @Mock CandleRepository candleRepository;
     @Mock ExecutionOpportunityRepository opportunityRepository;
     @Mock PressureReadinessService pressureReadinessService;
     @Mock RecoveryTransitionService recoveryTransitionService;
@@ -44,7 +47,7 @@ class ExecutionIntelligenceServiceTest {
     @BeforeEach
     void setUp() {
         service = new ExecutionIntelligenceService(properties, validationService, consolidationService,
-                signalRepository, opportunityRepository, pressureReadinessService, recoveryTransitionService);
+                signalRepository, candleRepository, opportunityRepository, pressureReadinessService, recoveryTransitionService);
         now = Instant.parse("2026-08-08T10:00:00Z");
         when(opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(any(), any(), any()))
                 .thenReturn(Optional.empty());
@@ -1566,6 +1569,87 @@ class ExecutionIntelligenceServiceTest {
         assertThat(decision.allowed()).isTrue();
         assertThat(decision.source()).isEqualTo("IMMEDIATE_VALIDATION");
         assertThat(decision.code()).isEqualTo("BALANCED_EARLY");
+    }
+
+
+    @Test
+    void fix064RejectsMaterialClosedCandleBearishReversalEvenWhenDerivedSignalIsSupportive() {
+        TradeSignal current = signal(2001L, "ENAUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 69, 68);
+        current.setAtrAtSignal(new BigDecimal("0.0010"));
+        when(candleRepository.findClosedCandlesClosedAtOrBefore(any(), any(), any(), any()))
+                .thenReturn(List.of(
+                        candle("ENAUSDT", now.minusSeconds(60), "0.1764", "0.1766", "0.1754", "0.1756"),
+                        candle("ENAUSDT", now.minusSeconds(120), "0.1758", "0.1765", "0.1757", "0.1762"),
+                        candle("ENAUSDT", now.minusSeconds(180), "0.1754", "0.1768", "0.1753", "0.1760")
+                ));
+
+        Object result = ReflectionTestUtils.invokeMethod(service, "immediatePriceAction", current);
+        assertThat(result).isNotNull();
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(result, "supportive")).isFalse();
+    }
+
+    @Test
+    void fix064RejectsUpperWickExhaustionAfterRecentPop() {
+        TradeSignal current = signal(2002L, "SUIUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 80, 80);
+        current.setAtrAtSignal(new BigDecimal("0.0020"));
+        when(candleRepository.findClosedCandlesClosedAtOrBefore(any(), any(), any(), any()))
+                .thenReturn(List.of(
+                        candle("SUIUSDT", now.minusSeconds(60), "0.8280", "0.8318", "0.8268", "0.8281"),
+                        candle("SUIUSDT", now.minusSeconds(120), "0.8260", "0.8320", "0.8258", "0.8290"),
+                        candle("SUIUSDT", now.minusSeconds(180), "0.8240", "0.8290", "0.8238", "0.8270")
+                ));
+
+        Object result = ReflectionTestUtils.invokeMethod(service, "immediatePriceAction", current);
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(result, "supportive")).isFalse();
+    }
+
+    @Test
+    void fix064PreservesHealthyWinningContinuationNearCandleHigh() {
+        TradeSignal current = signal(2003L, "BNBUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 76, 80);
+        current.setAtrAtSignal(new BigDecimal("0.50"));
+        when(candleRepository.findClosedCandlesClosedAtOrBefore(any(), any(), any(), any()))
+                .thenReturn(List.of(
+                        candle("BNBUSDT", now.minusSeconds(60), "697.10", "698.05", "696.95", "697.97"),
+                        candle("BNBUSDT", now.minusSeconds(120), "696.70", "697.40", "696.50", "697.00"),
+                        candle("BNBUSDT", now.minusSeconds(180), "696.20", "696.90", "696.00", "696.60")
+                ));
+
+        Object result = ReflectionTestUtils.invokeMethod(service, "immediatePriceAction", current);
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(result, "supportive")).isTrue();
+    }
+
+    @Test
+    void fix064DoesNotRejectSmallNormalRedPullback() {
+        TradeSignal current = signal(2004L, "PEPEUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now, 72, 72);
+        current.setAtrAtSignal(new BigDecimal("0.000000020"));
+        when(candleRepository.findClosedCandlesClosedAtOrBefore(any(), any(), any(), any()))
+                .thenReturn(List.of(
+                        candle("PEPEUSDT", now.minusSeconds(60), "0.000004120", "0.000004125", "0.000004112", "0.000004118"),
+                        candle("PEPEUSDT", now.minusSeconds(120), "0.000004110", "0.000004124", "0.000004108", "0.000004120"),
+                        candle("PEPEUSDT", now.minusSeconds(180), "0.000004100", "0.000004118", "0.000004098", "0.000004112")
+                ));
+
+        Object result = ReflectionTestUtils.invokeMethod(service, "immediatePriceAction", current);
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(result, "supportive")).isTrue();
+    }
+
+    private Candle candle(String symbol, Instant closeTime, String open, String high, String low, String close) {
+        return Candle.builder()
+                .symbol(symbol)
+                .intervalCode("1m")
+                .openTime(closeTime.minusSeconds(59))
+                .closeTime(closeTime)
+                .openPrice(new BigDecimal(open))
+                .highPrice(new BigDecimal(high))
+                .lowPrice(new BigDecimal(low))
+                .closePrice(new BigDecimal(close))
+                .volume(BigDecimal.ONE)
+                .closed(true)
+                .build();
     }
 
 }
