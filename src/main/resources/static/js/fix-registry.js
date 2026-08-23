@@ -1222,6 +1222,25 @@
             regression: "Verify BUY/SELL horizontal lines equal wallet_trade.price_usdt, result percentage equals persisted realized P/L divided by BUY gross, START/END cards are UTC-to-KSA conversions, entry/exit technical cards resolve persisted trade_signal evidence, volume bars use real candle.volume, indicator lines use technical_indicator values, SELL View on graph focuses the exact lifecycle, and no Production/Replay service is invoked by the graph endpoint."
         }
 
+        ,{
+            id: "FIX-063",
+            title: "Trade Activity stacked graph layout and softer chart palette",
+            status: "IMPLEMENTED · UI/AUDIT ONLY",
+            scenario: "FIX-062 split the Trade Activity list and forensic graph into side-by-side columns, made the selected symbol too easy to miss, and used a highly saturated chart palette. The operator also required BUY/SELL text to appear only on the price axis, not as floating boxes over candles.",
+            symbol: "One selected Trade Activity symbol",
+            entry: "Persisted wallet BUY fill shown as a horizontal price line with right-axis label only",
+            exit: "Persisted wallet SELL fill shown as a horizontal price line with right-axis label only",
+            entryTime: "UTC database timestamp rendered in KSA",
+            exitTime: "UTC database timestamp rendered in KSA",
+            replayWindow: "No replay required; read-only persisted Production visualization",
+            location: "Trade Activity page-scoped HTML/CSS/ApexCharts presentation",
+            classes: ["trade-activity.html", "trade-activity.js", "trade-activity.css"],
+            cause: "The cockpit workspace used a 28%/72% CSS grid, forcing the table and graph to share one horizontal row. Chart colors were intentionally high contrast but proved visually harsh, while symbol identity depended mainly on a small graph title/meta line. BUY/SELL annotation text needed stricter containment to the y-axis edge.",
+            solution: "Stack the Activity grid and forensic Graph as two independent full-width blocks on all desktop widths. Add a prominent selected-symbol badge in the graph header and repeat the symbol in graph metadata. Replace neon series/candle/volume colors with a softer muted palette while retaining visual separation. Keep BUY/SELL annotations as horizontal price lines with compact right-side y-axis labels only; start/end vertical guides have no text labels inside the plot.",
+            behavior: "The full-width Activity grid appears first and the full-width forensic graph appears below it. The selected symbol is obvious before reading the chart. Indicators and markers remain distinguishable but less visually aggressive. No BUY/SELL floating text box is drawn within candle space; only the axis price labels remain. All technical/execution data and KSA rendering are unchanged.",
+            regression: "Verify desktop and mobile layouts never split Activity and Graph into side-by-side columns, selected symbol is visible in the graph header, BUY/SELL text exists only on right-side y-axis annotations, start/end vertical guides contain no labels, chart/volume series still map to the same persisted data, and no Production/Replay write path is invoked."
+        }
+
 ];
 
     // FIX-057: registry history must be chronological by FIX number, not by the

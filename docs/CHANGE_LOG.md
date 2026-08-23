@@ -72,3 +72,12 @@
 - Activity list is compact/responsive and fits the screen without horizontal scrolling.
 - Database/Binance timestamps remain UTC; all visible Trade Activity times are rendered explicitly in KSA (`Asia/Riyadh`).
 - Read-only audit/UI change only: no Production, Replay, scoring, indicator calculation, execution or wallet mutation behavior changed.
+
+
+## FIX-063 — Trade Activity stacked full-width graph layout
+- Changed Trade Activity from a 28%/72% side-by-side workspace to two independent full-width blocks: Activity grid first, forensic graph second.
+- Added a prominent selected-symbol badge in the graph header and repeated the symbol in graph metadata so the chart identity cannot be missed.
+- Softened candlestick, indicator, analysis-marker, execution-marker and volume colors while preserving separation between series.
+- BUY/SELL trade text is now restricted to compact right-side y-axis price labels; no floating BUY/SELL or START/END text boxes are drawn over candles.
+- Start/end execution timestamps remain represented by subtle vertical guides and dedicated KSA summary cards outside the plot.
+- Read-only UI/audit change only; persisted data, Production, Replay, scoring, indicator calculation, execution and UTC/KSA architecture are unchanged.
