@@ -1137,6 +1137,21 @@
             behavior: "The Bug Fixes/Fix Registry page and copied registry output now show existing fixes in ascending numeric order. Missing historical IDs are not invented or renumbered.",
             regression: "Open Fix Registry and verify FIX ids increase numerically from the earliest existing record through FIX-057; verify Copy all fixes uses the same ascending order. No Production, Replay, scoring, execution, wallet, database-time or KSA display behavior changes."
         }
+        ,{
+            id: "FIX-058",
+            title: "Trade Activity completed WIN/LOST couples",
+            status: "ACTIVE · UI/AUDIT ONLY",
+            scenario: "Operator needs to review completed BUY→SELL trade couples and filter them by realized WIN or LOST without changing the existing Trade Activity grid.",
+            symbol: "ALL / any traded symbol", entry: "Opening wallet BUY", exit: "Closing wallet SELL",
+            entryTime: "Any selected Trade Activity window", exitTime: "Any selected Trade Activity window",
+            replayWindow: "No replay required; read-only Production wallet audit feature",
+            location: "Trade Activity filters and completed-position read model",
+            classes: ["TradeActivityService", "trade-activity.html", "trade-activity.js"],
+            cause: "The existing Trade Activity page could filter individual BUY/SELL EXECUTED/BLOCKED rows but could not return the two legs of a completed trade together or classify that completed lifecycle by realized profit/loss.",
+            solution: "Add exclusive COUPLE mode beside BUY/SELL and WIN/LOST result filters beside EXECUTED/BLOCKED. Resolve couples from CLOSED wallet_managed_position lifecycle authority, map the opening BUY from entry_signal_id/opened_at, map the closing SELL near the position close timestamp, and classify outcome from the SELL wallet_trade.realized_pnl_usdt. Return both rows adjacent in the existing seven-column grid.",
+            behavior: "COUPLE + LOST returns the BUY and SELL rows for completed losing positions; COUPLE + WIN returns both rows for completed winners; WIN+LOST returns both outcome classes. Normal mode remains (BUY or SELL) AND (EXECUTED or BLOCKED) AND symbol. Database timestamps remain UTC and frontend display remains Asia/Riyadh.",
+            regression: "For a known completed winner and loser, verify each couple returns exactly two adjacent rows (BUY then SELL), the outcome agrees with wallet_trade.realized_pnl_usdt, symbol/time filters apply, and normal BUY/SELL EXECUTED/BLOCKED searches remain unchanged. No trading, wallet execution, Replay or scoring behavior changes."
+        }
 
 ];
 

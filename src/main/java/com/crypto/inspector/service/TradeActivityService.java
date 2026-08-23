@@ -12,14 +12,14 @@ import java.util.*;
  * Read-only Trade Activity feed.
  *
  * This screen deliberately does NOT participate in signal generation or execution. It only
- * projects already-persisted trade_signal, execution_opportunity and wallet_trade evidence
- * into a compact operator view. Keeping this separate from Trade Inspector prevents the
- * forensic trade-quality screen from becoming an operational event log.
+ * projects already-persisted trade_signal, execution_opportunity, wallet_trade and completed
+ * wallet_managed_position evidence into a compact operator view.
  */
 @Service
 public class TradeActivityService {
     private static final Set<Integer> ALLOWED_HOURS = Set.of(1, 2, 4, 24);
-    private static final Set<String> ALLOWED_FILTERS = Set.of("BUY", "SELL", "BLOCKED", "EXECUTED");
+    private static final Set<String> ALLOWED_FILTERS = Set.of(
+            "BUY", "SELL", "COUPLE", "BLOCKED", "EXECUTED", "WIN", "LOST");
     private final JdbcTemplate jdbc;
 
     public TradeActivityService(JdbcTemplate jdbc) { this.jdbc = jdbc; }
@@ -31,9 +31,26 @@ public class TradeActivityService {
         if (requestedFilters != null) requestedFilters.stream().filter(Objects::nonNull)
                 .map(v -> v.trim().toUpperCase(Locale.ROOT)).filter(ALLOWED_FILTERS::contains).forEach(filters::add);
 
-        // FIX-049: Trade Activity now has two required dimensions. Direction must contain
-        // BUY and/or SELL, while state must contain EXECUTED and/or BLOCKED. Enforce this
-        // in the service as well as the UI so direct API calls cannot bypass the contract.
+        String normalizedSymbol = symbol == null || symbol.isBlank() || "ALL".equalsIgnoreCase(symbol)
+                ? null : symbol.trim().toUpperCase(Locale.ROOT);
+        Instant from = Instant.now().minus(hours, ChronoUnit.HOURS);
+
+        // FIX-058: COUPLE is an explicit completed-position mode, not another additive side.
+        // A couple is the opening BUY and the closing SELL of the same CLOSED
+        // wallet_managed_position. The outcome comes from the persisted SELL realized P/L.
+        // This prevents a nearby unrelated BUY/SELL from being paired merely because timestamps
+        // are close. WIN means realized_pnl_usdt > 0; LOST means realized_pnl_usdt < 0.
+        if (filters.contains("COUPLE")) {
+            boolean includeWin = filters.contains("WIN");
+            boolean includeLost = filters.contains("LOST");
+            if (!includeWin && !includeLost) {
+                throw new IllegalArgumentException("Select WIN, LOST, or both when COUPLE is selected.");
+            }
+            return searchCompletedCouples(normalizedSymbol, from, includeWin, includeLost);
+        }
+
+        // FIX-049/FIX-058: Normal activity mode retains the strict two-dimensional contract:
+        // (BUY or SELL) AND (EXECUTED or BLOCKED) AND symbol. WIN/LOST are couple-only filters.
         List<String> sides = new ArrayList<>();
         if (filters.contains("BUY")) sides.add("BUY");
         if (filters.contains("SELL")) sides.add("SELL");
@@ -42,13 +59,7 @@ public class TradeActivityService {
         if (sides.isEmpty()) throw new IllegalArgumentException("Select BUY, SELL, or both.");
         if (!includeExecuted && !includeBlocked) throw new IllegalArgumentException("Select EXECUTED, BLOCKED, or both.");
 
-        String normalizedSymbol = symbol == null || symbol.isBlank() || "ALL".equalsIgnoreCase(symbol) ? null : symbol.trim().toUpperCase(Locale.ROOT);
-        Instant from = Instant.now().minus(hours, ChronoUnit.HOURS);
         List<Map<String, Object>> rows = new ArrayList<>();
-
-        // FIX-049: EXECUTED rows are real wallet ledger executions and are filtered by the
-        // selected BUY/SELL side(s). Database/Binance timestamps remain UTC; conversion is
-        // presentation-only in trade-activity.js.
         if (includeExecuted) {
             String sideClause = " AND wt.side IN (" + String.join(",", Collections.nCopies(sides.size(), "?")) + ")";
             String sql = """
@@ -75,9 +86,6 @@ public class TradeActivityService {
             rows.addAll(jdbc.queryForList(sql, args.toArray()));
         }
 
-        // FIX-049: BLOCKED rows are persisted blocked/cancelled execution opportunities.
-        // Apply the exact same BUY/SELL direction group and symbol restriction, then union
-        // them with EXECUTED when both state checkboxes are selected.
         if (includeBlocked) {
             String sideClause = " AND eo.direction IN (" + String.join(",", Collections.nCopies(sides.size(), "?")) + ")";
             String sql = """
@@ -100,13 +108,85 @@ public class TradeActivityService {
         return rows.stream().limit(500).toList();
     }
 
-    @Transactional(readOnly = true)
     /**
-     * FIX-046: Trade Activity symbols must come from the activity evidence itself, not only
-     * from wallet_asset. A symbol can have signals or blocked opportunities before it ever
-     * becomes a wallet holding, so limiting this dropdown to wallet_asset made valid symbols
-     * appear unsearchable. This query is read-only and does not alter trading behavior.
+     * FIX-058 completed BUY/SELL pair search.
+     *
+     * Pair authority is wallet_managed_position rather than timestamp guessing:
+     * - BUY is resolved from the position's immutable entry_signal_id/opened_at.
+     * - SELL is the execution nearest the CLOSED position's updated_at inside that lifecycle.
+     * - WIN/LOST is read from the SELL's persisted realized_pnl_usdt.
+     * Both rows are returned adjacent in the existing Trade Activity grid (BUY first, SELL second).
      */
+    private List<Map<String, Object>> searchCompletedCouples(String normalizedSymbol, Instant from,
+                                                              boolean includeWin, boolean includeLost) {
+        String outcomeClause;
+        if (includeWin && includeLost) outcomeClause = " AND sell.realized_pnl_usdt <> 0";
+        else if (includeWin) outcomeClause = " AND sell.realized_pnl_usdt > 0";
+        else outcomeClause = " AND sell.realized_pnl_usdt < 0";
+
+        String sql = """
+                WITH completed AS (
+                    SELECT p.id position_id, p.symbol, p.entry_signal_id, p.opened_at, p.updated_at,
+                           (
+                             SELECT b.id
+                             FROM wallet_trade b
+                             WHERE b.symbol = p.symbol
+                               AND b.side = 'BUY'
+                               AND b.status = 'EXECUTED'
+                               AND b.executed_at BETWEEN p.opened_at - INTERVAL 10 SECOND
+                                                     AND p.opened_at + INTERVAL 60 SECOND
+                             ORDER BY CASE WHEN b.signal_id = p.entry_signal_id THEN 0 ELSE 1 END,
+                                      ABS(TIMESTAMPDIFF(MICROSECOND, b.executed_at, p.opened_at))
+                             LIMIT 1
+                           ) buy_trade_id,
+                           (
+                             SELECT s.id
+                             FROM wallet_trade s
+                             WHERE s.symbol = p.symbol
+                               AND s.side = 'SELL'
+                               AND s.status = 'EXECUTED'
+                               AND s.executed_at >= p.opened_at
+                               AND s.executed_at <= p.updated_at + INTERVAL 60 SECOND
+                             ORDER BY ABS(TIMESTAMPDIFF(MICROSECOND, s.executed_at, p.updated_at))
+                             LIMIT 1
+                           ) sell_trade_id
+                    FROM wallet_managed_position p
+                    WHERE p.status = 'CLOSED'
+                      AND p.updated_at >= ?
+                """ + (normalizedSymbol == null ? "" : " AND p.symbol = ?") + """
+                ), pairs AS (
+                    SELECT c.*, sell.realized_pnl_usdt, sell.executed_at sell_time
+                    FROM completed c
+                    JOIN wallet_trade sell ON sell.id = c.sell_trade_id
+                    WHERE c.buy_trade_id IS NOT NULL AND c.sell_trade_id IS NOT NULL
+                """ + outcomeClause + """
+                )
+                SELECT wt.executed_at event_time,
+                       wt.symbol,
+                       COALESCE(ts.interval_code, entry_ts.interval_code) timeframe,
+                       wt.side action,
+                       CASE WHEN p.realized_pnl_usdt > 0 THEN 'WIN' ELSE 'LOST' END status,
+                       'COUPLE' source,
+                       COALESCE(NULLIF(wt.execution_reason,''),
+                                CASE WHEN wt.side='BUY' THEN 'BUY_EXECUTED' ELSE 'SELL_EXECUTED' END) reason,
+                       p.position_id pair_id,
+                       p.sell_time pair_time,
+                       CASE WHEN wt.side='BUY' THEN 0 ELSE 1 END pair_order
+                FROM pairs p
+                JOIN wallet_trade wt ON wt.id IN (p.buy_trade_id, p.sell_trade_id)
+                LEFT JOIN trade_signal ts ON ts.id = wt.signal_id
+                LEFT JOIN trade_signal entry_ts ON entry_ts.id = p.entry_signal_id
+                ORDER BY p.sell_time DESC, p.position_id DESC, pair_order ASC
+                LIMIT 500
+                """;
+
+        List<Object> args = new ArrayList<>();
+        args.add(from);
+        if (normalizedSymbol != null) args.add(normalizedSymbol);
+        return jdbc.queryForList(sql, args.toArray());
+    }
+
+    @Transactional(readOnly = true)
     public List<String> symbols() {
         return jdbc.queryForList("""
                 SELECT symbol

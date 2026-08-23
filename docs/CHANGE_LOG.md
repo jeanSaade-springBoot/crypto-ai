@@ -20,3 +20,14 @@
 - Added wallet audit fields `decision_price_usdt` and `execution_price_observed_at`; `price_usdt` remains the actual fill price.
 - Added Production/Replay regression coverage for stale setup wake-up and fresh-price revalidation.
 - Database/Binance timestamps remain UTC; local/KSA conversion remains presentation-only.
+
+
+## FIX-058 — Trade Activity completed WIN/LOST couples
+- Added exclusive COUPLE mode beside BUY/SELL.
+- Added WIN/LOST result filters beside EXECUTED/BLOCKED.
+- COUPLE mode resolves completed lifecycle pairs from CLOSED `wallet_managed_position`, not by loose timestamp pairing.
+- The opening BUY is resolved from the position entry signal/open timestamp; the closing SELL is resolved from the same lifecycle close timestamp.
+- WIN/LOST is classified from persisted SELL `wallet_trade.realized_pnl_usdt` (>0 WIN, <0 LOST).
+- Both BUY and SELL rows are returned adjacent in the existing seven-column Trade Activity grid.
+- Normal Trade Activity semantics remain `(BUY OR SELL) AND (EXECUTED OR BLOCKED) AND symbol`.
+- Read-only audit feature only: no Production execution, Replay, scoring, wallet mutation or UTC/KSA architecture change.
