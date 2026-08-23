@@ -1277,6 +1277,42 @@
             behavior: "No Production trading behavior changes. Every queued case delegates to the same isolated regression start() path and existing single-active-run backend lock. Batch runs are sequential by design and continue to use analysis_test_*/shadow tables only.",
             regression: "Verify CSV upload, KSA→UTC conversion, per-row Run, sequential Run Selected, last-run linking, deletion, no static BNB UI fallback, and that Production wallet/trade tables remain untouched."
         }
+        ,{
+            id: "FIX-066",
+            title: "Trade Activity symbol column + explicit TAKE_PROFIT_EXTENDED path",
+            status: "UI / READ-ONLY AUDIT",
+            scenario: "Trade Activity rows were not self-identifying by symbol, and Trade Inspector only exposed the final managed TP snapshot so a real TAKE_PROFIT_EXTENDED action was easy to miss.",
+            symbol: "MULTI-SYMBOL",
+            entry: "N/A",
+            exit: "N/A",
+            entryTime: "N/A",
+            exitTime: "N/A",
+            replayWindow: "N/A — read-only Production audit/UI change",
+            location: "Trade Activity grid + Trade Inspector sequential decision/position path",
+            classes: ["TradeInspectorService", "PositionManagementEventRepository", "trade-activity.js", "trade-inspector.js"],
+            cause: "Trade Activity rendered time/side/result/price/P&L/action but omitted symbol. Trade Inspector returned only the current managed-position target snapshot and did not place immutable position_management_event rows into the completed BUY→SELL timeline.",
+            solution: "Add Symbol as a first-class Trade Activity column. Return position-management events for the exact managed-position lifecycle and render TAKE_PROFIT_EXTENDED as a dedicated highlighted chronological phase showing old TP, new TP, market price, reason and KSA time.",
+            behavior: "No trading or Replay behavior changes. Activity rows remain self-identifying in ALL-symbol and filtered views. When Production extends take profit, Trade Inspector now visibly shows TAKE_PROFIT_EXTENDED between entry and exit rather than hiding the change in a final snapshot.",
+            regression: "Verify mixed-symbol Trade Activity lists show a Symbol value on every row and remain screen-compatible. Inspect a position with a persisted TAKE_PROFIT_EXTENDED event and verify exact old/new TP, market price, reason and KSA timestamp appear in chronological order without changing BUY/SELL lifecycle data."
+        }
+        ,{
+            id: "FIX-067",
+            title: "Extended take-profit authoritative state synchronization",
+            status: "PRODUCTION + REPLAY PARITY VERIFIED",
+            scenario: "PEPE wallet BUY #833 / managed position #552 extended TP but wallet SELL #847 still fired TAKE_PROFIT below the extended target",
+            symbol: "PEPEUSDT",
+            entry: "0.000004110000",
+            exit: "0.000004150000",
+            entryTime: "2026-08-23 23:48:03 KSA",
+            exitTime: "2026-08-24 00:03:02 KSA",
+            replayWindow: "2026-08-23 23:45:00 -> 2026-08-24 00:05:00 KSA",
+            location: "LivePositionProtectionService + PaperTradingService",
+            classes: ["LivePositionProtectionService", "PaperTradingService", "LivePositionProtectionServiceTpExtensionSyncTest", "ShadowProductionReplayService"],
+            cause: "Production maintained take profit in two open-position state holders. LivePositionProtectionService correctly changed wallet_managed_position.take_profit_usdt from 0.000004146897 to 0.000004165346, but paper_position.take_profit remained at the old target. One minute later PaperTradingService processed signal #161661 at 0.000004150 and compared it to the stale paper TP, so 0.000004150 >= 0.000004146897 incorrectly triggered TAKE_PROFIT even though 0.000004150 < 0.000004165346.",
+            solution: "Synchronize paper_position.take_profit whenever live protection extends the managed TP, and make PaperTradingService prefer the OPEN wallet_managed_position TP as the authoritative target while repairing any stale paper snapshot. No TP percentage, continuation threshold, strategy, score, WEAK_UPTREND, ACCUMULATED_EVIDENCE or exit policy is changed.",
+            behavior: "After TAKE_PROFIT_EXTENDED, every Production exit path evaluates the same extended target. A fresh signal below the extended target can no longer close the position merely because paper_position retained the entry-time TP. Replay already updates wallet_position_test.take_profit_usdt and its in-memory ShadowPosition target before continuing, so the same authoritative-target behavior is preserved.",
+            regression: "Literal PEPE #552 regression: old TP 0.000004146897, extension checkpoint 0.000004150000, new target 0.000004165346. Verify the extension persists and synchronizes both Production state holders, and verify no TAKE_PROFIT exit occurs at 0.000004150. Replay must continue using the extended shadow TP before any later TP exit."
+        }
 
 
 ];

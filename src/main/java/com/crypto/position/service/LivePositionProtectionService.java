@@ -72,6 +72,24 @@ public class LivePositionProtectionService {
                 managed.setTakeProfitUsdt(newTarget);
                 managed.setUpdatedAt(changedAt);
                 managedPositionRepository.save(managed);
+
+                // FIX-067: Production has two persisted views of the same open lifecycle:
+                // wallet_managed_position drives live protection, while paper_position is also
+                // evaluated when a fresh TradeSignal arrives.  Before this fix only the managed
+                // position received a TAKE_PROFIT_EXTENDED update.  The next 1m signal could
+                // therefore see the stale ORIGINAL paper TP and close the wallet early.
+                // PEPE wallet #833 / managed position #552 proved the race: managed TP was
+                // extended 0.000004146897 -> 0.000004165346, but the signal path sold at
+                // 0.000004150 because paper_position still held 0.000004146897.
+                // Keep both Production state holders synchronized inside this same transaction.
+                PaperPosition synchronizedPaper = paperPositionRepository
+                        .findBySymbolAndStatus(symbol, PositionStatus.OPEN)
+                        .orElse(null);
+                if (synchronizedPaper != null) {
+                    synchronizedPaper.setTakeProfit(newTarget);
+                    paperPositionRepository.save(synchronizedPaper);
+                }
+
                 // FIX-053: Persist every TP revision so Dashboard can show the actual
                 // Production management path instead of only the latest target value.
                 positionManagementEventRepository.save(PositionManagementEvent.builder()

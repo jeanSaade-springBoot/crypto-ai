@@ -859,6 +859,22 @@ function buildSimpleTradePhases(data){
     phases.push({name:'NORMAL_POSITION',time:normalTime,s:normalSignal,kind:'position',subtitle:'Recovery thesis graduated to normal position management'});
   }else if(confirm)phases.push({name:'NORMAL_POSITION',time:confirm.generatedAt,s:confirm,kind:'position',subtitle:'Confirmed position management'});
 
+  // FIX-066: TAKE_PROFIT_EXTENDED is a real persisted management action, not generic context.
+  // Put every immutable management event directly in the sequential BUY -> SELL path so the
+  // user can see exactly when Production moved the target, from which TP to which TP, at what
+  // market price, and why. No trading logic is recalculated in the browser.
+  (data.managementEvents||[]).forEach(e=>{
+    const type=String(e.type||'POSITION_MANAGEMENT').toUpperCase();
+    const tpExtended=type==='TAKE_PROFIT_EXTENDED';
+    const extra=`<div class="management-event-detail ${tpExtended?'tp-extended':''}">
+      <div><span>Old TP</span><strong>${price(e.oldValue)}</strong></div>
+      <div><span>New TP</span><strong>${price(e.newValue)}</strong></div>
+      <div><span>Market price</span><strong>${price(e.marketPrice)}</strong></div>
+      <p>${esc(e.reason||'Persisted Production position-management event')}</p>
+    </div>`;
+    phases.push({name:type,time:e.occurredAt,s:null,kind:tpExtended?'tp-extended':'position',subtitle:tpExtended?'Profit target extended during the live position':'Persisted position-management change',extra});
+  });
+
   const deterioration=bestLifecycleSignal(signals,s=>new Date(s.generatedAt)>new Date(data.openedAt)&&String(s.interval).toLowerCase()==='1m'&&(String(s.originalDecision||'').includes('SELL')||Number(s.score)<50));
   if(deterioration)phases.push({name:'DETERIORATING',time:deterioration.generatedAt,s:deterioration,kind:'warn',subtitle:'Short-term thesis weakened'});
   const exitBase=data.exitSignal?.id?data.exitSignal:(data.exitOneMinute||latestBefore(signals,data.closedAt));
@@ -895,7 +911,7 @@ function renderTradePath(data){
   const phases=buildSimpleTradePhases(data);
   const nodes=phases.map((p,i)=>{
     const prev=i?phases[i-1]:null;const elapsed=prev?Math.max(0,(new Date(p.time)-new Date(prev.time))/1000):null;
-    return `${i?`<div class="trade-path-arrow"><span>→</span><small>${secondsLabel(elapsed)}</small></div>`:''}${phaseNode(p.name,p.time,p.subtitle,p.s,p.kind)}`;
+    return `${i?`<div class="trade-path-arrow"><span>→</span><small>${secondsLabel(elapsed)}</small></div>`:''}${phaseNode(p.name,p.time,p.subtitle,p.s,p.kind,p.extra||'')}`;
   }).join('');
   const entry=data.entrySignal||data.oneMinute||{};
   const rawChecks=decisionPathRows(data.decisionPath);

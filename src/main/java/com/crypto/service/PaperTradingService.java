@@ -106,9 +106,30 @@ public class PaperTradingService {
                     : DynamicProfitLockService.Evaluation.inactive(
                             "Signal price predates the open position and is context-only for mechanical protection.");
 
-            if (authoritativePrice && price.compareTo(position.getTakeProfit()) >= 0) {
+            // FIX-067: The wallet-managed position is the authoritative Production source for
+            // a dynamically extended take-profit.  paper_position historically retained the
+            // entry-time TP, so a fresh 1m signal could close against that stale threshold even
+            // after LivePositionProtectionService had persisted TAKE_PROFIT_EXTENDED.
+            // Prefer the OPEN managed TP and repair the paper snapshot when they differ. This is
+            // deliberately NOT a TP-policy change: it only makes both existing exit paths compare
+            // against the same already-approved target.
+            BigDecimal authoritativeTakeProfit = position.getTakeProfit();
+            WalletManagedPosition managedPosition = walletManagedPositionRepository
+                    .findTopBySymbolAndStatusOrderByOpenedAtDesc(symbol, "OPEN")
+                    .orElse(null);
+            if (managedPosition != null && managedPosition.getTakeProfitUsdt() != null) {
+                authoritativeTakeProfit = managedPosition.getTakeProfitUsdt();
+                if (position.getTakeProfit() == null
+                        || position.getTakeProfit().compareTo(authoritativeTakeProfit) != 0) {
+                    position.setTakeProfit(authoritativeTakeProfit);
+                    positionRepository.save(position);
+                }
+            }
+
+            if (authoritativePrice && authoritativeTakeProfit != null
+                    && price.compareTo(authoritativeTakeProfit) >= 0) {
                 return Optional.of(closeFromSignal(position, signal, PositionStatus.CLOSED,
-                        "TAKE_PROFIT", "Price reached the configured take-profit target."));
+                        "TAKE_PROFIT", "Price reached the authoritative configured take-profit target."));
             }
 
             if (authoritativePrice && profitLock.triggered()) {

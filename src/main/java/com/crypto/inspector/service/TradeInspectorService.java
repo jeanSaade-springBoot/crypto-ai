@@ -14,7 +14,9 @@ import com.crypto.repository.TradeSignalRepository;
 import com.crypto.execution.domain.ExecutionOpportunity;
 import com.crypto.execution.repository.ExecutionOpportunityRepository;
 import com.crypto.position.domain.PositionAnalysis;
+import com.crypto.position.domain.PositionManagementEvent;
 import com.crypto.position.repository.PositionAnalysisRepository;
+import com.crypto.position.repository.PositionManagementEventRepository;
 import com.crypto.wallet.domain.WalletTrade;
 import com.crypto.wallet.domain.WalletManagedPosition;
 import com.crypto.wallet.repository.WalletTradeRepository;
@@ -43,6 +45,7 @@ public class TradeInspectorService {
     private final ExecutionOpportunityRepository executionOpportunityRepository;
     private final ProductionExitAuditRepository productionExitAuditRepository;
     private final PositionAnalysisRepository positionAnalysisRepository;
+    private final PositionManagementEventRepository positionManagementEventRepository;
 
     public TradeInspectorService(WalletTradeRepository walletTradeRepository,
                                  CandleRepository candleRepository,
@@ -51,7 +54,8 @@ public class TradeInspectorService {
                                  TradeSignalRepository tradeSignalRepository,
                                  ExecutionOpportunityRepository executionOpportunityRepository,
                                  ProductionExitAuditRepository productionExitAuditRepository,
-                                 PositionAnalysisRepository positionAnalysisRepository) {
+                                 PositionAnalysisRepository positionAnalysisRepository,
+                                 PositionManagementEventRepository positionManagementEventRepository) {
         this.walletTradeRepository = walletTradeRepository;
         this.candleRepository = candleRepository;
         this.paperPositionRepository = paperPositionRepository;
@@ -60,6 +64,7 @@ public class TradeInspectorService {
         this.executionOpportunityRepository = executionOpportunityRepository;
         this.productionExitAuditRepository = productionExitAuditRepository;
         this.positionAnalysisRepository = positionAnalysisRepository;
+        this.positionManagementEventRepository = positionManagementEventRepository;
     }
 
     @Transactional(readOnly = true)
@@ -651,6 +656,28 @@ public class TradeInspectorService {
             management.put("profitLockProgressPercent", managed.getProfitLockProgressPercent());
         }
         result.put("management", management);
+
+        // FIX-066: expose immutable position-management changes in the same exact lifecycle
+        // shown by Trade Inspector. This is read-only presentation data. In particular, a
+        // TAKE_PROFIT_EXTENDED event must be visible as its own timeline phase with old TP,
+        // new TP, market price, reason and KSA-rendered timestamp instead of being hidden in
+        // the final managed-position snapshot.
+        List<PositionManagementEvent> managementEvents = managed == null || managed.getId() == null
+                ? List.of()
+                : positionManagementEventRepository
+                    .findByWalletPositionIdAndOccurredAtBetweenOrderByOccurredAtAsc(
+                            managed.getId(), buy.getExecutedAt(), sell.getExecutedAt());
+        result.put("managementEvents", managementEvents.stream().map(e -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", e.getId());
+            item.put("type", e.getEventType());
+            item.put("oldValue", e.getOldValueUsdt());
+            item.put("newValue", e.getNewValueUsdt());
+            item.put("marketPrice", e.getMarketPriceUsdt());
+            item.put("reason", e.getReason());
+            item.put("occurredAt", e.getOccurredAt());
+            return item;
+        }).toList());
         return result;
     }
 
