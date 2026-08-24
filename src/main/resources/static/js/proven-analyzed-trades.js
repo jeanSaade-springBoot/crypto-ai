@@ -89,6 +89,8 @@ async function loadRegressionRuns() {
     if (!body) return;
     try {
         const runs = await api('/api/administration/regression-tests/runs');
+        // FIX-087: Resume is hidden while the backend reports a live worker, even if its
+        // persisted heartbeat is old. ERROR runs are recoverable deterministically as well.
         body.innerHTML = runs.map(run => `
             <tr>
                 <td>#${run.id}</td>
@@ -98,7 +100,7 @@ async function loadRegressionRuns() {
                 <td><span class="status-pill ${regressionStatusClass(run.status)}">${escapeHtml(run.status)}</span></td>
                 <td>${Number(run.progress_percent || 0)}%</td>
                 <td><label class="proven-success-check" title="Save every closed trade from this run in Proven trades"><input type="checkbox" data-proven-run-toggle="${run.id}" ${Number(run.closed_trade_count || 0) > 0 && Number(run.proven_trade_count || 0) === Number(run.closed_trade_count || 0) ? 'checked' : ''} ${Number(run.closed_trade_count || 0) === 0 ? 'disabled' : ''}></label></td>
-                <td><button type="button" class="secondary-button" data-regression-run-id="${run.id}">View</button>${['PENDING','RUNNING'].includes(String(run.status)) && (!run.heartbeat_at || (Date.now() - new Date(run.heartbeat_at).getTime()) > 120000) ? ` <button type="button" class="secondary-button" data-regression-resume-id="${run.id}" title="Recover this interrupted replay using the same run id and window">Resume</button>` : ''}</td>
+                <td><button type="button" class="secondary-button" data-regression-run-id="${run.id}">View</button>${((['PENDING','RUNNING'].includes(String(run.status)) && (!run.heartbeat_at || (Date.now() - new Date(run.heartbeat_at).getTime()) > 120000)) || String(run.status) === 'ERROR') && !run.active_worker ? ` <button type="button" class="secondary-button" data-regression-resume-id="${run.id}" title="Recover this interrupted/failed replay using the same run id and window">Resume</button>` : ''}</td>
             </tr>
         `).join('') || '<tr><td colspan="8">No regression tests have been run yet.</td></tr>';
         const active = runs.find(run => ['PENDING', 'RUNNING'].includes(String(run.status)));

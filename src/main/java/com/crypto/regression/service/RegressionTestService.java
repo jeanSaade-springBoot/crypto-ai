@@ -116,6 +116,11 @@ public class RegressionTestService {
                 "SELECT id FROM analysis_test_run WHERE status IN ('PENDING','RUNNING') ORDER BY id", Long.class);
         for (Long runId : interrupted) {
             try {
+                // FIX-087: never reset isolated replay outputs when this JVM still owns the run.
+                // At normal startup the set is empty; this also protects repeated lifecycle calls.
+                if (worker.isActive(runId)) {
+                    continue;
+                }
                 prepareInterruptedRunForReplay(runId);
                 worker.runAsync(runId);
             } catch (Exception ex) {
@@ -131,9 +136,15 @@ public class RegressionTestService {
                 "SELECT id,status,heartbeat_at FROM analysis_test_run WHERE id=?", runId);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Regression test #" + runId + " not found.");
         Map<String,Object> row = rows.get(0);
+        // FIX-087: heartbeat_at can look stale during a long computation while the async replay
+        // worker is still healthy. Check actual in-JVM ownership before any destructive cleanup.
+        if (worker.isActive(runId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Replay #" + runId + " is still executing; Resume was not started.");
+        }
         String status = String.valueOf(row.get("status"));
-        if (!List.of("PENDING", "RUNNING").contains(status)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only an interrupted PENDING/RUNNING replay can be resumed.");
+        if (!List.of("PENDING", "RUNNING", "ERROR").contains(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only an interrupted PENDING/RUNNING or failed ERROR replay can be resumed.");
         }
         Timestamp heartbeat = (Timestamp) row.get("heartbeat_at");
         if (heartbeat != null && heartbeat.toInstant().isAfter(Instant.now().minusSeconds(120))) {
@@ -359,12 +370,15 @@ public class RegressionTestService {
                 WHERE test_run_id = ?
                 """, id);
         run.put("result", results.isEmpty() ? null : results.get(0));
+        // FIX-087: expose actual in-JVM worker ownership so the UI does not offer Resume merely
+        // because heartbeat_at aged during a legitimate long-running computation.
+        run.put("active_worker", worker.isActive(id));
         return run;
     }
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> latestRuns() {
-        return jdbcTemplate.queryForList("""
+        List<Map<String, Object>> runs = jdbcTemplate.queryForList("""
                 SELECT r.id, r.test_name, r.symbol, r.start_time, r.end_time, r.status, r.progress_percent,
                        r.current_step, r.heartbeat_at, r.started_at, r.completed_at, r.created_at,
                        (SELECT COUNT(*) FROM wallet_position_test w WHERE w.test_run_id=r.id AND w.exit_time IS NOT NULL) AS closed_trade_count,
@@ -373,6 +387,10 @@ public class RegressionTestService {
                 ORDER BY r.id DESC
                 LIMIT 20
                 """);
+        // FIX-087: heartbeat freshness is only a persistence signal; actual worker ownership is
+        // surfaced separately so a long healthy replay is not presented as resumable.
+        runs.forEach(run -> run.put("active_worker", worker.isActive(((Number) run.get("id")).longValue())));
+        return runs;
     }
 
     @Transactional(readOnly = true)

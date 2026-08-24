@@ -30,6 +30,8 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @RequiredArgsConstructor
@@ -53,8 +55,24 @@ public class RegressionTestWorker {
     private final BtcContextProperties btcContextProperties;
     private final MarketPriceEventService marketPriceEventService;
 
+    // FIX-087: heartbeat age alone cannot prove that a long replay worker has died.
+    // Some deterministic replay stages can legitimately run for more than the stale-heartbeat
+    // threshold without returning to updateRun(). Keep atomic in-JVM ownership so Resume cannot
+    // launch a second worker for the same durable run while the first worker is still executing.
+    private final Set<Long> activeRunIds = ConcurrentHashMap.newKeySet();
+
+    public boolean isActive(long runId) {
+        return activeRunIds.contains(runId);
+    }
+
     @Async
     public void runAsync(long runId) {
+        // FIX-087: close the race at worker entry as well. Even if two callers schedule the same
+        // run almost simultaneously, only one may execute the deterministic replay pipeline.
+        if (!activeRunIds.add(runId)) {
+            log.warn("FIX-087: replay run {} already has an active worker; duplicate execution skipped", runId);
+            return;
+        }
         try {
             Map<String, Object> run = jdbcTemplate.queryForMap(
                     "SELECT symbol, start_time, end_time FROM analysis_test_run WHERE id = ?", runId);
@@ -225,6 +243,9 @@ public class RegressionTestWorker {
                     + "The decision replay validates that originalDecision is audit-only and cannot override a non-null final decision. "
                     + "Regression AnalysisService returns unsaved TradeSignal objects. Fresh signals then pass through an isolated shadow execution/position lifecycle that records exact simulated BUY/SELL points. Real wallet, trade_signal and production execution_opportunity tables are never written.";
 
+            // FIX-087: one result row per run is an invariant. Worker ownership prevents the
+            // overlap at its source; this idempotent write is the database-level last safety net
+            // so a duplicate completion can never turn an otherwise valid replay into ERROR.
             jdbcTemplate.update("""
                     INSERT INTO analysis_test_result
                         (test_run_id,
@@ -236,6 +257,35 @@ public class RegressionTestWorker {
                          decision_authority_corrections, old_hard_bearish_reversals,
                          corrected_hard_bearish_reversals, cadence_path_passed, decision_authority_passed, test_passed, notes)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        candles_1m=VALUES(candles_1m),
+                        signals_1m_historical=VALUES(signals_1m_historical),
+                        replayable_1m_events=VALUES(replayable_1m_events),
+                        generated_signals_1m=VALUES(generated_signals_1m),
+                        generated_buys_1m=VALUES(generated_buys_1m),
+                        candles_5m=VALUES(candles_5m),
+                        signals_5m_historical=VALUES(signals_5m_historical),
+                        replayable_5m_events=VALUES(replayable_5m_events),
+                        generated_signals_5m=VALUES(generated_signals_5m),
+                        generated_buys_5m=VALUES(generated_buys_5m),
+                        candles_1h=VALUES(candles_1h),
+                        signals_1h_historical=VALUES(signals_1h_historical),
+                        replayable_1h_events=VALUES(replayable_1h_events),
+                        generated_signals_1h=VALUES(generated_signals_1h),
+                        generated_buys_1h=VALUES(generated_buys_1h),
+                        generated_signal_errors=VALUES(generated_signal_errors),
+                        simulated_trades=VALUES(simulated_trades),
+                        simulated_wins=VALUES(simulated_wins),
+                        simulated_losses=VALUES(simulated_losses),
+                        simulated_realized_pnl=VALUES(simulated_realized_pnl),
+                        simulated_final_wallet=VALUES(simulated_final_wallet),
+                        decision_authority_corrections=VALUES(decision_authority_corrections),
+                        old_hard_bearish_reversals=VALUES(old_hard_bearish_reversals),
+                        corrected_hard_bearish_reversals=VALUES(corrected_hard_bearish_reversals),
+                        cadence_path_passed=VALUES(cadence_path_passed),
+                        decision_authority_passed=VALUES(decision_authority_passed),
+                        test_passed=VALUES(test_passed),
+                        notes=VALUES(notes)
                     """,
                     runId,
                     requestedCandles1m, historical1m, replay1m, fresh.oneMinuteSignals(), fresh.oneMinuteBuys(),
@@ -267,6 +317,10 @@ public class RegressionTestWorker {
                     """,
                     summary, failedStep, exception.getClass().getName(),
                     rootCauseDetail(root, 1000), stackTrace(exception), runId);
+        } finally {
+            // FIX-087: always release ownership, including ERROR paths, so a genuinely stopped
+            // replay remains recoverable later using the same run id and original replay window.
+            activeRunIds.remove(runId);
         }
     }
 

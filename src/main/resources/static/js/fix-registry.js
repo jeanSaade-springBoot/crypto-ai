@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-087",
+            title: "Prevent duplicate Replay workers during Resume",
+            status: "COMPLETE · REPLAY RECOVERY SAFETY",
+            scenario: "A long-running replay can exceed the heartbeat stale threshold while its async worker is still alive; clicking Resume must not clear its outputs or start a second worker for the same run id.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A", exitTime: "N/A",
+            replayWindow: "Any PENDING/RUNNING replay, especially long shadow-production stages",
+            location: "Regression replay recovery and final result persistence",
+            classes: ["RegressionTestService", "RegressionTestWorker", "fix-registry.js"],
+            cause: "FIX-073 used heartbeat age to decide whether Resume was safe. A valid worker can spend more than 120 seconds inside a long replay stage without refreshing heartbeat_at, so Resume could reset the same run and launch an overlapping worker. Both workers could later INSERT analysis_test_result for the same test_run_id, violating uk_analysis_test_result_run.",
+            solution: "Track active replay run ids atomically inside RegressionTestWorker, reject manual Resume before any destructive cleanup when that run is still active, expose active worker ownership to the Recent Test Runs UI so Resume is hidden for a live worker, keep a second atomic guard at async worker entry, allow deterministic manual recovery of ERROR runs, always release ownership in finally, and make the one-row-per-run result persistence idempotent with ON DUPLICATE KEY UPDATE as a final database safety net.",
+            behavior: "Trading decisions, Production execution, Replay inputs/window and deterministic restart semantics are unchanged. Resume still rebuilds a genuinely interrupted run from the beginning using the same run id, but cannot overlap a worker that is still alive in the same application instance.",
+            regression: "Run a replay whose long stage exceeds 120 seconds and verify Resume stays hidden while active_worker=true. For an ERROR/interrupted run, Resume must rebuild the same run id/window. Verify analysis_test_result contains exactly one row for the run and no DuplicateKeyException occurs."
+        },
+        {
             id: "FIX-074",
             title: "Restore Shadow Trades directly under Proven replay result",
             scenario: "Recent Test Run View must immediately expose shadow BUY/SELL rows",
