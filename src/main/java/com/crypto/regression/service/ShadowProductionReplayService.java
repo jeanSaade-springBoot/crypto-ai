@@ -28,6 +28,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 
 @Service
 @RequiredArgsConstructor
@@ -49,7 +50,8 @@ public class ShadowProductionReplayService {
 
     public ReplayStats replay(long runId, String symbol, Instant executionStart, Instant executionEnd,
                               List<TradeSignal> generatedSignals,
-                              List<MarketPriceEventService.PriceEvent> productionPriceEvents) {
+                              List<MarketPriceEventService.PriceEvent> productionPriceEvents,
+                              BooleanSupplier stopRequested) {
         List<TradeSignal> timeline = generatedSignals.stream()
                 .filter(s -> s != null && s.getGeneratedAt() != null)
                 .sorted(Comparator.comparing(TradeSignal::getGeneratedAt)
@@ -92,11 +94,16 @@ public class ShadowProductionReplayService {
                     }
                 })) {
         for (TradeSignal signal : timeline) {
+            // FIX-090: shadow execution is frequently cancellable without affecting Production.
+            if (stopRequested != null && stopRequested.getAsBoolean()) {
+                throw new ReplayCancellationException(runId);
+            }
             // FIX-052 exact ordering: BinanceKlineService invokes live position protection
             // from the 1m price update BEFORE publishing the candle-close analysis event.
             // Consume all persisted Production prices up to this signal timestamp before
             // making the freshly generated signal visible to position management.
             while (livePriceIndex < livePrices.size()
+                    && (stopRequested == null || !stopRequested.getAsBoolean())
                     && !livePrices.get(livePriceIndex).observedAt().isAfter(signal.getGeneratedAt())) {
                 MarketPriceEventService.PriceEvent live = livePrices.get(livePriceIndex++);
                 replayScope.referencePrice(symbol, live.observedAt(), live.price());

@@ -99,15 +99,19 @@ async function loadRegressionRuns() {
                 <td><span class="status-pill ${regressionStatusClass(run.status)}">${escapeHtml(run.status)}</span></td>
                 <td>${Number(run.progress_percent || 0)}%</td>
                 <td><label class="proven-success-check" title="Save every closed trade from this run in Proven trades"><input type="checkbox" data-proven-run-toggle="${run.id}" ${Number(run.closed_trade_count || 0) > 0 && Number(run.proven_trade_count || 0) === Number(run.closed_trade_count || 0) ? 'checked' : ''} ${Number(run.closed_trade_count || 0) === 0 ? 'disabled' : ''}></label></td>
-                <td><button type="button" class="secondary-button" data-regression-run-id="${run.id}">View</button></td>
+                <td>
+                    <button type="button" class="secondary-button" data-regression-run-id="${run.id}">View</button>
+                    ${run.active_worker && ['PENDING','RUNNING'].includes(String(run.status))
+                        ? `<button type="button" class="danger-button" data-regression-stop-id="${run.id}">Stop Test</button>` : ''}
+                </td>
             </tr>
         `).join('') || '<tr><td colspan="8">No regression tests have been run yet.</td></tr>';
-        const active = runs.find(run => ['PENDING', 'RUNNING'].includes(String(run.status)));
+        const active = runs.find(run => Boolean(run.active_worker) || ['PENDING', 'RUNNING'].includes(String(run.status)));
         setRegressionRunButtonRunning(Boolean(active), active);
         const resetButton = document.getElementById('regression-reset');
         if (resetButton) {
-            resetButton.disabled = Boolean(active);
-            resetButton.title = active ? `Test #${active.id} is still ${active.status}. Wait for it to finish before resetting.` : 'Clear all isolated regression/shadow test data';
+            resetButton.disabled = runs.some(run => Boolean(run.active_worker));
+            resetButton.title = runs.some(run => Boolean(run.active_worker)) ? 'A Replay/Test worker is still active. Stop it before Delete Data.' : 'Clear all isolated regression/shadow test data';
         }
         return runs;
     } catch (error) {
@@ -842,6 +846,36 @@ if (regressionForm) {
 const regressionRunsBody = document.getElementById('regression-runs-body');
 if (regressionRunsBody) {
     regressionRunsBody.addEventListener('click', async event => {
+        const stopButton = event.target.closest('button[data-regression-stop-id]');
+        if (stopButton) {
+            const runId = stopButton.dataset.regressionStopId;
+            if (!window.confirm(`Stop Replay/Test #${runId}? Production will continue running.`)) return;
+            stopButton.disabled = true;
+            stopButton.textContent = 'Stopping…';
+            try {
+                const result = await api(`/api/administration/regression-tests/runs/${encodeURIComponent(runId)}/stop`, {method: 'POST'});
+                showAdminMessage(result.message || `Stop requested for test #${runId}.`);
+                // FIX-090: poll actual worker ownership. Delete Data stays disabled until
+                // active_worker=false, even if the database status has already become ERROR.
+                const waitForStop = window.setInterval(async () => {
+                    try {
+                        const runs = await loadRegressionRuns();
+                        const row = runs?.find(r => String(r.id) === String(runId));
+                        if (!row || !row.active_worker) {
+                            window.clearInterval(waitForStop);
+                            if (row) await loadRegressionDetail(runId, false);
+                            showAdminMessage(`Test #${runId} is stopped. You can now Delete Data.`);
+                        }
+                    } catch (_) { /* normal refresh/polling will retry */ }
+                }, 1000);
+            } catch (error) {
+                stopButton.disabled = false;
+                stopButton.textContent = 'Stop Test';
+                showAdminMessage(error.message, true);
+            }
+            return;
+        }
+
         const button = event.target.closest('button[data-regression-run-id]');
         if (!button) return;
         try {

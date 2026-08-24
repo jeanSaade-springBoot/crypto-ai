@@ -50,6 +50,10 @@ public class RegressionTestController {
     // FIX-088: manual Resume was removed. A failed/interrupted test run must be deleted
     // and started again explicitly so only one replay lifecycle exists per user action.
 
+    // FIX-090: real cooperative cancellation of one Replay/Test worker; Production is untouched.
+    @PostMapping("/runs/{id}/stop")
+    public Map<String, Object> stop(@PathVariable long id) { return service.stopRun(id); }
+
     @PostMapping("/runs/{id}/archive")
     public Map<String, Object> archive(@PathVariable long id, @RequestBody(required = false) Map<String,Object> body) {
         String reason = body == null ? null : String.valueOf(body.getOrDefault("reason", ""));

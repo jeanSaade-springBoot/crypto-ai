@@ -1,6 +1,22 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-090",
+            title: "Safe Stop Test with verified worker termination",
+            status: "COMPLETE · REPLAY LIFECYCLE SAFETY",
+            scenario: "A long Replay/Test must be stoppable without restarting the application or affecting Production, and Delete Data must never run while the replay Java worker is still alive.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A", exitTime: "N/A",
+            replayWindow: "Any active Replay/Test",
+            location: "RegressionTestWorker, ShadowProductionReplayService, RegressionTestService, RegressionTestController, Proven/Test UI",
+            classes: ["RegressionTestWorker", "ShadowProductionReplayService", "ReplayCancellationException", "RegressionTestService", "RegressionTestController", "proven-analyzed-trades.js"],
+            cause: "Changing analysis_test_run.status only changes database/UI state and does not stop the asynchronous Java replay worker. Deleting rows while that worker remains active can allow it to write test data again.",
+            solution: "Add a cooperative Stop Test request scoped to one run id, check cancellation throughout candle resolution, fresh-signal generation and shadow-production replay, mark the run ERROR only after the replay pipeline actually unwinds, expose active_worker ownership to the UI, and block Delete Data on actual Java worker ownership rather than database status alone.",
+            behavior: "Stop Test affects only isolated Replay/Test execution. Production analysis, wallet execution and BUY/SELL logic continue unchanged. After active_worker becomes false the stopped run is ERROR and Delete Data can safely purge test data while keeping Proven records.",
+            regression: "Start a long replay, click Stop Test, verify Production remains running, current_step shows stop requested then Stopped by user, active_worker becomes false, status becomes ERROR, Delete Data unlocks only afterward, and the validated purge leaves all Replay/Test tables at zero while Proven counts remain unchanged."
+        },
+
+        {
             id: "FIX-089",
             title: "Prevent false replay restart interruption",
             status: "COMPLETE · REPLAY LIFECYCLE SAFETY",

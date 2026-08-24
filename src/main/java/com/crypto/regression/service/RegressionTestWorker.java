@@ -61,8 +61,31 @@ public class RegressionTestWorker {
     // launch a second worker for the same durable run while the first worker is still executing.
     private final Set<Long> activeRunIds = ConcurrentHashMap.newKeySet();
 
+    // FIX-090: cooperative stop requests are tracked separately from active ownership. A Stop Test
+    // request never pretends the worker is gone; Delete Data stays blocked until runAsync reaches
+    // finally and removes the run from activeRunIds.
+    private final Set<Long> stopRequestedRunIds = ConcurrentHashMap.newKeySet();
+
     public boolean isActive(long runId) {
         return activeRunIds.contains(runId);
+    }
+
+    public boolean hasActiveRuns() {
+        return !activeRunIds.isEmpty();
+    }
+
+    public boolean requestStop(long runId) {
+        if (!activeRunIds.contains(runId)) return false;
+        stopRequestedRunIds.add(runId);
+        return true;
+    }
+
+    public boolean isStopRequested(long runId) {
+        return stopRequestedRunIds.contains(runId);
+    }
+
+    private void checkStopRequested(long runId) {
+        if (stopRequestedRunIds.contains(runId)) throw new ReplayCancellationException(runId);
     }
 
     @Async
@@ -81,6 +104,7 @@ public class RegressionTestWorker {
             Instant end = toInstant(run.get("end_time"));
 
             updateRun(runId, "RUNNING", 2, "Loading historical candles and signals", null);
+            checkStopRequested(runId);
 
             Instant contextStart = start.minus(REPLAY_CONTEXT_WARMUP);
             List<Candle> oneMinuteCandles = candles(symbol, "1m", contextStart, end);
@@ -103,11 +127,13 @@ public class RegressionTestWorker {
                     sourceSignals.size(), runId);
 
             updateRun(runId, "RUNNING", 10, "Replaying event-candle resolution (no production writes)", null);
+            checkStopRequested(runId);
             int replay1m = verifyEventResolution(runId, symbol, "1m", requestedOneMinuteCandles, 10, 28);
             int replay5m = verifyEventResolution(runId, symbol, "5m", requestedFiveMinuteCandles, 28, 38);
             int replay1h = verifyEventResolution(runId, symbol, "1h", requestedOneHourCandles, 38, 42);
 
             updateRun(runId, "RUNNING", 43, "Generating fresh signals from historical candles", null);
+            checkStopRequested(runId);
             FreshReplayStats fresh = generateFreshSignals(
                     runId, symbol, start, end,
                     oneMinuteCandles, fiveMinuteCandles, oneHourCandles,
@@ -120,6 +146,7 @@ public class RegressionTestWorker {
                     """, fresh.total(), fresh.buys(), fresh.watches(), fresh.sells(), fresh.strongSells(), runId);
 
             updateRun(runId, "RUNNING", 74, "Running full shadow-production execution flow", null);
+            checkStopRequested(runId);
             // FIX-052: Replay position protection consumes the same canonical live 1m
             // price observations that Production consumed. Historical windows before
             // V64 was deployed naturally have no events and are explicitly degraded to
@@ -127,15 +154,19 @@ public class RegressionTestWorker {
             List<MarketPriceEventService.PriceEvent> productionPriceEvents =
                     marketPriceEventService.find(symbol, contextStart, end);
             ShadowProductionReplayService.ReplayStats shadow = shadowReplayService.replay(
-                    runId, symbol, start, end, fresh.generatedSignals(), productionPriceEvents);
+                    runId, symbol, start, end, fresh.generatedSignals(), productionPriceEvents,
+                    () -> isStopRequested(runId));
+            checkStopRequested(runId);
 
             updateRun(runId, "RUNNING", 82, "Comparing historical decision authority", null);
+            checkStopRequested(runId);
             int authorityCorrections = 0;
             int replaySignals = 0;
             int oldHardReversals = 0;
             int correctedHardReversals = 0;
 
             for (TradeSignal signal : sourceSignals) {
+                checkStopRequested(runId);
                 SignalDecision finalDecision = signal.getDecision();
                 SignalDecision original = signal.getOriginalDecision();
                 SignalDecision effective = finalDecision != null ? finalDecision : original;
@@ -211,6 +242,7 @@ public class RegressionTestWorker {
                     """, replaySignals, authorityCorrections, oldHardReversals, correctedHardReversals, runId);
 
             updateRun(runId, "RUNNING", 94, "Calculating regression result", null);
+            checkStopRequested(runId);
 
             int historical1m = countSignals(sourceSignals, "1m");
             int historical5m = countSignals(sourceSignals, "5m");
@@ -302,6 +334,18 @@ public class RegressionTestWorker {
                     WHERE id=?
                     """, passed ? "PASSED" : "FAILED", passed ? "Regression checks passed" : "Regression checks failed", runId);
 
+        } catch (ReplayCancellationException stop) {
+            // FIX-090: only mark ERROR after the replay pipeline has actually unwound to here.
+            // This makes ERROR a trustworthy signal that Delete Data may proceed once active_worker=false.
+            log.warn("FIX-090: regression test run {} stopped by user request", runId);
+            jdbcTemplate.update("""
+                    UPDATE analysis_test_run
+                    SET status='ERROR', current_step='Stopped by user',
+                        error_message='Replay stopped manually by user. Test data may now be deleted.',
+                        failure_step='Manual stop', failure_exception=NULL, failure_root_cause=NULL,
+                        failure_stack_trace=NULL, heartbeat_at=CURRENT_TIMESTAMP(6), completed_at=CURRENT_TIMESTAMP(6)
+                    WHERE id=?
+                    """, runId);
         } catch (Exception exception) {
             log.error("Regression test run {} failed", runId, exception);
             String failedStep = currentStep(runId);
@@ -321,6 +365,7 @@ public class RegressionTestWorker {
             // FIX-087: always release ownership, including ERROR paths, so a genuinely stopped
             // replay remains recoverable later using the same run id and original replay window.
             activeRunIds.remove(runId);
+            stopRequestedRunIds.remove(runId);
         }
     }
 
@@ -334,6 +379,7 @@ public class RegressionTestWorker {
         int resolved = 0;
         int size = candles.size();
         for (int i = 0; i < size; i++) {
+            checkStopRequested(runId);
             Candle candle = candles.get(i);
             List<Candle> latestAtEvent = candleRepository.findClosedCandlesAtOrBefore(
                     symbol, interval, candle.getOpenTime(), PageRequest.of(0, 1));
@@ -386,6 +432,7 @@ public class RegressionTestWorker {
         // Do not "optimize" Replay by sampling every Nth candle or by copying the production recovery
         // scheduler cadence; that would recreate the exact 1m->~5m blind-gap incident FIX-043 fixes.
         for (int index = 0; index < timeline.size(); index++) {
+            checkStopRequested(runId);
             ReplayCandle replay = timeline.get(index);
             Candle candle = replay.candle();
             Instant evaluationTime = candle.getOpenTime().plusSeconds(intervalSeconds(replay.interval()));
@@ -444,6 +491,8 @@ public class RegressionTestWorker {
                     // trade_signal_test is the canonical parity table used for field-by-field comparison.
                     persistTradeSignalTest(runId, generated, null);
                 }
+            } catch (ReplayCancellationException stop) {
+                throw stop;
             } catch (Exception exception) {
                 if (replay.primary() && inRequestedWindow) {
                     errors++;
@@ -641,4 +690,6 @@ public class RegressionTestWorker {
         if (value == null) return "Unknown regression test error";
         return value.length() <= max ? value : value.substring(0, max);
     }
+
+
 }

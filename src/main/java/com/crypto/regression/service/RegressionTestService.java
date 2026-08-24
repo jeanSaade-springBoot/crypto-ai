@@ -128,6 +128,40 @@ public class RegressionTestService {
     // FIX-088: manual Resume was removed. We intentionally do not expose a method that
     // mutates an existing failed run back to PENDING. Users delete test data and start a clean run.
 
+
+    /**
+     * FIX-090: request cooperative cancellation of exactly one active replay worker.
+     * We do not mark the row ERROR here because that would be a false claim while Java is
+     * still executing. RegressionTestWorker marks ERROR only after it actually unwinds.
+     */
+    public synchronized Map<String, Object> stopRun(long runId) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT id,status,current_step FROM analysis_test_run WHERE id=?", runId);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Regression test #" + runId + " not found.");
+        String status = String.valueOf(rows.get(0).get("status"));
+        if (!("PENDING".equals(status) || "RUNNING".equals(status))) {
+            return Map.of("id", runId, "status", status, "activeWorker", worker.isActive(runId),
+                    "message", "Test is already stopped.");
+        }
+        boolean requested = worker.requestStop(runId);
+        if (!requested) {
+            // No worker in this JVM means it is already orphaned/stopped. Mark it ERROR now so
+            // Delete Data is not blocked forever by a stale RUNNING database status.
+            jdbcTemplate.update("""
+                    UPDATE analysis_test_run
+                    SET status='ERROR', current_step='Stopped by user',
+                        error_message='Replay worker was not active in this application instance; run marked stopped.',
+                        completed_at=CURRENT_TIMESTAMP(6), heartbeat_at=CURRENT_TIMESTAMP(6)
+                    WHERE id=? AND status IN ('PENDING','RUNNING')
+                    """, runId);
+            return Map.of("id", runId, "status", "ERROR", "activeWorker", false,
+                    "message", "Test had no active worker and is now stopped. You can Delete Data.");
+        }
+        jdbcTemplate.update("UPDATE analysis_test_run SET current_step='Stop requested — waiting for replay worker to exit', heartbeat_at=CURRENT_TIMESTAMP(6) WHERE id=?", runId);
+        return Map.of("id", runId, "status", "STOPPING", "activeWorker", true,
+                "message", "Stop requested. Delete Data will unlock after the replay worker has fully stopped.");
+    }
+
     public synchronized long start(RegressionTestRunRequest request) {
         if (request == null || request.symbol() == null || request.symbol().isBlank()
                 || request.startTime() == null || request.endTime() == null
@@ -244,13 +278,32 @@ public class RegressionTestService {
 
     @Transactional
     public synchronized Map<String, Object> resetAllTestData() {
+        // FIX-090: Java worker ownership is authoritative. Database ERROR may be written a few
+        // milliseconds before runAsync finally releases ownership; never purge during that gap.
+        if (worker.hasActiveRuns()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "A Replay/Test worker is still active. Stop it and wait for the worker to fully exit before Delete Data.");
+        }
         Integer activeRuns = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM analysis_test_run
                 WHERE status IN ('PENDING', 'RUNNING')
                 """, Integer.class);
         if (activeRuns != null && activeRuns > 0) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "A regression test is still running. Wait for it to finish before deleting test data.");
+            List<Map<String,Object>> liveRows = jdbcTemplate.queryForList(
+                    "SELECT id,status FROM analysis_test_run WHERE status IN ('PENDING','RUNNING')");
+            boolean workerStillActive = liveRows.stream()
+                    .anyMatch(r -> worker.isActive(((Number) r.get("id")).longValue()));
+            if (workerStillActive) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "A Replay/Test worker is still active. Use Stop Test and wait until it becomes ERROR before Delete Data.");
+            }
+            // Defensive cleanup for a stale DB status with no Java worker.
+            jdbcTemplate.update("""
+                    UPDATE analysis_test_run SET status='ERROR', current_step='Stopped/orphaned worker',
+                        error_message='No active Replay/Test worker exists in this application instance.',
+                        completed_at=CURRENT_TIMESTAMP(6)
+                    WHERE status IN ('PENDING','RUNNING')
+                    """);
         }
 
         // FIX-088: Delete Data is now a true purge, not an archive operation. Every replay/test
