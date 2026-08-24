@@ -1,3 +1,9 @@
+## FIX-073 — Replay restart recovery and Shadow Trades restoration
+- Restored Shadow Trades visibility from Recent Test Runs, including partial active/interrupted runs.
+- Added automatic recovery of PENDING/RUNNING replay jobs after application restart. Recovery keeps the same run ID/window and deterministically rebuilds isolated replay state from the beginning because mid-stream in-memory opportunity/wallet/position state cannot be resumed safely.
+- Added a replay heartbeat and a manual Resume action only for stale PENDING/RUNNING runs; a live worker cannot be duplicated accidentally.
+- Production trading tables and behavior are unchanged.
+
 # Change Log
 
 ## FIX-072 — Production signal persistence safety

@@ -1419,6 +1419,21 @@
             regression: "For a known Production candle, query trade_signal and trade_signal_test by symbol/interval/candle_open_time and compare decision, score components, context, ATR/R:R, strategy, decision_path and final_entry_allowed. Re-running the same candle in another test_run_id must be allowed."
         }
 
+        ,{
+            id: "FIX-073",
+            title: "Replay restart recovery and Shadow Trades restoration",
+            status: "FIXED",
+            scenario: "A server deployment/restart interrupted an active replay and View no longer exposed Shadow Trades while the run remained active.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED", entryTime: "N/A", exitTime: "N/A",
+            replayWindow: "Any replay interrupted by an application restart.",
+            location: "RegressionTestService, RegressionTestController and Proven Analysis UI",
+            files: ["src/main/java/com/crypto/regression/service/RegressionTestService.java","src/main/java/com/crypto/regression/controller/RegressionTestController.java","src/main/resources/static/js/proven-analyzed-trades.js"],
+            cause: "The async replay worker disappears on JVM restart while the durable run row can remain PENDING/RUNNING. The UI also gated Shadow Trades behind a finished-run check.",
+            solution: "Recover orphaned PENDING/RUNNING runs at application ready and provide a manual Resume action. Recovery keeps the same run id and requested window, clears only that run's isolated replay outputs, and deterministically rebuilds state from the historical start. View now exposes partial Shadow Trades for active runs.",
+            behavior: "No Production trading behavior changes. Exact mid-stream continuation is intentionally not attempted because replay opportunity/wallet/position state is in memory; deterministic rebuild is safer and preserves replay parity.",
+            regression: "Interrupt a replay by restarting the application. Verify the same run id/window automatically returns to PENDING/RUNNING, reaches completion without duplicate isolated rows, and View shows Shadow Trades during and after recovery."
+        }
+
 
 ];
 

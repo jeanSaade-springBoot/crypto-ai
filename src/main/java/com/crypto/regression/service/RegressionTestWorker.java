@@ -248,7 +248,7 @@ public class RegressionTestWorker {
 
             jdbcTemplate.update("""
                     UPDATE analysis_test_run
-                    SET status=?, progress_percent=100, current_step=?, completed_at=CURRENT_TIMESTAMP(6)
+                    SET status=?, progress_percent=100, current_step=?, heartbeat_at=CURRENT_TIMESTAMP(6), completed_at=CURRENT_TIMESTAMP(6)
                     WHERE id=?
                     """, passed ? "PASSED" : "FAILED", passed ? "Regression checks passed" : "Regression checks failed", runId);
 
@@ -259,7 +259,7 @@ public class RegressionTestWorker {
             Throwable root = rootCause(exception);
             jdbcTemplate.update("""
                     UPDATE analysis_test_run
-                    SET status='ERROR', progress_percent=100, current_step='Regression test failed',
+                    SET status='ERROR', progress_percent=100, current_step='Regression test failed', heartbeat_at=CURRENT_TIMESTAMP(6),
                         error_message=?, failure_step=?, failure_exception=?, failure_root_cause=?,
                         failure_stack_trace=?, started_at=COALESCE(started_at, CURRENT_TIMESTAMP(6)),
                         completed_at=CURRENT_TIMESTAMP(6)
@@ -515,7 +515,7 @@ public class RegressionTestWorker {
         jdbcTemplate.update("""
                 UPDATE analysis_test_run
                 SET status=?, progress_percent=?, current_step=?, error_message=?,
-                    started_at=COALESCE(started_at, CURRENT_TIMESTAMP(6))
+                    started_at=COALESCE(started_at, CURRENT_TIMESTAMP(6)), heartbeat_at=CURRENT_TIMESTAMP(6)
                 WHERE id=?
                 """, status, Math.max(0, Math.min(100, progress)), step, error, runId);
     }

@@ -13,6 +13,8 @@ import java.sql.PreparedStatement;
 import java.sql.Statement;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.context.event.EventListener;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -98,6 +100,68 @@ public class RegressionTestService {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /**
+     * FIX-073: an application restart kills the @Async replay thread but leaves its durable
+     * analysis_test_run row as PENDING/RUNNING.  A replay cannot safely continue from an
+     * arbitrary percentage because opportunity memory, wallet state and position-management
+     * policy state are intentionally in-memory during the isolated replay.  Recovery therefore
+     * reuses the SAME run id/window, clears only that run's isolated outputs, and deterministically
+     * rebuilds the replay from its historical start.  Production tables are never touched.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void resumeInterruptedRunsAfterRestart() {
+        List<Long> interrupted = jdbcTemplate.queryForList(
+                "SELECT id FROM analysis_test_run WHERE status IN ('PENDING','RUNNING') ORDER BY id", Long.class);
+        for (Long runId : interrupted) {
+            try {
+                prepareInterruptedRunForReplay(runId);
+                worker.runAsync(runId);
+            } catch (Exception ex) {
+                jdbcTemplate.update("UPDATE analysis_test_run SET status='ERROR', current_step='Automatic replay recovery failed', error_message=?, completed_at=CURRENT_TIMESTAMP(6) WHERE id=?",
+                        ex.getMessage(), runId);
+            }
+        }
+    }
+
+    /** Manual recovery endpoint for a stale/interrupted run. It performs the same safe rebuild. */
+    public synchronized void resume(long runId) {
+        List<Map<String,Object>> rows = jdbcTemplate.queryForList(
+                "SELECT id,status,heartbeat_at FROM analysis_test_run WHERE id=?", runId);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Regression test #" + runId + " not found.");
+        Map<String,Object> row = rows.get(0);
+        String status = String.valueOf(row.get("status"));
+        if (!List.of("PENDING", "RUNNING").contains(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only an interrupted PENDING/RUNNING replay can be resumed.");
+        }
+        Timestamp heartbeat = (Timestamp) row.get("heartbeat_at");
+        if (heartbeat != null && heartbeat.toInstant().isAfter(Instant.now().minusSeconds(120))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Replay #" + runId + " still has a live heartbeat; recovery was not started.");
+        }
+        prepareInterruptedRunForReplay(runId);
+        worker.runAsync(runId);
+    }
+
+    private void prepareInterruptedRunForReplay(long runId) {
+        // Delete child/output rows only for this replay id. Proven trades are deliberately preserved.
+        jdbcTemplate.update("DELETE FROM position_management_test WHERE test_run_id=?", runId);
+        jdbcTemplate.update("DELETE FROM wallet_execution_test WHERE test_run_id=?", runId);
+        jdbcTemplate.update("DELETE FROM wallet_position_test WHERE test_run_id=?", runId);
+        jdbcTemplate.update("DELETE FROM execution_opportunity_test WHERE test_run_id=?", runId);
+        jdbcTemplate.update("DELETE FROM trade_signal_test WHERE test_run_id=?", runId);
+        jdbcTemplate.update("DELETE FROM analysis_test_signal WHERE test_run_id=?", runId);
+        jdbcTemplate.update("DELETE FROM analysis_test_result WHERE test_run_id=?", runId);
+        jdbcTemplate.update("""
+                UPDATE analysis_test_run SET status='PENDING', progress_percent=0,
+                    current_step='Recovering interrupted replay from deterministic start', heartbeat_at=CURRENT_TIMESTAMP(6),
+                    source_signal_count=0, replay_signal_count=0, generated_signal_count=0,
+                    generated_buy_count=0, generated_watch_count=0, generated_sell_count=0, generated_strong_sell_count=0,
+                    simulated_trade_count=0, simulated_win_count=0, simulated_loss_count=0, simulated_realized_pnl=0, simulated_final_wallet=0,
+                    neutralized_original_bearish_count=0, corrected_hard_reversal_count=0, historical_hard_reversal_count=0,
+                    error_message=NULL, failure_step=NULL, failure_exception=NULL, failure_root_cause=NULL, failure_stack_trace=NULL,
+                    started_at=NULL, completed_at=NULL WHERE id=?
+                """, runId);
     }
 
     public synchronized long start(RegressionTestRunRequest request) {
@@ -273,7 +337,7 @@ public class RegressionTestService {
     public Map<String, Object> getRun(long id) {
         Map<String, Object> run = jdbcTemplate.queryForMap("""
                 SELECT id, test_name, symbol, start_time, end_time, status, progress_percent,
-                       current_step, source_signal_count, replay_signal_count, generated_signal_count,
+                       current_step, heartbeat_at, source_signal_count, replay_signal_count, generated_signal_count,
                        generated_buy_count, generated_watch_count, generated_sell_count, generated_strong_sell_count,
                        neutralized_original_bearish_count, corrected_hard_reversal_count,
                        historical_hard_reversal_count, error_message, failure_step, failure_exception,
@@ -302,7 +366,7 @@ public class RegressionTestService {
     public List<Map<String, Object>> latestRuns() {
         return jdbcTemplate.queryForList("""
                 SELECT r.id, r.test_name, r.symbol, r.start_time, r.end_time, r.status, r.progress_percent,
-                       r.current_step, r.started_at, r.completed_at, r.created_at,
+                       r.current_step, r.heartbeat_at, r.started_at, r.completed_at, r.created_at,
                        (SELECT COUNT(*) FROM wallet_position_test w WHERE w.test_run_id=r.id AND w.exit_time IS NOT NULL) AS closed_trade_count,
                        (SELECT COUNT(*) FROM proven_analyzed_trade p WHERE p.source_test_run_id=r.id) AS proven_trade_count
                 FROM analysis_test_run r

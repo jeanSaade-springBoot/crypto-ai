@@ -98,7 +98,7 @@ async function loadRegressionRuns() {
                 <td><span class="status-pill ${regressionStatusClass(run.status)}">${escapeHtml(run.status)}</span></td>
                 <td>${Number(run.progress_percent || 0)}%</td>
                 <td><label class="proven-success-check" title="Save every closed trade from this run in Proven trades"><input type="checkbox" data-proven-run-toggle="${run.id}" ${Number(run.closed_trade_count || 0) > 0 && Number(run.proven_trade_count || 0) === Number(run.closed_trade_count || 0) ? 'checked' : ''} ${Number(run.closed_trade_count || 0) === 0 ? 'disabled' : ''}></label></td>
-                <td><button type="button" class="secondary-button" data-regression-run-id="${run.id}">View</button></td>
+                <td><button type="button" class="secondary-button" data-regression-run-id="${run.id}">View</button>${['PENDING','RUNNING'].includes(String(run.status)) && (!run.heartbeat_at || (Date.now() - new Date(run.heartbeat_at).getTime()) > 120000) ? ` <button type="button" class="secondary-button" data-regression-resume-id="${run.id}" title="Recover this interrupted replay using the same run id and window">Resume</button>` : ''}</td>
             </tr>
         `).join('') || '<tr><td colspan="8">No regression tests have been run yet.</td></tr>';
         const active = runs.find(run => ['PENDING', 'RUNNING'].includes(String(run.status)));
@@ -562,7 +562,9 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
         resultPanel.classList.add('hidden');
     }
 
-    if (finished && includeTables) {
+    // FIX-073: View must keep Shadow Trades visible for active/interrupted runs too;
+    // partial isolated rows are useful evidence while progress is running or after a restart.
+    if (includeTables) {
         const detailResults = await Promise.allSettled([
             api(`${base}/signals`),
             api(`${base}/opportunities`),
@@ -835,6 +837,18 @@ if (regressionForm) {
 const regressionRunsBody = document.getElementById('regression-runs-body');
 if (regressionRunsBody) {
     regressionRunsBody.addEventListener('click', async event => {
+        const resumeButton = event.target.closest('button[data-regression-resume-id]');
+        if (resumeButton) {
+            try {
+                const runId = resumeButton.dataset.regressionResumeId;
+                await api(`/api/administration/regression-tests/runs/${encodeURIComponent(runId)}/resume`, {method:'POST'});
+                showAdminMessage(`Replay #${runId} recovery started with the same window.`);
+                await loadRegressionDetail(runId, true);
+                await loadRegressionRuns();
+                pollRegressionRun(runId);
+            } catch (error) { showAdminMessage(error.message, true); }
+            return;
+        }
         const button = event.target.closest('button[data-regression-run-id]');
         if (!button) return;
         try {

@@ -47,6 +47,14 @@ public class RegressionTestController {
         return Map.of("id", id, "status", "PENDING");
     }
 
+    // FIX-073: manually recover an interrupted replay using its original run id/window.
+    @PostMapping("/runs/{id}/resume")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public Map<String, Object> resume(@PathVariable long id) {
+        service.resume(id);
+        return Map.of("id", id, "status", "PENDING", "recovery", "DETERMINISTIC_REBUILD");
+    }
+
     @PostMapping("/runs/{id}/archive")
     public Map<String, Object> archive(@PathVariable long id, @RequestBody(required = false) Map<String,Object> body) {
         String reason = body == null ? null : String.valueOf(body.getOrDefault("reason", ""));
