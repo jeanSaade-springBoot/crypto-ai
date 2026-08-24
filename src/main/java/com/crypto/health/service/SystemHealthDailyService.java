@@ -359,7 +359,7 @@ public class SystemHealthDailyService {
             averages.put(key, BigDecimal.valueOf(total)
                     .divide(BigDecimal.valueOf(counts.size()), 1, RoundingMode.HALF_UP));
         });
-        return averages;
+        return averages; 
     }
 
     private boolean hasFullHistory(String table, String column, Instant requiredStart) {
