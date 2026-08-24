@@ -2,6 +2,7 @@ package com.crypto.health.service;
 
 import com.crypto.administration.service.CoinConfigurationService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,6 +27,7 @@ import java.util.Set;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class SystemHealthDailyService {
 
     private static final ZoneId DISPLAY_ZONE = ZoneId.of("Asia/Riyadh");
@@ -42,20 +44,38 @@ public class SystemHealthDailyService {
         Instant to = today.plusDays(1).atStartOfDay(DISPLAY_ZONE).toInstant();
         Instant baselineFrom = from.minus(Duration.ofDays(BASELINE_DAYS));
 
-        Map<String, Long> candleCounts = intervalCounts("candle", "open_time", "closed = 1", from, to);
-        Map<String, Long> signalCounts = intervalCounts("trade_signal", "generated_at", "1 = 1", from, to);
-        long buyCount = scalarLong("SELECT COUNT(*) FROM wallet_trade WHERE side='BUY' AND executed_at >= ? AND executed_at < ?", from, to);
-        long sellCount = scalarLong("SELECT COUNT(*) FROM wallet_trade WHERE side='SELL' AND executed_at >= ? AND executed_at < ?", from, to);
-        long openPositions = scalarLong("SELECT COUNT(*) FROM wallet_managed_position WHERE status='OPEN'");
-        long missingContext = scalarLong("SELECT COUNT(*) FROM execution_opportunity WHERE started_at >= ? AND started_at < ? AND decision_code='MISSING_CONTEXT'", from, to);
+        // FIX-071C: System Health is an observability endpoint and must never become a blind spot.
+        // Each diagnostic section is isolated so one schema/query problem is surfaced as a named
+        // CRITICAL health alert while the rest of the page continues to load. Trading is untouched.
+        List<Map<String, Object>> diagnosticErrors = new ArrayList<>();
 
-        Set<String> enabledSymbols = new LinkedHashSet<>(coinConfigurationService.enabledSymbols());
-        List<Map<String, Object>> signalStaleness = signalStaleness(now, enabledSymbols);
-        List<Map<String, Object>> candleStaleness = candleStaleness(now, enabledSymbols);
-        List<Map<String, Object>> tradeBaseline = tradeBaseline(from, to, baselineFrom);
-        List<Map<String, Object>> routes = routeDistribution(from, to, baselineFrom);
-        List<Map<String, Object>> strategyRegimes = strategyRegimeDistribution(from, to, baselineFrom);
-        List<Map<String, Object>> opportunityOutcomes = opportunityOutcomeDistribution(from, to, baselineFrom);
+        Map<String, Long> candleCounts = safe("Core candle counts", diagnosticErrors,
+                () -> intervalCounts("candle", "open_time", "closed = 1", from, to), new LinkedHashMap<>());
+        Map<String, Long> signalCounts = safe("Core signal counts", diagnosticErrors,
+                () -> intervalCounts("trade_signal", "generated_at", "1 = 1", from, to), new LinkedHashMap<>());
+        long buyCount = safe("BUY count", diagnosticErrors,
+                () -> scalarLong("SELECT COUNT(*) FROM wallet_trade WHERE side='BUY' AND executed_at >= ? AND executed_at < ?", from, to), 0L);
+        long sellCount = safe("SELL count", diagnosticErrors,
+                () -> scalarLong("SELECT COUNT(*) FROM wallet_trade WHERE side='SELL' AND executed_at >= ? AND executed_at < ?", from, to), 0L);
+        long openPositions = safe("Open position count", diagnosticErrors,
+                () -> scalarLong("SELECT COUNT(*) FROM wallet_managed_position WHERE status='OPEN'"), 0L);
+        long missingContext = safe("Missing-context count", diagnosticErrors,
+                () -> scalarLong("SELECT COUNT(*) FROM execution_opportunity WHERE started_at >= ? AND started_at < ? AND decision_code='MISSING_CONTEXT'", from, to), 0L);
+
+        Set<String> enabledSymbols = safe("Enabled symbol lookup", diagnosticErrors,
+                () -> new LinkedHashSet<>(coinConfigurationService.enabledSymbols()), new LinkedHashSet<>());
+        List<Map<String, Object>> signalStaleness = safe("Signal staleness", diagnosticErrors,
+                () -> signalStaleness(now, enabledSymbols), new ArrayList<>());
+        List<Map<String, Object>> candleStaleness = safe("Candle staleness", diagnosticErrors,
+                () -> candleStaleness(now, enabledSymbols), new ArrayList<>());
+        List<Map<String, Object>> tradeBaseline = safe("BUY/SELL baseline", diagnosticErrors,
+                () -> tradeBaseline(from, to, baselineFrom), new ArrayList<>());
+        List<Map<String, Object>> routes = safe("Entry-route distribution", diagnosticErrors,
+                () -> routeDistribution(from, to, baselineFrom), new ArrayList<>());
+        List<Map<String, Object>> strategyRegimes = safe("Strategy/regime distribution", diagnosticErrors,
+                () -> strategyRegimeDistribution(from, to, baselineFrom), new ArrayList<>());
+        List<Map<String, Object>> opportunityOutcomes = safe("Opportunity outcome distribution", diagnosticErrors,
+                () -> opportunityOutcomeDistribution(from, to, baselineFrom), new ArrayList<>());
 
         String balanceStatus = buySellBalanceStatus(buyCount, sellCount, openPositions);
         String balanceMessage = buySellBalanceMessage(buyCount, sellCount, openPositions);
@@ -63,6 +83,8 @@ public class SystemHealthDailyService {
 
         List<Map<String, Object>> alerts = buildAlerts(signalStaleness, candleStaleness, balanceStatus,
                 balanceMessage, missingContextStatus, missingContext);
+        alerts.addAll(diagnosticErrors);
+        alerts.sort((a, b) -> Integer.compare(statusRank((String) a.get("status")), statusRank((String) b.get("status"))));
         String overall = overallStatus(alerts);
 
         Map<String, Object> summary = new LinkedHashMap<>();
@@ -93,6 +115,22 @@ public class SystemHealthDailyService {
         response.put("strategyRegimes", strategyRegimes);
         response.put("opportunityOutcomes", opportunityOutcomes);
         return response;
+    }
+
+    private <T> T safe(String component, List<Map<String, Object>> errors, java.util.function.Supplier<T> action, T fallback) {
+        try {
+            return action.get();
+        } catch (Exception ex) {
+            log.error("FIX-071C System Health component failed: {}", component, ex);
+            Throwable root = ex;
+            while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+            String detail = root.getMessage() != null ? root.getMessage() : ex.getMessage();
+            if (detail == null || detail.isBlank()) detail = ex.getClass().getSimpleName();
+            // Keep the browser message useful but bounded; full stack trace remains in application logs.
+            if (detail.length() > 300) detail = detail.substring(0, 300);
+            errors.add(alert("CRITICAL", "Health diagnostic failed: " + component, detail));
+            return fallback;
+        }
     }
 
     private Map<String, Long> intervalCounts(String table, String timestampColumn, String extraWhere, Instant from, Instant to) {

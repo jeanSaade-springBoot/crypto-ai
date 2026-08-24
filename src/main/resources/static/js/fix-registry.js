@@ -1,6 +1,22 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-071B",
+            title: "Global System Health alert visibility",
+            status: "COMPLETE · OBSERVABILITY ONLY",
+            scenario: "WARNING/CRITICAL production health must attract attention without requiring the operator to open System Health.",
+            symbol: "ALL ENABLED", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A", exitTime: "N/A",
+            replayWindow: "No replay required; read-only UI monitoring.",
+            location: "Global left navigation + application top banner",
+            classes: ["global-system-health.js", "administration.css", "application HTML shells"],
+            cause: "FIX-071 exposed health state only after opening System Health, so an operator working on another page could miss a pipeline failure.",
+            solution: "Poll the existing read-only daily health endpoint every 60 seconds, show OK/WARNING/CRITICAL beside System Health in the left menu, and show a compact global banner for CRITICAL with a direct link to diagnostics.",
+            behavior: "Seven-day baseline checks remain LEARNING until enough history exists and do not start red. Day-one invariant checks such as candle/signal staleness can still turn WARNING/CRITICAL immediately when a real fault exists.",
+            regression: "Verify green OK badge on healthy pages, amber badge for WARNING, red badge plus global banner for CRITICAL, direct navigation to System Health, and no trading/persistence changes."
+        },
+
+        {
             id: "FIX-071",
             title: "Daily production System Health diagnostics",
             status: "COMPLETE · OBSERVABILITY ONLY",

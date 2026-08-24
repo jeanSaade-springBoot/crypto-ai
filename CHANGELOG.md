@@ -44,3 +44,16 @@ Trading behavior is unchanged. This release changes replay persistence/diagnosti
 - Replaced expression-style `JdbcTemplate.query(...)` row callbacks with block/void callbacks in `SystemHealthDailyService`.
 - This removes Java overload ambiguity between `RowCallbackHandler` and `ResultSetExtractor<T>` (notably `ResultSetExtractor<Boolean>` from `List.add(...)`).
 - No health thresholds, SQL semantics, trading behavior, replay behavior, or persistence behavior changed.
+
+## FIX-071B — Global System Health alert visibility
+- Added a read-only System Health badge to the left navigation on application screens: OK (green), WARNING (amber), CRITICAL (red).
+- Added a compact global red banner only for CRITICAL health, linking directly to System Health and showing the highest-priority active issue.
+- Global status refreshes every 60 seconds without changing trading, replay, wallet, opportunity, or persistence behavior.
+- Seven-day baseline checks remain LEARNING until enough historical coverage exists; LEARNING does not become CRITICAL merely because the application is new.
+- Candle/signal staleness and other day-one invariant checks remain active immediately and can therefore raise WARNING/CRITICAL before seven days if a real pipeline problem exists.
+
+## FIX-071C - System Health endpoint resilience
+- Prevent `/api/system-health/daily` from returning HTTP 500 when one diagnostic query fails.
+- Isolate every health section and surface the failing component as a CRITICAL alert while keeping the rest of the page available.
+- Log the full server-side exception for diagnosis; browser output is bounded and readable.
+- Observability only: no trading, replay, wallet, execution, or persistence behavior changed.
