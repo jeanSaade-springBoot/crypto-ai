@@ -1313,6 +1313,31 @@
             behavior: "After TAKE_PROFIT_EXTENDED, every Production exit path evaluates the same extended target. A fresh signal below the extended target can no longer close the position merely because paper_position retained the entry-time TP. Replay already updates wallet_position_test.take_profit_usdt and its in-memory ShadowPosition target before continuing, so the same authoritative-target behavior is preserved.",
             regression: "Literal PEPE #552 regression: old TP 0.000004146897, extension checkpoint 0.000004150000, new target 0.000004165346. Verify the extension persists and synchronizes both Production state holders, and verify no TAKE_PROFIT exit occurs at 0.000004150. Replay must continue using the extended shadow TP before any later TP exit."
         }
+        ,{
+            id: "FIX-069",
+            title: "Production-shaped replay TradeSignal parity and compact Proven Analysis Lab",
+            status: "FIXED",
+            scenario: "Replay generated different/no BUY decisions and could not be compared field-for-field with production because replay persisted only a reduced analysis_test_signal projection.",
+            symbol: "ALL",
+            entry: "N/A",
+            exit: "N/A",
+            entryTime: "N/A",
+            exitTime: "N/A",
+            replayWindow: "Any Production-vs-Replay comparison window; compare the same symbol/interval/candle in trade_signal and trade_signal_test.",
+            location: "Regression replay persistence + Proven Analyzed Trades review UI",
+            files: [
+                "src/main/resources/db/migration/V69__create_trade_signal_test_parity.sql",
+                "src/main/java/com/crypto/regression/service/RegressionTestWorker.java",
+                "src/main/java/com/crypto/regression/service/RegressionTestService.java",
+                "src/main/resources/static/proven-analyzed-trades.html",
+                "src/main/resources/static/js/proven-analyzed-trades.js",
+                "src/main/resources/static/css/administration.css"
+            ],
+            cause: "The replay engine used the production AnalysisService in memory but persisted only a small subset of TradeSignal fields, preventing exact diagnosis of where Replay first diverged from Production. The review page also separated run input, progress, results and Proven review with archive-heavy sections.",
+            solution: "Clone production trade_signal into isolated trade_signal_test, persist every JPA-mapped TradeSignal field automatically for each generated replay signal, archive the full test snapshot only in the backend safety archive, and reorganize the review UI around input → progress → result → recent runs → diagnostics → persistent Proven review.",
+            behavior: "Trading logic is unchanged. Replay gains a production-shaped signal audit table, deterministic run names, compact result cards, one-click run-to-Proven promotion, and the requested simplified layout without visible archive sections.",
+            regression: "For a known Production candle, query trade_signal and trade_signal_test by symbol/interval/candle_open_time and compare decision, score components, context, ATR/R:R, strategy, decision_path and final_entry_allowed. Re-running the same candle in another test_run_id must be allowed."
+        }
 
 
 ];

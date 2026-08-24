@@ -17,6 +17,9 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import jakarta.persistence.Column;
+
+import java.lang.reflect.Field;
 
 import java.sql.Timestamp;
 import java.io.PrintWriter;
@@ -381,6 +384,11 @@ public class RegressionTestWorker {
                             decision == null ? null : decision.name(),
                             generated.getTotalScore(), generated.getConfidenceScore(), generated.getTrendScore(),
                             generated.getVolumeScore(), generated.getMomentumScore());
+
+                    // FIX-069: Persist the exact production TradeSignal shape as replay output.
+                    // analysis_test_signal remains for backward-compatible diagnostics, while
+                    // trade_signal_test is the canonical parity table used for field-by-field comparison.
+                    persistTradeSignalTest(runId, generated, null);
                 }
             } catch (Exception exception) {
                 if (replay.primary() && inRequestedWindow) {
@@ -412,6 +420,45 @@ public class RegressionTestWorker {
                 """, runId, symbol, interval, Timestamp.from(candle.getOpenTime()),
                 Timestamp.from(candle.getOpenTime().plusSeconds(intervalSeconds(interval))),
                 candle.getClosePrice(), error);
+    }
+
+    /**
+     * FIX-069: write every field mapped by the TradeSignal JPA entity into trade_signal_test.
+     * Reflection is intentional here: whenever production TradeSignal gains another @Column,
+     * replay inherits it automatically instead of drifting behind a hand-maintained test schema.
+     */
+    private void persistTradeSignalTest(long runId, TradeSignal signal, String generationError) {
+        try {
+            java.util.List<String> columns = new java.util.ArrayList<>();
+            java.util.List<Object> values = new java.util.ArrayList<>();
+            columns.add("test_run_id"); values.add(runId);
+            columns.add("source_signal_id"); values.add(null);
+            columns.add("replay_generated"); values.add(1);
+            columns.add("generation_error"); values.add(generationError);
+
+            for (Field field : TradeSignal.class.getDeclaredFields()) {
+                if ("id".equals(field.getName()) || "createdAt".equals(field.getName())) continue;
+                Column column = field.getAnnotation(Column.class);
+                if (column == null) continue;
+                field.setAccessible(true);
+                Object value = field.get(signal);
+                if (value instanceof Enum<?> e) value = e.name();
+                if (value instanceof Instant instant) value = Timestamp.from(instant);
+                String columnName = column.name();
+                if (columnName == null || columnName.isBlank()) columnName = snakeCase(field.getName());
+                columns.add(columnName);
+                values.add(value);
+            }
+
+            String placeholders = String.join(",", java.util.Collections.nCopies(values.size(), "?"));
+            jdbcTemplate.update("INSERT INTO trade_signal_test (" + String.join(",", columns) + ") VALUES (" + placeholders + ")", values.toArray());
+        } catch (Exception e) {
+            throw new IllegalStateException("Unable to persist production-shaped replay TradeSignal", e);
+        }
+    }
+
+    private String snakeCase(String value) {
+        return value.replaceAll("([a-z0-9])([A-Z])", "$1_$2").toLowerCase(java.util.Locale.ROOT);
     }
 
     private long intervalSeconds(String interval) {

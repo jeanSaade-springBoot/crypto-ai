@@ -97,9 +97,10 @@ async function loadRegressionRuns() {
                 <td>${formatMoveTime(run.start_time)} → ${formatMoveTime(run.end_time)}</td>
                 <td><span class="status-pill ${regressionStatusClass(run.status)}">${escapeHtml(run.status)}</span></td>
                 <td>${Number(run.progress_percent || 0)}%</td>
+                <td><label class="proven-success-check" title="Save every closed trade from this run in Proven trades"><input type="checkbox" data-proven-run-toggle="${run.id}" ${Number(run.closed_trade_count || 0) > 0 && Number(run.proven_trade_count || 0) === Number(run.closed_trade_count || 0) ? 'checked' : ''} ${Number(run.closed_trade_count || 0) === 0 ? 'disabled' : ''}></label></td>
                 <td><button type="button" class="secondary-button" data-regression-run-id="${run.id}">View</button></td>
             </tr>
-        `).join('') || '<tr><td colspan="7">No regression tests have been run yet.</td></tr>';
+        `).join('') || '<tr><td colspan="8">No regression tests have been run yet.</td></tr>';
         const active = runs.find(run => ['PENDING', 'RUNNING'].includes(String(run.status)));
         setRegressionRunButtonRunning(Boolean(active), active);
         const resetButton = document.getElementById('regression-reset');
@@ -109,7 +110,7 @@ async function loadRegressionRuns() {
         }
         return runs;
     } catch (error) {
-        body.innerHTML = `<tr><td colspan="7">${escapeHtml(error.message)}</td></tr>`;
+        body.innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`;
     }
 }
 
@@ -125,7 +126,7 @@ async function loadRegressionArchives() {
             <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}">View</button></td>
         </tr>`).join('') || '<tr><td colspan="7">No archived test runs yet.</td></tr>';
         return rows;
-    } catch (error) { body.innerHTML = `<tr><td colspan="7">${escapeHtml(error.message)}</td></tr>`; return []; }
+    } catch (error) { body.innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`; return []; }
 }
 
 function regressionPipelineState(value, kind = 'decision') {
@@ -786,6 +787,16 @@ document.getElementById('investigation-run-selected')?.addEventListener('click',
     }catch(error){status.textContent='Batch stopped';showAdminMessage(error.message,true);} finally{investigationBatchRunning=false;event.currentTarget.disabled=false;await loadInvestigationCases();}
 });
 
+// FIX-069: Replay names are deterministic and derived from the actual run input so
+// a saved run can always be identified without manually maintaining a label.
+function regressionGeneratedTestName(symbol, startLocal, endLocal) {
+    const compact = value => String(value || '')
+        .replace('T', '_')
+        .replace(/:/g, '-')
+        .replace(/\s+/g, '');
+    return `${String(symbol || 'TEST').toUpperCase()}-${compact(startLocal)}-to-${compact(endLocal)}`.slice(0, 150);
+}
+
 const regressionForm = document.getElementById('regression-test-form');
 if (regressionForm) {
     regressionForm.addEventListener('submit', async event => {
@@ -801,7 +812,10 @@ if (regressionForm) {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
-                    testName: document.getElementById('regression-test-name').value,
+                    testName: regressionGeneratedTestName(
+                        document.getElementById('regression-symbol').value,
+                        document.getElementById('regression-start').value,
+                        document.getElementById('regression-end').value),
                     symbol: document.getElementById('regression-symbol').value,
                     startTime: regressionUtcInstant(document.getElementById('regression-start').value),
                     endTime: regressionUtcInstant(document.getElementById('regression-end').value)
@@ -833,6 +847,31 @@ if (regressionRunsBody) {
     });
 }
 
+// FIX-069: A completed run can be promoted to Proven with one checkbox. This is
+// only a review/persistence shortcut: it reuses the existing per-trade Proven API and
+// never changes replay or production trading decisions.
+if (regressionRunsBody) regressionRunsBody.addEventListener('change', async event => {
+    const cb = event.target.closest('input[data-proven-run-toggle]');
+    if (!cb) return;
+    cb.disabled = true;
+    try {
+        const runId = cb.dataset.provenRunToggle;
+        const trades = await api(`/api/administration/regression-tests/runs/${encodeURIComponent(runId)}/trades`);
+        const closed = (trades || []).filter(t => t.exit_time);
+        for (const trade of closed) {
+            const url = `/api/administration/regression-tests/proven-trades/${encodeURIComponent(runId)}/${encodeURIComponent(trade.id)}`;
+            await api(url, {method: cb.checked ? 'POST' : 'DELETE'});
+        }
+        await Promise.all([loadRegressionRuns(), loadProvenTradesGraph()]);
+        showAdminMessage(cb.checked ? `Run #${runId} saved to Proven trades.` : `Run #${runId} removed from Proven trades.`);
+    } catch (error) {
+        cb.checked = !cb.checked;
+        showAdminMessage(error.message, true);
+    } finally {
+        cb.disabled = false;
+    }
+});
+
 const regressionArchivesBody = document.getElementById('regression-archives-body');
 if (regressionArchivesBody) regressionArchivesBody.addEventListener('click', async event => {
     const button = event.target.closest('button[data-regression-archive-view]');
@@ -857,7 +896,6 @@ if (regressionReset) regressionReset.addEventListener('click', async () => {
         document.getElementById('regression-pipeline')?.classList.add('hidden');
         setRegressionRunButtonRunning(false);
         await loadRegressionRuns();
-        await loadRegressionArchives();
         showAdminMessage(`Completed runs archived safely. Test data reset. Runs ${deleted.runs || 0}, signals ${deleted.signals || 0}, opportunities ${deleted.opportunities || 0}, positions ${deleted.positions || 0}, executions ${deleted.executions || 0} removed.`);
     } catch (error) {
         showAdminMessage(error.message, true);
@@ -1092,12 +1130,8 @@ function renderProvenTradesGrid(all) {
             <td>${trade.exit_price == null ? '—' : formatMovePrice(trade.exit_price)}</td>
             <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>
             <td>${formatMoveTime(trade.marked_at)}</td>
-            <td class="proven-leg-actions">
-                <button type="button" class="secondary-button" data-proven-archive-leg="BUY" data-proven-id="${trade.id}" ${regressionBool(trade.buy_archived) ? 'disabled' : ''}>${regressionBool(trade.buy_archived) ? 'BUY archived' : 'Archive BUY'}</button>
-                <button type="button" class="secondary-button" data-proven-archive-leg="SELL" data-proven-id="${trade.id}" ${!trade.exit_time || regressionBool(trade.sell_archived) ? 'disabled' : ''}>${regressionBool(trade.sell_archived) ? 'SELL archived' : 'Archive SELL'}</button>
-            </td>
             <td><button type="button" class="secondary-button regression-chart-link" data-proven-view-index="${index}">View</button></td>
-        </tr>`).join('') : '<tr><td colspan="10">No proven trades yet.</td></tr>';
+        </tr>`).join('') : '<tr><td colspan="9">No proven trades yet.</td></tr>';
 }
 
 async function loadArchivedProvenTradeLegs() {
@@ -1272,7 +1306,3 @@ document.getElementById('proven-chart-interval')?.addEventListener('change',()=>
     }
 })().catch(error => showAdminMessage(error.message, true));
 
-const regressionZoneEl = document.getElementById('regression-browser-zone');
-if (regressionZoneEl) regressionZoneEl.textContent = `Displayed in ${window.CryptoTime.browserZone()} (${window.CryptoTime.browserOffsetLabel()}). Inputs are converted to UTC for the replay engine.`;
-
-loadRegressionArchives();

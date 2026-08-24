@@ -184,14 +184,18 @@ public class RegressionTestService {
         long batchId = kh.getKey().longValue();
         int runs = jdbcTemplate.update("INSERT INTO analysis_test_run_archive SELECT ?, r.* FROM analysis_test_run r WHERE r.id=?", batchId, runId);
         int signals = jdbcTemplate.update("INSERT INTO analysis_test_signal_archive SELECT ?, r.* FROM analysis_test_signal r WHERE r.test_run_id=?", batchId, runId);
+        // FIX-069: archive the full production-shaped replay signal snapshot as well.
+        int fullTradeSignals = jdbcTemplate.update("INSERT INTO trade_signal_test_archive SELECT ?, r.* FROM trade_signal_test r WHERE r.test_run_id=?", batchId, runId);
         int opportunities = jdbcTemplate.update("INSERT INTO execution_opportunity_test_archive SELECT ?, r.* FROM execution_opportunity_test r WHERE r.test_run_id=?", batchId, runId);
         int results = jdbcTemplate.update("INSERT INTO analysis_test_result_archive SELECT ?, r.* FROM analysis_test_result r WHERE r.test_run_id=?", batchId, runId);
         int executions = jdbcTemplate.update("INSERT INTO wallet_execution_test_archive SELECT ?, r.* FROM wallet_execution_test r WHERE r.test_run_id=?", batchId, runId);
         int positions = jdbcTemplate.update("INSERT INTO wallet_position_test_archive SELECT ?, r.* FROM wallet_position_test r WHERE r.test_run_id=?", batchId, runId);
         int management = jdbcTemplate.update("INSERT INTO position_management_test_archive SELECT ?, r.* FROM position_management_test r WHERE r.test_run_id=?", batchId, runId);
-        return Map.of("archiveBatchId", batchId, "sourceTestRunId", runId, "alreadyArchived", false,
-                "runs", runs, "signals", signals, "opportunities", opportunities, "results", results,
-                "executions", executions, "positions", positions, "management", management);
+        return Map.ofEntries(
+                Map.entry("archiveBatchId", batchId), Map.entry("sourceTestRunId", runId), Map.entry("alreadyArchived", false),
+                Map.entry("runs", runs), Map.entry("signals", signals), Map.entry("tradeSignals", fullTradeSignals),
+                Map.entry("opportunities", opportunities), Map.entry("results", results), Map.entry("executions", executions),
+                Map.entry("positions", positions), Map.entry("management", management));
     }
 
     @Transactional(readOnly = true)
@@ -240,6 +244,7 @@ public class RegressionTestService {
         int positions = jdbcTemplate.update("DELETE FROM wallet_position_test");
         int management = jdbcTemplate.update("DELETE FROM position_management_test");
         int opportunities = jdbcTemplate.update("DELETE FROM execution_opportunity_test");
+        int tradeSignals = jdbcTemplate.update("DELETE FROM trade_signal_test");
         int signals = jdbcTemplate.update("DELETE FROM analysis_test_signal");
         int results = jdbcTemplate.update("DELETE FROM analysis_test_result");
         int runs = jdbcTemplate.update("DELETE FROM analysis_test_run");
@@ -247,6 +252,7 @@ public class RegressionTestService {
         jdbcTemplate.execute("ALTER TABLE wallet_execution_test AUTO_INCREMENT = 1");
         jdbcTemplate.execute("ALTER TABLE position_management_test AUTO_INCREMENT = 1");
         jdbcTemplate.execute("ALTER TABLE execution_opportunity_test AUTO_INCREMENT = 1");
+        jdbcTemplate.execute("ALTER TABLE trade_signal_test AUTO_INCREMENT = 1");
         jdbcTemplate.execute("ALTER TABLE analysis_test_signal AUTO_INCREMENT = 1");
         jdbcTemplate.execute("ALTER TABLE analysis_test_result AUTO_INCREMENT = 1");
 
@@ -254,6 +260,7 @@ public class RegressionTestService {
                 "runs", runs,
                 "results", results,
                 "signals", signals,
+                "tradeSignals", tradeSignals,
                 "opportunities", opportunities,
                 "management", management,
                 "positions", positions,
@@ -294,24 +301,27 @@ public class RegressionTestService {
     @Transactional(readOnly = true)
     public List<Map<String, Object>> latestRuns() {
         return jdbcTemplate.queryForList("""
-                SELECT id, test_name, symbol, start_time, end_time, status, progress_percent,
-                       current_step, started_at, completed_at, created_at
-                FROM analysis_test_run
-                ORDER BY id DESC
+                SELECT r.id, r.test_name, r.symbol, r.start_time, r.end_time, r.status, r.progress_percent,
+                       r.current_step, r.started_at, r.completed_at, r.created_at,
+                       (SELECT COUNT(*) FROM wallet_position_test w WHERE w.test_run_id=r.id AND w.exit_time IS NOT NULL) AS closed_trade_count,
+                       (SELECT COUNT(*) FROM proven_analyzed_trade p WHERE p.source_test_run_id=r.id) AS proven_trade_count
+                FROM analysis_test_run r
+                ORDER BY r.id DESC
                 LIMIT 20
                 """);
     }
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> signals(long runId) {
+        // FIX-069: expose the production-shaped replay table as the canonical replay signal source.
+        // Aliases preserve the existing UI contract while every production field remains available.
         return jdbcTemplate.queryForList("""
-                SELECT generated_at, interval_code, latest_price, original_decision, final_decision,
-                       execution_effective_decision, total_score, confidence_score, trend_score,
-                       volume_score, momentum_score, decision_authority_corrected, replay_generated, generation_error
-                FROM analysis_test_signal
-                WHERE test_run_id = ?
-                ORDER BY generated_at ASC, FIELD(interval_code, '1h', '5m', '1m')
-                LIMIT 1500
+                SELECT t.*, t.decision AS final_decision, t.decision AS execution_effective_decision,
+                       0 AS decision_authority_corrected
+                FROM trade_signal_test t
+                WHERE t.test_run_id = ?
+                ORDER BY t.generated_at ASC, FIELD(t.interval_code, '1h', '5m', '1m')
+                LIMIT 5000
                 """, runId);
     }
 
