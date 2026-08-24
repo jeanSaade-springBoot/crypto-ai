@@ -1,6 +1,22 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-072B",
+            title: "Proven/Test page cleanup",
+            status: "COMPLETE · UI ONLY",
+            scenario: "The Proven/Test page should keep the replay controls and persistent manual review focused without a redundant combined chart or internal isolation copy.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A", exitTime: "N/A",
+            replayWindow: "No replay required; presentation-only regression check.",
+            location: "Proven Analyzed Trades UI",
+            classes: ["proven-analyzed-trades.html", "proven-analyzed-trades.js", "administration.css"],
+            cause: "The page still contained a redundant upper Proven graph, an administration-only isolation paragraph, and unnecessary top spacing.",
+            solution: "Remove the upper MANUALLY PROVEN SUCCESS TRADES / All proven trades on one graph section, remove the Administration-triggered regression-only paragraph, and eliminate the extra top padding while preserving the persistent Proven trades grid.",
+            behavior: "Replay, Production, Proven checkbox persistence, Recent Test Runs and persistent Proven trades data are unchanged.",
+            regression: "Open Proven Analyzed Trades and verify the page begins compactly with replay controls, the removed text/chart are absent, and Proven trade selection/persistence still works."
+        },
+
+        {
             id: "FIX-072",
             title: "Production signal persistence safety",
             status: "COMPLETE · PERSISTENCE/STARTUP SAFETY",

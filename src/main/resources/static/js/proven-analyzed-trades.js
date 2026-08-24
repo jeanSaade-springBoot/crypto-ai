@@ -1160,6 +1160,9 @@ async function loadProvenTradesGraph(preferredSymbol = null) {
     const all = await api('/api/administration/regression-tests/proven-trades');
     renderProvenTradesGrid(all);
     await loadArchivedProvenTradeLegs();
+    // FIX-072B: The redundant upper combined Proven chart was intentionally removed.
+    // Keep loading/rendering the persistent Proven trades grid without doing chart work.
+    if (!document.getElementById('proven-trades-chart')) return;
     const selector = document.getElementById('proven-chart-symbol');
     const symbols = [...new Set((all || []).map(t => String(t.symbol || '').toUpperCase()).filter(Boolean))];
     const focusSymbol = String(provenTradeFocus?.symbol || '').toUpperCase();

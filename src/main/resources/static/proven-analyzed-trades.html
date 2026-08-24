@@ -53,26 +53,6 @@
 <button class="secondary-button" id="regression-refresh" type="button">Refresh Runs</button>
 </div>
 </div>
-<p class="debug-isolation-note"><strong>Administration-triggered regression only.</strong> This test reads historical candles/signals and writes only to isolated regression tables including the production-shaped <code>trade_signal_test</code>, <code>analysis_test_*</code>, <code>execution_opportunity_test</code> and <code>position_management_test</code>. It never calls wallet execution, live position management, <code>trade_signal</code> writes or production <code>execution_opportunity</code> writes.</p>
-<div class="proven-trades-chart-panel">
-<div class="section-heading">
-<div><p class="eyebrow">MANUALLY PROVEN SUCCESS TRADES</p><h3>All proven trades on one graph</h3></div>
-<div class="proven-chart-controls">
-<label class="proven-symbol-picker">Symbol<select id="proven-chart-symbol"><option value="">No proven trades yet</option></select></label>
-<label class="proven-symbol-picker">Interval<select id="proven-chart-interval">
-<option value="1m">1 min</option>
-<option selected="" value="5m">5 min</option>
-<option value="1h">1 hour</option>
-<option value="4h">4 hours</option>
-</select></label>
-</div>
-</div>
-<p class="form-note">One chart for Proven and Current Test views. Candles come from the real historical candle table. When viewing one trade, the chart shows 7 hours before BUY through 7 hours after SELL, with only actual BUY/SELL execution dots and the Trade Path.</p>
-<div class="proven-trades-chart" id="proven-trades-chart"></div>
-<div class="empty hidden" id="proven-trades-empty">Check a closed shadow trade to add it to this graph.</div>
-
-
-</div>
 <form class="regression-test-form" id="regression-test-form">
 
 <label>Symbol

@@ -301,10 +301,17 @@ public class SystemHealthDailyService {
 
     private List<Map<String, Object>> opportunityOutcomeDistribution(Instant from, Instant to, Instant baselineFrom) {
         Map<String, Long> today = keyedCounts(
-                "SELECT CONCAT(status,'|',COALESCE(decision_code,'NULL')) k, COUNT(*) cnt FROM execution_opportunity WHERE started_at >= ? AND started_at < ? GROUP BY CONCAT(status,'|',COALESCE(decision_code,'NULL'))",
+                "SELECT CONCAT(x.status,'|',COALESCE(x.decision_code,'NULL')) k, x.cnt FROM (" +
+                        "SELECT status, decision_code, COUNT(*) cnt FROM execution_opportunity " +
+                        "WHERE started_at >= ? AND started_at < ? GROUP BY status, decision_code" +
+                        ") x",
                 from, to);
         Map<String, BigDecimal> baseline = baselineDailyAverages(
-                "SELECT CONCAT(status,'|',COALESCE(decision_code,'NULL')) k, DATE(DATE_ADD(started_at, INTERVAL 3 HOUR)) d, COUNT(*) cnt FROM execution_opportunity WHERE started_at >= ? AND started_at < ? GROUP BY CONCAT(status,'|',COALESCE(decision_code,'NULL')), DATE(DATE_ADD(started_at, INTERVAL 3 HOUR))",
+                "SELECT CONCAT(x.status,'|',COALESCE(x.decision_code,'NULL')) k, x.d, x.cnt FROM (" +
+                        "SELECT status, decision_code, DATE(DATE_ADD(started_at, INTERVAL 3 HOUR)) d, COUNT(*) cnt " +
+                        "FROM execution_opportunity WHERE started_at >= ? AND started_at < ? " +
+                        "GROUP BY status, decision_code, DATE(DATE_ADD(started_at, INTERVAL 3 HOUR))" +
+                        ") x",
                 baselineFrom, from);
 
         Set<String> keys = new LinkedHashSet<>();

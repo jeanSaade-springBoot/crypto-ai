@@ -68,3 +68,9 @@ Trading behavior is unchanged. This release changes replay persistence/diagnosti
 - Isolate every health section and surface the failing component as a CRITICAL alert while keeping the rest of the page available.
 - Log the full server-side exception for diagnosis; browser output is bounded and readable.
 - Observability only: no trading, replay, wallet, execution, or persistence behavior changed.
+
+
+## FIX-072A - System Health strict GROUP BY compatibility
+- Reworked Opportunity Outcome aggregation to group raw `status` and `decision_code` columns inside a subquery, then build the display key in the outer query.
+- This avoids MySQL `ONLY_FULL_GROUP_BY` ambiguity entirely, including on servers that reject equivalent expressions.
+- No health thresholds or trading/replay behavior changed.
