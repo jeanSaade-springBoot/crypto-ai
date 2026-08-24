@@ -103,20 +103,26 @@ public class RegressionTestService {
     }
 
     /**
-     * FIX-088: Resume/recovery is intentionally removed. If the JVM restarts while a replay
-     * is PENDING/RUNNING, there is no surviving async worker, so mark the durable row ERROR.
-     * The user can then use Delete Data and start a clean replay explicitly. This avoids any
-     * automatic or manual second execution of the same test_run_id.
+     * FIX-089: only rows that pre-date this service/JVM instance can be leftovers from a real
+     * application restart. FIX-088 updated every PENDING/RUNNING row when ApplicationReadyEvent
+     * fired, which could falsely mark a replay created by the current JVM as interrupted.
+     *
+     * Capturing the service construction time makes the distinction deterministic: a replay row
+     * created after this instant belongs to the current application instance and must never be
+     * touched by startup recovery, even if ApplicationReadyEvent is delivered later than expected.
      */
+    private final Instant serviceInstanceStartedAt = Instant.now();
+
     @EventListener(ApplicationReadyEvent.class)
     public void markInterruptedRunsAfterRestart() {
         jdbcTemplate.update("""
                 UPDATE analysis_test_run
                 SET status='ERROR', current_step='Interrupted by application restart',
-                    error_message='Replay was interrupted by application restart. Resume is disabled; delete test data and start a new run.',
+                    error_message='Replay was interrupted by an actual application restart. Resume is disabled; delete test data and start a new run.',
                     completed_at=CURRENT_TIMESTAMP(6)
                 WHERE status IN ('PENDING','RUNNING')
-                """);
+                  AND created_at < ?
+                """, Timestamp.from(serviceInstanceStartedAt));
     }
 
     // FIX-088: manual Resume was removed. We intentionally do not expose a method that

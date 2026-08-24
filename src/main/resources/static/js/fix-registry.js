@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-089",
+            title: "Prevent false replay restart interruption",
+            status: "COMPLETE · REPLAY LIFECYCLE SAFETY",
+            scenario: "A replay started normally in the current JVM must never be changed to ERROR by startup recovery when no restart occurred.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A", exitTime: "N/A",
+            replayWindow: "Any PENDING/RUNNING replay",
+            location: "Regression replay startup lifecycle",
+            classes: ["RegressionTestService", "fix-registry.js"],
+            cause: "FIX-088 marked every PENDING/RUNNING analysis_test_run row as interrupted whenever ApplicationReadyEvent fired. The SQL did not distinguish rows left by a previous JVM from rows created by the current JVM, so a live replay could be falsely labelled as an application restart even when no restart occurred.",
+            solution: "Capture the current RegressionTestService/JVM instance start instant and restrict startup recovery to rows whose created_at predates that instant. A run created by the current application instance is therefore immune to the restart cleanup regardless of when ApplicationReadyEvent is delivered.",
+            behavior: "Resume remains removed. Delete Data remains the validated full Replay/Test purge. Proven and Production data remain untouched. No signal, BUY/SELL, wallet, or Replay/Production decision behavior changes.",
+            regression: "Start a long replay after the application is already running and verify it remains PENDING/RUNNING until the worker completes. On a genuine application restart, only rows created before the new JVM instance may be marked interrupted."
+        },
+        {
             id: "FIX-088",
             title: "Remove Replay Resume and make Delete Data a validated full purge",
             status: "COMPLETE · REPLAY DATA LIFECYCLE",
