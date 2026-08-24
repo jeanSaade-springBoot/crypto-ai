@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-088",
+            title: "Remove Replay Resume and make Delete Data a validated full purge",
+            status: "COMPLETE · REPLAY DATA LIFECYCLE",
+            scenario: "Resume caused repeated recovery failures and Delete Data retained archived replay rows instead of actually clearing the test history.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A", exitTime: "N/A",
+            replayWindow: "All Replay/Test runs",
+            location: "Proven/Test UI, regression controller/service, replay startup lifecycle",
+            classes: ["RegressionTestService", "RegressionTestController", "proven-analyzed-trades.html", "proven-analyzed-trades.js", "fix-registry.js"],
+            cause: "The previous reset path archived every run before deleting only active test tables, so replay history remained in *_archive tables. Resume also reused existing run ids and added unnecessary lifecycle complexity after duplicate-worker failures.",
+            solution: "Remove manual Resume from the UI and API, stop automatic replay recovery after application restart, mark interrupted runs ERROR, and redefine Delete Data as a permanent purge of every live and archived Replay/Test table plus archive metadata. Validate COUNT(*)=0 for every purged table inside the same transaction and verify Proven row counts are unchanged; any validation failure rolls the transaction back.",
+            behavior: "Replay/Production trading decisions are unchanged. Delete Data now intentionally removes Recent Test Runs, Shadow/Test outputs, and replay archives while preserving proven_analyzed_trade, proven_trade_leg_archive, and all Production data.",
+            regression: "Create replay data and archive data, preserve at least one Proven trade, click Delete Data, then verify all 17 Replay/Test tables report zero rows, Recent Test Runs is empty, archives are empty, and both Proven tables retain exactly their previous counts."
+        },
+        {
             id: "FIX-087",
             title: "Prevent duplicate Replay workers during Resume",
             status: "COMPLETE · REPLAY RECOVERY SAFETY",

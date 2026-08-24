@@ -103,77 +103,24 @@ public class RegressionTestService {
     }
 
     /**
-     * FIX-073: an application restart kills the @Async replay thread but leaves its durable
-     * analysis_test_run row as PENDING/RUNNING.  A replay cannot safely continue from an
-     * arbitrary percentage because opportunity memory, wallet state and position-management
-     * policy state are intentionally in-memory during the isolated replay.  Recovery therefore
-     * reuses the SAME run id/window, clears only that run's isolated outputs, and deterministically
-     * rebuilds the replay from its historical start.  Production tables are never touched.
+     * FIX-088: Resume/recovery is intentionally removed. If the JVM restarts while a replay
+     * is PENDING/RUNNING, there is no surviving async worker, so mark the durable row ERROR.
+     * The user can then use Delete Data and start a clean replay explicitly. This avoids any
+     * automatic or manual second execution of the same test_run_id.
      */
     @EventListener(ApplicationReadyEvent.class)
-    public void resumeInterruptedRunsAfterRestart() {
-        List<Long> interrupted = jdbcTemplate.queryForList(
-                "SELECT id FROM analysis_test_run WHERE status IN ('PENDING','RUNNING') ORDER BY id", Long.class);
-        for (Long runId : interrupted) {
-            try {
-                // FIX-087: never reset isolated replay outputs when this JVM still owns the run.
-                // At normal startup the set is empty; this also protects repeated lifecycle calls.
-                if (worker.isActive(runId)) {
-                    continue;
-                }
-                prepareInterruptedRunForReplay(runId);
-                worker.runAsync(runId);
-            } catch (Exception ex) {
-                jdbcTemplate.update("UPDATE analysis_test_run SET status='ERROR', current_step='Automatic replay recovery failed', error_message=?, completed_at=CURRENT_TIMESTAMP(6) WHERE id=?",
-                        ex.getMessage(), runId);
-            }
-        }
-    }
-
-    /** Manual recovery endpoint for a stale/interrupted run. It performs the same safe rebuild. */
-    public synchronized void resume(long runId) {
-        List<Map<String,Object>> rows = jdbcTemplate.queryForList(
-                "SELECT id,status,heartbeat_at FROM analysis_test_run WHERE id=?", runId);
-        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Regression test #" + runId + " not found.");
-        Map<String,Object> row = rows.get(0);
-        // FIX-087: heartbeat_at can look stale during a long computation while the async replay
-        // worker is still healthy. Check actual in-JVM ownership before any destructive cleanup.
-        if (worker.isActive(runId)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Replay #" + runId + " is still executing; Resume was not started.");
-        }
-        String status = String.valueOf(row.get("status"));
-        if (!List.of("PENDING", "RUNNING", "ERROR").contains(status)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only an interrupted PENDING/RUNNING or failed ERROR replay can be resumed.");
-        }
-        Timestamp heartbeat = (Timestamp) row.get("heartbeat_at");
-        if (heartbeat != null && heartbeat.toInstant().isAfter(Instant.now().minusSeconds(120))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Replay #" + runId + " still has a live heartbeat; recovery was not started.");
-        }
-        prepareInterruptedRunForReplay(runId);
-        worker.runAsync(runId);
-    }
-
-    private void prepareInterruptedRunForReplay(long runId) {
-        // Delete child/output rows only for this replay id. Proven trades are deliberately preserved.
-        jdbcTemplate.update("DELETE FROM position_management_test WHERE test_run_id=?", runId);
-        jdbcTemplate.update("DELETE FROM wallet_execution_test WHERE test_run_id=?", runId);
-        jdbcTemplate.update("DELETE FROM wallet_position_test WHERE test_run_id=?", runId);
-        jdbcTemplate.update("DELETE FROM execution_opportunity_test WHERE test_run_id=?", runId);
-        jdbcTemplate.update("DELETE FROM trade_signal_test WHERE test_run_id=?", runId);
-        jdbcTemplate.update("DELETE FROM analysis_test_signal WHERE test_run_id=?", runId);
-        jdbcTemplate.update("DELETE FROM analysis_test_result WHERE test_run_id=?", runId);
+    public void markInterruptedRunsAfterRestart() {
         jdbcTemplate.update("""
-                UPDATE analysis_test_run SET status='PENDING', progress_percent=0,
-                    current_step='Recovering interrupted replay from deterministic start', heartbeat_at=CURRENT_TIMESTAMP(6),
-                    source_signal_count=0, replay_signal_count=0, generated_signal_count=0,
-                    generated_buy_count=0, generated_watch_count=0, generated_sell_count=0, generated_strong_sell_count=0,
-                    simulated_trade_count=0, simulated_win_count=0, simulated_loss_count=0, simulated_realized_pnl=0, simulated_final_wallet=0,
-                    neutralized_original_bearish_count=0, corrected_hard_reversal_count=0, historical_hard_reversal_count=0,
-                    error_message=NULL, failure_step=NULL, failure_exception=NULL, failure_root_cause=NULL, failure_stack_trace=NULL,
-                    started_at=NULL, completed_at=NULL WHERE id=?
-                """, runId);
+                UPDATE analysis_test_run
+                SET status='ERROR', current_step='Interrupted by application restart',
+                    error_message='Replay was interrupted by application restart. Resume is disabled; delete test data and start a new run.',
+                    completed_at=CURRENT_TIMESTAMP(6)
+                WHERE status IN ('PENDING','RUNNING')
+                """);
     }
+
+    // FIX-088: manual Resume was removed. We intentionally do not expose a method that
+    // mutates an existing failed run back to PENDING. Users delete test data and start a clean run.
 
     public synchronized long start(RegressionTestRunRequest request) {
         if (request == null || request.symbol() == null || request.symbol().isBlank()
@@ -297,51 +244,82 @@ public class RegressionTestService {
                 """, Integer.class);
         if (activeRuns != null && activeRuns > 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "A regression test is still running. Wait for it to finish before resetting test data.");
+                    "A regression test is still running. Wait for it to finish before deleting test data.");
         }
 
-        // Safety-first reset: archive every completed active run before deleting shadow data.
-        // If any archive copy fails, the transaction rolls back and reset does not proceed.
-        List<Long> unarchivedRunIds = jdbcTemplate.queryForList("""
-                SELECT r.id FROM analysis_test_run r
-                LEFT JOIN regression_test_archive_batch a ON a.source_test_run_id=r.id
-                WHERE a.id IS NULL ORDER BY r.id
-                """, Long.class);
-        for (Long runId : unarchivedRunIds) archiveRun(runId, "Automatic archive before Reset Test Data");
+        // FIX-088: Delete Data is now a true purge, not an archive operation. Every replay/test
+        // table that can feed Recent Test Runs, run detail, Shadow Trades, or archived replay
+        // history is emptied. Persistent Proven records are deliberately excluded.
+        int provenBefore = countRows("proven_analyzed_trade");
+        int provenLegsBefore = countRows("proven_trade_leg_archive");
 
-        // Proven trades are intentionally NOT test data. proven_analyzed_trade is a
-        // standalone immutable snapshot table with no FK to analysis_test_run, so deleting
-        // or resetting replay runs must never erase manually reviewed success trades.
-        Integer provenTradesPreserved = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM proven_analyzed_trade", Integer.class);
+        Map<String, Integer> deleted = new java.util.LinkedHashMap<>();
+        // Delete children before parents so the purge remains safe if foreign keys are added later.
+        deleted.put("position_management_test", jdbcTemplate.update("DELETE FROM position_management_test"));
+        deleted.put("wallet_execution_test", jdbcTemplate.update("DELETE FROM wallet_execution_test"));
+        deleted.put("wallet_position_test", jdbcTemplate.update("DELETE FROM wallet_position_test"));
+        deleted.put("execution_opportunity_test", jdbcTemplate.update("DELETE FROM execution_opportunity_test"));
+        deleted.put("trade_signal_test", jdbcTemplate.update("DELETE FROM trade_signal_test"));
+        deleted.put("analysis_test_signal", jdbcTemplate.update("DELETE FROM analysis_test_signal"));
+        deleted.put("analysis_test_result", jdbcTemplate.update("DELETE FROM analysis_test_result"));
+        deleted.put("analysis_test_run", jdbcTemplate.update("DELETE FROM analysis_test_run"));
 
-        int executions = jdbcTemplate.update("DELETE FROM wallet_execution_test");
-        int positions = jdbcTemplate.update("DELETE FROM wallet_position_test");
-        int management = jdbcTemplate.update("DELETE FROM position_management_test");
-        int opportunities = jdbcTemplate.update("DELETE FROM execution_opportunity_test");
-        int tradeSignals = jdbcTemplate.update("DELETE FROM trade_signal_test");
-        int signals = jdbcTemplate.update("DELETE FROM analysis_test_signal");
-        int results = jdbcTemplate.update("DELETE FROM analysis_test_result");
-        int runs = jdbcTemplate.update("DELETE FROM analysis_test_run");
+        deleted.put("position_management_test_archive", jdbcTemplate.update("DELETE FROM position_management_test_archive"));
+        deleted.put("wallet_execution_test_archive", jdbcTemplate.update("DELETE FROM wallet_execution_test_archive"));
+        deleted.put("wallet_position_test_archive", jdbcTemplate.update("DELETE FROM wallet_position_test_archive"));
+        deleted.put("execution_opportunity_test_archive", jdbcTemplate.update("DELETE FROM execution_opportunity_test_archive"));
+        deleted.put("trade_signal_test_archive", jdbcTemplate.update("DELETE FROM trade_signal_test_archive"));
+        deleted.put("analysis_test_signal_archive", jdbcTemplate.update("DELETE FROM analysis_test_signal_archive"));
+        deleted.put("analysis_test_result_archive", jdbcTemplate.update("DELETE FROM analysis_test_result_archive"));
+        deleted.put("analysis_test_run_archive", jdbcTemplate.update("DELETE FROM analysis_test_run_archive"));
+        deleted.put("regression_test_archive_batch", jdbcTemplate.update("DELETE FROM regression_test_archive_batch"));
 
-        jdbcTemplate.execute("ALTER TABLE wallet_execution_test AUTO_INCREMENT = 1");
-        jdbcTemplate.execute("ALTER TABLE position_management_test AUTO_INCREMENT = 1");
-        jdbcTemplate.execute("ALTER TABLE execution_opportunity_test AUTO_INCREMENT = 1");
-        jdbcTemplate.execute("ALTER TABLE trade_signal_test AUTO_INCREMENT = 1");
-        jdbcTemplate.execute("ALTER TABLE analysis_test_signal AUTO_INCREMENT = 1");
-        jdbcTemplate.execute("ALTER TABLE analysis_test_result AUTO_INCREMENT = 1");
+        // Validate the database state inside this same transaction. If any replay table still
+        // contains rows, throw and rollback instead of reporting a false successful purge.
+        java.util.List<String> replayTables = java.util.List.of(
+                "position_management_test", "wallet_execution_test", "wallet_position_test",
+                "execution_opportunity_test", "trade_signal_test", "analysis_test_signal",
+                "analysis_test_result", "analysis_test_run",
+                "position_management_test_archive", "wallet_execution_test_archive",
+                "wallet_position_test_archive", "execution_opportunity_test_archive",
+                "trade_signal_test_archive", "analysis_test_signal_archive",
+                "analysis_test_result_archive", "analysis_test_run_archive",
+                "regression_test_archive_batch");
+        Map<String, Integer> remaining = new java.util.LinkedHashMap<>();
+        for (String table : replayTables) remaining.put(table, countRows(table));
+        java.util.List<String> nonEmpty = remaining.entrySet().stream()
+                .filter(e -> e.getValue() != 0).map(Map.Entry::getKey).toList();
+        if (!nonEmpty.isEmpty()) {
+            throw new IllegalStateException("Delete Test Data validation failed; rows remain in: " + String.join(", ", nonEmpty));
+        }
+
+        int provenAfter = countRows("proven_analyzed_trade");
+        int provenLegsAfter = countRows("proven_trade_leg_archive");
+        if (provenBefore != provenAfter || provenLegsBefore != provenLegsAfter) {
+            throw new IllegalStateException("Delete Test Data validation failed; Proven records changed unexpectedly.");
+        }
+
+        // Reset only tables that own an AUTO_INCREMENT id. This is cosmetic and happens only
+        // after successful delete + validation; Proven ids are never reset.
+        java.util.List<String> autoIncrementTables = java.util.List.of(
+                "wallet_execution_test", "wallet_position_test", "position_management_test",
+                "execution_opportunity_test", "trade_signal_test", "analysis_test_signal",
+                "analysis_test_result", "analysis_test_run", "regression_test_archive_batch");
+        for (String table : autoIncrementTables) jdbcTemplate.execute("ALTER TABLE " + table + " AUTO_INCREMENT = 1");
 
         return Map.of(
-                "runs", runs,
-                "results", results,
-                "signals", signals,
-                "tradeSignals", tradeSignals,
-                "opportunities", opportunities,
-                "management", management,
-                "positions", positions,
-                "executions", executions,
-                "provenTradesPreserved", provenTradesPreserved == null ? 0 : provenTradesPreserved
+                "success", true,
+                "message", "All replay/test data deleted and validated; Proven trades preserved.",
+                "deleted", deleted,
+                "remaining", remaining,
+                "provenTradesPreserved", provenAfter,
+                "provenTradeLegsPreserved", provenLegsAfter
         );
+    }
+
+    private int countRows(String table) {
+        Integer count = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
+        return count == null ? 0 : count;
     }
 
     @Transactional(readOnly = true)
@@ -370,9 +348,6 @@ public class RegressionTestService {
                 WHERE test_run_id = ?
                 """, id);
         run.put("result", results.isEmpty() ? null : results.get(0));
-        // FIX-087: expose actual in-JVM worker ownership so the UI does not offer Resume merely
-        // because heartbeat_at aged during a legitimate long-running computation.
-        run.put("active_worker", worker.isActive(id));
         return run;
     }
 
