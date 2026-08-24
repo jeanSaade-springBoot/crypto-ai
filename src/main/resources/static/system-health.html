@@ -26,9 +26,7 @@
                 <a href="/opportunity-center" title="AI Opportunity Center"><span class="nav-icon">⚡</span><span class="nav-text">Opportunity Center</span></a><a href="/wallet" title="Paper Wallet"><span class="nav-icon">◫</span><span class="nav-text">Wallet</span></a><a href="/binance" title="Binance Account"><span class="nav-icon">₿</span><span class="nav-text">Binance</span></a>
             </div>
             <div class="nav-group"><span class="nav-group-label">ANALYSIS</span>
-                
                 <a href="/trade-inspector" title="Trade Inspector"><span class="nav-icon">⌕</span><span class="nav-text">Trade Inspector</span></a><a href="/trade-activity" title="Trade Activity"><span class="nav-icon">↕</span><span class="nav-text">Trade Activity</span></a>
-                
                 <a href="/crypto-fundamentals" title="Crypto Fundamentals"><span class="nav-icon">ƒ</span><span class="nav-text">Crypto Fundamentals</span></a>
                 <a href="/proven-analyzed-trades" title="Proven Analyzed Trades"><span class="nav-icon">✓</span><span class="nav-text">Proven Analyzed Trades</span></a>
             </div>
@@ -37,61 +35,116 @@
                 <a href="/fix-registry" title="Fix Registry"><span class="nav-icon">•</span><span class="nav-text">Fix Registry</span></a><a class="active" href="/system-health" title="System Health"><span class="nav-icon">♥</span><span class="nav-text">System Health</span></a>
             </div>
         </nav>
-        <div class="connection"><span class="online"></span><div class="sidebar-label"><strong>System Health</strong><small>Operations & runtime cadence</small></div></div>
+        <div class="connection"><span id="system-health-dot" class="online"></span><div class="sidebar-label"><strong id="system-health-sidebar-status">System Health</strong><small>Daily production diagnostics</small></div></div>
     </aside>
 
     <main>
         <header class="topbar">
             <div>
                 <p class="eyebrow">SYSTEM HEALTH</p>
-                <h1>AI operations &amp; runtime</h1>
+                <h1>Daily production health</h1>
+                <p class="system-health-subtitle">Candles → signals → opportunities → wallet execution</p>
             </div>
-            <div class="topbar-actions">
-                <a class="dashboard-button" href="/dashboard">← Dashboard</a>
+            <div class="topbar-actions system-health-actions">
+                <span id="system-health-day" class="health-day-chip">—</span>
                 <button id="refresh-system-health" type="button">Refresh</button>
             </div>
         </header>
 
+        <section class="health-overview" aria-label="Daily system health overview">
+            <article id="overall-health-card" class="health-overall-card">
+                <div><span class="health-card-label">Overall</span><strong id="overall-health-status">LOADING</strong></div>
+                <small id="overall-health-updated">Reading production state…</small>
+            </article>
+            <article class="health-kpi-card"><span>Candles · 1m</span><strong id="health-candle-1m">0</strong><small>Closed today</small></article>
+            <article class="health-kpi-card"><span>Candles · 5m</span><strong id="health-candle-5m">0</strong><small>Closed today</small></article>
+            <article class="health-kpi-card"><span>Candles · 1h</span><strong id="health-candle-1h">0</strong><small>Closed today</small></article>
+            <article class="health-kpi-card"><span>Signals · 1m</span><strong id="health-signal-1m">0</strong><small>Generated today</small></article>
+            <article class="health-kpi-card"><span>Signals · 5m</span><strong id="health-signal-5m">0</strong><small>Generated today</small></article>
+            <article class="health-kpi-card"><span>Signals · 1h</span><strong id="health-signal-1h">0</strong><small>Generated today</small></article>
+            <article class="health-kpi-card health-buy-card"><span>BUY executions</span><strong id="health-buy-count">0</strong><small>Wallet BUY rows today</small></article>
+            <article class="health-kpi-card health-sell-card"><span>SELL executions</span><strong id="health-sell-count">0</strong><small>Wallet SELL rows today</small></article>
+            <article class="health-kpi-card"><span>Open positions</span><strong id="health-open-positions">0</strong><small>Current wallet state</small></article>
+        </section>
+
+        <section class="panel system-health-panel health-alert-panel">
+            <div class="section-heading">
+                <div><p class="eyebrow">ATTENTION FIRST</p><h2>Pipeline alerts</h2></div>
+                <span id="health-alert-count" class="health-section-meta">0 active</span>
+            </div>
+            <div id="health-alerts" class="health-alert-list"><div class="empty">Loading daily health…</div></div>
+        </section>
+
+        <section class="health-two-column">
+            <article class="panel system-health-panel">
+                <div class="section-heading">
+                    <div><p class="eyebrow">DATA → ANALYSIS</p><h2>Signal staleness</h2></div>
+                    <span class="health-section-meta">Per symbol / timeframe</span>
+                </div>
+                <div class="health-table-wrap"><table class="health-table"><thead><tr><th>Status</th><th>Symbol</th><th>TF</th><th>Last signal</th><th>Stale</th></tr></thead><tbody id="health-signal-staleness"></tbody></table></div>
+            </article>
+
+            <article class="panel system-health-panel">
+                <div class="section-heading">
+                    <div><p class="eyebrow">MARKET DATA</p><h2>Candle staleness</h2></div>
+                    <span class="health-section-meta">Closed candles</span>
+                </div>
+                <div class="health-table-wrap"><table class="health-table"><thead><tr><th>Status</th><th>Symbol</th><th>TF</th><th>Last candle</th><th>Stale</th></tr></thead><tbody id="health-candle-staleness"></tbody></table></div>
+            </article>
+        </section>
+
+        <section class="health-two-column">
+            <article class="panel system-health-panel">
+                <div class="section-heading">
+                    <div><p class="eyebrow">EXECUTION BALANCE</p><h2>BUY vs SELL</h2></div>
+                    <span id="health-balance-status" class="health-status-pill">—</span>
+                </div>
+                <div class="health-balance-grid">
+                    <div><span>BUY today</span><strong id="health-balance-buy">0</strong></div>
+                    <div><span>SELL today</span><strong id="health-balance-sell">0</strong></div>
+                    <div><span>Open positions</span><strong id="health-balance-open">0</strong></div>
+                </div>
+                <p id="health-balance-message" class="form-note">—</p>
+                <div class="health-table-wrap compact"><table class="health-table"><thead><tr><th>Side</th><th>Today</th><th>7d avg</th><th>Status</th></tr></thead><tbody id="health-trade-baseline"></tbody></table></div>
+            </article>
+
+            <article class="panel system-health-panel">
+                <div class="section-heading">
+                    <div><p class="eyebrow">WHAT FIRED THE BUY</p><h2>Entry routes</h2></div>
+                    <span class="health-section-meta">Today vs 7d baseline</span>
+                </div>
+                <div class="health-table-wrap"><table class="health-table"><thead><tr><th>Route</th><th>Today</th><th>7d avg</th><th>Status</th></tr></thead><tbody id="health-entry-routes"></tbody></table></div>
+            </article>
+        </section>
+
         <section class="panel system-health-panel">
             <div class="section-heading">
-                <div><p class="eyebrow">SYSTEM HEALTH</p><h2>AI operations</h2></div>
-                <div class="operations-heading-meta">
-                    <select id="admin-ai-period" aria-label="AI operations period">
-                        <option value="ALL_TIME">All Time</option>
-                        <option value="TODAY">Today</option>
-                        <option value="LAST_24_HOURS">Last 24 Hours</option>
-                        <option value="LAST_7_DAYS">Last 7 Days</option>
-                        <option value="LAST_30_DAYS">Last 30 Days</option>
-                    </select>
-                    <span id="admin-ai-updated">—</span>
-                </div>
+                <div><p class="eyebrow">ANALYSIS DISTRIBUTION</p><h2>Strategy &amp; regime</h2></div>
+                <span class="health-section-meta">Detects strategies that unexpectedly go silent</span>
             </div>
-            <p class="form-note">Live state + selected-period activity. Operational visibility only; this does not alter trading decisions.</p>
-            <div class="ai-operations-grid admin-ai-operations-grid">
-                <div class="operations-stat period-stat"><span>Coins analyzed</span><strong id="admin-pipeline-coins-scanned">0</strong><small>Selected period</small></div>
-                <div class="operations-stat period-stat"><span>Opportunities</span><strong id="admin-pipeline-opportunities-found">0</strong><small>Started in period</small></div>
-                <div class="operations-stat live-stat"><span>Building now</span><strong id="admin-pipeline-building">0</strong><small>Evidence accumulating</small></div>
-                <div class="operations-stat live-stat"><span>Weakening now</span><strong id="admin-pipeline-weakening">0</strong><small>Health/evidence falling</small></div>
-                <div class="operations-stat live-stat"><span>Recovering now</span><strong id="admin-pipeline-recovering">0</strong><small>Health improving</small></div>
-                <div class="operations-stat live-stat"><span>Ready now</span><strong id="admin-pipeline-ready">0</strong><small>Confirmed for execution</small></div>
-                <div class="operations-stat rejected-stat"><span>Blocked / Rejected</span><strong id="admin-pipeline-blocked-rejected">0</strong><small>Selected period</small></div>
-                <div class="operations-stat period-stat"><span>Executed</span><strong id="admin-pipeline-executed">0</strong><small>Positions opened in period</small></div>
-                <div class="operations-stat live-stat"><span>Open positions</span><strong id="admin-pipeline-managed">0</strong><small>Live wallet state</small></div>
-                <div class="operations-stat period-stat"><span>Closed</span><strong id="admin-pipeline-closed">0</strong><small>Wins + losses in period</small></div>
+            <div class="health-table-wrap"><table class="health-table"><thead><tr><th>Strategy</th><th>Regime</th><th>Today</th><th>7d avg</th><th>Status</th></tr></thead><tbody id="health-strategy-regime"></tbody></table></div>
+        </section>
+
+        <section class="panel system-health-panel">
+            <div class="section-heading">
+                <div><p class="eyebrow">OPPORTUNITY PIPELINE</p><h2>Outcome distribution</h2></div>
+                <span id="health-missing-context" class="health-status-pill">MISSING_CONTEXT —</span>
             </div>
+            <p class="form-note">Outcome spikes are informational because market conditions can legitimately increase cancellations. MISSING_CONTEXT is monitored separately.</p>
+            <div class="health-table-wrap"><table class="health-table"><thead><tr><th>Status</th><th>Decision code</th><th>Today</th><th>7d avg</th></tr></thead><tbody id="health-opportunity-outcomes"></tbody></table></div>
+        </section>
 
-            <hr class="system-health-divider">
-
+        <section class="panel system-health-panel">
             <div class="section-heading system-health-runtime-heading">
                 <div><p class="eyebrow">RUNTIME CONFIGURATION</p><h2>Collection and analysis schedules</h2></div>
-                <span>Operational cadence</span>
+                <span class="health-section-meta">Operational cadence</span>
             </div>
-            <p class="form-note">Operational cadence only. These values describe when market data, analysis and dashboard refresh jobs run; they do not change replay decision logic.</p>
             <div id="admin-schedule-groups" class="schedule-groups"><div class="empty">Loading runtime configuration…</div></div>
         </section>
     </main>
 </div>
 <script src="/js/time-utils.js"></script>
 <script src="/js/system-health.js"></script>
-<script src="/js/catching-market-badge.js"></script></body>
+<script src="/js/catching-market-badge.js"></script>
+</body>
 </html>

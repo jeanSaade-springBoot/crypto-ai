@@ -11,6 +11,136 @@ async function api(url) {
     return response.json();
 }
 
+function setText(id, value) {
+    const node = document.getElementById(id);
+    if (node) node.textContent = value ?? '—';
+}
+
+function statusClass(status) {
+    const value = String(status || 'OK').toUpperCase();
+    if (value === 'CRITICAL') return 'critical';
+    if (value === 'WARNING') return 'warning';
+    if (value === 'LEARNING') return 'learning';
+    return 'ok';
+}
+
+function statusPill(status) {
+    const value = String(status || 'OK').toUpperCase();
+    return `<span class="health-status-pill ${statusClass(value)}">${escapeHtml(value)}</span>`;
+}
+
+function fmtCount(value) {
+    return Number(value || 0).toLocaleString();
+}
+
+function fmtBaseline(value) {
+    return value == null ? '—' : Number(value).toFixed(1);
+}
+
+function fmtTime(value) {
+    if (!value) return '—';
+    if (window.CryptoTime?.formatLocal) return window.CryptoTime.formatLocal(value);
+    return String(value);
+}
+
+function renderStaleness(targetId, rows) {
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    const sorted = Array.isArray(rows) ? rows : [];
+    target.innerHTML = sorted.length ? sorted.map(row => `
+        <tr class="health-row-${statusClass(row.status)}">
+            <td>${statusPill(row.status)}</td>
+            <td><strong>${escapeHtml(row.symbol)}</strong></td>
+            <td>${escapeHtml(row.interval)}</td>
+            <td>${escapeHtml(fmtTime(row.lastAt))}</td>
+            <td>${row.minutesStale == null ? '—' : `${fmtCount(row.minutesStale)} min`}</td>
+        </tr>`).join('') : '<tr><td colspan="5" class="empty">No rows returned.</td></tr>';
+}
+
+function renderAlerts(rows) {
+    const target = document.getElementById('health-alerts');
+    if (!target) return;
+    const alerts = Array.isArray(rows) ? rows : [];
+    setText('health-alert-count', `${alerts.length} active`);
+    target.innerHTML = alerts.length ? alerts.map(row => `
+        <article class="health-alert ${statusClass(row.status)}">
+            ${statusPill(row.status)}
+            <div><strong>${escapeHtml(row.title)}</strong><small>${escapeHtml(row.message)}</small></div>
+        </article>`).join('') : '<div class="health-empty-ok"><strong>All monitored checks are OK</strong><small>No candle/signal staleness, execution imbalance or missing-context alert is active.</small></div>';
+}
+
+function renderTradeBaseline(rows) {
+    const target = document.getElementById('health-trade-baseline');
+    if (!target) return;
+    target.innerHTML = (rows || []).map(row => `<tr><td><strong>${escapeHtml(row.side)}</strong></td><td>${fmtCount(row.todayCount)}</td><td>${fmtBaseline(row.baselineAvg)}</td><td>${statusPill(row.status)}</td></tr>`).join('');
+}
+
+function renderRoutes(rows) {
+    const target = document.getElementById('health-entry-routes');
+    if (!target) return;
+    target.innerHTML = (rows || []).length ? rows.map(row => `<tr><td><strong>${escapeHtml(String(row.route || 'UNKNOWN').replaceAll('_',' '))}</strong></td><td>${fmtCount(row.todayCount)}</td><td>${fmtBaseline(row.baselineAvg)}</td><td>${statusPill(row.status)}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">No BUY routes fired today.</td></tr>';
+}
+
+function renderStrategyRegimes(rows) {
+    const target = document.getElementById('health-strategy-regime');
+    if (!target) return;
+    target.innerHTML = (rows || []).length ? rows.map(row => `<tr><td><strong>${escapeHtml(String(row.strategy || '').replaceAll('_',' '))}</strong></td><td>${escapeHtml(String(row.regime || '').replaceAll('_',' '))}</td><td>${fmtCount(row.todayCount)}</td><td>${fmtBaseline(row.baselineAvg)}</td><td>${statusPill(row.status)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No strategy/regime signals today.</td></tr>';
+}
+
+function renderOpportunityOutcomes(rows) {
+    const target = document.getElementById('health-opportunity-outcomes');
+    if (!target) return;
+    target.innerHTML = (rows || []).length ? rows.map(row => `<tr><td><strong>${escapeHtml(row.opportunityStatus)}</strong></td><td>${escapeHtml(String(row.decisionCode || 'NULL').replaceAll('_',' '))}</td><td>${fmtCount(row.todayCount)}</td><td>${fmtBaseline(row.baselineAvg)}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">No opportunity activity today.</td></tr>';
+}
+
+function renderDailyHealth(data) {
+    const summary = data?.summary || {};
+    const candles = summary.candleCounts || {};
+    const signals = summary.signalCounts || {};
+    setText('health-candle-1m', fmtCount(candles['1m']));
+    setText('health-candle-5m', fmtCount(candles['5m']));
+    setText('health-candle-1h', fmtCount(candles['1h']));
+    setText('health-signal-1m', fmtCount(signals['1m']));
+    setText('health-signal-5m', fmtCount(signals['5m']));
+    setText('health-signal-1h', fmtCount(signals['1h']));
+    setText('health-buy-count', fmtCount(summary.buyCount));
+    setText('health-sell-count', fmtCount(summary.sellCount));
+    setText('health-open-positions', fmtCount(summary.openPositions));
+    setText('health-balance-buy', fmtCount(summary.buyCount));
+    setText('health-balance-sell', fmtCount(summary.sellCount));
+    setText('health-balance-open', fmtCount(summary.openPositions));
+    setText('health-balance-message', summary.buySellMessage || '—');
+    setText('system-health-day', `${data.day || 'Today'} · Asia/Riyadh`);
+    setText('overall-health-updated', `Updated ${fmtTime(data.generatedAt)}`);
+
+    const overall = String(data.status || 'OK').toUpperCase();
+    const overallCard = document.getElementById('overall-health-card');
+    if (overallCard) overallCard.className = `health-overall-card ${statusClass(overall)}`;
+    setText('overall-health-status', overall);
+    const dot = document.getElementById('system-health-dot');
+    if (dot) dot.className = overall === 'CRITICAL' ? 'offline' : overall === 'WARNING' ? '' : 'online';
+    setText('system-health-sidebar-status', overall === 'OK' ? 'System Healthy' : `System ${overall}`);
+
+    const balance = document.getElementById('health-balance-status');
+    if (balance) {
+        balance.className = `health-status-pill ${statusClass(summary.buySellStatus)}`;
+        balance.textContent = summary.buySellStatus || 'OK';
+    }
+    const missing = document.getElementById('health-missing-context');
+    if (missing) {
+        missing.className = `health-status-pill ${statusClass(summary.missingContextStatus)}`;
+        missing.textContent = `MISSING_CONTEXT ${fmtCount(summary.missingContextCount)} · ${summary.missingContextStatus || 'OK'}`;
+    }
+
+    renderAlerts(data.alerts);
+    renderStaleness('health-signal-staleness', data.signalStaleness);
+    renderStaleness('health-candle-staleness', data.candleStaleness);
+    renderTradeBaseline(data.tradeBaseline);
+    renderRoutes(data.entryRoutes);
+    renderStrategyRegimes(data.strategyRegimes);
+    renderOpportunityOutcomes(data.opportunityOutcomes);
+}
+
 async function loadSystemHealthRuntimeConfiguration() {
     const target = document.getElementById('admin-schedule-groups');
     if (!target) return;
@@ -32,41 +162,6 @@ async function loadSystemHealthRuntimeConfiguration() {
             </article>`).join('') : '<div class="empty">No runtime schedule configuration was returned.</div>';
     } catch (error) {
         target.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
-    }
-}
-
-async function loadSystemHealthAiOperations() {
-    const period = document.getElementById('admin-ai-period')?.value || 'ALL_TIME';
-    const updated = document.getElementById('admin-ai-updated');
-    try {
-        const [summary, opportunities] = await Promise.all([
-            api(`/api/execution-intelligence/summary?period=${encodeURIComponent(period)}`),
-            api('/api/execution-intelligence/opportunities/active')
-        ]);
-        const rows = Array.isArray(opportunities) ? opportunities : [];
-        const building = rows.filter(o => String(o.status || '').toUpperCase() === 'BUILDING').length;
-        const recovering = rows.filter(o => String(o.status || '').toUpperCase() === 'WEAKENING' && Number(o.healthMomentum || 0) > 0).length;
-        const weakening = rows.filter(o => String(o.status || '').toUpperCase() === 'WEAKENING' && Number(o.healthMomentum || 0) <= 0).length;
-        const ready = rows.filter(o => String(o.status || '').toUpperCase() === 'CONFIRMED').length;
-        const values = {
-            'admin-pipeline-coins-scanned': summary.coinsScanned || 0,
-            'admin-pipeline-opportunities-found': summary.opportunitiesFound || 0,
-            'admin-pipeline-building': summary.buildingNow ?? building,
-            'admin-pipeline-weakening': summary.weakeningNow ?? weakening,
-            'admin-pipeline-recovering': summary.recoveringNow ?? recovering,
-            'admin-pipeline-ready': summary.readyNow ?? ready,
-            'admin-pipeline-blocked-rejected': summary.blockedRejected || 0,
-            'admin-pipeline-executed': summary.executed || 0,
-            'admin-pipeline-managed': summary.activePositions || 0,
-            'admin-pipeline-closed': summary.closedTrades || 0
-        };
-        Object.entries(values).forEach(([id, value]) => {
-            const node = document.getElementById(id);
-            if (node) node.textContent = value;
-        });
-        if (updated) updated.textContent = summary.updatedAt ? window.CryptoTime.formatLocal(summary.updatedAt) : 'Live';
-    } catch (error) {
-        if (updated) updated.textContent = error.message;
     }
 }
 
@@ -102,13 +197,19 @@ async function refreshSystemHealth() {
     const button = document.getElementById('refresh-system-health');
     if (button) button.disabled = true;
     try {
-        await Promise.all([loadSystemHealthAiOperations(), loadSystemHealthRuntimeConfiguration()]);
+        // FIX-071 loads daily production diagnostics and runtime cadence independently so a schedule error
+        // cannot hide the candle/signal/execution health data that operators need first.
+        const [health] = await Promise.all([api('/api/system-health/daily'), loadSystemHealthRuntimeConfiguration()]);
+        renderDailyHealth(health);
+    } catch (error) {
+        const target = document.getElementById('health-alerts');
+        if (target) target.innerHTML = `<article class="health-alert critical"><span class="health-status-pill critical">CRITICAL</span><div><strong>Health endpoint failed</strong><small>${escapeHtml(error.message)}</small></div></article>`;
+        setText('overall-health-status', 'UNAVAILABLE');
     } finally {
         if (button) button.disabled = false;
     }
 }
 
 initializeSystemHealthSidebar();
-document.getElementById('admin-ai-period')?.addEventListener('change', loadSystemHealthAiOperations);
 document.getElementById('refresh-system-health')?.addEventListener('click', refreshSystemHealth);
 refreshSystemHealth();

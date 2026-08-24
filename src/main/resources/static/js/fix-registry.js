@@ -1,6 +1,22 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-071",
+            title: "Daily production System Health diagnostics",
+            status: "COMPLETE · OBSERVABILITY ONLY",
+            scenario: "System Health must detect candle/signal pipeline stalls, abnormal BUY/SELL execution balance, silent strategies/routes and opportunity-processing anomalies from daily production data.",
+            symbol: "ALL ENABLED", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A", exitTime: "N/A",
+            replayWindow: "No replay required; this fix is read-only operational observability.",
+            location: "System Health left-menu page + /api/system-health/daily",
+            classes: ["SystemHealthDailyService", "SystemHealthController", "system-health.html", "system-health.js", "administration.css"],
+            cause: "The previous System Health page emphasized aggregate AI-operation counters and runtime schedules, but did not expose the production invariants needed to detect the exact incident class where candles continued while 1m/5m trade-signal generation stopped. It also lacked daily route, strategy/regime, opportunity-outcome and BUY/SELL balance diagnostics.",
+            solution: "Replace the page's primary view with a read-only daily health model using KSA day boundaries over UTC production timestamps. Show closed-candle and trade-signal counts for 1m/5m/1h, BUY/SELL/open-position counts, enabled-symbol candle/signal staleness, 7-day baselines, entry routes, strategy/regime distribution, opportunity outcomes and a dedicated MISSING_CONTEXT alert. Preserve runtime cadence at the bottom.",
+            behavior: "Critical/warning staleness is surfaced first. BUY materially exceeding SELL is a diagnostic warning rather than an automatic trading failure because progressive entries/open positions can legitimately create an imbalance. Baseline-dependent checks show LEARNING until a full seven days of history exists. No trading, Replay, wallet, scoring or persistence behavior changes.",
+            regression: "Open System Health with healthy live data and verify 1m/5m/1h counts and per-symbol staleness. Stop only analysis while candles continue and verify signal staleness becomes WARNING/CRITICAL while candle health remains OK. Verify MISSING_CONTEXT >0 warns and >5 is critical. Verify BUY route, strategy/regime and opportunity distributions match direct production SQL for the same KSA day."
+        },
+
+        {
             id: "FIX-070",
             title: "Unified chart hover and crosshair presentation",
             status: "COMPLETE · UI ONLY",
