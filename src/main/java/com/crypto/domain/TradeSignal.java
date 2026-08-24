@@ -343,7 +343,9 @@ public class TradeSignal {
     @Column(name = "atr_explanation", length = 1000)
     private String atrExplanation;
 
-    @Column(length = 2000)
+    // FIX-072: this assembled diagnostic can legitimately exceed 2,000 characters.
+    // TEXT prevents a diagnostic string from aborting persistence of the trading signal itself.
+    @Column(columnDefinition = "TEXT")
     private String explanation;
 
     @Column(name = "generated_at", nullable = false)

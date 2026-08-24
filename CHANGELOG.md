@@ -1,5 +1,16 @@
 # Change Log
 
+## FIX-072 — Production signal persistence safety
+
+- Changed `trade_signal.explanation` from `VARCHAR(2000)` to `TEXT` after live diagnostics reached the 2,000-character ceiling and longer values caused Production signal INSERT failures.
+- Applied the same `TEXT` capacity to `trade_signal_test.explanation` and `trade_signal_test_archive.explanation` so Replay keeps production-shaped persistence parity.
+- Kept `uk_trade_signal_symbol_interval_candle`; startup bootstrap now skips analysis/execution when that exact symbol/interval/candle signal already exists instead of attempting a duplicate INSERT.
+- Corrected System Health opportunity-outcome SQL for MySQL `ONLY_FULL_GROUP_BY` by grouping on the exact composite expression used in the SELECT.
+- Removed the misplaced `System Health / Daily production diagnostics` footer from the System Health sidebar.
+- Added code comments around persistence and duplicate-prevention behavior.
+
+Trading scores, entry/exit rules, wallet sizing and strategy behavior are unchanged.
+
 ## FIX-071 — Daily production System Health diagnostics
 
 - Refactored the left-menu System Health page around daily production invariants instead of aggregate AI-operation totals.

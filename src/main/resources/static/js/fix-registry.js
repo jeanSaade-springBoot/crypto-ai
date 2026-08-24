@@ -1,6 +1,22 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-072",
+            title: "Production signal persistence safety",
+            status: "COMPLETE · PERSISTENCE/STARTUP SAFETY",
+            scenario: "A valid production signal must never be lost because its diagnostic explanation exceeds VARCHAR(2000), and startup bootstrap must not regenerate an already-persisted candle signal.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A", exitTime: "N/A",
+            replayWindow: "No trading-rule replay required; verify Production/Replay persistence parity on long explanations and startup idempotency.",
+            location: "TradeSignal schema/entity, MarketDataBootstrapService, System Health SQL/UI",
+            classes: ["TradeSignal", "MarketDataBootstrapService", "SystemHealthDailyService", "system-health.html", "V70__protect_signal_persistence_and_health.sql"],
+            cause: "trade_signal.explanation reached its 2,000-character limit and longer diagnostics caused INSERT failure. Startup bootstrap also always analyzed the latest indicator even when the same symbol/interval/candle signal already existed. System Health opportunity grouping was incompatible with ONLY_FULL_GROUP_BY and its page contained a duplicate sidebar footer label.",
+            solution: "Promote production/replay/archive TradeSignal explanation to TEXT, skip bootstrap analysis/execution when the exact signal key already exists while retaining the unique database constraint, group opportunity health by the exact selected key expression, and remove the misplaced sidebar footer.",
+            behavior: "Trading scores and decisions are unchanged. Valid signals can persist with long explanations; bootstrap does not duplicate an existing signal or process it twice; System Health opportunity outcomes work with ONLY_FULL_GROUP_BY.",
+            regression: "Generate an explanation over 2,000 chars and verify signal persistence; restart with an existing latest signal and verify bootstrap logs a skip with no duplicate INSERT; verify /api/system-health/daily returns opportunity outcomes; verify the sidebar footer text is absent."
+        },
+
+        {
             id: "FIX-071B",
             title: "Global System Health alert visibility",
             status: "COMPLETE · OBSERVABILITY ONLY",

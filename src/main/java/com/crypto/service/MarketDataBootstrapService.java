@@ -8,6 +8,7 @@ import com.crypto.domain.TradeSignal;
 import com.crypto.indicator.service.TechnicalIndicatorService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import com.crypto.repository.TradeSignalRepository;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
@@ -37,6 +38,7 @@ public class MarketDataBootstrapService implements ApplicationRunner {
     private final TechnicalIndicatorService technicalIndicatorService;
     private final AnalysisService analysisService;
     private final PaperTradingService paperTradingService;
+    private final TradeSignalRepository tradeSignalRepository;
 
     @Override
     public void run(ApplicationArguments args) {
@@ -103,6 +105,17 @@ public class MarketDataBootstrapService implements ApplicationRunner {
                         symbol,
                         interval
                 );
+                return;
+            }
+
+            // FIX-072: bootstrap can overlap with the live candle-close worker during startup.
+            // Never regenerate or re-execute a signal that Production already persisted for this
+            // exact symbol/interval/candle; the unique key remains the final database safety net.
+            if (tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime(
+                    indicator.getSymbol(), indicator.getIntervalCode(), indicator.getCandleOpenTime())) {
+                log.info(
+                        "Initial signal skipped: already exists for symbol={}, interval={}, candleOpenTime={}",
+                        indicator.getSymbol(), indicator.getIntervalCode(), indicator.getCandleOpenTime());
                 return;
             }
 
