@@ -1,3 +1,10 @@
+## FIX-074 · Shadow Trades placement/visibility
+
+- Restored Shadow Trades as an immediate replay result directly below the selected run result/failure area.
+- View now clears both CSS and native hidden state and fails visibly if the panel is missing instead of silently hiding it.
+- Removed obsolete "combined graph" wording from the Shadow Trades manual-review note.
+- UI only; no Production or Replay trading behavior changed.
+
 ## FIX-073 — Replay restart recovery and Shadow Trades restoration
 - Restored Shadow Trades visibility from Recent Test Runs, including partial active/interrupted runs.
 - Added automatic recovery of PENDING/RUNNING replay jobs after application restart. Recovery keeps the same run ID/window and deterministically rebuilds isolated replay state from the beginning because mid-stream in-memory opportunity/wallet/position state cannot be resumed safely.

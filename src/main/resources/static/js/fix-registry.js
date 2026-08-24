@@ -1,6 +1,23 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-074",
+            title: "Restore Shadow Trades directly under Proven replay result",
+            scenario: "Recent Test Run View must immediately expose shadow BUY/SELL rows",
+            symbol: "ALL",
+            entry: "UNCHANGED",
+            exit: "UNCHANGED",
+            entryTime: "N/A",
+            exitTime: "N/A",
+            replayWindow: "Any completed or interrupted Proven replay",
+            location: "Proven Analyzed Trades UI",
+            classes: ["proven-analyzed-trades.html", "proven-analyzed-trades.js"],
+            cause: "FIX-072B removed the upper graph and left Shadow Trades physically below Recent Runs and the Investigation Queue, making View appear to have no shadow section even when JavaScript unhid it.",
+            solution: "Move Shadow Trades directly below the run result/failure area and explicitly clear both CSS and native hidden state when View loads run details.",
+            behavior: "UI only. Replay generation, shadow persistence, Proven checkboxes and Production trading behavior are unchanged.",
+            regression: "Open any Recent Test Run with View and confirm Shadow Trades appears immediately below the selected run result, including an explicit NO BUY EXECUTED row when there are no trades."
+        },
+        {
             id: "FIX-072B",
             title: "Proven/Test page cleanup",
             status: "COMPLETE · UI ONLY",

@@ -589,7 +589,11 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
         if (pipelineToggle) { pipelineToggle.textContent = 'Expand pipeline'; pipelineToggle.setAttribute('aria-expanded', 'false'); }
 
         const tradePanel = document.getElementById('regression-trades');
+        // FIX-074: Shadow Trades is a first-class run result directly under the replay result area.
+        // Clear both CSS and native hidden state so View cannot leave it invisible after prior UI cleanup.
+        if (!tradePanel) throw new Error('Shadow Trades panel is missing from the Proven/Test page.');
         tradePanel.classList.remove('hidden');
+        tradePanel.hidden = false;
         const tradeTable = tradePanel.querySelector('table');
         const tradeHead = tradeTable?.querySelector('thead');
         if (tradeHead) {
@@ -597,7 +601,7 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
         }
         const tradeNote = tradePanel.querySelector('.form-note');
         if (tradeNote) {
-            tradeNote.textContent = 'Check a closed trade after your manual review. Checked trades are copied to the persistent Proven trades table and the combined graph; unchecking removes them from both.';
+            tradeNote.textContent = 'Check a closed trade after your manual review. Checked trades are copied to the persistent Proven trades table; unchecking removes them.';
         }
         document.getElementById('regression-trades-body').innerHTML = trades.map((trade, index) => `
             <tr>

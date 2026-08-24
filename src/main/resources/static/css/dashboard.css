@@ -1586,7 +1586,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
 /* Dashboard v2 execution markers, live price and reliable fixed-header clearance */
 @media (min-width: 761px) {
     main {
-        padding-top: calc(var(--dashboard-fixed-header-height, 188px) + 22px) !important;
+        padding-top: calc(var(--dashboard-fixed-header-height, 15px) + 22px) !important;
     }
     main > .topbar {
         display: block !important;
