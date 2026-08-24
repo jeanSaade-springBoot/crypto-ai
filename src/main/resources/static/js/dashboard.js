@@ -961,11 +961,11 @@ function candleTooltipTime(value) {
     if (value === null || value === undefined || value === '') return '—';
     const date = window.CryptoTime.parseUtc(value);
     if (Number.isNaN(date.getTime())) return '—';
-    return date.toLocaleString(undefined, {
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', second: '2-digit',
-        timeZoneName: 'short'
-    });
+    // FIX-070: Dashboard open/close labels remain KSA but omit the redundant GMT+3 suffix.
+    return new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Riyadh', year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    }).format(date).replace(',', '');
 }
 
 function updateFixedCandleSummary(candle) {
@@ -1301,13 +1301,19 @@ function renderCharts(candles, executions = [], options = {}) {
     };
     const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime', labels: { datetimeUTC: false }, tooltip: { enabled: false } }, noData: { text: 'Waiting for closed candles' } };
     if (!candleChart) {
-        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390, events: candleEvents }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: positionYAnnotations }, tooltip: { shared:false, followCursor:true, intersect:false, custom: ({ seriesIndex, dataPointIndex, w }) => candlePriceTooltipHtml(w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex]) }, yaxis: { tooltip: { enabled: false }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
-        candleChart.render().then(() => { bindExecutionMarkerClicks(); bindDebugTradeDotTitles(); bindChartNavigation(); });
+        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390, events: candleEvents }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: positionYAnnotations }, tooltip: { enabled:false }, yaxis: { tooltip: { enabled: false }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
+        candleChart.render().then(() => {
+            bindExecutionMarkerClicks();
+            bindDebugTradeDotTitles();
+            bindChartNavigation();
+            // FIX-070: Dashboard uses the same display-only X/Y pointer layer as every trade chart.
+            window.CryptoChartCrosshair?.bind(el('candlestick-chart'), candleChart, { valueFormatter: candleTooltipPrice });
+        });
         volumeChart = new ApexCharts(el('volume-chart'), { ...common, chart: { ...common.chart, type: 'bar', height: 150 }, series: [{ name: 'Volume', data: volumeSeries }], dataLabels: { enabled: false }, yaxis: { labels: { formatter: v => Number(v).toLocaleString(undefined, { notation: 'compact' }) } } });
         volumeChart.render();
     } else {
         candleChart.updateSeries([{ name: 'Price', data: candleSeries }], false);
-        candleChart.updateOptions({ chart: { events: candleEvents }, annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: positionYAnnotations }, tooltip: { shared:false, followCursor:true, intersect:false, custom: ({ seriesIndex, dataPointIndex, w }) => candlePriceTooltipHtml(w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex]) } }, false, true, false).then(async () => {
+        candleChart.updateOptions({ chart: { events: candleEvents }, annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: positionYAnnotations }, tooltip: { enabled:false } }, false, true, false).then(async () => {
             bindExecutionMarkerClicks();
             bindDebugTradeDotTitles();
             if (preserveViewport && Number.isFinite(chartViewport.min) && Number.isFinite(chartViewport.max)) {

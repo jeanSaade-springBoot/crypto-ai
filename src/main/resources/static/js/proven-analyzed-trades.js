@@ -1094,7 +1094,8 @@ async function renderProvenTradePopup() {
     host.innerHTML='';
     provenPopupChart=new ApexCharts(host,options);
     await provenPopupChart.render();
-    bindPopupCrosshair(provenPopupChart,host);
+    // FIX-070: Proven popup uses the same KSA X/Y pointer overlay as every other market/trade chart.
+    provenPopupCrosshairCleanup = window.CryptoChartCrosshair?.bind(host, provenPopupChart, { valueFormatter: adaptivePopupPrice }) || null;
     bindProvenDotTitles([trade]);
 }
 
@@ -1222,8 +1223,8 @@ async function loadProvenTradesGraph(preferredSymbol = null) {
         stroke:{width:[1,...tradePaths.map(()=>3)],curve:'straight'},
         markers:{size:[0,...tradePaths.map(()=>3)]},
         dataLabels:{enabled:false},
-        xaxis: { type:'datetime', labels:{datetimeUTC:false}, tooltip:{enabled:true, formatter:value => { const d=new Date(Number(value)); return Number.isNaN(d.getTime())?'':d.toLocaleString(); }}},
-        yaxis: { tooltip:{enabled:true}, decimalsInFloat:4 },
+        xaxis: { type:'datetime', labels:{datetimeUTC:false}, tooltip:{enabled:false}},
+        yaxis: { tooltip:{enabled:false}, decimalsInFloat:4 },
         grid:{borderColor:'#203342'}, theme:{mode:'dark'},
         plotOptions:{candlestick:{colors:{upward:'#39d98a',downward:'#ff6b72'}}},
         annotations:{points}, tooltip:{shared:false}
@@ -1232,6 +1233,8 @@ async function loadProvenTradesGraph(preferredSymbol = null) {
     if (provenTradesChart) provenTradesChart.destroy();
     provenTradesChart = new ApexCharts(host, options);
     await provenTradesChart.render();
+    // FIX-070: Combined Proven chart uses the unified pointer time/price overlay too.
+    window.CryptoChartCrosshair?.bind(host, provenTradesChart, { valueFormatter: adaptivePopupPrice });
     bindProvenDotTitles(chartTrades || []);
 }
 function provenPoint(time, price, side, index) {

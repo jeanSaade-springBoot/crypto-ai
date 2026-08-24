@@ -1,0 +1,24 @@
+/* FIX-070: shared display-only chart pointer UI. No pointer events are captured, preserving Apex zoom/pan. */
+.crypto-chart-crosshair-v,
+.crypto-chart-crosshair-h,
+.crypto-chart-axis-label {
+  position: absolute;
+  z-index: 28;
+  pointer-events: none;
+  display: none;
+}
+.crypto-chart-crosshair-v { width: 1px; background: rgba(210,224,235,.48); }
+.crypto-chart-crosshair-h { height: 1px; background: rgba(210,224,235,.48); }
+.crypto-chart-axis-label {
+  padding: 4px 7px;
+  border: 1px solid #355064;
+  border-radius: 5px;
+  background: #10212c;
+  color: #e7f0f5;
+  box-shadow: 0 4px 14px rgba(0,0,0,.32);
+  font: 700 10px/1.15 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.crypto-chart-price-label { transform: translateY(-50%); }
+.crypto-chart-time-label { transform: translateX(-50%); }

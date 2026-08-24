@@ -1,5 +1,16 @@
 # Change Log
 
+## FIX-070 — Unified chart hover and crosshair presentation
+
+- Added one shared display-only ApexCharts crosshair overlay for Proven Analysis, Trade Activity, Dashboard and Trade Inspector.
+- Pointer X labels now use `dd/MM/yyyy HH:mm` in Asia/Riyadh and pointer Y labels use adaptive price/value precision.
+- Added matching horizontal/vertical crosshair lines and dark theme-matched axis badges.
+- Replaced page-specific/default axis-hover behavior with the shared overlay while preserving chart zoom, pan, selection and click behavior.
+- Dashboard candle open/close labels remain KSA-local but no longer append a GMT+3 suffix.
+- Added FIX-070 to Fix Registry.
+
+Trading, Replay, wallet and persistence behavior are unchanged; this release is UI-only.
+
 ## FIX-069 — Replay signal parity and Proven Analysis Lab layout
 
 - Added `trade_signal_test`, cloned from production `trade_signal`, plus replay metadata (`test_run_id`, source id, replay flag, generation error).

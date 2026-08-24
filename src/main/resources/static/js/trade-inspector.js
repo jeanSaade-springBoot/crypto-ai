@@ -458,11 +458,9 @@ async function loadInspectedTradeChart(){
   inspectedTradeChart=new ApexCharts(chartHost,options);
   await inspectedTradeChart.render();
 
-  // FIX-013: ApexCharts' built-in Y-axis tooltip is unreliable for a mixed
-  // candlestick + lifecycle series. Render our own Binance-style price badge by
-  // mapping the pointer's vertical position inside the actual plot grid to the
-  // chart's current visible Y range. This is display-only and never captures
-  // clicks, wheel events, pan/zoom gestures, or toolbar controls.
+  // FIX-070: Trade Inspector now binds the same display-only X/Y pointer overlay
+  // used by Dashboard, Trade Activity and Proven Analysis. The existing rich candle
+  // tooltip remains available, while the axis time/value behavior is unified.
   const host=$('inspected-trade-chart');
   if(host){
     host.onwheel=null;
@@ -504,74 +502,16 @@ function inspectorVisibleYRange(chart){
 }
 
 function installInspectorYAxisHoverPrice(host, chart){
-  // FIX-019: Trade Inspector now shares the Proven/Test full X/Y crosshair behavior.
-  // The custom layer is lifecycle-safe: interval changes destroy the old chart/listeners,
-  // while zoom/pan/reset simply rebind against Apex's current visible scale. It is display-only
-  // and never owns pointer events, so toolbar, wheel, page scrolling and chart gestures remain intact.
-  if(typeof host.__inspectorYAxisHoverCleanup==='function')host.__inspectorYAxisHoverCleanup();
-  host.querySelectorAll('.inspector-crosshair-v,.inspector-crosshair-h,.inspector-axis-hover-label,.inspector-y-hover-price').forEach(el=>el.remove());
-
-  const make=(className)=>{const el=document.createElement('div');el.className=className;el.setAttribute('aria-hidden','true');host.appendChild(el);return el;};
-  const ui={
-    vertical:make('inspector-crosshair-v'),
-    horizontal:make('inspector-crosshair-h'),
-    price:make('inspector-axis-hover-label inspector-crosshair-price'),
-    time:make('inspector-axis-hover-label inspector-crosshair-time')
-  };
-  host.__inspectorYAxisHoverChart=chart;
-
-  const hide=()=>Object.values(ui).forEach(el=>{el.style.display='none';});
-  const move=(event)=>{
-    const activeChart=host.__inspectorYAxisHoverChart||inspectedTradeChart;
-    const grid=host.querySelector('.apexcharts-grid')||host.querySelector('.apexcharts-inner');
-    if(!grid||!activeChart?.w?.globals){hide();return;}
-    const rect=grid.getBoundingClientRect();
-    const hostRect=host.getBoundingClientRect();
-    if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom){hide();return;}
-
-    const globals=activeChart.w.globals;
-    const yRange=inspectorVisibleYRange(activeChart);
-    const minX=Number(globals.minX ?? window.__inspectedChartState?.visibleMin);
-    const maxX=Number(globals.maxX ?? window.__inspectedChartState?.visibleMax);
-    if(!yRange||!Number.isFinite(minX)||!Number.isFinite(maxX)||maxX<=minX){hide();return;}
-
-    const gx=rect.left-hostRect.left,gy=rect.top-hostRect.top;
-    const px=event.clientX-rect.left,py=event.clientY-rect.top;
-    const xRatio=Math.min(1,Math.max(0,px/Math.max(1,rect.width)));
-    const yRatio=Math.min(1,Math.max(0,py/Math.max(1,rect.height)));
-    const timeValue=minX+xRatio*(maxX-minX);
-    const priceValue=yRange.max-yRatio*(yRange.max-yRange.min);
-
-    ui.vertical.style.display='block';
-    ui.vertical.style.left=`${gx+px}px`;
-    ui.vertical.style.top=`${gy}px`;
-    ui.vertical.style.height=`${rect.height}px`;
-
-    ui.horizontal.style.display='block';
-    ui.horizontal.style.left=`${gx}px`;
-    ui.horizontal.style.top=`${gy+py}px`;
-    ui.horizontal.style.width=`${rect.width}px`;
-
-    ui.price.textContent=chartPriceLabel(priceValue);
-    ui.price.style.display='block';
-    ui.price.style.left=`${gx+rect.width+4}px`;
-    ui.price.style.top=`${gy+py}px`;
-
-    ui.time.textContent=chartTimeLabel(timeValue,true);
-    const labelLeft=Math.max(gx+72,Math.min(gx+rect.width-72,gx+px));
-    ui.time.style.display='block';
-    ui.time.style.left=`${labelLeft}px`;
-    ui.time.style.top=`${gy+rect.height+5}px`;
-  };
-
-  host.addEventListener('pointermove',move,{passive:true,capture:true});
-  host.addEventListener('pointerleave',hide,{passive:true,capture:true});
+  // FIX-070: compatibility wrapper keeps existing Trade Inspector lifecycle hooks while
+  // delegating the visual pointer behavior to the one shared chart-crosshair implementation.
+  if(typeof host.__inspectorYAxisHoverCleanup==='function') host.__inspectorYAxisHoverCleanup();
+  const cleanup=window.CryptoChartCrosshair?.bind(host, chart, {
+    valueFormatter: chartPriceLabel,
+    yRange: inspectorVisibleYRange
+  }) || (()=>{});
   host.__inspectorYAxisHoverCleanup=()=>{
-    host.removeEventListener('pointermove',move,true);
-    host.removeEventListener('pointerleave',hide,true);
-    Object.values(ui).forEach(el=>el.remove());
+    cleanup();
     host.__inspectorYAxisHoverCleanup=null;
-    host.__inspectorYAxisHoverChart=null;
   };
 }
 

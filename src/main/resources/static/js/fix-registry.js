@@ -1,6 +1,22 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-070",
+            title: "Unified chart hover and crosshair presentation",
+            status: "COMPLETE · UI ONLY",
+            scenario: "All market/trade charts should expose the same pointer time/price behavior",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A", exitTime: "N/A",
+            replayWindow: "Use the scenario regression/protection notes; no fixed trade window is required.",
+            location: "Proven Analysis, Trade Activity, Dashboard and Trade Inspector chart UI",
+            classes: ["chart-crosshair.js", "chart-crosshair.css", "dashboard.js", "trade-activity.js", "trade-inspector.js", "proven-analyzed-trades.js"],
+            cause: "Each page configured ApexCharts hover/crosshair behavior independently, producing missing axis hover values, inconsistent formatting and default tooltip surfaces that did not match the dark trading UI.",
+            solution: "Use one display-only shared crosshair overlay that derives X time and Y value from the visible Apex plot scale and formats time consistently in Asia/Riyadh. Bind it to Proven Analysis, Trade Activity, Dashboard and Trade Inspector without changing chart data or trading state.",
+            behavior: "Hover shows dd/MM/yyyy HH:mm on X, pointer price/value on Y, horizontal and vertical crosshair lines, and theme-matched labels. Dashboard candle open/close labels remain converted to KSA but omit the GMT+3 suffix. Zoom, pan, selection and persisted/trading behavior are unchanged.",
+            regression: "Open Proven Analysis, Trade Activity, Dashboard and Trade Inspector and verify identical pointer behavior before and after zoom/pan. Confirm the labels use KSA dd/MM/yyyy HH:mm, values follow the visible Y scale, Dashboard open/close labels have no GMT+3 suffix, and no trading/persistence behavior changes."
+        },
+
+        {
             id: "FIX-051",
             title: "Administration coin configuration pagination",
             status: "ACTIVE · UI/ADMIN ONLY",

@@ -8,7 +8,8 @@
 <link href="/css/dashboard.css" rel="stylesheet"/>
 <link href="/css/wallet.css" rel="stylesheet"/>
 <link href="/css/administration.css" rel="stylesheet"/>
-<script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1"></script>
+<link rel="stylesheet" href="/css/chart-crosshair.css">
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1"></script>
 </head>
 <body>
 <div class="app-shell">
@@ -236,10 +237,11 @@
 <div class="proven-popup-chart" id="proven-popup-chart"></div>
 <div class="empty hidden" id="proven-popup-chart-empty">No candles are available for this trade window.</div>
 </div>
-<p class="proven-popup-hint">Hover the plot for a full crosshair. The right label shows exact price and the bottom label shows browser-local date/time.</p>
+<p class="proven-popup-hint">Hover the plot for the shared crosshair. The right label shows exact price and the bottom label shows dd/MM/yyyy HH:mm in KSA.</p>
 </section>
 </div>
 <script src="/js/time-utils.js"></script>
+<script src="/js/chart-crosshair.js"></script>
 <script src="/js/proven-analyzed-trades.js"></script>
 <script src="/js/catching-market-badge.js"></script></body>
 </html>
