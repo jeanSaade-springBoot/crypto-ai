@@ -2500,7 +2500,18 @@ public class ExecutionIntelligenceService {
             double distanceFromRejectedHighPercent,
             boolean transitionProbe,
             Integer entryAuthorityMaxPositionPercent
-    ) {}
+    ) {
+        /**
+         * FIX-091 compatibility constructor for existing unit tests and callers that only
+         * exercise the pre-FIX-091 entry-quality fields. New risk metadata defaults to
+         * neutral values so the tests keep validating their original behavior.
+         */
+        public EntryQuality(int score, String classification, double expansionPercent,
+                            double atrExtension, double rewardRisk, long opportunityAgeMinutes) {
+            this(score, classification, expansionPercent, atrExtension, rewardRisk, opportunityAgeMinutes,
+                    false, null, 0, 0d, false, null);
+        }
+    }
 
     private record EvidenceDeterioration(boolean material, String explanation) {
         static EvidenceDeterioration none() { return new EvidenceDeterioration(false, ""); }

@@ -14,6 +14,9 @@ class AnalysisServiceTrendPriceLocationTest {
     private final AnalysisService service = new AnalysisService(
             null, null, null, null, null, null, null, null,
             new AnalysisScoringProperties(null, null, null),
+            // FIX-091: RegimeStateService and EntryAuthorityService were added to AnalysisService.
+            // These focused scoring tests do not exercise either dependency, so keep them null.
+            null, null,
             null, null, null, null, null, null, null, null, null, null
     );
 
