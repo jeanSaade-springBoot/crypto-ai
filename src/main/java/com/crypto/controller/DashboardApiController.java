@@ -167,9 +167,11 @@ public class DashboardApiController {
         ZonedDateTime now = ZonedDateTime.now(riyadh);
         return switch (period) {
             case "TODAY" -> now.toLocalDate().atStartOfDay(riyadh).toInstant();
+            case "15M" -> now.minusMinutes(15).toInstant();
             case "4H" -> now.minusHours(4).toInstant();
             case "2H" -> now.minusHours(2).toInstant();
             case "1H" -> now.minusHours(1).toInstant();
+            case "1W" -> now.minusDays(7).toInstant();
             case "ALL" -> null;
             default -> now.toLocalDate().atStartOfDay(riyadh).toInstant();
         };
@@ -182,15 +184,24 @@ public class DashboardApiController {
     ) {
         String decision = signal.getDecision() == null ? "" : signal.getDecision().name();
         boolean buy = "BUY".equals(decision) || "STRONG_BUY".equals(decision);
+        boolean sell = "SELL".equals(decision) || "STRONG_SELL".equals(decision);
         return switch (filter) {
             case "EXECUTED" -> execution != null;
             case "BUY_BLOCKED" -> buy && !signal.isFinalEntryAllowed();
+            // FIX-092: Dashboard Signals filter can inspect SELL evidence without changing
+            // signal generation or wallet behavior. BUY_SELL intentionally means all persisted
+            // actionable BUY/STRONG_BUY/SELL/STRONG_SELL decisions in the selected window.
+            case "SELL_SIGNAL" -> sell;
+            case "BUY_SELL" -> buy || sell;
             default -> true;
         };
     }
 
     private Map<String, Object> signalEvidenceDto(TradeSignal signal, WalletTrade execution) {
         Map<String, Object> result = new LinkedHashMap<>(signalDto(signal));
+        // FIX-092: View chart anchors to the immutable signal candle/price, never to the
+        // current clock, so blocked BUY and BUY/SELL evidence opens at the exact signal.
+        result.put("candleOpenTime", signal.getCandleOpenTime());
         result.put("executionState", execution == null ? "NOT_EXECUTED" : "EXECUTED");
         result.put("executionId", execution == null ? null : execution.getId());
         result.put("executedSide", execution == null ? null : execution.getSide());
@@ -245,6 +256,10 @@ public class DashboardApiController {
         response.put("displayOnlyInterval", displayOnlyInterval);
         response.put("updatedAt", Instant.now());
         response.put("candles", candles.stream().map(this::candleDto).toList());
+        // FIX-092: Bollinger/ATR are chart-only overlays read from the same persisted
+        // technical_indicator rows as the visible candle window. Display-only 4h/1d
+        // aggregation has no native persisted indicator series, so it remains empty.
+        response.put("indicatorSeries", displayOnlyInterval ? List.of() : indicatorSeries(normalizedSymbol, normalizedInterval, candles));
         response.put("livePrice", currentLatestPrice(candles));
         response.put("activePosition", walletManagedPositionRepository
                 .findTopBySymbolAndStatusOrderByOpenedAtDesc(normalizedSymbol, "OPEN")
@@ -281,6 +296,7 @@ public class DashboardApiController {
         response.put("before", before);
         response.put("count", candles.size());
         response.put("candles", candles.stream().map(this::candleDto).toList());
+        response.put("indicatorSeries", isDisplayOnlyInterval(normalizedInterval) ? List.of() : indicatorSeries(normalizedSymbol, normalizedInterval, candles));
         return response;
     }
 
@@ -331,6 +347,7 @@ public class DashboardApiController {
                 ? displayOnlyPipeline(closedCandleCount)
                 : pipeline(normalizedSymbol, closedCandleCount, latestIndicator, latestSignal, positions));
         response.put("candles", candles.stream().map(this::candleDto).toList());
+        response.put("indicatorSeries", displayOnlyInterval ? List.of() : indicatorSeries(normalizedSymbol, normalizedInterval, candles));
         response.put("indicator", indicatorDto(latestIndicator));
         response.put("schedule", scheduleConfigurationService.dashboardSchedule());
         response.put("signals", signals.stream().map(this::signalDto).toList());
@@ -631,7 +648,10 @@ public class DashboardApiController {
             Instant focusStart,
             Instant focusEnd
     ) {
-        if (!"5m".equals(interval) || focusStart == null || focusEnd == null || !focusEnd.isAfter(focusStart)) {
+        // FIX-092: Signal "View chart" deep-links may target 1m, 5m or 1h. Historical
+        // focusing is presentation-only, so honor the requested persisted timeframe instead
+        // of limiting focus navigation to the older 5m debug use case.
+        if (focusStart == null || focusEnd == null || !focusEnd.isAfter(focusStart)) {
             return loadClosedCandles(symbol, interval, 120);
         }
 
@@ -1000,6 +1020,30 @@ public class DashboardApiController {
         result.put("close", candle.getClosePrice());
         result.put("volume", candle.getVolume());
         return result;
+    }
+
+    /**
+     * FIX-092: Load only indicators that belong to the visible candle interval.
+     * This is presentation data for Bollinger/ATR overlays and is intentionally
+     * read-only; no value is recomputed in the browser or reused by trading logic.
+     */
+    private List<Map<String, Object>> indicatorSeries(String symbol, String interval, List<Candle> candles) {
+        if (candles == null || candles.isEmpty()) return List.of();
+        Instant from = candles.get(0).getOpenTime();
+        Instant to = candles.get(candles.size() - 1).getOpenTime();
+        return technicalIndicatorRepository
+                .findBySymbolAndIntervalCodeAndCandleOpenTimeBetweenOrderByCandleOpenTimeAsc(symbol, interval, from, to)
+                .stream()
+                .map(indicator -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("time", indicator.getCandleOpenTime().toEpochMilli());
+                    row.put("bollingerUpper", indicator.getBollingerUpper());
+                    row.put("bollingerMiddle", indicator.getBollingerMiddle());
+                    row.put("bollingerLower", indicator.getBollingerLower());
+                    row.put("atr14", indicator.getAtr14());
+                    return row;
+                })
+                .toList();
     }
 
     private Map<String, Object> indicatorDto(TechnicalIndicator indicator) {

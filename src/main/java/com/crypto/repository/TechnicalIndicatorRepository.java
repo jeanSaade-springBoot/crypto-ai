@@ -30,6 +30,18 @@ public interface TechnicalIndicatorRepository
             Instant candleOpenTime
     );
 
+
+    // FIX-092: Dashboard chart overlays must use the indicator values persisted for the
+    // same historical candles being rendered. This read-only range query never feeds
+    // chart data back into analysis, Replay, or execution.
+    List<TechnicalIndicator>
+    findBySymbolAndIntervalCodeAndCandleOpenTimeBetweenOrderByCandleOpenTimeAsc(
+            String symbol,
+            String intervalCode,
+            Instant from,
+            Instant to
+    );
+
     List<TechnicalIndicator>
     findTop100BySymbolAndIntervalCodeOrderByCandleOpenTimeDesc(
             String symbol,

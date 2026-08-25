@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-092",
+            title: "Dashboard Signals view with blocked/actionable filters and ATR/Bollinger chart context",
+            status: "IMPLEMENTED · UI / READ-ONLY DASHBOARD",
+            scenario: "Dashboard active-position analysis needed to remain the default while also allowing operators to inspect blocked BUY and actionable SELL/BUY+SELL signals and jump directly to the exact signal on the market chart. The price chart also lacked Bollinger-band and ATR context even though both values are already persisted by Production analysis.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A · dashboard inspection only", exitTime: "N/A",
+            replayWindow: "Replay behavior is unchanged. FIX-092 reads Production dashboard persistence only; no Replay signal generation, Replay execution, Production analysis or wallet behavior is modified.",
+            location: "Dashboard Signals panel, DashboardApiController read-only signal/chart APIs, TechnicalIndicatorRepository historical display query, dashboard ApexCharts rendering",
+            classes: ["DashboardApiController", "TechnicalIndicatorRepository", "dashboard.html", "dashboard.js", "dashboard.css", "fix-registry.js"],
+            cause: "The dashboard section was hard-wired to the current open position. Existing /api/dashboard/signals evidence was not exposed through this panel, View graph navigation was limited by the older 5m-only focus loader, and the chart payload returned only the latest indicator rather than the Bollinger/ATR series matching visible candles.",
+            solution: "Rename the section to Signals and add a Signal view combo whose default remains Open positions. Add Blocked BUY, SELL signals and BUY / SELL signals modes using the existing read-only signal endpoint. Add exact signal deep-links anchored to persisted candle time/latest price and display a visible B/S marker. Extend focused history navigation to the persisted selected timeframe. Add a read-only TechnicalIndicator range query; overlay Bollinger upper/middle/lower on the candlestick price axis and render ATR14 in a synchronized lower chart so ATR cannot distort the price scale.",
+            behavior: "Opening Dashboard behaves exactly as before: Open positions is selected by default. Changing the combo changes only displayed audit data. Blocked BUY and BUY/SELL View chart links highlight the selected signal; wallet execution markers remain independent. Bollinger/ATR are visual overlays sourced from existing technical_indicator rows. 4h/1d display-only aggregated candles intentionally show no fabricated indicator series.",
+            regression: "Verify default Open positions is unchanged; each new filter returns only the intended persisted signal decisions; 15m/1h/4h/1d/1w window selection works; View chart on a 1m blocked BUY opens around that exact signal instead of latest candles; BUY shows B and SELL shows S; Bollinger lines align to candle time and ATR14 renders below the chart; panning older candles loads matching indicator history; no wallet, Production trading or Replay behavior changes."
+        },
+        {
             id: "FIX-091",
             title: "Pre-wallet entry authority hardening, replay regime persistence and stale-evidence protection",
             status: "IMPLEMENTED · PHASED / REPLAY-GATED CORE",

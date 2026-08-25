@@ -10,6 +10,7 @@ window.fetch = async (...args) => {
 
 let candleChart;
 let volumeChart;
+let atrChart;
 let dashboardRefreshTimer;
 let dashboardRefreshInFlight = false;
 let dashboardOverviewAbortController = null;
@@ -62,6 +63,8 @@ let chartNavigationBound = false;
 let chartLoadedCandles = [];
 let chartLoadedExecutions = [];
 let chartLoadedActivePosition = null;
+// FIX-092: Persisted Bollinger/ATR rows travel with chart history exactly like candles.
+let chartLoadedIndicators = [];
 let chartViewport = { min: null, max: null };
 let chartDragState = null;
 
@@ -239,7 +242,7 @@ function renderFastMarket(data) {
     el('header-live-price').textContent = headerMoney(latestPrice);
     // Avoid showing execution markers from the previously selected symbol while
     // the full dashboard payload is still loading.
-    renderCharts(data.candles || [], [], {activePosition: data.activePosition || null});
+    renderCharts(data.candles || [], [], {activePosition: data.activePosition || null, indicatorSeries: data.indicatorSeries || []});
 }
 
 async function refreshDashboardWallet() {
@@ -307,7 +310,7 @@ function render(data) {
     renderSentiment(data.sentiment || {}, data.sentimentProviderStatuses || [], data.sentimentSystemStatus || {});
     renderSchedules(data.schedule || {});
     applyDashboardRefreshSchedule(data.schedule || {});
-    renderCharts(data.candles || [], data.executions || [], {activePosition: data.activePosition || null});
+    renderCharts(data.candles || [], data.executions || [], {activePosition: data.activePosition || null, indicatorSeries: data.indicatorSeries || []});
     latestSignalEvidenceContext = {
         symbol: data.symbol,
         interval: data.interval,
@@ -320,7 +323,7 @@ function render(data) {
     // FIX-035: do not let the normal dashboard renderer overwrite the independently
     // loaded BUY/SELL evidence table. A new symbol/timeframe gets one dedicated load;
     // subsequent updates happen only via its Load button or its own refresh timer.
-    const signalContextKey = `${data.symbol}|${el('signal-evidence-period')?.value || '1H'}`;
+    const signalContextKey = `${data.symbol}|${el('signal-evidence-period')?.value || '1H'}|${el('signal-evidence-mode')?.value || 'OPEN_POSITION'}`;
     if (signalEvidenceLoadedContextKey !== signalContextKey) {
         const signalBody = el('signals-body');
         if (signalBody) signalBody.innerHTML = '<tr><td colspan="7" class="empty">Loading active-position analysis path…</td></tr>';
@@ -334,6 +337,7 @@ function render(data) {
 async function refreshSignalEvidence(showLoading = true) {
     const context = latestSignalEvidenceContext;
     const periodSelect = el('signal-evidence-period');
+    const modeSelect = el('signal-evidence-mode');
     const status = el('signal-evidence-status');
     const body = el('signals-body');
     const summary = el('active-position-analysis-summary');
@@ -343,32 +347,108 @@ async function refreshSignalEvidence(showLoading = true) {
     signalEvidenceAbortController = new AbortController();
     const requestedSymbol = context.symbol;
     const windowValue = periodSelect.value || '1H';
-    if (showLoading) body.innerHTML = '<tr><td colspan="7" class="empty">Loading active-position analysis path…</td></tr>';
+    const mode = modeSelect?.value || 'OPEN_POSITION';
+    if (showLoading) body.innerHTML = '<tr><td colspan="7" class="empty">Loading signals…</td></tr>';
     if (status) status.textContent = 'Loading…';
 
     try {
-        const params = new URLSearchParams({symbol: requestedSymbol, window: windowValue});
-        const response = await fetch(`/api/dashboard/active-position-analysis?${params.toString()}`, {signal: signalEvidenceAbortController.signal});
-        if (!response.ok) throw new Error(`Active-position analysis API returned ${response.status}`);
-        const result = await response.json();
-        const current = latestSignalEvidenceContext;
-        if (!current || current.symbol !== requestedSymbol) return;
-        renderActivePositionAnalysis(result);
-        signalEvidenceLoadedContextKey = `${requestedSymbol}|${windowValue}`;
-        if (status) {
-            const labels = {'15M':'15 minutes', '1H':'1 hour', '4H':'4 hours', '1D':'1 day', '1W':'1 week'};
-            status.textContent = result.active
-                ? `${labels[windowValue] || '1 hour'} · ${Number(result.analysisPath?.length || 0)} analysis step${Number(result.analysisPath?.length || 0) === 1 ? '' : 's'}`
-                : `No active ${requestedSymbol} position`;
+        if (mode === 'OPEN_POSITION') {
+            const params = new URLSearchParams({symbol: requestedSymbol, window: windowValue});
+            const response = await fetch(`/api/dashboard/active-position-analysis?${params.toString()}`, {signal: signalEvidenceAbortController.signal});
+            if (!response.ok) throw new Error(`Active-position analysis API returned ${response.status}`);
+            const result = await response.json();
+            const current = latestSignalEvidenceContext;
+            if (!current || current.symbol !== requestedSymbol) return;
+            renderActivePositionAnalysis(result);
+            if (status) {
+                const labels = {'15M':'15 minutes', '1H':'1 hour', '4H':'4 hours', '1D':'1 day', '1W':'1 week'};
+                status.textContent = result.active
+                    ? `${labels[windowValue] || '1 hour'} · ${Number(result.analysisPath?.length || 0)} analysis step${Number(result.analysisPath?.length || 0) === 1 ? '' : 's'}`
+                    : `No active ${requestedSymbol} position`;
+            }
+        } else {
+            // FIX-092: Non-position signal views reuse the existing read-only /signals API.
+            // They do not query or modify wallet state and preserve the same persisted decisions.
+            const periodMap = {'15M':'15M', '1H':'1H', '4H':'4H', '1D':'TODAY', '1W':'1W'};
+            const params = new URLSearchParams({
+                symbol: requestedSymbol,
+                interval: context.interval || '1m',
+                period: periodMap[windowValue] || '1H',
+                executionFilter: mode,
+                limit: '250'
+            });
+            const response = await fetch(`/api/dashboard/signals?${params.toString()}`, {signal: signalEvidenceAbortController.signal});
+            if (!response.ok) throw new Error(`Signals API returned ${response.status}`);
+            const result = await response.json();
+            const current = latestSignalEvidenceContext;
+            if (!current || current.symbol !== requestedSymbol) return;
+            renderSignalEvidenceList(result, mode);
+            if (status) status.textContent = `${signalModeLabel(mode)} · ${Number(result.count || 0)} signal${Number(result.count || 0) === 1 ? '' : 's'}`;
         }
+        signalEvidenceLoadedContextKey = `${requestedSymbol}|${windowValue}|${mode}`;
     } catch (error) {
         if (error?.name === 'AbortError') return;
-        if (status) status.textContent = 'Could not load active-position analysis';
+        if (status) status.textContent = 'Could not load signals';
         if (summary) summary.innerHTML = '';
         body.innerHTML = `<tr><td colspan="7" class="empty">${escapeHtml(error.message)}</td></tr>`;
     } finally {
         signalEvidenceAbortController = null;
     }
+}
+
+function signalModeLabel(mode) {
+    return ({BUY_BLOCKED:'Blocked BUY', SELL_SIGNAL:'SELL signals', BUY_SELL:'BUY / SELL signals'})[mode] || 'Open positions';
+}
+
+function renderSignalEvidenceList(result, mode) {
+    const body = el('signals-body');
+    const summary = el('active-position-analysis-summary');
+    if (!body || !summary) return;
+    const rows = Array.isArray(result?.signals) ? result.signals : [];
+    summary.innerHTML = `<div class="active-position-summary-grid"><div><span>Signal view</span><strong>${escapeHtml(signalModeLabel(mode))}</strong><small>${escapeHtml(result?.symbol || '—')} · ${escapeHtml(displayInterval(result?.interval || '1m'))}</small></div><div><span>Signals</span><strong>${rows.length}</strong><small>Persisted pre-wallet decisions</small></div></div>`;
+    if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="7" class="empty">No ${escapeHtml(signalModeLabel(mode).toLowerCase())} in this window.</td></tr>`;
+        return;
+    }
+    body.innerHTML = rows.map(signal => {
+        const decision = String(signal.decision || '—').toUpperCase();
+        const blocked = Boolean(signal.buyPositionBlocked);
+        const badgeClass = decision.includes('BUY') ? 'positive' : decision.includes('SELL') ? 'negative' : 'neutral';
+        const recommendation = blocked ? 'BLOCKED BUY' : (signal.executionState === 'EXECUTED' ? `EXECUTED ${signal.executedSide || decision}` : decision);
+        return `<tr class="active-analysis-row ${blocked ? 'blocked-signal-row' : ''}">
+            <td>${dateTime(signal.generatedAt || signal.candleOpenTime)}</td>
+            <td><strong>${escapeHtml(displayInterval(signal.interval || '—'))}</strong></td>
+            <td><span class="badge ${badgeClass}">${escapeHtml(decision.replaceAll('_',' '))}</span></td>
+            <td><strong>${escapeHtml(recommendation.replaceAll('_',' '))}</strong>${blocked && signal.primaryBlockingStage ? `<small>${escapeHtml(signal.primaryBlockingStage)}</small>` : ''}</td>
+            <td><strong>${escapeHtml(signal.totalScore ?? '—')}</strong><small>${escapeHtml(signal.effectiveConfidence ?? signal.confidenceScore ?? '—')}% confidence</small></td>
+            <td>${money(signal.latestPrice)}</td>
+            <td><a class="analysis-view-graph" href="${escapeHtml(signalGraphUrl(signal, mode))}">View chart</a></td>
+        </tr>`;
+    }).join('');
+}
+
+function signalGraphUrl(signal, mode) {
+    // FIX-092: Deep-link to the exact immutable signal candle and price. A blocked BUY
+    // is labelled distinctly; BUY/SELL signals use their persisted side on the chart.
+    const at = window.CryptoTime.parseUtc(signal?.candleOpenTime || signal?.generatedAt);
+    const price = Number(signal?.latestPrice);
+    if (!at || Number.isNaN(at.getTime()) || !Number.isFinite(price)) return '#market';
+    const decision = String(signal?.decision || 'ANALYSIS').toUpperCase();
+    const side = decision.includes('SELL') ? 'SELL' : decision.includes('BUY') ? 'BUY' : 'ANALYSIS';
+    const label = mode === 'BUY_BLOCKED' ? `Blocked BUY #${signal.id}` : `${side} signal #${signal.id}`;
+    const params = new URLSearchParams({
+        symbol: String(signal?.symbol || el('symbol-select')?.value || 'BTCUSDT').toUpperCase(),
+        interval: String(signal?.interval || el('interval-select')?.value || '1m').toLowerCase(),
+        focusStart: new Date(at.getTime() - 30 * 60 * 1000).toISOString(),
+        focusEnd: new Date(at.getTime() + 30 * 60 * 1000).toISOString(),
+        focusDirection: side === 'SELL' ? 'DOWN' : side === 'BUY' ? 'UP' : '',
+        debugTrade: '1',
+        debugTradeLabel: label,
+        debugPointTime: at.toISOString(),
+        debugPointPrice: String(price),
+        debugPointSide: side
+    });
+    return `/dashboard?${params.toString()}#market`;
 }
 
 function renderActivePositionAnalysis(result) {
@@ -1031,6 +1111,15 @@ function mergeChartCandles(existing, incoming) {
         window.CryptoTime.parseUtc(a.time ?? a.openTime).getTime() - window.CryptoTime.parseUtc(b.time ?? b.openTime).getTime());
 }
 
+function mergeChartIndicators(existing, incoming) {
+    const byTime = new Map();
+    [...(existing || []), ...(incoming || [])].forEach(row => {
+        const time = window.CryptoTime.parseUtc(row.time)?.getTime();
+        if (Number.isFinite(time)) byTime.set(time, {...row, time});
+    });
+    return [...byTime.values()].sort((a,b) => Number(a.time) - Number(b.time));
+}
+
 function updateChartLatestButton() {
     const button = el('chart-go-latest');
     if (!button) return;
@@ -1042,6 +1131,7 @@ function resetChartHistoryNavigation() {
     chartHistoryLoading = false;
     chartLoadedCandles = [];
     chartLoadedExecutions = [];
+    chartLoadedIndicators = [];
     chartViewport = { min: null, max: null };
     chartDragState = null;
     updateChartLatestButton();
@@ -1073,7 +1163,8 @@ async function loadOlderChartCandles(beforeMillis) {
         const older = data.candles || [];
         if (!older.length) return false;
         chartLoadedCandles = mergeChartCandles(chartLoadedCandles, older);
-        renderCharts(chartLoadedCandles, chartLoadedExecutions, { force: true, preserveViewport: true });
+        chartLoadedIndicators = mergeChartIndicators(chartLoadedIndicators, data.indicatorSeries || []);
+        renderCharts(chartLoadedCandles, chartLoadedExecutions, { force: true, preserveViewport: true, indicatorSeries: chartLoadedIndicators });
         return true;
     } catch (error) {
         console.warn('Unable to load older dashboard candles', error);
@@ -1111,6 +1202,7 @@ async function applyChartViewport(min, max) {
     updateChartLatestButton();
     if (candleChart) candleChart.zoomX(min, max);
     if (volumeChart) volumeChart.zoomX(min, max);
+    if (atrChart) atrChart.zoomX(min, max);
 }
 
 function goToLatestChart() {
@@ -1187,17 +1279,19 @@ function bindChartNavigation() {
 }
 
 function renderCharts(candles, executions = [], options = {}) {
-    const { force = false, preserveViewport = false, activePosition = undefined } = options;
+    const { force = false, preserveViewport = false, activePosition = undefined, indicatorSeries = undefined } = options;
     // While the user is inspecting history, periodic dashboard refreshes must
     // not snap the chart back to the newest candles.
     if (chartHistoryActive && !force) return;
 
     chartLoadedCandles = mergeChartCandles(force ? chartLoadedCandles : [], candles || []);
     if (!force) chartLoadedExecutions = executions || [];
+    if (indicatorSeries !== undefined) chartLoadedIndicators = mergeChartIndicators(force ? chartLoadedIndicators : [], indicatorSeries || []);
     if (activePosition !== undefined) chartLoadedActivePosition = activePosition;
     const renderCandlesList = chartLoadedCandles;
     const renderExecutions = force ? chartLoadedExecutions : (executions || []);
     const renderPosition = activePosition === undefined ? chartLoadedActivePosition : activePosition;
+    const renderIndicators = indicatorSeries === undefined ? chartLoadedIndicators : mergeChartIndicators(chartLoadedIndicators, indicatorSeries || []);
 
     const candleSeries = renderCandlesList.map(c => ({
         x: window.CryptoTime.parseUtc(c.time),
@@ -1207,6 +1301,15 @@ function renderCharts(candles, executions = [], options = {}) {
         open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close)
     }));
     const volumeSeries = renderCandlesList.map(c => ({ x: window.CryptoTime.parseUtc(c.time), y: Number(c.volume) }));
+    // FIX-092: Bollinger uses the price axis; ATR uses a separate synchronized chart so
+    // volatility magnitude cannot distort the candlestick Y scale.
+    const indicatorPoint = (key) => renderIndicators
+        .filter(row => row[key] !== null && row[key] !== undefined && Number.isFinite(Number(row[key])))
+        .map(row => ({x: new Date(Number(row.time)), y: Number(row[key])}));
+    const bollingerUpperSeries = indicatorPoint('bollingerUpper');
+    const bollingerMiddleSeries = indicatorPoint('bollingerMiddle');
+    const bollingerLowerSeries = indicatorPoint('bollingerLower');
+    const atrSeries = indicatorPoint('atr14');
     latestWalletExecutions = new Map((renderExecutions || []).map(execution => [String(execution.id), execution]));
     const annotations = (renderExecutions || []).map(execution => {
         const isBuy = String(execution.side || '').toUpperCase() === 'BUY';
@@ -1232,9 +1335,10 @@ function renderCharts(candles, executions = [], options = {}) {
             y: point.price,
             marker: { size: 6, fillColor: markerColor, strokeColor: '#071018', strokeWidth: 2, radius: 6 },
             label: {
-                text: '',
-                borderColor: 'transparent',
-                style: { background: 'transparent', color: 'transparent', fontSize: '1px', padding: { left: 0, right: 0, top: 0, bottom: 0 } },
+                text: isBuy ? 'B' : isSell ? 'S' : '•',
+                borderColor: markerColor,
+                offsetY: isBuy ? 14 : isSell ? -10 : 12,
+                style: { background: markerColor, color: '#071018', fontSize: '9px', fontWeight: 900, padding: { left: 3, right: 3, top: 1, bottom: 1 } },
                 cssClass: `debug-trade-marker debug-trade-dot debug-trade-marker-${index}`
             }
         });
@@ -1301,7 +1405,7 @@ function renderCharts(candles, executions = [], options = {}) {
     };
     const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime', labels: { datetimeUTC: false }, tooltip: { enabled: false } }, noData: { text: 'Waiting for closed candles' } };
     if (!candleChart) {
-        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390, events: candleEvents }, series: [{ name: 'Price', data: candleSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: positionYAnnotations }, tooltip: { enabled:false }, yaxis: { tooltip: { enabled: false }, decimalsInFloat: 4 }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
+        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390, events: candleEvents }, series: [{ name: 'Price', type: 'candlestick', data: candleSeries }, { name: 'BB Upper', type: 'line', data: bollingerUpperSeries }, { name: 'BB Middle', type: 'line', data: bollingerMiddleSeries }, { name: 'BB Lower', type: 'line', data: bollingerLowerSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: positionYAnnotations }, tooltip: { enabled:false }, yaxis: { tooltip: { enabled: false }, decimalsInFloat: 4 }, stroke: { width: [1, 1.5, 1, 1.5], dashArray: [0, 0, 4, 0] }, legend: { show: true }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
         candleChart.render().then(() => {
             bindExecutionMarkerClicks();
             bindDebugTradeDotTitles();
@@ -1311,17 +1415,21 @@ function renderCharts(candles, executions = [], options = {}) {
         });
         volumeChart = new ApexCharts(el('volume-chart'), { ...common, chart: { ...common.chart, type: 'bar', height: 150 }, series: [{ name: 'Volume', data: volumeSeries }], dataLabels: { enabled: false }, yaxis: { labels: { formatter: v => Number(v).toLocaleString(undefined, { notation: 'compact' }) } } });
         volumeChart.render();
+        atrChart = new ApexCharts(el('atr-chart'), { ...common, chart: { ...common.chart, type: 'line', height: 125 }, series: [{ name: 'ATR 14', data: atrSeries }], dataLabels: { enabled: false }, stroke: { width: 2 }, yaxis: { labels: { formatter: v => formatChartPrice(v) }, title: { text: 'ATR 14' } } });
+        atrChart.render();
     } else {
-        candleChart.updateSeries([{ name: 'Price', data: candleSeries }], false);
+        candleChart.updateSeries([{ name: 'Price', type: 'candlestick', data: candleSeries }, { name: 'BB Upper', type: 'line', data: bollingerUpperSeries }, { name: 'BB Middle', type: 'line', data: bollingerMiddleSeries }, { name: 'BB Lower', type: 'line', data: bollingerLowerSeries }], false);
         candleChart.updateOptions({ chart: { events: candleEvents }, annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: positionYAnnotations }, tooltip: { enabled:false } }, false, true, false).then(async () => {
             bindExecutionMarkerClicks();
             bindDebugTradeDotTitles();
             if (preserveViewport && Number.isFinite(chartViewport.min) && Number.isFinite(chartViewport.max)) {
                 candleChart.zoomX(chartViewport.min, chartViewport.max);
                 if (volumeChart) volumeChart.zoomX(chartViewport.min, chartViewport.max);
+                if (atrChart) atrChart.zoomX(chartViewport.min, chartViewport.max);
             }
         });
         volumeChart.updateSeries([{ name: 'Volume', data: volumeSeries }], false);
+        if (atrChart) atrChart.updateSeries([{ name: 'ATR 14', data: atrSeries }], false);
     }
     updateChartLatestButton();
 }
@@ -2570,11 +2678,13 @@ function setupSidebar() {
 }
 
 const signalEvidencePeriod = el('signal-evidence-period');
+const signalEvidenceMode = el('signal-evidence-mode');
 const signalEvidenceRefresh = el('signal-evidence-refresh');
 // Filters are intentionally applied on Load / the dedicated auto-refresh timer. This
 // keeps the table predictable while the user is choosing multiple filter values.
 if (signalEvidenceRefresh) signalEvidenceRefresh.addEventListener('click', () => refreshSignalEvidence(true));
 if (signalEvidencePeriod) signalEvidencePeriod.addEventListener('change', () => refreshSignalEvidence(true));
+if (signalEvidenceMode) signalEvidenceMode.addEventListener('change', () => refreshSignalEvidence(true));
 configureSignalEvidenceRefreshTimer();
 
 el('refresh-button').addEventListener('click', refreshDashboard);

@@ -107,6 +107,9 @@
             </div>
             <div id="candlestick-chart"></div>
             <div id="volume-chart"></div>
+            <!-- FIX-092: ATR uses its own synchronized panel because ATR is a volatility
+                 magnitude, not a price level. Bollinger remains overlaid on price. -->
+            <div id="atr-chart"></div>
         </section>
 
         <section id="indicators" class="content-grid ai-analysis-grid">
@@ -187,8 +190,18 @@
 
         <section id="signals" class="panel active-position-analysis-panel">
             <div class="section-heading signal-evidence-heading">
-                <div><p class="eyebrow">ACTIVE POSITION</p><h2>BUY / SELL analysis path</h2></div>
+                <div><p class="eyebrow">SIGNALS</p><h2>Signals</h2></div>
                 <div class="signal-evidence-controls">
+                    <!-- FIX-092: OPEN_POSITION is intentionally the default so the existing
+                         dashboard behavior is preserved until the operator selects another view. -->
+                    <label>Signal view
+                        <select id="signal-evidence-mode">
+                            <option value="OPEN_POSITION" selected>Open positions</option>
+                            <option value="BUY_BLOCKED">Blocked BUY</option>
+                            <option value="SELL_SIGNAL">SELL signals</option>
+                            <option value="BUY_SELL">BUY / SELL signals</option>
+                        </select>
+                    </label>
                     <label>Analysis window
                         <select id="signal-evidence-period">
                             <option value="15M">15 minutes</option>
@@ -199,7 +212,7 @@
                         </select>
                     </label>
                     <button id="signal-evidence-refresh" type="button" class="secondary-button">Refresh path</button>
-                    <span id="signal-evidence-status">Active position only</span>
+                    <span id="signal-evidence-status">Open positions</span>
                 </div>
             </div>
             <div id="active-position-analysis-summary" class="active-position-analysis-summary"></div>

@@ -2851,3 +2851,16 @@ body.position-modal-open{overflow:hidden}
 .analysis-view-graph{display:inline-flex;align-items:center;justify-content:center;min-height:32px;padding:6px 10px;border:1px solid #315369;border-radius:7px;background:#10212c;color:#b9d9eb;font-size:12px;font-weight:700;text-decoration:none;white-space:nowrap}
 .analysis-view-graph:hover{background:#173140;border-color:#4b7790;color:#e7f5fc}
 .analysis-view-graph:focus-visible{outline:2px solid #7bb8d5;outline-offset:2px}
+
+/* FIX-092: Signal selector keeps the existing active-position view as the default,
+   while Bollinger/ATR additions remain presentation-only chart aids. */
+#atr-chart {
+    margin-top: 4px;
+    min-height: 125px;
+}
+.signal-evidence-controls select#signal-evidence-mode {
+    min-width: 150px;
+}
+.blocked-signal-row td {
+    background: rgba(255, 107, 114, 0.035);
+}
