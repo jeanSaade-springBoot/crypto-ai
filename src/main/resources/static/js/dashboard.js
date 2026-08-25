@@ -67,13 +67,12 @@ let chartLoadedActivePosition = null;
 let chartLoadedIndicators = [];
 let chartViewport = { min: null, max: null };
 let chartDragState = null;
-// FIX-092A: These controls are visualization-only. They are derived entirely from
-// candles/indicators already loaded by the dashboard and never feed Analysis/Replay/Execution.
+// FIX-092C: Keep only stable, persisted-indicator overlays. Trend-line and Fibonacci
+// retracement rendering were removed completely because their browser-derived series
+// could corrupt the mixed candlestick chart and obscure View Chart signal focus.
 const chartOverlayState = {
     bollinger: localStorage.getItem('dashboardOverlayBollinger') !== '0',
-    atr: localStorage.getItem('dashboardOverlayAtr') !== '0',
-    trendLines: localStorage.getItem('dashboardOverlayTrendLines') !== '0',
-    retracement: localStorage.getItem('dashboardOverlayRetracement') !== '0'
+    atr: localStorage.getItem('dashboardOverlayAtr') !== '0'
 };
 
 // Debug-only deep link from Administration > Market Move Tracker.
@@ -1287,111 +1286,12 @@ function bindChartNavigation() {
 }
 
 
-// FIX-092A: Find local swing points from the displayed candle series. The radius keeps
-// single-tick noise from creating a line while still reacting quickly on 1m/5m charts.
-function chartSwingPoints(candles, radius = 2) {
-    const rows = (candles || []).map(c => ({
-        time: window.CryptoTime.parseUtc(c.time ?? c.openTime)?.getTime(),
-        high: Number(c.high), low: Number(c.low)
-    })).filter(c => Number.isFinite(c.time) && Number.isFinite(c.high) && Number.isFinite(c.low));
-    const highs = [], lows = [];
-    for (let i = radius; i < rows.length - radius; i++) {
-        const current = rows[i];
-        let isHigh = true, isLow = true;
-        for (let j = i - radius; j <= i + radius; j++) {
-            if (j === i) continue;
-            if (rows[j].high >= current.high) isHigh = false;
-            if (rows[j].low <= current.low) isLow = false;
-        }
-        if (isHigh) highs.push({ index: i, time: current.time, price: current.high, type: 'HIGH' });
-        if (isLow) lows.push({ index: i, time: current.time, price: current.low, type: 'LOW' });
-    }
-    return { highs, lows };
-}
-
-function projectTrendLine(first, second, endTime) {
-    if (!first || !second || second.time <= first.time || !Number.isFinite(endTime)) return [];
-    const slope = (second.price - first.price) / (second.time - first.time);
-    const projected = second.price + slope * (endTime - second.time);
-    if (![first.price, second.price, projected].every(Number.isFinite)) return [];
-    return [
-        { x: new Date(first.time), y: first.price },
-        { x: new Date(second.time), y: second.price },
-        { x: new Date(endTime), y: projected }
-    ];
-}
-
-function chartTrendLineSeries(candles) {
-    if (!chartOverlayState.trendLines || !candles?.length) return [];
-    const { highs, lows } = chartSwingPoints(candles);
-    const lastTime = window.CryptoTime.parseUtc(candles.at(-1).time ?? candles.at(-1).openTime)?.getTime();
-    const result = [];
-    if (lows.length >= 2) {
-        const [first, second] = lows.slice(-2);
-        const data = projectTrendLine(first, second, lastTime);
-        if (data.length) result.push({ name: 'Trend support', type: 'line', data });
-    }
-    if (highs.length >= 2) {
-        const [first, second] = highs.slice(-2);
-        const data = projectTrendLine(first, second, lastTime);
-        if (data.length) result.push({ name: 'Trend resistance', type: 'line', data });
-    }
-    return result;
-}
-
-// FIX-092B: Fibonacci retracement is rendered as bounded line series instead of
-// Apex Y-axis annotations. FIX-092A used labelled Y annotations, which accumulated on
-// repeated updateOptions() calls and could visually cover the immutable View Chart signal
-// marker. Keeping retracement as normal series isolates it from signal/debug annotations.
-function chartRetracementSeries(candles) {
-    if (!chartOverlayState.retracement || !candles?.length) return [];
-    const { highs, lows } = chartSwingPoints(candles);
-    const pivots = [...highs, ...lows].sort((a, b) => a.index - b.index);
-    if (pivots.length < 2) return [];
-
-    const end = pivots.at(-1);
-    let start = null;
-    for (let i = pivots.length - 2; i >= 0; i--) {
-        if (pivots[i].type !== end.type) {
-            start = pivots[i];
-            break;
-        }
-    }
-    if (!start || !Number.isFinite(start.price) || !Number.isFinite(end.price) || start.price === end.price) return [];
-
-    const bullish = start.type === 'LOW' && end.type === 'HIGH';
-    const bearish = start.type === 'HIGH' && end.type === 'LOW';
-    if (!bullish && !bearish) return [];
-
-    const move = Math.abs(end.price - start.price);
-    // FIX-092B: Do not draw Fibonacci overlays for a tiny/noisy swing. The threshold is
-    // display-only and is based on the visible swing range, never used by trading logic.
-    const visiblePrices = candles.flatMap(c => [Number(c.high), Number(c.low)]).filter(Number.isFinite);
-    const visibleRange = visiblePrices.length ? Math.max(...visiblePrices) - Math.min(...visiblePrices) : 0;
-    if (!(visibleRange > 0) || move < visibleRange * 0.08) return [];
-
-    const levels = [0.236, 0.382, 0.5, 0.618, 0.786];
-    // Bound the levels to the completed impulse itself. They no longer stretch infinitely
-    // across the price chart and therefore cannot obscure the View Chart focus marker.
-    return levels.map(level => {
-        const y = bullish ? end.price - move * level : end.price + move * level;
-        return {
-            name: `Fib ${(level * 100).toFixed(1)}%`,
-            type: 'line',
-            data: [
-                { x: new Date(start.time), y },
-                { x: new Date(end.time), y }
-            ],
-            _fix092bOverlay: 'retracement'
-        };
-    });
-}
+// FIX-092C: Trend-line and Fibonacci helper functions intentionally removed.
+// The market chart now renders only candles, persisted Bollinger, signal/position annotations, volume and ATR.
 
 function bindChartOverlayControls() {
     const controls = [
         ['chart-toggle-bollinger', 'bollinger', 'dashboardOverlayBollinger'],
-        ['chart-toggle-trend-lines', 'trendLines', 'dashboardOverlayTrendLines'],
-        ['chart-toggle-retracement', 'retracement', 'dashboardOverlayRetracement'],
         ['chart-toggle-atr', 'atr', 'dashboardOverlayAtr']
     ];
     controls.forEach(([id, key, storageKey]) => {
@@ -1447,14 +1347,14 @@ function renderCharts(candles, executions = [], options = {}) {
     const bollingerMiddleSeries = indicatorPoint('bollingerMiddle');
     const bollingerLowerSeries = indicatorPoint('bollingerLower');
     const atrSeries = indicatorPoint('atr14');
-    const trendLineSeries = chartTrendLineSeries(renderCandlesList);
-    const retracementSeries = chartRetracementSeries(renderCandlesList);
     const bollingerSeries = chartOverlayState.bollinger ? [
         { name: 'BB Upper', type: 'line', data: bollingerUpperSeries },
         { name: 'BB Middle', type: 'line', data: bollingerMiddleSeries },
         { name: 'BB Lower', type: 'line', data: bollingerLowerSeries }
     ] : [];
-    const priceChartSeries = [{ name: 'Price', type: 'candlestick', data: candleSeries }, ...bollingerSeries, ...trendLineSeries, ...retracementSeries];
+    // FIX-092C: No browser-derived trend/Fibonacci series are mixed into the candlestick chart.
+    // This protects the exact View Chart B/S/blocked-BUY annotation from overlay corruption.
+    const priceChartSeries = [{ name: 'Price', type: 'candlestick', data: candleSeries }, ...bollingerSeries];
     latestWalletExecutions = new Map((renderExecutions || []).map(execution => [String(execution.id), execution]));
     const annotations = (renderExecutions || []).map(execution => {
         const isBuy = String(execution.side || '').toUpperCase() === 'BUY';
@@ -1519,8 +1419,8 @@ function renderCharts(candles, executions = [], options = {}) {
         }
     }
 
-    // FIX-092B: Only immutable position levels use Y annotations now. Fibonacci is a
-    // bounded price series, so it cannot overwrite/accumulate with signal annotations.
+    // FIX-092C: Only stable position price levels use Y annotations. Trend-line and
+    // retracement overlays are removed; View Chart signal annotations remain authoritative.
     const displayYAnnotations = [...positionYAnnotations];
 
     const debugZoneAnnotations = debugMoveFocus ? [{
@@ -1568,10 +1468,9 @@ function renderCharts(candles, executions = [], options = {}) {
         atrChart.render();
         el('atr-chart')?.classList.toggle('hidden', !chartOverlayState.atr);
     } else {
-        // FIX-092B: Clear Apex's runtime annotation cache before rebuilding the chart.
-        // This prevents old overlay annotations from surviving updateOptions() and, just as
-        // importantly, guarantees the immutable View Chart B/S/blocked-BUY marker is added
-        // back on every render/toggle/history refresh.
+        // FIX-092C: Clear Apex's runtime annotation cache before rebuilding the chart so
+        // the immutable View Chart B/S/blocked-BUY marker is always reconstructed cleanly.
+        // No trend-line or retracement overlay is allowed to share this annotation layer.
         if (typeof candleChart.clearAnnotations === 'function') candleChart.clearAnnotations();
         candleChart.updateSeries(priceChartSeries, false);
         candleChart.updateOptions({
@@ -3000,7 +2899,7 @@ function renderTradeReplay(replay) {
 window.addEventListener('resize', syncDashboardHeaderOffset);
 window.addEventListener('load', () => {
     syncDashboardHeaderOffset();
-    // FIX-092A: Bind presentation-only overlay toggles after dashboard DOM is ready.
+    // FIX-092C: Bind only the stable Bollinger/ATR presentation toggles.
     bindChartOverlayControls();
     const closeButton = el('execution-marker-close');
     if (closeButton) closeButton.addEventListener('click', () => el('execution-marker-dialog').close());

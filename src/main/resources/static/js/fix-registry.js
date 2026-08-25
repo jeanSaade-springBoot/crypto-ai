@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-092C",
+            title: "Remove unstable trend-line and retracement chart overlays",
+            status: "IMPLEMENTED · UI / CHART-ONLY",
+            scenario: "Trend-line/Fibonacci overlays introduced in FIX-092A/092B still corrupted the mixed candlestick rendering and could remove or obscure the exact signal highlight opened through View chart.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A · visualization only", exitTime: "N/A",
+            replayWindow: "Replay behavior is unchanged. FIX-092C removes browser-only overlays; no Production analysis, Replay analysis, execution intelligence or wallet code is changed.",
+            location: "Dashboard market-chart overlay state, controls and ApexCharts series composition",
+            classes: ["dashboard.html", "dashboard.js", "dashboard.css", "fix-registry.js"],
+            cause: "Browser-derived trend-line and Fibonacci series were mixed into the same ApexCharts candlestick instance used for exact View Chart signal focus. Even after annotation isolation, the extra dynamic series could destabilize rendering and signal-highlight visibility.",
+            solution: "Remove trend-line and retracement controls, state, swing calculations, projected series and Fibonacci series completely. Keep only candlesticks, persisted Bollinger bands, exact BUY/SELL/blocked-BUY annotations, active-position levels, Volume and the separate ATR panel. Continue clearing/rebuilding runtime annotations so View Chart focus remains authoritative.",
+            behavior: "Dashboard chart overlays are now limited to Bollinger and ATR. View Chart signal highlighting remains visible across refresh, history loading and overlay toggles. No trend-line or retracement calculation remains in the dashboard runtime.",
+            regression: "Open blocked BUY, BUY and SELL View chart links and verify their exact B/S marker remains visible. Toggle Bollinger/ATR, pan historical candles and refresh. Verify no Trend lines/Retracement controls or series appear and that Production/Replay/wallet behavior remains unchanged."
+        },
+        {
             id: "FIX-092B",
             title: "Stable chart overlays that preserve View Chart signal highlighting",
             status: "IMPLEMENTED · UI / CHART-ONLY",
