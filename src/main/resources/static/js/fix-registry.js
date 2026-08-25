@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-092A",
+            title: "Display-only trend lines and Fibonacci retracement overlays",
+            status: "IMPLEMENTED · UI / CHART-ONLY",
+            scenario: "Signal chart review needed visual market-structure context without changing trading logic: operators should see recent support/resistance trend lines and retracement levels alongside the existing BUY/SELL markers, Bollinger bands and ATR panel.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A · visualization only", exitTime: "N/A",
+            replayWindow: "Replay behavior is unchanged. Trend lines and retracement levels are calculated in the browser from candles already returned for display and are never supplied to Replay analysis, Production analysis, FinalDecision, ExecutionIntelligence or wallet code.",
+            location: "Dashboard market chart overlay controls and ApexCharts rendering",
+            classes: ["dashboard.html", "dashboard.js", "dashboard.css", "fix-registry.js"],
+            cause: "The chart already displayed candles, BUY/SELL markers, Bollinger and ATR but did not visually project recent swing support/resistance or show where price sits inside the latest completed swing impulse.",
+            solution: "Add display-only overlay toggles for Bollinger, Trend lines, Retracement and ATR. Detect local swing highs/lows from visible candles using a two-candle pivot radius, project the latest two swing lows as support and latest two swing highs as resistance, and calculate Fibonacci 23.6/38.2/50/61.8/78.6 percent levels from the latest completed opposite-pivot swing. Persist only each user's overlay visibility preference in browser localStorage; no market-derived overlay value is persisted.",
+            behavior: "All four overlays are enabled by default. Trend support/resistance and Fibonacci levels refresh when the visible candle history changes, including historical View chart/panning. Turning an overlay off changes only chart rendering. Existing signal markers, position annotations and chart navigation remain unchanged.",
+            regression: "Verify chart defaults show Bollinger, Trend lines, Retracement and ATR; each toggle independently hides/restores its overlay; a blocked BUY or BUY/SELL deep-link still highlights the exact persisted signal; panning older history recalculates swing overlays from loaded candles; no API write occurs and no AnalysisService, FinalDecisionService, ExecutionIntelligenceService, Replay or wallet class is modified."
+        },
+        {
             id: "FIX-092",
             title: "Dashboard Signals view with blocked/actionable filters and ATR/Bollinger chart context",
             status: "IMPLEMENTED · UI / READ-ONLY DASHBOARD",

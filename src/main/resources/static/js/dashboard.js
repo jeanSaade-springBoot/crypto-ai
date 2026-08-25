@@ -67,6 +67,14 @@ let chartLoadedActivePosition = null;
 let chartLoadedIndicators = [];
 let chartViewport = { min: null, max: null };
 let chartDragState = null;
+// FIX-092A: These controls are visualization-only. They are derived entirely from
+// candles/indicators already loaded by the dashboard and never feed Analysis/Replay/Execution.
+const chartOverlayState = {
+    bollinger: localStorage.getItem('dashboardOverlayBollinger') !== '0',
+    atr: localStorage.getItem('dashboardOverlayAtr') !== '0',
+    trendLines: localStorage.getItem('dashboardOverlayTrendLines') !== '0',
+    retracement: localStorage.getItem('dashboardOverlayRetracement') !== '0'
+};
 
 // Debug-only deep link from Administration > Market Move Tracker.
 // This only controls dashboard navigation/chart rendering and never feeds back into trading logic.
@@ -1278,6 +1286,119 @@ function bindChartNavigation() {
     if (latestButton) latestButton.addEventListener('click', goToLatestChart);
 }
 
+
+// FIX-092A: Find local swing points from the displayed candle series. The radius keeps
+// single-tick noise from creating a line while still reacting quickly on 1m/5m charts.
+function chartSwingPoints(candles, radius = 2) {
+    const rows = (candles || []).map(c => ({
+        time: window.CryptoTime.parseUtc(c.time ?? c.openTime)?.getTime(),
+        high: Number(c.high), low: Number(c.low)
+    })).filter(c => Number.isFinite(c.time) && Number.isFinite(c.high) && Number.isFinite(c.low));
+    const highs = [], lows = [];
+    for (let i = radius; i < rows.length - radius; i++) {
+        const current = rows[i];
+        let isHigh = true, isLow = true;
+        for (let j = i - radius; j <= i + radius; j++) {
+            if (j === i) continue;
+            if (rows[j].high >= current.high) isHigh = false;
+            if (rows[j].low <= current.low) isLow = false;
+        }
+        if (isHigh) highs.push({ index: i, time: current.time, price: current.high, type: 'HIGH' });
+        if (isLow) lows.push({ index: i, time: current.time, price: current.low, type: 'LOW' });
+    }
+    return { highs, lows };
+}
+
+function projectTrendLine(first, second, endTime) {
+    if (!first || !second || second.time <= first.time || !Number.isFinite(endTime)) return [];
+    const slope = (second.price - first.price) / (second.time - first.time);
+    const projected = second.price + slope * (endTime - second.time);
+    if (![first.price, second.price, projected].every(Number.isFinite)) return [];
+    return [
+        { x: new Date(first.time), y: first.price },
+        { x: new Date(second.time), y: second.price },
+        { x: new Date(endTime), y: projected }
+    ];
+}
+
+function chartTrendLineSeries(candles) {
+    if (!chartOverlayState.trendLines || !candles?.length) return [];
+    const { highs, lows } = chartSwingPoints(candles);
+    const lastTime = window.CryptoTime.parseUtc(candles.at(-1).time ?? candles.at(-1).openTime)?.getTime();
+    const result = [];
+    if (lows.length >= 2) {
+        const [first, second] = lows.slice(-2);
+        const data = projectTrendLine(first, second, lastTime);
+        if (data.length) result.push({ name: 'Trend support', type: 'line', data });
+    }
+    if (highs.length >= 2) {
+        const [first, second] = highs.slice(-2);
+        const data = projectTrendLine(first, second, lastTime);
+        if (data.length) result.push({ name: 'Trend resistance', type: 'line', data });
+    }
+    return result;
+}
+
+// FIX-092A: Fibonacci levels are anchored to the latest completed swing-to-swing impulse.
+// They are presentation aids only; no decision threshold or retracement execution reads them.
+function chartRetracementAnnotations(candles) {
+    if (!chartOverlayState.retracement || !candles?.length) return [];
+    const { highs, lows } = chartSwingPoints(candles);
+    const pivots = [...highs, ...lows].sort((a, b) => a.index - b.index);
+    if (pivots.length < 2) return [];
+    let end = pivots.at(-1), start = null;
+    for (let i = pivots.length - 2; i >= 0; i--) {
+        if (pivots[i].type !== end.type) { start = pivots[i]; break; }
+    }
+    if (!start || !Number.isFinite(start.price) || !Number.isFinite(end.price) || start.price === end.price) return [];
+    const bullish = start.type === 'LOW' && end.type === 'HIGH';
+    const bearish = start.type === 'HIGH' && end.type === 'LOW';
+    if (!bullish && !bearish) return [];
+    const move = Math.abs(end.price - start.price);
+    const levels = [0.236, 0.382, 0.5, 0.618, 0.786];
+    return levels.map(level => {
+        const y = bullish ? end.price - move * level : end.price + move * level;
+        return {
+            y,
+            borderColor: '#7f91a0',
+            strokeDashArray: level === 0.5 ? 3 : 5,
+            label: {
+                text: `Fib ${(level * 100).toFixed(1)}%`,
+                borderColor: '#536675',
+                style: { background: '#0d1820', color: '#aebdca', fontSize: '9px', fontWeight: 700 }
+            }
+        };
+    });
+}
+
+function bindChartOverlayControls() {
+    const controls = [
+        ['chart-toggle-bollinger', 'bollinger', 'dashboardOverlayBollinger'],
+        ['chart-toggle-trend-lines', 'trendLines', 'dashboardOverlayTrendLines'],
+        ['chart-toggle-retracement', 'retracement', 'dashboardOverlayRetracement'],
+        ['chart-toggle-atr', 'atr', 'dashboardOverlayAtr']
+    ];
+    controls.forEach(([id, key, storageKey]) => {
+        const input = el(id);
+        if (!input) return;
+        input.checked = chartOverlayState[key];
+        input.addEventListener('change', () => {
+            chartOverlayState[key] = input.checked;
+            localStorage.setItem(storageKey, input.checked ? '1' : '0');
+            const atrHost = el('atr-chart');
+            if (atrHost) atrHost.classList.toggle('hidden', !chartOverlayState.atr);
+            renderCharts(chartLoadedCandles, chartLoadedExecutions, {
+                force: true,
+                preserveViewport: true,
+                activePosition: chartLoadedActivePosition,
+                indicatorSeries: chartLoadedIndicators
+            });
+        });
+    });
+    const atrHost = el('atr-chart');
+    if (atrHost) atrHost.classList.toggle('hidden', !chartOverlayState.atr);
+}
+
 function renderCharts(candles, executions = [], options = {}) {
     const { force = false, preserveViewport = false, activePosition = undefined, indicatorSeries = undefined } = options;
     // While the user is inspecting history, periodic dashboard refreshes must
@@ -1310,6 +1431,14 @@ function renderCharts(candles, executions = [], options = {}) {
     const bollingerMiddleSeries = indicatorPoint('bollingerMiddle');
     const bollingerLowerSeries = indicatorPoint('bollingerLower');
     const atrSeries = indicatorPoint('atr14');
+    const trendLineSeries = chartTrendLineSeries(renderCandlesList);
+    const retracementYAnnotations = chartRetracementAnnotations(renderCandlesList);
+    const bollingerSeries = chartOverlayState.bollinger ? [
+        { name: 'BB Upper', type: 'line', data: bollingerUpperSeries },
+        { name: 'BB Middle', type: 'line', data: bollingerMiddleSeries },
+        { name: 'BB Lower', type: 'line', data: bollingerLowerSeries }
+    ] : [];
+    const priceChartSeries = [{ name: 'Price', type: 'candlestick', data: candleSeries }, ...bollingerSeries, ...trendLineSeries];
     latestWalletExecutions = new Map((renderExecutions || []).map(execution => [String(execution.id), execution]));
     const annotations = (renderExecutions || []).map(execution => {
         const isBuy = String(execution.side || '').toUpperCase() === 'BUY';
@@ -1374,6 +1503,10 @@ function renderCharts(candles, executions = [], options = {}) {
         }
     }
 
+    // FIX-092A: Fibonacci is appended to display annotations after position levels so
+    // both can coexist. Neither annotation collection is ever consumed by trading code.
+    const displayYAnnotations = [...positionYAnnotations, ...retracementYAnnotations];
+
     const debugZoneAnnotations = debugMoveFocus ? [{
         x: debugMoveFocus.start.getTime(),
         x2: debugMoveFocus.end.getTime(),
@@ -1405,7 +1538,7 @@ function renderCharts(candles, executions = [], options = {}) {
     };
     const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime', labels: { datetimeUTC: false }, tooltip: { enabled: false } }, noData: { text: 'Waiting for closed candles' } };
     if (!candleChart) {
-        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390, events: candleEvents }, series: [{ name: 'Price', type: 'candlestick', data: candleSeries }, { name: 'BB Upper', type: 'line', data: bollingerUpperSeries }, { name: 'BB Middle', type: 'line', data: bollingerMiddleSeries }, { name: 'BB Lower', type: 'line', data: bollingerLowerSeries }], annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: positionYAnnotations }, tooltip: { enabled:false }, yaxis: { tooltip: { enabled: false }, decimalsInFloat: 4 }, stroke: { width: [1, 1.5, 1, 1.5], dashArray: [0, 0, 4, 0] }, legend: { show: true }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
+        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390, events: candleEvents }, series: priceChartSeries, annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: displayYAnnotations }, tooltip: { enabled:false }, yaxis: { tooltip: { enabled: false }, decimalsInFloat: 4 }, stroke: { width: 1.5, dashArray: 0 }, legend: { show: true }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
         candleChart.render().then(() => {
             bindExecutionMarkerClicks();
             bindDebugTradeDotTitles();
@@ -1417,9 +1550,10 @@ function renderCharts(candles, executions = [], options = {}) {
         volumeChart.render();
         atrChart = new ApexCharts(el('atr-chart'), { ...common, chart: { ...common.chart, type: 'line', height: 125 }, series: [{ name: 'ATR 14', data: atrSeries }], dataLabels: { enabled: false }, stroke: { width: 2 }, yaxis: { labels: { formatter: v => formatChartPrice(v) }, title: { text: 'ATR 14' } } });
         atrChart.render();
+        el('atr-chart')?.classList.toggle('hidden', !chartOverlayState.atr);
     } else {
-        candleChart.updateSeries([{ name: 'Price', type: 'candlestick', data: candleSeries }, { name: 'BB Upper', type: 'line', data: bollingerUpperSeries }, { name: 'BB Middle', type: 'line', data: bollingerMiddleSeries }, { name: 'BB Lower', type: 'line', data: bollingerLowerSeries }], false);
-        candleChart.updateOptions({ chart: { events: candleEvents }, annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: positionYAnnotations }, tooltip: { enabled:false } }, false, true, false).then(async () => {
+        candleChart.updateSeries(priceChartSeries, false);
+        candleChart.updateOptions({ chart: { events: candleEvents }, annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: displayYAnnotations }, tooltip: { enabled:false } }, false, true, false).then(async () => {
             bindExecutionMarkerClicks();
             bindDebugTradeDotTitles();
             if (preserveViewport && Number.isFinite(chartViewport.min) && Number.isFinite(chartViewport.max)) {
@@ -2839,6 +2973,8 @@ function renderTradeReplay(replay) {
 window.addEventListener('resize', syncDashboardHeaderOffset);
 window.addEventListener('load', () => {
     syncDashboardHeaderOffset();
+    // FIX-092A: Bind presentation-only overlay toggles after dashboard DOM is ready.
+    bindChartOverlayControls();
     const closeButton = el('execution-marker-close');
     if (closeButton) closeButton.addEventListener('click', () => el('execution-marker-dialog').close());
     const positionsKpi = el('active-positions-kpi');

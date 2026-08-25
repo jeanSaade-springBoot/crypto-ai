@@ -2864,3 +2864,10 @@ body.position-modal-open{overflow:hidden}
 .blocked-signal-row td {
     background: rgba(255, 107, 114, 0.035);
 }
+
+/* FIX-092A: Compact display-only overlay controls for the market chart. */
+.chart-overlay-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:-4px 0 12px;padding:9px 11px;border:1px solid var(--border);border-radius:10px;background:rgba(18,33,46,.55);color:var(--muted);font-size:12px}
+.chart-overlay-controls>span{font-weight:800;color:var(--text);letter-spacing:.04em;text-transform:uppercase;font-size:10px}
+.chart-overlay-controls label{display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:var(--muted)}
+.chart-overlay-controls input{accent-color:var(--accent)}
+#atr-chart.hidden{display:none!important}
