@@ -212,6 +212,13 @@ public class ExecutionIntelligenceService {
     private static final int CONFIRMATION_MIN_ENTRY_QUALITY = 65;
     private static final int TREND_MIN_ENTRY_QUALITY = 60;
     private static final int CHASE_ENTRY_CUTOFF = 50;
+    // FIX-091 / Fix 1: plain BTC CONFLICT is a sizing authority, not a hard veto.
+    // STRONG_CONFLICT continues to be vetoed upstream by BtcMarketContextService.
+    private static final int BTC_MODERATE_CONFLICT_EXCELLENT_CAP = 40;
+    private static final int BTC_MODERATE_CONFLICT_GOOD_CAP = 30;
+    private static final int BTC_MODERATE_CONFLICT_LATE_CAP = 25;
+    // FIX-091 / Fix 7: rejection-zone awareness starts as a soft quality penalty only.
+    private static final int RECENT_REJECTION_ENTRY_QUALITY_PENALTY = 12;
 
     // Symbol-agnostic opportunity health weights. Higher timeframes carry more
     // information and signal quality scales every contribution.
@@ -788,19 +795,29 @@ public class ExecutionIntelligenceService {
     private EntryQuality assessEntryQuality(TradeSignal current, BigDecimal authoritativeAtr, BigDecimal executionPrice) {
         if (current == null || current.getGeneratedAt() == null || executionPrice == null
                 || executionPrice.signum() <= 0) {
-            return new EntryQuality(0, "UNKNOWN", 0d, 0d, 0d, 0L);
+            return new EntryQuality(0, "UNKNOWN", 0d, 0d, 0d, 0L, false, null, 0, 0d, false, null);
         }
 
         Instant cutoff = current.getGeneratedAt().minus(EVIDENCE_WINDOW);
         List<TradeSignal> recent = recentSignals(current.getSymbol(), EXECUTION_INTERVAL, current.getGeneratedAt());
 
         BigDecimal reference = executionPrice;
+        BigDecimal recentHigh = executionPrice;
+        Instant recentHighAt = current.getGeneratedAt();
         for (TradeSignal s : recent) {
             if (s.getGeneratedAt() == null || s.getGeneratedAt().isAfter(current.getGeneratedAt())) continue;
             if (s.getGeneratedAt().isBefore(cutoff)) break;
             if (s.getLatestPrice() != null && s.getLatestPrice().signum() > 0
                     && s.getLatestPrice().compareTo(reference) < 0) {
                 reference = s.getLatestPrice();
+            }
+            // FIX-091 / Fix 7: mirror the existing rolling-low memory with a rolling high.
+            // We intentionally use already-persisted signal prices so Replay and Production
+            // observe the same pre-wallet evidence and no new market-data dependency is added.
+            if (s.getLatestPrice() != null && s.getLatestPrice().signum() > 0
+                    && s.getLatestPrice().compareTo(recentHigh) > 0) {
+                recentHigh = s.getLatestPrice();
+                recentHighAt = s.getGeneratedAt();
             }
         }
 
@@ -838,6 +855,28 @@ public class ExecutionIntelligenceService {
                 .orElse(0L);
 
         double rr = currentRewardRisk(current, executionPrice);
+
+        // FIX-091 / Fix 7: a prior high is considered a recent rejection only when price
+        // subsequently backed away and the current entry is returning close to that same zone.
+        // v1 is deliberately conservative: this only reduces Entry Quality; it never hard-vetoes.
+        int rejectionCount = 0;
+        double distanceFromRejectedHighPercent = 0d;
+        BigDecimal recentRejectedHigh = null;
+        if (recentHigh != null && recentHigh.signum() > 0 && recentHighAt != null
+                && recentHighAt.isBefore(current.getGeneratedAt())) {
+            for (TradeSignal s : recent) {
+                if (s.getGeneratedAt() == null || !s.getGeneratedAt().isAfter(recentHighAt)
+                        || s.getGeneratedAt().isAfter(current.getGeneratedAt()) || s.getLatestPrice() == null) continue;
+                if (s.getLatestPrice().compareTo(recentHigh) < 0) rejectionCount++;
+            }
+            distanceFromRejectedHighPercent = recentHigh.subtract(executionPrice).abs()
+                    .divide(recentHigh, 8, RoundingMode.HALF_UP)
+                    .multiply(BigDecimal.valueOf(100)).doubleValue();
+            if (rejectionCount >= 2 && distanceFromRejectedHighPercent <= 0.50d) {
+                recentRejectedHigh = recentHigh;
+            }
+        }
+
         int score = 100;
 
         if (expansionPercent > 8d) score -= 50;
@@ -856,6 +895,16 @@ public class ExecutionIntelligenceService {
         if (rr <= 0d || rr < 1d) score -= 30;
         else if (rr < 1.25d) score -= 15;
         else if (rr >= 2d) score += 5;
+
+        if (recentRejectedHigh != null) {
+            // FIX-091 / Fix 7 v1 is penalty/size-reduction only. A rejection penalty must not
+            // by itself push an otherwise non-chase entry below the hard CHASE_ENTRY cutoff.
+            int beforeRejectionPenalty = score;
+            score -= RECENT_REJECTION_ENTRY_QUALITY_PENALTY;
+            if (beforeRejectionPenalty >= CHASE_ENTRY_CUTOFF) {
+                score = Math.max(CHASE_ENTRY_CUTOFF, score);
+            }
+        }
 
         if ("HIGH_VOLATILITY".equals(String.valueOf(current.getMarketRegime()))) score -= 10;
 
@@ -876,7 +925,12 @@ public class ExecutionIntelligenceService {
                 : score >= CHASE_ENTRY_CUTOFF ? "LATE_ENTRY"
                 : "CHASE_ENTRY";
 
-        return new EntryQuality(score, classification, expansionPercent, atrExtension, rr, ageMinutes);
+        boolean moderateBtcConflict = current.getBtcContextStatus() == com.crypto.domain.BtcContextStatus.CONFLICT;
+        boolean transitionProbe = "TRANSITION_PROBE".equals(current.getEntryAuthority());
+        Integer authorityCap = current.getEntryAuthorityMaxPositionPercent();
+        return new EntryQuality(score, classification, expansionPercent, atrExtension, rr, ageMinutes,
+                moderateBtcConflict, recentRejectedHigh, rejectionCount, distanceFromRejectedHighPercent,
+                transitionProbe, authorityCap);
     }
 
     private ExecutionDecision progressivePositionDecision(
@@ -1022,6 +1076,35 @@ public class ExecutionIntelligenceService {
         }
 
         int cap = q.score() >= 85 ? 50 : q.score() >= 70 ? 40 : 25;
+        StringBuilder capReason = new StringBuilder(" Entry Quality ")
+                .append(q.score()).append("/100 (").append(q.classification()).append(")");
+
+        // FIX-091 / Fix 1: moderate BTC conflict stays fast and BUY-eligible, but may not
+        // receive full exposure. Classification remains owned by BtcMarketContextService.
+        if (q.moderateBtcConflict()) {
+            int btcConflictCap = q.score() >= 85 ? BTC_MODERATE_CONFLICT_EXCELLENT_CAP
+                    : q.score() >= 70 ? BTC_MODERATE_CONFLICT_GOOD_CAP
+                    : BTC_MODERATE_CONFLICT_LATE_CAP;
+            cap = Math.min(cap, btcConflictCap);
+            capReason.append("; BTC context is CONFLICT, so the same tiered initial-entry model reduces exposure to ")
+                    .append(btcConflictCap).append("%");
+        }
+        // FIX-091 / Fix 5: EntryAuthority is only a maximum size. The current signal has already
+        // travelled through the normal direct-candidate + validateBuy flow before this guard runs.
+        // The EntryQuality snapshot is created from the current TradeSignal, so the explicit cap is
+        // carried through the signal fields without inventing a parallel execution route.
+        if (q.entryAuthorityMaxPositionPercent() != null && q.entryAuthorityMaxPositionPercent() > 0) {
+            cap = Math.min(cap, q.entryAuthorityMaxPositionPercent());
+            if (q.transitionProbe()) {
+                capReason.append("; BREAKOUT_TRANSITION probe authority caps exposure at ")
+                        .append(q.entryAuthorityMaxPositionPercent()).append("%");
+            }
+        }
+        if (q.recentRejectedHigh() != null) {
+            capReason.append("; recent rejection zone near ").append(q.recentRejectedHigh())
+                    .append(" reduced entry quality without creating a hard veto");
+        }
+
         int reduced = Math.min(decision.positionPercent(), cap);
         if (reduced == decision.positionPercent()) return decision;
 
@@ -1029,8 +1112,7 @@ public class ExecutionIntelligenceService {
                 decision.source(),
                 decision.code(),
                 reduced,
-                decision.explanation() + " Entry Quality " + q.score() + "/100 ("
-                        + q.classification() + ") capped the initial allocation at " + reduced
+                decision.explanation() + capReason + " capped the initial allocation at " + reduced
                         + "% so confirmation can add later instead of committing full size at once.",
                 decision.evidence());
     }
@@ -1723,6 +1805,18 @@ public class ExecutionIntelligenceService {
                             + ", confidence=" + e.averageConfidence() + ".", e);
         }
 
+        // FIX-091 / Fix 8: accumulated evidence is also forbidden from entering after the
+        // current setup has materially deteriorated from the recent opportunity peak. This
+        // directly protects the UNI/PEPE pattern where a strong BUY peak was followed by a
+        // weaker WATCH that later executed only because old evidence remained in memory.
+        EvidenceDeterioration deterioration = assessEvidenceDeterioration(current);
+        if (deterioration.material()) {
+            return ExecutionDecision.building(
+                    "ACCUMULATED_EVIDENCE_DETERIORATED",
+                    deterioration.explanation(),
+                    e);
+        }
+
         // FIX-021 / BICOUSDT + ETHUSDT:
         // Accumulated evidence is memory, not a separate execution authority. It must obey
         // the SAME configured 5m/1h profile that a normal direct BUY would face. This closes
@@ -2148,6 +2242,76 @@ public class ExecutionIntelligenceService {
         return result;
     }
 
+    private void updateOpportunityPeak(ExecutionOpportunity opportunity, TradeSignal signal) {
+        if (opportunity == null || signal == null || signal.getGeneratedAt() == null) return;
+        boolean stale = opportunity.getPeakObservedAt() == null
+                || opportunity.getPeakObservedAt().isBefore(signal.getGeneratedAt().minus(Duration.ofMinutes(15)));
+        boolean stronger = signal.getTotalScore() > opportunity.getPeakScore()
+                || (signal.getTotalScore() == opportunity.getPeakScore()
+                    && signal.getConfidenceScore() > opportunity.getPeakConfidence());
+        if (!stale && !stronger) return;
+
+        opportunity.setPeakScore(signal.getTotalScore());
+        opportunity.setPeakConfidence(signal.getConfidenceScore());
+        opportunity.setPeakDecision(signal.getDecision() == null ? null : signal.getDecision().name());
+        opportunity.setPeakRegime(signal.getMarketRegime() == null ? null : signal.getMarketRegime().name());
+        opportunity.setPeakBtcStatus(signal.getBtcContextStatus() == null ? null : signal.getBtcContextStatus().name());
+        opportunity.setPeakLiquidityStatus(signal.getLiquidityStatus() == null ? null : signal.getLiquidityStatus().name());
+        opportunity.setPeakObservedAt(signal.getGeneratedAt());
+    }
+
+    private EvidenceDeterioration assessEvidenceDeterioration(TradeSignal current) {
+        if (current == null || current.getGeneratedAt() == null) return EvidenceDeterioration.none();
+        ExecutionOpportunity opportunity = currentOpportunity(
+                current.getSymbol(), List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED")).orElse(null);
+        if (opportunity == null || opportunity.getPeakObservedAt() == null) return EvidenceDeterioration.none();
+
+        // Expired peak memory intentionally stops influencing a rebuilt setup.
+        if (opportunity.getPeakObservedAt().isBefore(current.getGeneratedAt().minus(Duration.ofMinutes(15)))) {
+            return EvidenceDeterioration.none();
+        }
+        // A new equal/stronger setup is recovery, not deterioration. It will replace the peak on save.
+        if (current.getTotalScore() >= opportunity.getPeakScore()
+                && current.getConfidenceScore() >= opportunity.getPeakConfidence()) {
+            return EvidenceDeterioration.none();
+        }
+
+        boolean decisionWeakened = decisionRank(current.getDecision()) < decisionRankName(opportunity.getPeakDecision());
+        boolean regimeWeakened = "BREAKOUT".equals(opportunity.getPeakRegime())
+                && current.getMarketRegime() != com.crypto.domain.MarketRegime.BREAKOUT;
+        boolean btcWeakened = "CONFIRMED".equals(opportunity.getPeakBtcStatus())
+                && current.getBtcContextStatus() != com.crypto.domain.BtcContextStatus.CONFIRMED;
+        boolean liquidityWeakened = "BULLISH_SUPPORT".equals(opportunity.getPeakLiquidityStatus())
+                && current.getLiquidityStatus() != LiquidityContextStatus.BULLISH_SUPPORT;
+        int scoreDrop = opportunity.getPeakScore() - current.getTotalScore();
+        int confidenceDrop = opportunity.getPeakConfidence() - current.getConfidenceScore();
+        boolean material = decisionWeakened || regimeWeakened || btcWeakened || liquidityWeakened
+                || scoreDrop >= 12 || confidenceDrop >= 12;
+        if (!material) return EvidenceDeterioration.none();
+
+        String explanation = "Accumulated evidence is held because current setup quality materially deteriorated from "
+                + "the recent peak: peak score/confidence=" + opportunity.getPeakScore() + "/"
+                + opportunity.getPeakConfidence() + ", current=" + current.getTotalScore() + "/"
+                + current.getConfidenceScore() + ", decisionWeakened=" + decisionWeakened
+                + ", regimeWeakened=" + regimeWeakened + ", btcWeakened=" + btcWeakened
+                + ", liquidityWeakened=" + liquidityWeakened + ". Wait for fresh evidence to rebuild.";
+        return new EvidenceDeterioration(true, explanation);
+    }
+
+    private int decisionRank(SignalDecision decision) {
+        if (decision == SignalDecision.STRONG_BUY) return 4;
+        if (decision == SignalDecision.BUY) return 3;
+        if (decision == SignalDecision.WATCH) return 2;
+        if (decision == SignalDecision.NEUTRAL) return 1;
+        return 0;
+    }
+
+    private int decisionRankName(String decision) {
+        if (decision == null) return 0;
+        try { return decisionRank(SignalDecision.valueOf(decision)); }
+        catch (IllegalArgumentException ex) { return 0; }
+    }
+
     private void saveOpportunity(TradeSignal signal, Evidence evidence, String status, String source,
                                  int positionPercent, String code, String explanation) {
         Instant now = Instant.now();
@@ -2175,6 +2339,11 @@ public class ExecutionIntelligenceService {
                 opportunity.setBestEntryPrice(signal.getLatestPrice());
             }
         }
+        // FIX-091 / Fix 8: update or reset the opportunity peak using the current signal.
+        // The peak expires after 15 minutes so an old BUY cannot permanently poison a newly
+        // rebuilt setup. A genuinely stronger current signal establishes a fresh peak.
+        updateOpportunityPeak(opportunity, signal);
+
         opportunity.setEvidenceCount(evidence.observationCount());
         opportunity.setBuyCount(evidence.buyCount());
         opportunity.setWatchCount(evidence.watchCount());
@@ -2324,8 +2493,18 @@ public class ExecutionIntelligenceService {
             double expansionPercent,
             double atrExtension,
             double rewardRisk,
-            long opportunityAgeMinutes
+            long opportunityAgeMinutes,
+            boolean moderateBtcConflict,
+            BigDecimal recentRejectedHigh,
+            int rejectionCount,
+            double distanceFromRejectedHighPercent,
+            boolean transitionProbe,
+            Integer entryAuthorityMaxPositionPercent
     ) {}
+
+    private record EvidenceDeterioration(boolean material, String explanation) {
+        static EvidenceDeterioration none() { return new EvidenceDeterioration(false, ""); }
+    }
 
     private record ImmediatePriceAction(boolean supportive, String summary) {
         static ImmediatePriceAction supportive(String summary) {

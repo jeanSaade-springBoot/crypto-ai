@@ -7,6 +7,8 @@ import com.crypto.dto.RangeEntryLocationAssessment;
 import com.crypto.dto.StrategyProfile;
 import com.crypto.dto.StrategyScoreResult;
 import com.crypto.dto.TrendStructureResult;
+import com.crypto.execution.domain.EntryAuthority;
+import com.crypto.execution.domain.EntryAuthorityDecision;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -33,6 +35,29 @@ public class RangeEntryLocationService {
     static final BigDecimal MAX_NORMAL_RANGE_BUY_POSITION_PERCENT = new BigDecimal("55.00");
     static final BigDecimal MIN_EXPANSION_EXCEPTION_RVOL = new BigDecimal("2.00");
     static final int MIN_EXPANSION_EXCEPTION_SCORE = 90;
+
+    /**
+     * FIX-091 / Fix 5: Replay-only verified transition authority may use the already-designed
+     * expansion exception. The ordinary evaluate(...) method below is intentionally unchanged
+     * so the 55% RANGE guard keeps exactly the same behavior for normal range trades.
+     */
+    public RangeEntryLocationAssessment evaluate(
+            IndicatorSnapshot indicator,
+            StrategyProfile profile,
+            StrategyScoreResult score,
+            TrendStructureResult trendStructure,
+            EntryAuthorityDecision authority
+    ) {
+        RangeEntryLocationAssessment normal = evaluate(indicator, profile, score, trendStructure);
+        if (normal.entryAllowed() || authority == null
+                || authority.authority() != EntryAuthority.TRANSITION_PROBE
+                || !authority.structuralCandidate() || !authority.safetyComplete()) {
+            return normal;
+        }
+        return new RangeEntryLocationAssessment(true, true, normal.bollingerPositionPercent(), true,
+                "FIX-091 verified BREAKOUT_TRANSITION probe bypassed only the ordinary RANGE location veto. "
+                        + authority.explanation());
+    }
 
     public RangeEntryLocationAssessment evaluate(
             IndicatorSnapshot indicator,

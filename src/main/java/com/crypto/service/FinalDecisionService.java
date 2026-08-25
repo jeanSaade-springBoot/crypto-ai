@@ -152,16 +152,28 @@ public class FinalDecisionService {
             entryAllowed = false;
         }
 
-        int confidence = confidence(regime, context, confluence, btcContext, derivatives, liquidity, entryAllowed);
+        // FIX-091 / Fix 3: compute confidence once without the legacy 49 cap, then derive
+        // the effective value from final entry authority. This keeps 49 as a consequence
+        // of a veto instead of hiding the actual signal quality that existed before it.
+        int rawConfidence = rawConfidence(regime, context, confluence, btcContext, derivatives, liquidity);
+        int effectiveConfidence = entryAllowed ? rawConfidence : Math.min(rawConfidence, 49);
+        String primaryBlockingStage = path.stream()
+                .filter(a -> a.entryAllowedBefore() && !a.entryAllowedAfter())
+                .map(DecisionAdjustment::source)
+                .findFirst()
+                .orElse(entryAllowed ? null : "STRATEGY_AUTHORITY");
         String explanation = "FinalDecisionService applied " + path.size()
-                + " ordered checks. Confidence " + confidence + "/100. Entry "
-                + (entryAllowed ? "allowed" : "blocked") + ".";
+                + " ordered checks. Raw confidence " + rawConfidence + "/100, effective confidence "
+                + effectiveConfidence + "/100. Entry " + (entryAllowed ? "allowed" : "blocked")
+                + (primaryBlockingStage == null ? "." : " by " + primaryBlockingStage + ".");
 
         return new FinalDecisionResult(
                 baseDecision,
                 current,
                 entryAllowed,
-                confidence,
+                rawConfidence,
+                effectiveConfidence,
+                primaryBlockingStage,
                 List.copyOf(path),
                 explanation
         );
@@ -194,14 +206,13 @@ public class FinalDecisionService {
         return after;
     }
 
-    private int confidence(
+    private int rawConfidence(
             MarketRegimeAssessment regime,
             MarketContextSnapshot context,
             MultiTimeframeConfluenceResult confluence,
             BtcMarketContextResult btc,
             DerivativesPositioningResult derivatives,
-            OrderBookLiquidityResult liquidity,
-            boolean entryAllowed
+            OrderBookLiquidityResult liquidity
     ) {
         double value = regime.confidence() * 0.25;
         value += (context.dataValid() ? 100 : 0) * 0.15;
@@ -211,9 +222,6 @@ public class FinalDecisionService {
         value += derivativesConfidence(derivatives) * 0.08;
         value += sentimentConfidence(context) * 0.10;
         int result = (int) Math.round(value);
-        if (!entryAllowed) {
-            result = Math.min(result, 49);
-        }
         return Math.max(0, Math.min(100, result));
     }
 
@@ -246,6 +254,7 @@ public class FinalDecisionService {
             case BULLISH_SUPPORT -> 95;
             case BALANCED, DISABLED -> 85;
             case LEARNING -> 55;
+            case INSUFFICIENT_DATA_HOLD -> 25;
             case UNAVAILABLE -> 40;
             case BEARISH_PRESSURE, STOP_EXPOSED -> 35;
             case TARGET_BLOCKED, THIN_LIQUIDITY -> 15;

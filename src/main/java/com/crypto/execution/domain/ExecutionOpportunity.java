@@ -87,6 +87,29 @@ public class ExecutionOpportunity {
     @Column(name = "average_confidence", nullable = false)
     private int averageConfidence;
 
+    // FIX-091 / Fix 8: strongest recent opportunity state. Accumulated evidence may
+    // remember old bullish evidence, but it must not execute after that evidence materially decays.
+    @Column(name = "peak_score", nullable = false)
+    private int peakScore;
+
+    @Column(name = "peak_confidence", nullable = false)
+    private int peakConfidence;
+
+    @Column(name = "peak_decision", length = 30)
+    private String peakDecision;
+
+    @Column(name = "peak_regime", length = 40)
+    private String peakRegime;
+
+    @Column(name = "peak_btc_status", length = 30)
+    private String peakBtcStatus;
+
+    @Column(name = "peak_liquidity_status", length = 30)
+    private String peakLiquidityStatus;
+
+    @Column(name = "peak_observed_at")
+    private Instant peakObservedAt;
+
     @Column(name = "five_minute_decision", length = 30)
     private String fiveMinuteDecision;
 

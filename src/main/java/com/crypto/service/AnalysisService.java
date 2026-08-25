@@ -23,6 +23,7 @@ import com.crypto.dto.FinalDecisionResult;
 import com.crypto.dto.DerivativesPositioningResult;
 import com.crypto.dto.TrendStructureResult;
 import com.crypto.dto.RangeEntryLocationAssessment;
+import com.crypto.execution.domain.EntryAuthorityDecision;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.crypto.indicator.service.TechnicalIndicatorService;
@@ -69,6 +70,10 @@ public class AnalysisService {
     private final AtrRiskService atrRiskService;
     private final AnalysisScoringProperties scoringProperties;
     private final MarketRegimeService marketRegimeService;
+    // FIX-091 / Fix 4: Replay-only state machine; Production remains one-candle behavior until parity approval.
+    private final RegimeStateService regimeStateService;
+    // FIX-091 / Fix 5: transition authority is maximum exposure metadata, never an execution shortcut.
+    private final EntryAuthorityService entryAuthorityService;
     private final MarketStrategyService marketStrategyService;
     private final MarketContextService marketContextService;
     private final MultiTimeframeConfluenceService multiTimeframeConfluenceService;
@@ -170,7 +175,10 @@ public class AnalysisService {
                 + (sentimentAvailable ? MAX_SENTIMENT_SCORE : 0);
 
         AtrRiskAssessment atrRisk = atrRiskService.assess(i);
-        MarketRegimeAssessment regimeAssessment = marketRegimeService.assess(i, trendStructure);
+        MarketRegimeAssessment detectedRegimeAssessment = marketRegimeService.assess(i, trendStructure);
+        RegimeStateService.Decision regimeState = regimeStateService.apply(
+                symbol, i.intervalCode(), i.candleOpenTime(), detectedRegimeAssessment);
+        MarketRegimeAssessment regimeAssessment = regimeState.effectiveAssessment();
         MarketRegime marketRegime = regimeAssessment.regime();
         MarketContextSnapshot marketContext = marketContextService.build(
                 i, atrRisk, sentimentOverview, sentimentEnabled, signalGeneratedAt, historicalReplay);
@@ -189,14 +197,6 @@ public class AnalysisService {
         strategyScore = marketStrategyService.constrainBreakoutCandidate(regimeAssessment, strategyScore);
         strategyScore = marketStrategyService.promoteEarlyBreakout(
                 strategyProfile, strategyScore, marketContext, atrRisk, regimeAssessment, trendStructure);
-
-        // FIX-042 / FIX-036 integration: evaluate RANGE_MEAN_REVERSION entry location only after
-        // the final strategy score is known. This guard never rescales or changes the technical
-        // BUY/STRONG_BUY decision; it only supplies a one-way execution veto to FinalDecisionService.
-        // SETUP_CONFIRMATION_WAKEUP, ACCUMULATED_EVIDENCE, scout/recovery probes and SELL logic
-        // remain untouched because they consume the resulting immutable final-decision authority.
-        RangeEntryLocationAssessment rangeEntryLocation = rangeEntryLocationService.evaluate(
-                i, strategyProfile, strategyScore, trendStructure);
 
         int rawTotal = strategyScore.rawScore();
         int maximumAvailableScore = strategyScore.maximumScore();
@@ -220,16 +220,25 @@ public class AnalysisService {
         DerivativesPositioningResult derivatives = derivativesPositioningService.evaluate(
                 symbol, i.intervalCode(), btcContext.finalDecision(), btcContext.entryAllowed(), signalGeneratedAt
         );
-        OrderBookLiquidityResult liquidity = orderBookLiquidityService.evaluate(
-                symbol,
-                i.intervalCode(),
-                derivatives.finalDecision(),
-                derivatives.entryAllowed(),
-                i.latestPrice(),
-                atrRisk.stopLoss(),
-                atrRisk.takeProfit(),
-                signalGeneratedAt
-        );
+        OrderBookLiquidityResult liquidity = historicalReplay
+                ? orderBookLiquidityService.evaluateHistorical(
+                    symbol, i.intervalCode(), derivatives.finalDecision(), derivatives.entryAllowed(),
+                    i.latestPrice(), atrRisk.stopLoss(), atrRisk.takeProfit(), signalGeneratedAt)
+                : orderBookLiquidityService.evaluate(
+                    symbol, i.intervalCode(), derivatives.finalDecision(), derivatives.entryAllowed(),
+                    i.latestPrice(), atrRisk.stopLoss(), atrRisk.takeProfit(), signalGeneratedAt);
+
+        // FIX-091 / Fix 5: transition authority is evaluated only after all structural/context
+        // evidence exists. In Replay it can identify a candidate early, but a RANGE-location
+        // exception is only granted when the full BTC/liquidity/HTF/ATR safety set is complete.
+        EntryAuthorityDecision entryAuthority = entryAuthorityService.evaluate(
+                i, regimeState, strategyProfile, strategyScore, trendStructure, atrRisk, confluence, btcContext, liquidity);
+
+        // FIX-042 / FIX-036 + FIX-091: ordinary RANGE behavior remains unchanged. Only a verified,
+        // safety-complete TRANSITION_PROBE may use the explicit transition overload.
+        RangeEntryLocationAssessment rangeEntryLocation = rangeEntryLocationService.evaluate(
+                i, strategyProfile, strategyScore, trendStructure, entryAuthority);
+
         FinalDecisionResult finalDecision = finalDecisionService.decide(
                 baseDecision,
                 atrAdjustedDecision,
@@ -331,6 +340,14 @@ public class AnalysisService {
                 .liquidityExplanation(liquidity.explanation())
                 .liquidityEvaluatedAt(liquidity.evaluatedAt())
                 .marketRegime(marketRegime)
+                // FIX-091 / Fix 4-5: persist the exact replay state/authority used for parity diagnostics.
+                .detectedRegime(regimeState.detectedRegime())
+                .candidateRegime(regimeState.candidateRegime())
+                .confirmedRegime(regimeState.confirmedRegime())
+                .regimeCandidateCount(regimeState.candidateCount())
+                .entryAuthority(entryAuthority.authority().name())
+                .entryAuthorityMaxPositionPercent(entryAuthority.maxPositionPercent())
+                .entryAuthorityExplanation(entryAuthority.explanation())
                 .marketRegimeConfidence(regimeAssessment.confidence())
                 .selectedStrategy(strategyProfile.strategy())
                 .strategyVersion(strategyProfile.version())
@@ -349,6 +366,11 @@ public class AnalysisService {
                 .strategyFundamentalMaximum(fundamentalAvailable ? strategyProfile.fundamentalMaximum() : 0)
                 .totalScore(total)
                 .confidenceScore(finalDecision.confidenceScore())
+                // FIX-091 / Fix 3: Replay inherits these fields automatically through the
+                // production-shaped TradeSignal mirror, preserving field-level parity.
+                .rawConfidenceScore(finalDecision.rawConfidenceScore())
+                .effectiveConfidenceScore(finalDecision.effectiveConfidenceScore())
+                .primaryBlockingStage(finalDecision.primaryBlockingStage())
                 .finalEntryAllowed(finalDecision.entryAllowed())
                 .decisionPath(serializeDecisionPath(finalDecision))
                 .finalDecisionExplanation(finalDecision.explanation())

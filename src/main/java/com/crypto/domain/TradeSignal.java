@@ -204,6 +204,31 @@ public class TradeSignal {
     @Column(name = "market_regime", nullable = false, length = 40)
     private MarketRegime marketRegime;
 
+    // FIX-091 / Fix 4-5: explicit Replay parity audit of regime persistence and transition authority.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "detected_regime", length = 40)
+    private MarketRegime detectedRegime;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "candidate_regime", length = 40)
+    private MarketRegime candidateRegime;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "confirmed_regime", length = 40)
+    private MarketRegime confirmedRegime;
+
+    @Column(name = "regime_candidate_count", nullable = false)
+    private int regimeCandidateCount;
+
+    @Column(name = "entry_authority", length = 40)
+    private String entryAuthority;
+
+    @Column(name = "entry_authority_max_position_percent")
+    private Integer entryAuthorityMaxPositionPercent;
+
+    @Column(name = "entry_authority_explanation", length = 1500)
+    private String entryAuthorityExplanation;
+
     @Column(name = "market_regime_confidence", nullable = false)
     private int marketRegimeConfidence;
 
@@ -246,6 +271,17 @@ public class TradeSignal {
 
     @Column(name = "confidence_score", nullable = false)
     private int confidenceScore;
+
+    // FIX-091 / Fix 3: raw confidence survives later vetoes; effective confidence
+    // remains compatible with the historical capped confidence_score behavior.
+    @Column(name = "raw_confidence_score")
+    private Integer rawConfidenceScore;
+
+    @Column(name = "effective_confidence_score")
+    private Integer effectiveConfidenceScore;
+
+    @Column(name = "primary_blocking_stage", length = 80)
+    private String primaryBlockingStage;
 
     @Column(name = "final_entry_allowed", nullable = false)
     private boolean finalEntryAllowed;

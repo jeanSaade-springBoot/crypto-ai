@@ -528,15 +528,17 @@ public class ShadowProductionReplayService {
         jdbcTemplate.update("""
             INSERT INTO execution_opportunity_test
             (test_run_id, source_signal_id, symbol, generated_at, replay_stage, evidence_count, buy_count, watch_count,
-             neutral_count, bearish_count, evidence_score, opportunity_health, recommended_position_percent,
+             neutral_count, bearish_count, evidence_score, opportunity_health, peak_score, peak_confidence, peak_decision,
+             peak_regime, peak_btc_status, peak_liquidity_status, peak_observed_at, recommended_position_percent,
              current_final_decision, current_original_decision, five_minute_decision, one_hour_decision,
              old_hard_bearish_reversal, corrected_hard_bearish_reversal, decision_code, decision_explanation)
-            VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
+            VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
             """, runId, s.getSymbol(), Timestamp.from(s.getGeneratedAt()), o.getStatus(), o.getEvidenceCount(),
                 o.getBuyCount(), o.getWatchCount(), o.getNeutralCount(), o.getBearishCount(), o.getEvidenceScore(),
-                o.getOpportunityHealth(), o.getRecommendedPositionPercent(), name(s.getDecision()),
-                name(s.getOriginalDecision()), o.getFiveMinuteDecision(), o.getOneHourDecision(),
-                o.getDecisionCode(), o.getDecisionExplanation());
+                o.getOpportunityHealth(), o.getPeakScore(), o.getPeakConfidence(), o.getPeakDecision(), o.getPeakRegime(),
+                o.getPeakBtcStatus(), o.getPeakLiquidityStatus(), o.getPeakObservedAt() == null ? null : Timestamp.from(o.getPeakObservedAt()),
+                o.getRecommendedPositionPercent(), name(s.getDecision()), name(s.getOriginalDecision()),
+                o.getFiveMinuteDecision(), o.getOneHourDecision(), o.getDecisionCode(), o.getDecisionExplanation());
     }
 
     private void persistBuy(long runId,String symbol,TradeSignal s,ExecutionPriceAuthorityService.ExecutionPrice fresh,BigDecimal qty,BigDecimal budget,int pct,ExecutionIntelligenceService.ExecutionDecision d){

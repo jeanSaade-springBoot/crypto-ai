@@ -474,16 +474,24 @@ public class RegressionTestWorker {
                             INSERT INTO analysis_test_signal
                                 (test_run_id, source_signal_id, replay_generated, symbol, interval_code, candle_open_time,
                                  generated_at, latest_price, original_decision, final_decision,
-                                 execution_effective_decision, total_score, confidence_score, trend_score,
-                                 volume_score, momentum_score, decision_authority_corrected, generation_error)
-                            VALUES (?, NULL, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+                                 execution_effective_decision, total_score, confidence_score, raw_confidence_score,
+                                 effective_confidence_score, primary_blocking_stage, detected_regime, candidate_regime,
+                                 confirmed_regime, regime_candidate_count, entry_authority, entry_authority_max_position_percent,
+                                 trend_score, volume_score, momentum_score, decision_authority_corrected, generation_error)
+                            VALUES (?, NULL, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
                             """,
                             runId, replay.symbol(), replay.interval(), Timestamp.from(candle.getOpenTime()),
                             Timestamp.from(evaluationTime), generated.getLatestPrice(),
                             generated.getOriginalDecision() == null ? null : generated.getOriginalDecision().name(),
                             decision == null ? null : decision.name(),
                             decision == null ? null : decision.name(),
-                            generated.getTotalScore(), generated.getConfidenceScore(), generated.getTrendScore(),
+                            generated.getTotalScore(), generated.getConfidenceScore(), generated.getRawConfidenceScore(),
+                            generated.getEffectiveConfidenceScore(), generated.getPrimaryBlockingStage(),
+                            generated.getDetectedRegime() == null ? null : generated.getDetectedRegime().name(),
+                            generated.getCandidateRegime() == null ? null : generated.getCandidateRegime().name(),
+                            generated.getConfirmedRegime() == null ? null : generated.getConfirmedRegime().name(),
+                            generated.getRegimeCandidateCount(), generated.getEntryAuthority(),
+                            generated.getEntryAuthorityMaxPositionPercent(), generated.getTrendScore(),
                             generated.getVolumeScore(), generated.getMomentumScore());
 
                     // FIX-069: Persist the exact production TradeSignal shape as replay output.

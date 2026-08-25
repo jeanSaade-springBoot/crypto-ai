@@ -161,9 +161,13 @@ public class OrderBookLiquidityService {
             deque = historyBySymbol.get(normalizedSymbol);
         }
         if (deque == null || deque.isEmpty()) {
-            return result(LiquidityContextStatus.UNAVAILABLE, currentDecision, currentDecision,
-                    entryAllowed, null, null, null, null, null, null, null, null,
-                    false, false, 0, "No order-book snapshot is available yet.", snapshotTime,
+            // FIX-091 / Fix 2: in LIVE analysis, zero observations are not proof that liquidity is safe.
+            // Hold a fresh entry until the configured sample minimum is reached. Historical replay uses
+            // evaluateHistorical(...) and deliberately keeps its separate UNAVAILABLE limitation.
+            return result(LiquidityContextStatus.INSUFFICIENT_DATA_HOLD, currentDecision, currentDecision,
+                    false, null, null, null, null, null, null, null, null,
+                    false, false, 0, "Live order-book sampling is not ready (0/" + policy.minimumObservations()
+                            + "). Fresh entry is held until enough observations are collected.", snapshotTime,
                     policy, 0L);
         }
 
@@ -176,11 +180,14 @@ public class OrderBookLiquidityService {
                     .toList();
         }
         if (snapshots.isEmpty()) {
-            return result(LiquidityContextStatus.UNAVAILABLE, currentDecision, currentDecision,
-                    entryAllowed, null, null, null, null, null, null, null, null,
+            // FIX-091 / Fix 2: an enabled LIVE order-book service with no observation in the active
+            // window is an insufficient-sampling condition, not a neutral PASS.
+            return result(LiquidityContextStatus.INSUFFICIENT_DATA_HOLD, currentDecision, currentDecision,
+                    false, null, null, null, null, null, null, null, null,
                     false, false, 0,
-                    "No order-book observation exists inside the " + policy.windowSeconds()
-                            + " second window for interval " + interval + ".",
+                    "No live order-book observation exists inside the " + policy.windowSeconds()
+                            + " second window for interval " + interval + "; fresh entry is held until "
+                            + policy.minimumObservations() + " observations are available.",
                     snapshotTime, policy, 0L);
         }
 
@@ -197,13 +204,16 @@ public class OrderBookLiquidityService {
         int observations = snapshots.size();
         long observedSeconds = observedDurationSeconds(snapshots);
         if (observations < policy.minimumObservations()) {
-            return result(LiquidityContextStatus.LEARNING, currentDecision, currentDecision,
-                    entryAllowed, latestMetrics.imbalance(), latestMetrics.bidDepth(), latestMetrics.askDepth(),
+            // FIX-091 / Fix 2: live partial sampling is now authoritative as a temporary HOLD.
+            // This is intentionally different from historical Replay UNAVAILABLE, where snapshots
+            // were never persisted and live Binance data must never be substituted retroactively.
+            return result(LiquidityContextStatus.INSUFFICIENT_DATA_HOLD, currentDecision, currentDecision,
+                    false, latestMetrics.imbalance(), latestMetrics.bidDepth(), latestMetrics.askDepth(),
                     latestMetrics.spreadPercent(), latestMetrics.bidWallPrice(), latestMetrics.bidWallSize(),
                     latestMetrics.askWallPrice(), latestMetrics.askWallSize(), false, false, observations,
                     "Collecting " + interval + " liquidity observations (" + observations + "/"
                             + policy.minimumObservations() + ") inside a " + policy.windowSeconds()
-                            + " second window. No liquidity veto was applied.", snapshotTime,
+                            + " second window. Fresh entry is held until the minimum sample is ready.", snapshotTime,
                     policy, observedSeconds);
         }
 

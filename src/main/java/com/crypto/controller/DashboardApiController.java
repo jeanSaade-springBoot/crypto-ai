@@ -1100,6 +1100,17 @@ public class DashboardApiController {
         result.put("marketContextSnapshot", parseAnalysisBreakdown(signal.getMarketContextSnapshot()));
         result.put("totalScore", signal.getTotalScore());
         result.put("confidenceScore", signal.getConfidenceScore());
+        // FIX-091 / Fix 3-5: expose the real confidence and authority used by the pre-wallet engine.
+        result.put("rawConfidenceScore", signal.getRawConfidenceScore());
+        result.put("effectiveConfidenceScore", signal.getEffectiveConfidenceScore());
+        result.put("primaryBlockingStage", signal.getPrimaryBlockingStage());
+        result.put("detectedRegime", signal.getDetectedRegime());
+        result.put("candidateRegime", signal.getCandidateRegime());
+        result.put("confirmedRegime", signal.getConfirmedRegime());
+        result.put("regimeCandidateCount", signal.getRegimeCandidateCount());
+        result.put("entryAuthority", signal.getEntryAuthority());
+        result.put("entryAuthorityMaxPositionPercent", signal.getEntryAuthorityMaxPositionPercent());
+        result.put("entryAuthorityExplanation", signal.getEntryAuthorityExplanation());
         result.put("finalEntryAllowed", signal.isFinalEntryAllowed());
         result.put("decisionPath", parseDecisionPath(signal.getDecisionPath()));
         result.put("finalDecisionExplanation", signal.getFinalDecisionExplanation());
