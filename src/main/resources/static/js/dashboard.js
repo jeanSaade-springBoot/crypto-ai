@@ -1339,34 +1339,50 @@ function chartTrendLineSeries(candles) {
     return result;
 }
 
-// FIX-092A: Fibonacci levels are anchored to the latest completed swing-to-swing impulse.
-// They are presentation aids only; no decision threshold or retracement execution reads them.
-function chartRetracementAnnotations(candles) {
+// FIX-092B: Fibonacci retracement is rendered as bounded line series instead of
+// Apex Y-axis annotations. FIX-092A used labelled Y annotations, which accumulated on
+// repeated updateOptions() calls and could visually cover the immutable View Chart signal
+// marker. Keeping retracement as normal series isolates it from signal/debug annotations.
+function chartRetracementSeries(candles) {
     if (!chartOverlayState.retracement || !candles?.length) return [];
     const { highs, lows } = chartSwingPoints(candles);
     const pivots = [...highs, ...lows].sort((a, b) => a.index - b.index);
     if (pivots.length < 2) return [];
-    let end = pivots.at(-1), start = null;
+
+    const end = pivots.at(-1);
+    let start = null;
     for (let i = pivots.length - 2; i >= 0; i--) {
-        if (pivots[i].type !== end.type) { start = pivots[i]; break; }
+        if (pivots[i].type !== end.type) {
+            start = pivots[i];
+            break;
+        }
     }
     if (!start || !Number.isFinite(start.price) || !Number.isFinite(end.price) || start.price === end.price) return [];
+
     const bullish = start.type === 'LOW' && end.type === 'HIGH';
     const bearish = start.type === 'HIGH' && end.type === 'LOW';
     if (!bullish && !bearish) return [];
+
     const move = Math.abs(end.price - start.price);
+    // FIX-092B: Do not draw Fibonacci overlays for a tiny/noisy swing. The threshold is
+    // display-only and is based on the visible swing range, never used by trading logic.
+    const visiblePrices = candles.flatMap(c => [Number(c.high), Number(c.low)]).filter(Number.isFinite);
+    const visibleRange = visiblePrices.length ? Math.max(...visiblePrices) - Math.min(...visiblePrices) : 0;
+    if (!(visibleRange > 0) || move < visibleRange * 0.08) return [];
+
     const levels = [0.236, 0.382, 0.5, 0.618, 0.786];
+    // Bound the levels to the completed impulse itself. They no longer stretch infinitely
+    // across the price chart and therefore cannot obscure the View Chart focus marker.
     return levels.map(level => {
         const y = bullish ? end.price - move * level : end.price + move * level;
         return {
-            y,
-            borderColor: '#7f91a0',
-            strokeDashArray: level === 0.5 ? 3 : 5,
-            label: {
-                text: `Fib ${(level * 100).toFixed(1)}%`,
-                borderColor: '#536675',
-                style: { background: '#0d1820', color: '#aebdca', fontSize: '9px', fontWeight: 700 }
-            }
+            name: `Fib ${(level * 100).toFixed(1)}%`,
+            type: 'line',
+            data: [
+                { x: new Date(start.time), y },
+                { x: new Date(end.time), y }
+            ],
+            _fix092bOverlay: 'retracement'
         };
     });
 }
@@ -1432,13 +1448,13 @@ function renderCharts(candles, executions = [], options = {}) {
     const bollingerLowerSeries = indicatorPoint('bollingerLower');
     const atrSeries = indicatorPoint('atr14');
     const trendLineSeries = chartTrendLineSeries(renderCandlesList);
-    const retracementYAnnotations = chartRetracementAnnotations(renderCandlesList);
+    const retracementSeries = chartRetracementSeries(renderCandlesList);
     const bollingerSeries = chartOverlayState.bollinger ? [
         { name: 'BB Upper', type: 'line', data: bollingerUpperSeries },
         { name: 'BB Middle', type: 'line', data: bollingerMiddleSeries },
         { name: 'BB Lower', type: 'line', data: bollingerLowerSeries }
     ] : [];
-    const priceChartSeries = [{ name: 'Price', type: 'candlestick', data: candleSeries }, ...bollingerSeries, ...trendLineSeries];
+    const priceChartSeries = [{ name: 'Price', type: 'candlestick', data: candleSeries }, ...bollingerSeries, ...trendLineSeries, ...retracementSeries];
     latestWalletExecutions = new Map((renderExecutions || []).map(execution => [String(execution.id), execution]));
     const annotations = (renderExecutions || []).map(execution => {
         const isBuy = String(execution.side || '').toUpperCase() === 'BUY';
@@ -1503,9 +1519,9 @@ function renderCharts(candles, executions = [], options = {}) {
         }
     }
 
-    // FIX-092A: Fibonacci is appended to display annotations after position levels so
-    // both can coexist. Neither annotation collection is ever consumed by trading code.
-    const displayYAnnotations = [...positionYAnnotations, ...retracementYAnnotations];
+    // FIX-092B: Only immutable position levels use Y annotations now. Fibonacci is a
+    // bounded price series, so it cannot overwrite/accumulate with signal annotations.
+    const displayYAnnotations = [...positionYAnnotations];
 
     const debugZoneAnnotations = debugMoveFocus ? [{
         x: debugMoveFocus.start.getTime(),
@@ -1538,7 +1554,7 @@ function renderCharts(candles, executions = [], options = {}) {
     };
     const common = { chart: { background: 'transparent', foreColor: '#8da2b1', toolbar: { show: false }, animations: { enabled: false } }, theme: { mode: 'dark' }, grid: { borderColor: '#203342' }, xaxis: { type: 'datetime', labels: { datetimeUTC: false }, tooltip: { enabled: false } }, noData: { text: 'Waiting for closed candles' } };
     if (!candleChart) {
-        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390, events: candleEvents }, series: priceChartSeries, annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: displayYAnnotations }, tooltip: { enabled:false }, yaxis: { tooltip: { enabled: false }, decimalsInFloat: 4 }, stroke: { width: 1.5, dashArray: 0 }, legend: { show: true }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
+        candleChart = new ApexCharts(el('candlestick-chart'), { ...common, chart: { ...common.chart, type: 'candlestick', height: 390, events: candleEvents }, series: priceChartSeries, annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: displayYAnnotations }, dataLabels: { enabled: false }, markers: { size: 0 }, tooltip: { enabled:false }, yaxis: { tooltip: { enabled: false }, decimalsInFloat: 4 }, stroke: { width: 1.5, dashArray: 0 }, legend: { show: true }, plotOptions: { candlestick: { colors: { upward: '#39d98a', downward: '#ff6b72' } } } });
         candleChart.render().then(() => {
             bindExecutionMarkerClicks();
             bindDebugTradeDotTitles();
@@ -1552,8 +1568,19 @@ function renderCharts(candles, executions = [], options = {}) {
         atrChart.render();
         el('atr-chart')?.classList.toggle('hidden', !chartOverlayState.atr);
     } else {
+        // FIX-092B: Clear Apex's runtime annotation cache before rebuilding the chart.
+        // This prevents old overlay annotations from surviving updateOptions() and, just as
+        // importantly, guarantees the immutable View Chart B/S/blocked-BUY marker is added
+        // back on every render/toggle/history refresh.
+        if (typeof candleChart.clearAnnotations === 'function') candleChart.clearAnnotations();
         candleChart.updateSeries(priceChartSeries, false);
-        candleChart.updateOptions({ chart: { events: candleEvents }, annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: displayYAnnotations }, tooltip: { enabled:false } }, false, true, false).then(async () => {
+        candleChart.updateOptions({
+            chart: { events: candleEvents },
+            annotations: { points: annotations, xaxis: debugZoneAnnotations, yaxis: displayYAnnotations },
+            dataLabels: { enabled: false },
+            markers: { size: 0 },
+            tooltip: { enabled:false }
+        }, false, true, false).then(async () => {
             bindExecutionMarkerClicks();
             bindDebugTradeDotTitles();
             if (preserveViewport && Number.isFinite(chartViewport.min) && Number.isFinite(chartViewport.max)) {

@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-092B",
+            title: "Stable chart overlays that preserve View Chart signal highlighting",
+            status: "IMPLEMENTED · UI / CHART-ONLY",
+            scenario: "FIX-092A Fibonacci labels accumulated across ApexCharts refreshes and could visually cover/remove the exact blocked-BUY or BUY/SELL marker opened through View chart.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A · visualization only", exitTime: "N/A",
+            replayWindow: "Replay behavior is unchanged. FIX-092B changes only browser rendering; no Production analysis, Replay analysis, execution or wallet code is touched.",
+            location: "Dashboard ApexCharts price rendering and overlay refresh path",
+            classes: ["dashboard.js", "fix-registry.js"],
+            cause: "FIX-092A rendered Fibonacci retracement as labelled Y-axis annotations while View chart signal focus also relied on Apex annotations. Repeated updateOptions() calls could retain/stack annotation DOM and obscure the immutable focus marker.",
+            solution: "Render Fibonacci levels as bounded ordinary line series between the actual opposite swing pivots, suppress noisy tiny-swing retracements, disable line point/data labels, clear Apex runtime annotations before each chart refresh, and then rebuild position/debug/signal annotations from immutable state. Trend lines remain normal line series and cannot own or clear signal focus annotations.",
+            behavior: "View chart B/S/blocked-BUY highlighting remains visible while Bollinger, Trend lines, Retracement and ATR are toggled or while historical candles are loaded. Fibonacci no longer creates repeated labels across the whole chart and is limited to the completed swing that produced it.",
+            regression: "Open a blocked BUY and a BUY/SELL View chart deep-link, toggle Trend lines and Retracement repeatedly, refresh/pan history, and verify the exact signal marker remains present. Verify no repeated Fibonacci annotation labels accumulate, trend/retracement are display-only, and Bollinger/ATR remain unchanged."
+        },
+        {
             id: "FIX-092A",
             title: "Display-only trend lines and Fibonacci retracement overlays",
             status: "IMPLEMENTED · UI / CHART-ONLY",
