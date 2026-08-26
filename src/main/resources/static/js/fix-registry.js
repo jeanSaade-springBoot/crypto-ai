@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-104",
+            title: "Trade Activity symbol-filter stale-response guard",
+            status: "IMPLEMENTED · READ-ONLY UI RACE FIX",
+            scenario: "After selecting a symbol, the grid could briefly show the correct symbol-filtered rows and then unexpectedly revert to rows from all symbols.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A · diagnostics only", exitTime: "N/A",
+            replayWindow: "Replay and trading behavior are unchanged. FIX-104 changes only read-only Trade Activity request coordination.",
+            location: "Trade Activity JavaScript request lifecycle",
+            classes: ["trade-activity.js", "trade-activity.html", "fix-registry.js"],
+            cause: "Trade Activity can issue overlapping asynchronous loads (initial ALL-symbol load plus later filter-change loads). A slower stale response could arrive after the newer symbol-filtered response and overwrite the grid because responses had no request ordering/identity guard.",
+            solution: "Snapshot Symbol/Period/Type for every request, increment a request sequence, abort the previous fetch on every new load, and render a response only when both its sequence and filter snapshot still match the current UI. Cache-bust Trade Activity assets to v=104.",
+            behavior: "Once the operator selects a symbol, stale ALL-symbol or older filter responses are ignored and cannot replace the current grid. Period and Type receive the same protection.",
+            regression: "Load Trade Activity, select a symbol while the initial request is still running, then rapidly switch Period/Type/Symbol. Verify the final grid always corresponds exactly to the currently visible dropdown values and never reverts to an older request."
+        },
+        {
             id: "FIX-103",
             title: "Trade Activity dedicated Signals & executions workspace",
             status: "IMPLEMENTED · READ-ONLY UI CONSOLIDATION",

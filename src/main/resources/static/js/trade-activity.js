@@ -6,6 +6,10 @@ const time=v=>{const d=utcDate(v);if(!d||Number.isNaN(d.getTime()))return '—';
 const num=v=>v===null||v===undefined||v===''?null:Number(v);
 const price=v=>{const n=num(v);return Number.isFinite(n)?n.toLocaleString(undefined,{maximumSignificantDigits:10}):'—';};
 let analysisRows=[];
+// FIX-104: Trade Activity auto-loads and reloads quickly; keep one authoritative request token
+// so a slower stale ALL-symbol response can never overwrite the user's newer symbol-filtered result.
+let analysisRequestSequence=0;
+let analysisAbortController=null;
 
 // FIX-103: Symbols are discovered from the read-only analysis endpoint so blocked/non-executed
 // symbols remain selectable; this page does not depend on wallet history to populate the filter.
@@ -41,12 +45,40 @@ function closeAnalysis(){const modal=$('activity-analysis-modal');if(!modal)retu
 // persisted-evidence endpoint and never invokes chart, trading, Replay or wallet mutation logic.
 async function loadTradeAnalysis(){
   const err=$('activity-error');err.classList.add('hidden');
-  const p=new URLSearchParams({symbol:$('activity-symbol').value||'ALL',period:$('activity-period').value||'1d',type:$('activity-type').value||'BLOCKED_BUY',limit:'250'});
+
+  // FIX-104: Snapshot the exact filter state for this request. A response is allowed to render
+  // only if it is still the newest request AND the UI still has the same filter values.
+  const filterSnapshot={
+    symbol:$('activity-symbol').value||'ALL',
+    period:$('activity-period').value||'1d',
+    type:$('activity-type').value||'BLOCKED_BUY'
+  };
+  const requestId=++analysisRequestSequence;
+
+  // Cancel the previous fetch when the operator changes a filter. The sequence check below remains
+  // as a second guard because cancellation can race with an already-completed network response.
+  if(analysisAbortController)analysisAbortController.abort();
+  analysisAbortController=new AbortController();
+  const controller=analysisAbortController;
+
+  const p=new URLSearchParams({...filterSnapshot,limit:'250'});
   $('activity-rows').innerHTML='<tr><td colspan="9" class="empty-cell">Loading trade analysis…</td></tr>';$('activity-count').textContent='Loading…';
   try{
-    const r=await fetch(`/api/trade-inspector/signals?${p.toString()}`,{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);
-    analysisRows=await r.json();$('activity-count').textContent=`${analysisRows.length} rows`;$('activity-rows').innerHTML=analysisRows.length?analysisRows.map(analysisRow).join(''):'<tr><td colspan="9" class="empty-cell">No rows match these filters.</td></tr>';
-  }catch(e){$('activity-rows').innerHTML='<tr><td colspan="9" class="empty-cell">Trade analysis unavailable.</td></tr>';err.textContent=`Trade Activity could not load: ${e.message}`;err.classList.remove('hidden');$('activity-count').textContent='Error';}
+    const r=await fetch(`/api/trade-inspector/signals?${p.toString()}`,{cache:'no-store',signal:controller.signal});if(!r.ok)throw new Error(`HTTP ${r.status}`);
+    const rows=await r.json();
+
+    const stillCurrent=requestId===analysisRequestSequence
+      && filterSnapshot.symbol===($('activity-symbol').value||'ALL')
+      && filterSnapshot.period===($('activity-period').value||'1d')
+      && filterSnapshot.type===($('activity-type').value||'BLOCKED_BUY');
+    if(!stillCurrent)return;
+
+    analysisRows=rows;$('activity-count').textContent=`${analysisRows.length} rows`;$('activity-rows').innerHTML=analysisRows.length?analysisRows.map(analysisRow).join(''):'<tr><td colspan="9" class="empty-cell">No rows match these filters.</td></tr>';
+  }catch(e){
+    if(e?.name==='AbortError')return;
+    if(requestId!==analysisRequestSequence)return;
+    $('activity-rows').innerHTML='<tr><td colspan="9" class="empty-cell">Trade analysis unavailable.</td></tr>';err.textContent=`Trade Activity could not load: ${e.message}`;err.classList.remove('hidden');$('activity-count').textContent='Error';
+  }
 }
 
 $('activity-search').addEventListener('click',loadTradeAnalysis);
