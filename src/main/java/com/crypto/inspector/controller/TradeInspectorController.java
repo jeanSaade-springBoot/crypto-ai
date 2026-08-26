@@ -54,6 +54,27 @@ public class TradeInspectorController {
         return service.blockedSells(symbol, from, to, limit);
     }
 
+    // FIX-100: read-only all-signal analysis feed. This endpoint never invokes trading logic;
+    // it only exposes already-persisted TradeSignal evidence for the inspector grid.
+    @GetMapping("/api/trade-inspector/signals/symbols")
+    @ResponseBody
+    public java.util.List<String> signalSymbols() {
+        return service.signalAnalysisSymbols();
+    }
+
+    @GetMapping("/api/trade-inspector/signals")
+    @ResponseBody
+    public java.util.List<Map<String, Object>> signals(
+            @RequestParam(required = false, defaultValue = "ALL") String symbol,
+            @RequestParam(required = false, defaultValue = "ALL") String interval,
+            @RequestParam(required = false, defaultValue = "ALL") String decision,
+            @RequestParam(required = false, defaultValue = "ALL") String state,
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to,
+            @RequestParam(required = false, defaultValue = "250") int limit) {
+        return service.signalAnalysis(symbol, interval, decision, state, from, to, limit);
+    }
+
     @GetMapping("/api/trade-inspector/production-exits")
     @ResponseBody
     public java.util.List<Map<String, Object>> productionExits(

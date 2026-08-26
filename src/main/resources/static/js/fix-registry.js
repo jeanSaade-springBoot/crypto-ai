@@ -1,6 +1,36 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-100",
+            title: "Trade Inspector all-signal analysis grid restoration",
+            status: "IMPLEMENTED · READ-ONLY DIAGNOSTICS",
+            scenario: "Trade Inspector still contained legacy blocked-signal filter JavaScript, but FIX-045 had removed the matching HTML, so the expected analysis grid and filters no longer appeared and the page focused only on completed trades.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A · diagnostics only", exitTime: "N/A",
+            replayWindow: "Replay/trading behavior is unchanged. FIX-100 reads persisted production trade_signal rows only and never invokes the analysis/execution pipeline.",
+            location: "TradeInspectorController/TradeInspectorService/TradeSignalRepository + Trade Inspector HTML/JS/CSS",
+            classes: ["TradeInspectorController", "TradeInspectorService", "TradeSignalRepository", "trade-inspector.html", "trade-inspector.js", "trade-inspector.css", "fix-registry.js"],
+            cause: "The blocked-signal helper code was made DOM-optional after its UI was removed, leaving no visible signal-analysis section. Symbol choices also came from completed wallet trades, which excluded signals for symbols that never executed.",
+            solution: "Restore a dedicated Trade Signal Analysis panel backed directly by trade_signal. Add read-only filters for signal symbol, interval, decision, entry state, KSA From/To and row limit; populate symbols from trade_signal rather than wallet history; show all persisted signal states in a grid; and add an Analyze modal exposing scores, raw/effective confidence, primary blocker, regime/strategy, ATR, MTF, BTC, liquidity, derivatives, SL/TP, explanations and immutable decision_path.",
+            behavior: "Operators can inspect all persisted signals, including WATCH/NEUTRAL and blocked signals that never became wallet trades. Completed Trade Inspector cards remain unchanged. No trade_signal row is modified and no FinalDecision, ExecutionIntelligence, Replay, position or wallet behavior changes.",
+            regression: "Open Trade Inspector and verify the Trade Signal Analysis panel is visible; symbol list includes non-traded signal symbols; default last-3-hours window loads all states; each filter narrows independently; Analyze opens the exact persisted signal evidence; timestamps display in KSA; completed-trade filters/cards and trade popup continue to work."
+        },
+        {
+            id: "FIX-099",
+            title: "Catching Market blamed-signal black-chart rendering fix",
+            status: "IMPLEMENTED · UI / READ-ONLY DIAGNOSTICS",
+            scenario: "Some blamed-signal popups still opened as an all-black chart even when valid persisted candles were returned, especially for sparse historical windows.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A · visualization only", exitTime: "N/A",
+            replayWindow: "Replay/trading behavior is unchanged. FIX-099 changes only Catching Market popup rendering of persisted production candles/signals.",
+            location: "Catching Market blamed-signal popup Apex configuration and viewport navigation",
+            classes: ["catching-market.js", "catching-market.html", "fix-registry.js"],
+            cause: "The blame popup used a top-level Apex candlestick chart while the proven Trade Inspector uses a line shell with a typed candlestick series. Sparse windows could also produce xaxis.min == xaxis.max, leaving Apex with a valid instance but no visible plot.",
+            solution: "Reuse the stable Trade Inspector chart composition (line shell + candlestick series), guarantee a non-zero X viewport, derive a safe OHLC Y range for sparse data, clamp navigation to loaded candle bounds, provide an explicit no-data state, and cache-bust popup assets.",
+            behavior: "The blamed-signal popup renders persisted candles whenever at least one valid OHLC row exists and keeps exactly one blamed signal highlighted. No signal generation, analysis, Replay, execution or wallet behavior changes.",
+            regression: "Verify one-candle, sparse multi-candle and normal historical windows render visible candles; verify Fit/Jump/Earliest/Latest never move outside the loaded range; verify the blamed BUY/SELL annotation remains visible and no-candle cases show text instead of a black chart."
+        },
+        {
             id: "FIX-098",
             title: "Catching Market retrospective blame diagnosis enrichment",
             status: "IMPLEMENTED · RETROSPECTIVE DIAGNOSTICS ONLY",

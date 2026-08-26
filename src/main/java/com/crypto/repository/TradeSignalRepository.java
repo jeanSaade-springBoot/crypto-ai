@@ -106,4 +106,24 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
     List<TradeSignal> findBySymbolAndCandleOpenTimeBetweenOrderByCandleOpenTimeAsc(
             String symbol, Instant from, Instant to
     );
+    // FIX-100: Trade Inspector signal analysis reads the persisted signal ledger directly.
+    // Filtering by symbol/time happens in SQL so the diagnostic grid can inspect a real
+    // historical window instead of only the latest in-memory/recent rows.
+    @Query("""
+            select s from TradeSignal s
+            where (:symbol is null or upper(s.symbol) = :symbol)
+              and s.generatedAt between :from and :to
+            order by s.generatedAt desc
+            """)
+    List<TradeSignal> findForInspectorAnalysis(
+            @Param("symbol") String symbol,
+            @Param("from") Instant from,
+            @Param("to") Instant to,
+            org.springframework.data.domain.Pageable pageable);
+
+    // FIX-100: symbol choices for Trade Signal Analysis come from trade_signal itself,
+    // not wallet history, so symbols that never executed are still analyzable.
+    @Query("select distinct upper(s.symbol) from TradeSignal s order by upper(s.symbol)")
+    List<String> findDistinctInspectorSymbols();
+
 }

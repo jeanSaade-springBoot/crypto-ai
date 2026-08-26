@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Trade Inspector</title>
     <link rel="stylesheet" href="/css/dashboard.css">
-    <link rel="stylesheet" href="/css/trade-inspector.css">
+    <link rel="stylesheet" href="/css/trade-inspector.css?v=100">
     <link rel="stylesheet" href="/css/chart-crosshair.css">
     <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1"></script>
 </head>
@@ -47,6 +47,46 @@
                 <span><b class="quality pending">PENDING</b> Not enough post-exit candles yet.</span>
             </div>
         </section>
+
+
+        <!-- FIX-100: Restore the Trade Signal Analysis grid that was unintentionally hidden when
+             the older blocked-only diagnostics markup was removed. This grid is read-only and
+             analyzes persisted trade_signal rows; it never invokes or changes trading behavior. -->
+        <section class="panel inspector-signal-analysis-panel">
+            <div class="section-heading">
+                <div><p class="eyebrow">TRADE SIGNAL ANALYSIS</p><h2>All persisted signals</h2></div>
+                <span id="signal-analysis-count">0 signals</span>
+            </div>
+            <div class="signal-analysis-filters">
+                <label>Symbol<select id="signal-analysis-symbol"><option value="ALL">All symbols</option></select></label>
+                <label>Interval<select id="signal-analysis-interval"><option value="ALL">All intervals</option><option value="1m">1m</option><option value="5m">5m</option><option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option></select></label>
+                <label>Decision<select id="signal-analysis-decision"><option value="ALL">All decisions</option><option value="BUY">BUY / STRONG BUY</option><option value="SELL">SELL / STRONG SELL</option><option value="WATCH">WATCH</option><option value="NEUTRAL">NEUTRAL</option></select></label>
+                <label>Entry state<select id="signal-analysis-state"><option value="ALL">Allowed + blocked</option><option value="ALLOWED">Allowed</option><option value="BLOCKED">Blocked</option></select></label>
+                <label>From (KSA)<input id="signal-analysis-from" type="datetime-local"></label>
+                <label>To (KSA)<input id="signal-analysis-to" type="datetime-local"></label>
+                <label>Rows<select id="signal-analysis-limit"><option>100</option><option selected>250</option><option>500</option></select></label>
+                <button id="signal-analysis-search" type="button">Search signals</button>
+            </div>
+            <p class="form-note">Read-only analysis of persisted <code>trade_signal</code> rows. Database timestamps remain UTC; this screen displays and accepts KSA time.</p>
+            <div id="signal-analysis-error" class="error-banner hidden"></div>
+            <div class="signal-analysis-table-wrap">
+                <table class="signal-analysis-table">
+                    <thead><tr><th>Time (KSA)</th><th>Symbol</th><th>TF</th><th>Original → Final</th><th>Score / Conf.</th><th>Entry</th><th>Regime / Strategy</th><th>Primary blocker</th><th>Action</th></tr></thead>
+                    <tbody id="signal-analysis-rows"><tr><td colspan="9" class="empty-cell">Loading persisted signals…</td></tr></tbody>
+                </table>
+            </div>
+        </section>
+
+        <div id="signal-analysis-modal" class="inspector-trade-chart-modal hidden" aria-hidden="true">
+            <div class="inspector-trade-chart-backdrop" data-signal-analysis-close="1"></div>
+            <section class="inspector-trade-path-dialog signal-analysis-dialog" role="dialog" aria-modal="true" aria-labelledby="signal-analysis-title">
+                <div class="section-heading inspector-popup-head">
+                    <div><p class="eyebrow">PERSISTED SIGNAL EVIDENCE</p><h2 id="signal-analysis-title">Signal analysis</h2><p id="signal-analysis-subtitle" class="trade-path-summary">—</p></div>
+                    <button id="signal-analysis-close" type="button" class="trade-path-close">Close</button>
+                </div>
+                <div id="signal-analysis-content" class="signal-analysis-content"><div class="empty">Select a signal to analyze.</div></div>
+            </section>
+        </div>
 
 
         <!-- FIX-019: Trade Inspector uses the same focused popup chart as Proven Trades.
@@ -123,7 +163,7 @@
 </div>
 <script src="/js/time-utils.js"></script>
 <script src="/js/chart-crosshair.js"></script>
-<script src="/js/trade-inspector.js"></script>
+<script src="/js/trade-inspector.js?v=100"></script>
 <script src="/js/catching-market-badge.js"></script><script src="/js/global-system-health.js"></script>
 </body>
 </html>

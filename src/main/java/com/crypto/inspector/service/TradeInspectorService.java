@@ -149,6 +149,122 @@ public class TradeInspectorService {
     }
 
     /**
+     * FIX-100: read-only Trade Signal Analysis feed used by Trade Inspector.
+     * This method deliberately reads TradeSignal persistence only; it never calls
+     * AnalysisService, FinalDecisionService, ExecutionIntelligenceService or wallet code.
+     */
+    @Transactional(readOnly = true)
+    public List<String> signalAnalysisSymbols() {
+        return tradeSignalRepository.findDistinctInspectorSymbols();
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> signalAnalysis(String requestedSymbol,
+                                                    String requestedInterval,
+                                                    String requestedDecision,
+                                                    String requestedState,
+                                                    Instant requestedFrom,
+                                                    Instant requestedTo,
+                                                    int requestedLimit) {
+        Instant to = requestedTo == null ? Instant.now() : requestedTo;
+        Instant from = requestedFrom == null ? to.minus(Duration.ofHours(3)) : requestedFrom;
+        if (from.isAfter(to)) {
+            throw new IllegalArgumentException("Signal analysis From time must be before To time.");
+        }
+
+        String symbol = normalizeSymbol(requestedSymbol);
+        String interval = normalizeInspectorFilter(requestedInterval);
+        String decision = normalizeInspectorFilter(requestedDecision);
+        String state = normalizeInspectorFilter(requestedState);
+        int limit = Math.max(1, Math.min(requestedLimit, 500));
+
+        // Pull a bounded superset because interval/decision/state filters are intentionally
+        // interpreted from persisted enum/state values in one place below.
+        List<TradeSignal> rows = tradeSignalRepository.findForInspectorAnalysis(
+                symbol, from, to, PageRequest.of(0, Math.min(2000, Math.max(limit * 6, 500))));
+
+        return rows.stream()
+                .filter(s -> "ALL".equals(interval) || interval.equalsIgnoreCase(s.getInterval()))
+                .filter(s -> matchesInspectorDecision(s, decision))
+                .filter(s -> matchesInspectorState(s, state))
+                .limit(limit)
+                .map(this::signalAnalysisView)
+                .toList();
+    }
+
+    private String normalizeInspectorFilter(String value) {
+        if (value == null || value.isBlank()) return "ALL";
+        return value.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private boolean matchesInspectorDecision(TradeSignal s, String decision) {
+        if ("ALL".equals(decision)) return true;
+        String finalDecision = s.getDecision() == null ? "" : s.getDecision().name();
+        String originalDecision = s.getOriginalDecision() == null ? "" : s.getOriginalDecision().name();
+        if ("BUY".equals(decision)) {
+            return "BUY".equals(finalDecision) || "STRONG_BUY".equals(finalDecision)
+                    || "BUY".equals(originalDecision) || "STRONG_BUY".equals(originalDecision);
+        }
+        if ("SELL".equals(decision)) {
+            return "SELL".equals(finalDecision) || "STRONG_SELL".equals(finalDecision)
+                    || "SELL".equals(originalDecision) || "STRONG_SELL".equals(originalDecision);
+        }
+        return decision.equals(finalDecision);
+    }
+
+    private boolean matchesInspectorState(TradeSignal s, String state) {
+        if ("ALL".equals(state)) return true;
+        if ("ALLOWED".equals(state)) return s.isFinalEntryAllowed();
+        if ("BLOCKED".equals(state)) return !s.isFinalEntryAllowed();
+        return true;
+    }
+
+    private Map<String, Object> signalAnalysisView(TradeSignal s) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("signalId", s.getId());
+        m.put("symbol", s.getSymbol());
+        m.put("interval", s.getInterval());
+        m.put("candleOpenTime", s.getCandleOpenTime());
+        m.put("generatedAt", s.getGeneratedAt());
+        m.put("price", s.getLatestPrice());
+        m.put("originalDecision", s.getOriginalDecision() == null ? null : s.getOriginalDecision().name());
+        m.put("decision", s.getDecision() == null ? null : s.getDecision().name());
+        m.put("score", s.getTotalScore());
+        m.put("confidence", s.getConfidenceScore());
+        m.put("rawConfidence", s.getRawConfidenceScore());
+        m.put("effectiveConfidence", s.getEffectiveConfidenceScore());
+        m.put("finalEntryAllowed", s.isFinalEntryAllowed());
+        m.put("primaryBlockingStage", s.getPrimaryBlockingStage());
+        m.put("trendScore", s.getTrendScore());
+        m.put("volumeScore", s.getVolumeScore());
+        m.put("momentumScore", s.getMomentumScore());
+        m.put("sentimentScore", s.getSentimentScore());
+        m.put("fundamentalScore", s.getFundamentalScore());
+        m.put("regime", s.getMarketRegime() == null ? null : s.getMarketRegime().name());
+        m.put("regimeConfidence", s.getMarketRegimeConfidence());
+        m.put("strategy", s.getSelectedStrategy() == null ? null : s.getSelectedStrategy().name());
+        m.put("atrEntryType", s.getAtrEntryType());
+        m.put("atrImmediateEntryAllowed", s.isAtrImmediateEntryAllowed());
+        m.put("atrExplanation", s.getAtrExplanation());
+        m.put("confluenceStatus", s.getConfluenceStatus() == null ? null : s.getConfluenceStatus().name());
+        m.put("confluenceHigherInterval", s.getConfluenceHigherInterval());
+        m.put("confluenceHigherDecision", s.getConfluenceHigherDecision() == null ? null : s.getConfluenceHigherDecision().name());
+        m.put("confluenceExplanation", s.getConfluenceExplanation());
+        m.put("btcContextStatus", s.getBtcContextStatus() == null ? null : s.getBtcContextStatus().name());
+        m.put("btcContextExplanation", s.getBtcContextExplanation());
+        m.put("liquidityStatus", s.getLiquidityStatus() == null ? null : s.getLiquidityStatus().name());
+        m.put("liquidityExplanation", s.getLiquidityExplanation());
+        m.put("derivativesStatus", s.getDerivativesStatus() == null ? null : s.getDerivativesStatus().name());
+        m.put("derivativesExplanation", s.getDerivativesExplanation());
+        m.put("stopLoss", s.getStopLoss());
+        m.put("takeProfit", s.getTakeProfit());
+        m.put("finalExplanation", s.getFinalDecisionExplanation());
+        m.put("explanation", s.getExplanation());
+        m.put("decisionPath", s.getDecisionPath());
+        return m;
+    }
+
+    /**
      * FIX-038: separate production-exit audit feed. The table intentionally does not expose
      * a generic signal "decision" column because that was misleading for TP/SL/mechanical exits.
      * Instead it exposes the real close trigger plus the source signal id/recommendation as context.

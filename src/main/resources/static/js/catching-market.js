@@ -145,12 +145,21 @@ async function loadCatchChart(){
     // create a valid chart instance with an entirely black viewport. Center on the blamed signal when
     // it falls inside the candle range; otherwise show the nearest real candle range explicitly.
     const firstX=candles[0].x,lastX=candles[candles.length-1].x;
+    catchFocusSignal.__loadedFirstX=firstX;catchFocusSignal.__loadedLastX=lastX;
     let focus;
     if(Number.isFinite(signalX)&&signalX>=firstX-step&&signalX<=lastX+step){
         focus={min:Math.max(firstX,signalX-step*45),max:Math.min(lastX,signalX+step*75)};
-        if(focus.max-focus.min<step*8)focus={min:firstX,max:lastX};
     }else{
         focus={min:firstX,max:lastX};
+    }
+    // FIX-099: Apex can render a completely black plot when sparse historical data leaves
+    // xaxis.min === xaxis.max. Always provide a real-width viewport even for a single stored candle.
+    if(!Number.isFinite(focus.min)||!Number.isFinite(focus.max)||focus.max<=focus.min){
+        const anchor=Number.isFinite(signalX)?signalX:firstX;
+        focus={min:anchor-step*6,max:anchor+step*6};
+    }else if(focus.max-focus.min<step*4){
+        const center=(focus.min+focus.max)/2;
+        focus={min:center-step*3,max:center+step*3};
     }
     const metaByTime=new Map(candles.map(c=>[c.x,c.meta]));
     const original=String(catchFocusSignal?.originalDecision||'').toUpperCase();
@@ -173,21 +182,34 @@ async function loadCatchChart(){
         return `<div class="inspector-candle-tooltip"><div class="tooltip-time">${esc(chartTime(ts,true))} KSA</div><div class="tooltip-grid"><span>Open</span><strong>${esc(price(c.openPrice))}</strong><span>High</span><strong>${esc(price(c.highPrice))}</strong><span>Low</span><strong>${esc(price(c.lowPrice))}</strong><span>Close</span><strong>${esc(price(c.closePrice))}</strong><span>Volume</span><strong>${esc(num(c.volume,8))}</strong><span>Taker buy</span><strong>${Number.isFinite(buyPct)?buyPct.toFixed(2)+'%':'—'}</strong><span>Trades</span><strong>${esc(num(c.numberOfTrades,0))}</strong></div></div>`;
     };
 
+    // FIX-099: use the exact stable Trade Inspector Apex composition: a line chart shell with a
+    // typed candlestick series. The previous top-level candlestick chart behaved inconsistently for
+    // sparse historical blame windows even when valid OHLC rows were present.
+    const ohlcValues=candles.flatMap(c=>c.y).map(Number).filter(Number.isFinite);
+    let visibleYMin=ohlcValues.length?Math.min(...ohlcValues):null;
+    let visibleYMax=ohlcValues.length?Math.max(...ohlcValues):null;
+    if(Number.isFinite(visibleYMin)&&Number.isFinite(visibleYMax)){
+        const rawSpan=visibleYMax-visibleYMin;
+        const pad=rawSpan>0?rawSpan*.06:Math.max(Math.abs(visibleYMax)*.002,1e-12);
+        visibleYMin-=pad;visibleYMax+=pad;
+    }
+
     const options={
         chart:{
-            type:'candlestick',height:540,background:'transparent',foreColor:'#8da2b1',animations:{enabled:false},
+            type:'line',height:540,background:'transparent',foreColor:'#8da2b1',animations:{enabled:false},
             toolbar:{show:true,autoSelected:'zoom',tools:{download:false,selection:true,zoom:true,zoomin:true,zoomout:true,pan:true,reset:true}},
             zoom:{enabled:true,type:'x',autoScaleYaxis:true},
             events:{updated:()=>setTimeout(bindCatchCrosshair,0),zoomed:()=>setTimeout(bindCatchCrosshair,0),selection:()=>setTimeout(bindCatchCrosshair,0),scrolled:()=>setTimeout(bindCatchCrosshair,0)}
         },
         title:{text:`${String(e.symbol||'').toUpperCase()} · ${interval} · Blamed signal #${catchFocusSignal?.id??''}`,align:'left',style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'}},
-        series:[{name:'Candles',data:candles.map(({x,y})=>({x,y}))}],
+        series:[{name:'Candles',type:'candlestick',data:candles.map(({x,y})=>({x,y}))}],
+        stroke:{width:[1]},markers:{size:[0]},
         dataLabels:{enabled:false},
         xaxis:{type:'datetime',min:focus.min,max:focus.max,tickAmount:10,labels:{datetimeUTC:false,hideOverlappingLabels:true,formatter:(value,timestamp)=>chartTime(timestamp??value)},axisTicks:{show:true},crosshairs:{show:true,position:'front',stroke:{width:1,dashArray:3}},tooltip:{enabled:false}},
-        yaxis:{opposite:true,forceNiceScale:true,decimalsInFloat:8,labels:{formatter:value=>price(value)},tooltip:{enabled:false},crosshairs:{show:true,position:'front',stroke:{width:1,dashArray:3}}},
+        yaxis:{opposite:true,forceNiceScale:true,min:Number.isFinite(visibleYMin)?visibleYMin:undefined,max:Number.isFinite(visibleYMax)?visibleYMax:undefined,decimalsInFloat:8,labels:{formatter:value=>price(value)},tooltip:{enabled:false},crosshairs:{show:true,position:'front',stroke:{width:1,dashArray:3}}},
         grid:{borderColor:'#203342',xaxis:{lines:{show:false}},yaxis:{lines:{show:true}},padding:{left:6,right:10}},theme:{mode:'dark'},
         plotOptions:{candlestick:{colors:{upward:'#39d98a',downward:'#ff6b72'},wick:{useFillColor:true}}},
-        annotations:catchAnnotations(data),tooltip:{shared:false,intersect:false,followCursor:true,custom:tooltip}
+        annotations:catchAnnotations(data),noData:{text:'No persisted candle data is available for this blamed signal.'},tooltip:{shared:false,intersect:false,followCursor:true,custom:tooltip}
     };
     if(typeof catchCrosshairCleanup==='function'){catchCrosshairCleanup();catchCrosshairCleanup=null;}
     if(catchChart)catchChart.destroy();
@@ -242,10 +264,18 @@ function navigateCatch(mode){
     const step=intervalMs(interval);
     const signalX=parseUtc(catchFocusSignal.candleOpenTime||catchFocusSignal.generatedAt)?.getTime();
     if(!Number.isFinite(signalX))return;
+    const firstX=Number(catchFocusSignal.__loadedFirstX),lastX=Number(catchFocusSignal.__loadedLastX);
     let range;
     if(mode==='start'||mode==='fit')range={min:signalX-step*45,max:signalX+step*75};
-    else if(mode==='earliest')range={min:signalX-step*120,max:signalX};
-    else range={min:signalX,max:signalX+step*120};
+    else if(mode==='earliest')range=Number.isFinite(firstX)?{min:firstX-step,max:Math.min(lastX,firstX+step*120)}:{min:signalX-step*120,max:signalX};
+    else range=Number.isFinite(lastX)?{min:Math.max(firstX,lastX-step*120),max:lastX+step}:{min:signalX,max:signalX+step*120};
+    // FIX-099: navigation must never create an empty viewport outside the candles loaded for the popup.
+    if(Number.isFinite(firstX)&&Number.isFinite(lastX)&&lastX>=firstX){
+        range.min=Math.max(range.min,firstX-step*2);
+        range.max=Math.min(range.max,lastX+step*2);
+        if(range.max<=range.min){range={min:firstX-step*2,max:lastX+step*2};}
+        if(range.max<=range.min){range={min:firstX-step*6,max:firstX+step*6};}
+    }
     catchChart.updateOptions({xaxis:{min:range.min,max:range.max}},false,false).then(()=>setTimeout(bindCatchCrosshair,0));
 }
 
