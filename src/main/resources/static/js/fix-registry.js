@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-101",
+            title: "Trade Analysis compact business-state redesign",
+            status: "IMPLEMENTED · READ-ONLY ANALYSIS UI",
+            scenario: "The restored FIX-100 signal-analysis panel exposed low-level interval/decision/state/date controls, while the requested operator workflow is a compact business view: choose a symbol, choose a recent period, then inspect blocked BUY, blocked SELL, completed BUY/SELL, or currently open BUY evidence.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A · diagnostics only", exitTime: "N/A",
+            replayWindow: "Replay and trading behavior are unchanged. FIX-101 reads persisted TradeSignal, WalletTrade and WalletManagedPosition rows only.",
+            location: "Trade Inspector Trade Analysis section + TradeInspectorController/TradeInspectorService",
+            classes: ["TradeInspectorController", "TradeInspectorService", "trade-inspector.html", "trade-inspector.js", "trade-inspector.css", "fix-registry.js"],
+            cause: "The previous panel was technically broad but did not match the requested business workflow and mixed low-level filters with operator analysis.",
+            solution: "Replace the panel filters with Symbol, Period (15m/1h/4h/1d/1w), and Type (Blocked BUY, Blocked SELL, BUY/SELL done, BUY open). Reuse the proven blocked-signal repository semantics, read completed SELL closes from wallet_trade, read current OPEN rows from wallet_managed_position, enrich each row with its persisted TradeSignal when available, and keep Analyze read-only.",
+            behavior: "Operators can switch among blocked candidates, completed trades and open BUY positions without leaving Trade Inspector. The Analyze modal shows linked persisted signal evidence where available. No signal is rescored, no trade is executed, and no wallet/position row is mutated.",
+            regression: "Verify each period filter returns only rows inside that recent window; Blocked SELL follows original SELL -> non-SELL semantics; DONE shows executed completed trades; OPEN BUY shows current open managed positions; symbol filter applies to every type; Analyze remains read-only; existing completed-trade cards and chart popup remain unchanged."
+        },
+        {
             id: "FIX-100",
             title: "Trade Inspector all-signal analysis grid restoration",
             status: "IMPLEMENTED · READ-ONLY DIAGNOSTICS",

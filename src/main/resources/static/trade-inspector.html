@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Trade Inspector</title>
     <link rel="stylesheet" href="/css/dashboard.css">
-    <link rel="stylesheet" href="/css/trade-inspector.css?v=100">
+    <link rel="stylesheet" href="/css/trade-inspector.css?v=101">
     <link rel="stylesheet" href="/css/chart-crosshair.css">
     <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1"></script>
 </head>
@@ -49,30 +49,43 @@
         </section>
 
 
-        <!-- FIX-100: Restore the Trade Signal Analysis grid that was unintentionally hidden when
-             the older blocked-only diagnostics markup was removed. This grid is read-only and
-             analyzes persisted trade_signal rows; it never invokes or changes trading behavior. -->
+        <!-- FIX-101: Trade Analysis is a compact read-only browser across the four business states
+             requested by the operator. It combines persisted signals/executions/positions for inspection only;
+             no analysis, execution, replay, or wallet state is recalculated or mutated here. -->
         <section class="panel inspector-signal-analysis-panel">
             <div class="section-heading">
-                <div><p class="eyebrow">TRADE SIGNAL ANALYSIS</p><h2>All persisted signals</h2></div>
-                <span id="signal-analysis-count">0 signals</span>
+                <div><p class="eyebrow">TRADE ANALYSIS</p><h2>Signals &amp; executions</h2></div>
+                <span id="signal-analysis-count">0 rows</span>
             </div>
-            <div class="signal-analysis-filters">
-                <label>Symbol<select id="signal-analysis-symbol"><option value="ALL">All symbols</option></select></label>
-                <label>Interval<select id="signal-analysis-interval"><option value="ALL">All intervals</option><option value="1m">1m</option><option value="5m">5m</option><option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option></select></label>
-                <label>Decision<select id="signal-analysis-decision"><option value="ALL">All decisions</option><option value="BUY">BUY / STRONG BUY</option><option value="SELL">SELL / STRONG SELL</option><option value="WATCH">WATCH</option><option value="NEUTRAL">NEUTRAL</option></select></label>
-                <label>Entry state<select id="signal-analysis-state"><option value="ALL">Allowed + blocked</option><option value="ALLOWED">Allowed</option><option value="BLOCKED">Blocked</option></select></label>
-                <label>From (KSA)<input id="signal-analysis-from" type="datetime-local"></label>
-                <label>To (KSA)<input id="signal-analysis-to" type="datetime-local"></label>
-                <label>Rows<select id="signal-analysis-limit"><option>100</option><option selected>250</option><option>500</option></select></label>
-                <button id="signal-analysis-search" type="button">Search signals</button>
+            <div class="signal-analysis-filters signal-analysis-filters-compact">
+                <label>Symbol
+                    <select id="signal-analysis-symbol"><option value="ALL">All symbols</option></select>
+                </label>
+                <label>Period
+                    <select id="signal-analysis-period">
+                        <option value="15m">Last 15 minutes</option>
+                        <option value="1h" selected>Last 1 hour</option>
+                        <option value="4h">Last 4 hours</option>
+                        <option value="1d">Last 1 day</option>
+                        <option value="1w">Last 1 week</option>
+                    </select>
+                </label>
+                <label>Type
+                    <select id="signal-analysis-type">
+                        <option value="BLOCKED_BUY" selected>Blocked BUY</option>
+                        <option value="BLOCKED_SELL">Blocked SELL</option>
+                        <option value="DONE">BUY / SELL done</option>
+                        <option value="OPEN_BUY">BUY open</option>
+                    </select>
+                </label>
+                <button id="signal-analysis-search" type="button">Analyze</button>
             </div>
-            <p class="form-note">Read-only analysis of persisted <code>trade_signal</code> rows. Database timestamps remain UTC; this screen displays and accepts KSA time.</p>
+            <p class="form-note">Read-only production evidence. Signal/candle timestamps are stored in UTC and displayed here in KSA.</p>
             <div id="signal-analysis-error" class="error-banner hidden"></div>
             <div class="signal-analysis-table-wrap">
                 <table class="signal-analysis-table">
-                    <thead><tr><th>Time (KSA)</th><th>Symbol</th><th>TF</th><th>Original → Final</th><th>Score / Conf.</th><th>Entry</th><th>Regime / Strategy</th><th>Primary blocker</th><th>Action</th></tr></thead>
-                    <tbody id="signal-analysis-rows"><tr><td colspan="9" class="empty-cell">Loading persisted signals…</td></tr></tbody>
+                    <thead><tr><th>Time (KSA)</th><th>Symbol</th><th>Type</th><th>Signal</th><th>Score / Conf.</th><th>State</th><th>Regime / Strategy</th><th>Reason / P&amp;L</th><th>Action</th></tr></thead>
+                    <tbody id="signal-analysis-rows"><tr><td colspan="9" class="empty-cell">Loading trade analysis…</td></tr></tbody>
                 </table>
             </div>
         </section>
@@ -163,7 +176,7 @@
 </div>
 <script src="/js/time-utils.js"></script>
 <script src="/js/chart-crosshair.js"></script>
-<script src="/js/trade-inspector.js?v=100"></script>
+<script src="/js/trade-inspector.js?v=101"></script>
 <script src="/js/catching-market-badge.js"></script><script src="/js/global-system-health.js"></script>
 </body>
 </html>

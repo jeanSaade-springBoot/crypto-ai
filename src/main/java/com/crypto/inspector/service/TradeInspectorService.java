@@ -149,74 +149,139 @@ public class TradeInspectorService {
     }
 
     /**
-     * FIX-100: read-only Trade Signal Analysis feed used by Trade Inspector.
-     * This method deliberately reads TradeSignal persistence only; it never calls
-     * AnalysisService, FinalDecisionService, ExecutionIntelligenceService or wallet code.
+     * FIX-101: read-only Trade Analysis feed used by Trade Inspector.
+     * It joins already-persisted signal/execution/open-position evidence for display only;
+     * it never calls AnalysisService, FinalDecisionService or ExecutionIntelligenceService
+     * and never mutates wallet or position state.
      */
     @Transactional(readOnly = true)
     public List<String> signalAnalysisSymbols() {
-        return tradeSignalRepository.findDistinctInspectorSymbols();
+        // FIX-101: the Trade Analysis symbol selector spans signals, completed wallet trades,
+        // and open managed positions so a symbol never disappears merely because its row type changes.
+        Set<String> symbols = new TreeSet<>();
+        tradeSignalRepository.findDistinctInspectorSymbols().stream().filter(Objects::nonNull)
+                .map(String::toUpperCase).forEach(symbols::add);
+        walletTradeRepository.findTop100ByOrderByExecutedAtDesc().stream().map(WalletTrade::getSymbol)
+                .filter(Objects::nonNull).map(String::toUpperCase).forEach(symbols::add);
+        walletManagedPositionRepository.findAllByStatusOrderByOpenedAtDesc("OPEN").stream()
+                .map(WalletManagedPosition::getSymbol).filter(Objects::nonNull)
+                .map(String::toUpperCase).forEach(symbols::add);
+        return new ArrayList<>(symbols);
     }
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> signalAnalysis(String requestedSymbol,
-                                                    String requestedInterval,
-                                                    String requestedDecision,
-                                                    String requestedState,
-                                                    Instant requestedFrom,
-                                                    Instant requestedTo,
+                                                    String requestedPeriod,
+                                                    String requestedType,
                                                     int requestedLimit) {
-        Instant to = requestedTo == null ? Instant.now() : requestedTo;
-        Instant from = requestedFrom == null ? to.minus(Duration.ofHours(3)) : requestedFrom;
-        if (from.isAfter(to)) {
-            throw new IllegalArgumentException("Signal analysis From time must be before To time.");
+        // FIX-101: the Trade Analysis grid exposes business-level states instead of raw
+        // technical filters. All branches read persisted production evidence only.
+        String symbol = normalizeSymbol(requestedSymbol);
+        String type = normalizeInspectorFilter(requestedType);
+        int limit = Math.max(1, Math.min(requestedLimit, 250));
+        Instant to = Instant.now();
+        Instant from = to.minus(periodDuration(requestedPeriod));
+
+        if ("DONE".equals(type)) {
+            return walletTradeRepository.findClosedTradesBetween(from, to).stream()
+                    .filter(t -> symbol == null || symbol.equalsIgnoreCase(t.getSymbol()))
+                    .limit(limit)
+                    .map(this::completedTradeAnalysisView)
+                    .toList();
         }
 
-        String symbol = normalizeSymbol(requestedSymbol);
-        String interval = normalizeInspectorFilter(requestedInterval);
-        String decision = normalizeInspectorFilter(requestedDecision);
-        String state = normalizeInspectorFilter(requestedState);
-        int limit = Math.max(1, Math.min(requestedLimit, 500));
+        if ("OPEN_BUY".equals(type)) {
+            return walletManagedPositionRepository.findAllByStatusOrderByOpenedAtDesc("OPEN").stream()
+                    .filter(p -> symbol == null || symbol.equalsIgnoreCase(p.getSymbol()))
+                    .filter(p -> p.getOpenedAt() != null && !p.getOpenedAt().isBefore(from))
+                    .limit(limit)
+                    .map(this::openPositionAnalysisView)
+                    .toList();
+        }
 
-        // Pull a bounded superset because interval/decision/state filters are intentionally
-        // interpreted from persisted enum/state values in one place below.
-        List<TradeSignal> rows = tradeSignalRepository.findForInspectorAnalysis(
-                symbol, from, to, PageRequest.of(0, Math.min(2000, Math.max(limit * 6, 500))));
+        // Reuse the already-proven blocked BUY / blocked SELL repository semantics instead of
+        // reinterpreting those states in the UI layer. In particular, a blocked SELL means an
+        // original SELL/STRONG_SELL that FinalDecision changed to a non-SELL state; it is not
+        // defined by finalEntryAllowed=false.
+        boolean blockedSell = "BLOCKED_SELL".equals(type);
+        List<TradeSignal> rows = blockedSell
+                ? tradeSignalRepository.findBlockedSells(
+                        com.crypto.domain.SignalDecision.SELL,
+                        com.crypto.domain.SignalDecision.STRONG_SELL,
+                        symbol, from, to, PageRequest.of(0, limit))
+                : tradeSignalRepository.findBlockedBuys(
+                        com.crypto.domain.SignalDecision.BUY,
+                        com.crypto.domain.SignalDecision.STRONG_BUY,
+                        symbol, from, to, PageRequest.of(0, limit));
 
-        return rows.stream()
-                .filter(s -> "ALL".equals(interval) || interval.equalsIgnoreCase(s.getInterval()))
-                .filter(s -> matchesInspectorDecision(s, decision))
-                .filter(s -> matchesInspectorState(s, state))
-                .limit(limit)
-                .map(this::signalAnalysisView)
-                .toList();
+        return rows.stream().map(s -> {
+                    Map<String, Object> row = signalAnalysisView(s);
+                    row.put("rowKind", blockedSell ? "BLOCKED_SELL" : "BLOCKED_BUY");
+                    row.put("eventTime", s.getCandleOpenTime() != null ? s.getCandleOpenTime() : s.getGeneratedAt());
+                    return row;
+                }).toList();
+    }
+
+    private Duration periodDuration(String period) {
+        String value = period == null ? "1h" : period.trim().toLowerCase(Locale.ROOT);
+        return switch (value) {
+            case "15m" -> Duration.ofMinutes(15);
+            case "4h" -> Duration.ofHours(4);
+            case "1d" -> Duration.ofDays(1);
+            case "1w" -> Duration.ofDays(7);
+            default -> Duration.ofHours(1);
+        };
+    }
+
+    private Map<String, Object> completedTradeAnalysisView(WalletTrade sell) {
+        // FIX-101: a completed row represents the real executed SELL that closed a BUY lifecycle.
+        // The linked exit TradeSignal is copied into the same diagnostic shape when present.
+        TradeSignal signal = sell.getSignal();
+        Map<String, Object> m = signal == null ? new LinkedHashMap<>() : signalAnalysisView(signal);
+        m.put("rowKind", "DONE");
+        m.put("eventTime", sell.getExecutedAt());
+        m.put("symbol", sell.getSymbol());
+        m.put("price", sell.getPriceUsdt());
+        m.put("executionStatus", sell.getStatus());
+        m.put("executionReason", safeText(sell.getExecutionReason(), sell.getExecutionMessage()));
+        m.put("realizedPnlPercent", sell.getRealizedPnlPercent());
+        m.put("realizedPnlUsdt", sell.getRealizedPnlUsdt());
+        if (signal == null) {
+            m.put("originalDecision", "BUY");
+            m.put("decision", "SELL");
+            m.put("finalEntryAllowed", true);
+        }
+        return m;
+    }
+
+    private Map<String, Object> openPositionAnalysisView(WalletManagedPosition position) {
+        // FIX-101: OPEN_BUY is derived from the current managed-position table, then enriched
+        // with the immutable entry signal if that signal still exists.
+        TradeSignal signal = position.getEntrySignalId() == null ? null
+                : tradeSignalRepository.findById(position.getEntrySignalId()).orElse(null);
+        Map<String, Object> m = signal == null ? new LinkedHashMap<>() : signalAnalysisView(signal);
+        m.put("rowKind", "OPEN_BUY");
+        m.put("eventTime", position.getOpenedAt());
+        m.put("symbol", position.getSymbol());
+        m.put("price", position.getAverageEntryPriceUsdt());
+        m.put("allocatedPositionPercent", position.getAllocatedPositionPercent());
+        m.put("executionStatus", position.getStatus());
+        m.put("stopLoss", position.getStopLossUsdt());
+        m.put("takeProfit", position.getTakeProfitUsdt());
+        if (signal == null) {
+            m.put("signalId", position.getEntrySignalId());
+            m.put("originalDecision", position.getEntryDecision() == null ? "BUY" : position.getEntryDecision());
+            m.put("decision", position.getEntryDecision() == null ? "BUY" : position.getEntryDecision());
+            m.put("score", position.getEntryTotalScore());
+            m.put("confidence", position.getEntryConfidence());
+            m.put("finalEntryAllowed", true);
+        }
+        return m;
     }
 
     private String normalizeInspectorFilter(String value) {
         if (value == null || value.isBlank()) return "ALL";
         return value.trim().toUpperCase(Locale.ROOT);
-    }
-
-    private boolean matchesInspectorDecision(TradeSignal s, String decision) {
-        if ("ALL".equals(decision)) return true;
-        String finalDecision = s.getDecision() == null ? "" : s.getDecision().name();
-        String originalDecision = s.getOriginalDecision() == null ? "" : s.getOriginalDecision().name();
-        if ("BUY".equals(decision)) {
-            return "BUY".equals(finalDecision) || "STRONG_BUY".equals(finalDecision)
-                    || "BUY".equals(originalDecision) || "STRONG_BUY".equals(originalDecision);
-        }
-        if ("SELL".equals(decision)) {
-            return "SELL".equals(finalDecision) || "STRONG_SELL".equals(finalDecision)
-                    || "SELL".equals(originalDecision) || "STRONG_SELL".equals(originalDecision);
-        }
-        return decision.equals(finalDecision);
-    }
-
-    private boolean matchesInspectorState(TradeSignal s, String state) {
-        if ("ALL".equals(state)) return true;
-        if ("ALLOWED".equals(state)) return s.isFinalEntryAllowed();
-        if ("BLOCKED".equals(state)) return !s.isFinalEntryAllowed();
-        return true;
     }
 
     private Map<String, Object> signalAnalysisView(TradeSignal s) {

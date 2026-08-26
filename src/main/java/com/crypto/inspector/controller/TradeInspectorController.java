@@ -66,13 +66,12 @@ public class TradeInspectorController {
     @ResponseBody
     public java.util.List<Map<String, Object>> signals(
             @RequestParam(required = false, defaultValue = "ALL") String symbol,
-            @RequestParam(required = false, defaultValue = "ALL") String interval,
-            @RequestParam(required = false, defaultValue = "ALL") String decision,
-            @RequestParam(required = false, defaultValue = "ALL") String state,
-            @RequestParam(required = false) Instant from,
-            @RequestParam(required = false) Instant to,
+            @RequestParam(required = false, defaultValue = "1h") String period,
+            @RequestParam(required = false, defaultValue = "BLOCKED_BUY") String type,
             @RequestParam(required = false, defaultValue = "250") int limit) {
-        return service.signalAnalysis(symbol, interval, decision, state, from, to, limit);
+        // FIX-101: compact Trade Analysis filters are resolved server-side from persisted
+        // production evidence only. This endpoint remains strictly read-only.
+        return service.signalAnalysis(symbol, period, type, limit);
     }
 
     @GetMapping("/api/trade-inspector/production-exits")
