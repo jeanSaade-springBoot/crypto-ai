@@ -1,6 +1,36 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-098",
+            title: "Catching Market retrospective blame diagnosis enrichment",
+            status: "IMPLEMENTED · RETROSPECTIVE DIAGNOSTICS ONLY",
+            scenario: "Catching Market could identify a strong/matching historical signal but still report the generic EXECUTION_NOT_COMPLETED code, while MISSED_SIGNAL diagnosis duplicated FinalDecision blocker logic and best-signal selection could prefer an already-understood ATR-deferred snapshot over a more informative directional candidate.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A · retrospective diagnosis only", exitTime: "N/A",
+            replayWindow: "Replay/trading behavior is unchanged. FIX-098 reads immutable TradeSignal, WalletTrade and ExecutionOpportunity production audit history only; it never invokes or writes to execution/trading paths.",
+            location: "PriceMoveMonitorService.applyBlame() and private retrospective helper methods",
+            classes: ["PriceMoveMonitorService", "ExecutionOpportunityRepository (existing read methods reused)", "TradeSignal (existing FIX-091 blocker fields read only)", "fix-registry.js"],
+            cause: "SIGNALLED_NOT_TRADED stopped at a generic stub even when Execution Intelligence had already persisted the real decisionCode/decisionExplanation. MISSED_SIGNAL recomputed blocker priority from six flags instead of preferring FIX-091 primaryBlockingStage. Signal ranking was raw score only, and soft contextual warnings were invisible when no single hard blocker existed.",
+            solution: "For a directional signal with no wallet trade, resolve ExecutionOpportunity read-only by exact latestSignalId first and lifecycle overlap second, then surface its persisted decisionCode/explanation. For MISSED_SIGNAL, prefer primaryBlockingStage and extract its immutable decision_path reason, retaining the existing six-gate hierarchy for legacy rows. Select one blamed signal by preferring the move-direction BUY/SELL, then non-ATR-deferred candidates, then score. When no canonical/legacy hard blocker exists, append non-causal soft warnings for moderate BTC conflict, mixed HTF confluence and thin order-book sampling.",
+            behavior: "Still exactly one PriceMoveEvent row per direction per 8-hour block and one blamed signal per row. Blame becomes more specific without changing AnalysisService, FinalDecisionService, ExecutionIntelligenceService, Replay, wallet execution, signals or positions.",
+            regression: "Verify a SIGNalled-not-traded row linked by latestSignalId surfaces the persisted opportunity decisionCode; verify progressive opportunities fall back to symbol/direction/lifecycle overlap; verify FIX-091 signals use primaryBlockingStage/decision_path reason; verify pre-FIX-091 rows still use legacy flags; verify directional signals outrank non-directional higher scores, non-deferred signals outrank deferred peers, all-deferred windows still return one signal, and soft warnings appear only when no hard blocker exists."
+        },
+        {
+            id: "FIX-097",
+            title: "Catching Market blamed-signal reconstruction for missing bestSignalId",
+            status: "IMPLEMENTED · READ-ONLY DIAGNOSTICS + BLAME-TIME ALIGNMENT",
+            scenario: "Some caught-move View chart requests returned HTTP 400 because PriceMoveEvent.bestSignalId was null even though immutable TradeSignal evidence could exist inside the caught market move.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A · diagnostics only", exitTime: "N/A",
+            replayWindow: "Replay behavior is unchanged. FIX-097 reads persisted production caught-move and TradeSignal history only.",
+            location: "PriceMoveMonitorService.applyBlame()/eventChart() signal resolution + Catching Market popup empty-state handling",
+            classes: ["PriceMoveMonitorService", "TradeSignalRepository (existing methods reused)", "catching-market.js", "catching-market.html", "fix-registry.js"],
+            cause: "Blame selection used generatedAt against a move window defined in market/candle time. Persistence latency could place generatedAt outside the move even when candleOpenTime belonged to it. PENDING/legacy caught rows could therefore have no bestSignalId, and FIX-095/096 treated that as a hard chart error.",
+            solution: "Resolve blame candidates by candleOpenTime first and merge generatedAt-only legacy rows as fallback. Future applyBlame persists the resolved bestSignalId. The read-only chart first honors an existing bestSignalId, then deterministically reconstructs the same best directional signal from immutable move-window evidence without mutating the event. If no signal truly exists, return a truthful no-signal payload instead of HTTP 400.",
+            behavior: "View chart opens for legacy/PENDING rows when a real signal can be reconstructed and highlights exactly that one signal. Rows with genuinely no signal show an explicit no-signal message rather than an error or black chart. Trading, FinalDecision, ExecutionIntelligence, Replay and wallet behavior are unchanged.",
+            regression: "Test a caught row with persisted bestSignalId, a legacy/PENDING row with bestSignalId null but a candleOpenTime signal inside the move, a legacy generatedAt-only signal, and a move with no signals. Verify exactly one real signal is highlighted when available and no-signal cases remain truthful."
+        },
+        {
             id: "FIX-096",
             title: "Blamed signal popup empty-black chart hardening",
             status: "IMPLEMENTED · UI / READ-ONLY DIAGNOSTICS",

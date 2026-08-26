@@ -107,6 +107,18 @@ async function loadCatchChart(){
     // FIX-095: backend chooses the blamed signal native interval; no popup timeframe can hide it.
     const data=await api(`/api/administration/debug/price-moves/${encodeURIComponent(catchFocusId)}/chart`);
     const e=data.event;catchFocusEvent=e;catchFocusSignal=data.blamedSignal||null;
+    // FIX-097: an older/PENDING caught move may have no persisted bestSignalId. The backend now
+    // reconstructs the deterministic best signal from immutable move-window signals. If no signal
+    // truly exists, show an explicit explanation instead of a 400 error or an empty black chart.
+    if(!catchFocusSignal){
+        if(catchChart){catchChart.destroy();catchChart=null;}
+        const host=document.getElementById('catch-chart');if(host)host.innerHTML='';
+        const empty=document.getElementById('catch-chart-empty');
+        if(empty){empty.textContent=data.blamedSignalMessage||'No persisted trade signal exists inside this caught move window, so there is no blamed signal to highlight.';empty.classList.remove('hidden');}
+        document.getElementById('catch-chart-title').textContent=`${String(e?.symbol||'').toUpperCase()} · No blamed signal`;
+        document.getElementById('catch-chart-context').textContent='No persisted signal exists inside the caught move window.';
+        return;
+    }
     // FIX-096: backend returns the actual candle interval used for this popup. It is normally the
     // blamed signal's native interval, with a truthful 1m fallback only when that historical native
     // candle series is absent. The signal's own interval remains visible in the context label.
@@ -148,7 +160,8 @@ async function loadCatchChart(){
 
     document.getElementById('catch-chart-title').textContent=`${String(e.symbol||'').toUpperCase()} · Blamed ${side} signal #${catchFocusSignal?.id??'—'}`;
     const intervalContext=data.fallbackIntervalUsed?`${signalInterval} signal · ${interval} candle fallback`:`${signalInterval}`;
-    document.getElementById('catch-chart-context').textContent=`${intervalContext} · ${blocked?'BLOCKED · ':''}score ${catchFocusSignal?.totalScore??'—'} · confidence ${catchFocusSignal?.confidenceScore??'—'} · KSA chart context`;
+    const resolutionNote=data.blamedSignalResolution==='MOVE_WINDOW_RECONSTRUCTED'?' · reconstructed from move-window signals':'';
+    document.getElementById('catch-chart-context').textContent=`${intervalContext} · ${blocked?'BLOCKED · ':''}score ${catchFocusSignal?.totalScore??'—'} · confidence ${catchFocusSignal?.confidenceScore??'—'}${resolutionNote} · KSA chart context`;
 
     const tooltip=({seriesIndex,dataPointIndex,w})=>{
         const point=w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex];

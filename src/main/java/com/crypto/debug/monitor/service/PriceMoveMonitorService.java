@@ -5,12 +5,19 @@ import com.crypto.debug.monitor.domain.PriceMoveMonitorSettings;
 import com.crypto.debug.monitor.dto.PriceMoveMonitorSettingsRequest;
 import com.crypto.debug.monitor.repository.PriceMoveEventRepository;
 import com.crypto.debug.monitor.repository.PriceMoveMonitorSettingsRepository;
+import com.crypto.domain.BtcContextStatus;
+import com.crypto.domain.ConfluenceStatus;
+import com.crypto.domain.LiquidityContextStatus;
 import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
+import com.crypto.execution.domain.ExecutionOpportunity;
+import com.crypto.execution.repository.ExecutionOpportunityRepository;
 import com.crypto.repository.TradeSignalRepository;
 import com.crypto.repository.CandleRepository;
 import com.crypto.wallet.domain.WalletTrade;
 import com.crypto.wallet.repository.WalletTradeRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,6 +43,7 @@ public class PriceMoveMonitorService {
     private static final long SETTINGS_CACHE_MILLIS = 10_000L;
     private static final int BLOCK_HOURS = 8;
     private static final int HISTORY_DAYS = 3650; // caught moves are evidence; keep them long-term.
+    private static final ObjectMapper BLAME_JSON = new ObjectMapper();
 
     private static final List<WindowRule> RULES = List.of(
             new WindowRule("30m", 30, bd("1.0"), bd("2.0"), bd("3.0")),
@@ -49,6 +57,8 @@ public class PriceMoveMonitorService {
     private final TradeSignalRepository signalRepository;
     private final CandleRepository candleRepository;
     private final WalletTradeRepository walletTradeRepository;
+    // FIX-098: read-only retrospective diagnosis only. This repository is never written from PriceMoveMonitorService.
+    private final ExecutionOpportunityRepository executionOpportunityRepository;
 
     private final Map<String, BlockTracker> trackers = new ConcurrentHashMap<>();
     private volatile PriceMoveMonitorSettings cachedSettings;
@@ -146,10 +156,11 @@ public class PriceMoveMonitorService {
             return;
         }
 
-        List<TradeSignal> signals = signalRepository.findBySymbolAndGeneratedAtBetweenOrderByGeneratedAtAsc(
-                event.getSymbol(), event.getStartTime(), event.getEndTime());
-        TradeSignal best = up ? signals.stream().max(Comparator.comparingInt(TradeSignal::getTotalScore)).orElse(null)
-                : signals.stream().min(Comparator.comparingInt(TradeSignal::getTotalScore)).orElse(null);
+        // FIX-097: caught moves are defined by market/candle time, so blame selection must prefer
+        // candleOpenTime. generatedAt can lag the analyzed candle and caused valid signals to miss the
+        // move window, leaving bestSignalId null. A generatedAt query is retained only as a legacy
+        // fallback for older rows whose candleOpenTime was not persisted.
+        TradeSignal best = resolveBestSignalForMove(event);
         if (best == null) {
             event.setOutcomeStatus("NOT_TRADABLE_EARLY");
             event.setBlameRequired(false);
@@ -161,24 +172,140 @@ public class PriceMoveMonitorService {
         event.setBestSignalDecision(best.getDecision().name());
         event.setBestSignalScore(best.getTotalScore());
 
-        boolean matchingSignal = up
-                ? best.getDecision() == SignalDecision.BUY || best.getDecision() == SignalDecision.STRONG_BUY
-                : best.getDecision() == SignalDecision.SELL || best.getDecision() == SignalDecision.STRONG_SELL;
+        boolean matchingSignal = isDirectionalMatch(best, up);
         if (matchingSignal) {
             event.setOutcomeStatus("SIGNALLED_NOT_TRADED");
             event.setBlameRequired(true);
-            event.setBlameCode("EXECUTION_NOT_COMPLETED");
-            event.setBlameExplanation("A matching " + best.getDecision() + " signal existed, but no matching wallet execution occurred. Final decision: " + safe(best.getFinalDecisionExplanation()));
+
+            // FIX-098: once a directional signal existed, report the real retrospective execution
+            // decision when an ExecutionOpportunity can be linked. Prefer the exact latest-signal
+            // relationship; progressive opportunity accumulation can later advance latestSignal, so
+            // lifecycle overlap is a safe read-only fallback. This never invokes execution logic.
+            ExecutionOpportunity matchedOpportunity = resolveExecutionOpportunity(best, wantedSide);
+            if (matchedOpportunity != null) {
+                event.setBlameCode(hasText(matchedOpportunity.getDecisionCode())
+                        ? matchedOpportunity.getDecisionCode() : "EXECUTION_NOT_COMPLETED");
+                event.setBlameExplanation("A matching " + best.getDecision()
+                        + " signal existed. Execution Intelligence: "
+                        + safe(matchedOpportunity.getDecisionExplanation()));
+            } else {
+                event.setBlameCode("EXECUTION_NOT_COMPLETED");
+                event.setBlameExplanation("A matching " + best.getDecision()
+                        + " signal existed, but no matching wallet execution occurred. Final decision: "
+                        + safe(best.getFinalDecisionExplanation()));
+            }
             return;
         }
 
         event.setOutcomeStatus("MISSED_SIGNAL");
         event.setBlameRequired(true);
         event.setBlameCode(primaryBlocker(best, up));
-        event.setBlameExplanation("Best historical signal was " + best.getDecision() + " (score " + best.getTotalScore() + "). " + blockerExplanation(best));
+        String explanation = "Best historical signal was " + best.getDecision() + " (score "
+                + best.getTotalScore() + "). " + blockerExplanation(best, up);
+
+        // FIX-098: soft context is useful only when there is no canonical or legacy hard blocker.
+        // Keep the wording explicitly non-causal: these factors contributed context but individually
+        // did not veto the signal.
+        if (!hasHardBlocker(best)) {
+            List<String> softWarnings = softWarnings(best);
+            if (!softWarnings.isEmpty()) {
+                explanation += " Contributing soft factors (none individually blocking): "
+                        + String.join(", ", softWarnings) + ".";
+            }
+        }
+        event.setBlameExplanation(explanation);
+    }
+
+
+    /**
+     * FIX-097: resolve the best historical signal for the exact caught-move market-time window.
+     * Candle time is authoritative because PriceMoveEvent.startTime/endTime describe the observed
+     * market move. generatedAt is only a compatibility fallback for older signal records.
+     */
+    private TradeSignal resolveBestSignalForMove(PriceMoveEvent event) {
+        if (event == null || event.getSymbol() == null || event.getStartTime() == null || event.getEndTime() == null) {
+            return null;
+        }
+
+        Map<Long, TradeSignal> byId = new LinkedHashMap<>();
+        signalRepository.findBySymbolAndCandleOpenTimeBetweenOrderByCandleOpenTimeAsc(
+                        event.getSymbol(), event.getStartTime(), event.getEndTime())
+                .forEach(signal -> byId.put(signal.getId(), signal));
+
+        // Legacy compatibility: some older records may have null candleOpenTime even though generatedAt
+        // falls inside the move. Merge them without duplicating signals already found by candle time.
+        signalRepository.findBySymbolAndGeneratedAtBetweenOrderByGeneratedAtAsc(
+                        event.getSymbol(), event.getStartTime(), event.getEndTime())
+                .forEach(signal -> byId.putIfAbsent(signal.getId(), signal));
+
+        List<TradeSignal> signals = new ArrayList<>(byId.values());
+        if (signals.isEmpty()) return null;
+
+        boolean up = "UP".equals(event.getDirection());
+        return selectBestSignal(signals, up);
+    }
+
+    /**
+     * FIX-098: one blamed signal per caught row, but choose the most diagnostically relevant one.
+     * A real directional BUY/SELL is more important than a higher-scoring WATCH/NEUTRAL snapshot.
+     * Within the same pool prefer signals that were not already explicitly deferred by ATR, then
+     * preserve the historical score ordering. If every candidate was deferred, keep them eligible.
+     */
+    private TradeSignal selectBestSignal(List<TradeSignal> signals, boolean up) {
+        List<TradeSignal> directional = signals.stream()
+                .filter(signal -> isDirectionalMatch(signal, up))
+                .toList();
+        List<TradeSignal> pool = directional.isEmpty() ? signals : directional;
+
+        List<TradeSignal> nonDeferred = pool.stream()
+                .filter(signal -> !isAtrDeferred(signal))
+                .toList();
+        if (!nonDeferred.isEmpty()) pool = nonDeferred;
+
+        return up
+                ? pool.stream().max(Comparator.comparingInt(TradeSignal::getTotalScore)).orElse(null)
+                : pool.stream().min(Comparator.comparingInt(TradeSignal::getTotalScore)).orElse(null);
+    }
+
+    private boolean isDirectionalMatch(TradeSignal signal, boolean up) {
+        if (signal == null || signal.getDecision() == null) return false;
+        return up
+                ? signal.getDecision() == SignalDecision.BUY || signal.getDecision() == SignalDecision.STRONG_BUY
+                : signal.getDecision() == SignalDecision.SELL || signal.getDecision() == SignalDecision.STRONG_SELL;
+    }
+
+    private boolean isAtrDeferred(TradeSignal signal) {
+        if (signal == null || !hasText(signal.getAtrEntryType())) return false;
+        return "PULLBACK_ENTRY".equalsIgnoreCase(signal.getAtrEntryType())
+                || "WAIT_FOR_RETRACEMENT".equalsIgnoreCase(signal.getAtrEntryType());
+    }
+
+    /** FIX-098: read-only linkage from the blamed signal to the execution-opportunity audit trail. */
+    private ExecutionOpportunity resolveExecutionOpportunity(TradeSignal signal, String wantedSide) {
+        if (signal == null || !hasText(wantedSide)) return null;
+
+        Optional<ExecutionOpportunity> exact = executionOpportunityRepository
+                .findTopByLatestSignalIdOrderByUpdatedAtDesc(signal.getId());
+        if (exact.isPresent() && wantedSide.equalsIgnoreCase(exact.get().getDirection())) {
+            return exact.get();
+        }
+
+        Instant point = signal.getGeneratedAt() != null ? signal.getGeneratedAt() : signal.getCandleOpenTime();
+        if (point == null) return null;
+        return executionOpportunityRepository
+                .findTop10BySymbolAndStartedAtLessThanEqualAndUpdatedAtGreaterThanEqualOrderByUpdatedAtDesc(
+                        signal.getSymbol(), point, point)
+                .stream()
+                .filter(opportunity -> wantedSide.equalsIgnoreCase(opportunity.getDirection()))
+                .findFirst()
+                .orElse(null);
     }
 
     private String primaryBlocker(TradeSignal s, boolean up) {
+        // FIX-098: FIX-091's canonical blocker is authoritative for newly persisted signals.
+        if (hasText(s.getPrimaryBlockingStage())) return s.getPrimaryBlockingStage();
+
+        // Legacy fallback: older signals pre-date primaryBlockingStage and must remain diagnosable.
         if (!s.isFinalEntryAllowed()) return "FINAL_ENTRY_BLOCKED";
         if (!s.isStrategyEntryAllowed()) return "STRATEGY_ENTRY_BLOCKED";
         if (!s.isConfluenceEntryAllowed()) return "MULTI_TIMEFRAME_BLOCKED";
@@ -187,14 +314,71 @@ public class PriceMoveMonitorService {
         if (!s.isLiquidityEntryAllowed()) return "LIQUIDITY_BLOCKED";
         return up ? "BUY_THRESHOLD_NOT_REACHED" : "SELL_THRESHOLD_NOT_REACHED";
     }
-    private String blockerExplanation(TradeSignal s) {
+
+    private String blockerExplanation(TradeSignal s, boolean up) {
+        // FIX-098: the entity intentionally has no duplicate primaryBlockingExplanation field.
+        // Pull the reason from the immutable decision_path stage selected by FinalDecisionService.
+        if (hasText(s.getPrimaryBlockingStage())) {
+            String canonicalReason = decisionPathReason(s, s.getPrimaryBlockingStage());
+            if (hasText(canonicalReason)) return canonicalReason;
+            return "Canonical blocker " + s.getPrimaryBlockingStage() + ": "
+                    + safe(s.getFinalDecisionExplanation());
+        }
+
         if (!s.isFinalEntryAllowed()) return "Final entry was blocked: " + safe(s.getFinalDecisionExplanation());
         if (!s.isStrategyEntryAllowed()) return "Strategy blocked entry: " + safe(s.getStrategyExplanation());
         if (!s.isConfluenceEntryAllowed()) return "Multi-timeframe confluence blocked entry: " + safe(s.getConfluenceExplanation());
         if (!s.isBtcContextEntryAllowed()) return "BTC context blocked entry: " + safe(s.getBtcContextExplanation());
         if (!s.isDerivativesEntryAllowed()) return "Derivatives positioning blocked entry: " + safe(s.getDerivativesExplanation());
         if (!s.isLiquidityEntryAllowed()) return "Liquidity/order-book context blocked entry: " + safe(s.getLiquidityExplanation());
-        return "The directional score did not reach the required trading decision threshold.";
+        return "The directional score did not reach the required "
+                + (up ? "BUY" : "SELL") + " decision threshold.";
+    }
+
+    private String decisionPathReason(TradeSignal signal, String stage) {
+        if (signal == null || !hasText(stage) || !hasText(signal.getDecisionPath())) return null;
+        try {
+            JsonNode path = BLAME_JSON.readTree(signal.getDecisionPath());
+            if (!path.isArray()) return null;
+            for (JsonNode adjustment : path) {
+                if (stage.equalsIgnoreCase(adjustment.path("source").asText())) {
+                    String reason = adjustment.path("reason").asText(null);
+                    if (hasText(reason)) return reason;
+                }
+            }
+        } catch (Exception ignored) {
+            // Retrospective diagnostics must never fail the monitor because one legacy JSON value is malformed.
+        }
+        return null;
+    }
+
+    private boolean hasHardBlocker(TradeSignal s) {
+        return hasText(s.getPrimaryBlockingStage())
+                || !s.isFinalEntryAllowed()
+                || !s.isStrategyEntryAllowed()
+                || !s.isConfluenceEntryAllowed()
+                || !s.isBtcContextEntryAllowed()
+                || !s.isDerivativesEntryAllowed()
+                || !s.isLiquidityEntryAllowed();
+    }
+
+    private List<String> softWarnings(TradeSignal s) {
+        List<String> warnings = new ArrayList<>();
+        if (s.getBtcContextStatus() == BtcContextStatus.CONFLICT) {
+            warnings.add("moderate BTC conflict");
+        }
+        if (s.getConfluenceStatus() == ConfluenceStatus.MIXED) {
+            warnings.add("mixed higher-timeframe confluence");
+        }
+        if (s.getLiquidityStatus() == LiquidityContextStatus.LEARNING
+                || s.getLiquidityStatus() == LiquidityContextStatus.INSUFFICIENT_DATA_HOLD) {
+            warnings.add("thin order-book sampling");
+        }
+        return warnings;
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     @Transactional(readOnly = true)
@@ -213,8 +397,24 @@ public class PriceMoveMonitorService {
         // diagnostic popup; the operator asked to inspect the one persisted best/blamed signal only.
         TradeSignal blamedSignal = e.getBestSignalId() == null ? null
                 : signalRepository.findById(e.getBestSignalId()).orElse(null);
+        String blamedSignalResolution = blamedSignal == null ? "MOVE_WINDOW_RECONSTRUCTED" : "PERSISTED_ID";
+
+        // FIX-097: historical/live caught-move rows may legitimately have no bestSignalId yet (for
+        // example a PENDING block) or may have been created when generatedAt-based blame selection
+        // missed a valid candle-time signal. Reconstruct the same deterministic best signal from
+        // immutable TradeSignal rows instead of failing the read-only chart with HTTP 400. This does
+        // not mutate the event and does not create/synthesize a signal.
         if (blamedSignal == null) {
-            throw new IllegalArgumentException("No blamed signal is persisted for this caught move");
+            blamedSignal = resolveBestSignalForMove(e);
+        }
+        if (blamedSignal == null) {
+            Map<String,Object> noSignal = new LinkedHashMap<>();
+            noSignal.put("event", e);
+            noSignal.put("blamedSignal", null);
+            noSignal.put("blamedSignalResolution", "NONE");
+            noSignal.put("blamedSignalMessage", "No persisted trade signal exists inside this caught move window, so there is no blamed signal to highlight.");
+            noSignal.put("candles", List.of());
+            return noSignal;
         }
 
         // FIX-095: always render the blamed signal on its native interval so its highlight cannot
@@ -274,6 +474,7 @@ public class PriceMoveMonitorService {
         out.put("fallbackIntervalUsed", fallbackIntervalUsed);
         out.put("signalTime", signalTime);
         out.put("blamedSignal", blamedSignal);
+        out.put("blamedSignalResolution", blamedSignalResolution);
         out.put("candles", candles);
         return out;
     }
