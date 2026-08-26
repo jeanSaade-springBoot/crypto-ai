@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-106",
+            title: "Trade Inspector database pagination and historical BUY pairing",
+            status: "IMPLEMENTED · READ-ONLY INSPECTOR FETCHING",
+            scenario: "Trade Inspector did not expose every completed trade because it fetched only the newest 100 closed SELL rows, then applied symbol filtering in Java; historical SELLs also depended on a second latest-100 wallet ledger to find their BUY.",
+            symbol: "ALL", entry: "READ-ONLY INSPECTOR", exit: "READ-ONLY INSPECTOR",
+            entryTime: "Historical persisted wallet_trade", exitTime: "Historical persisted wallet_trade",
+            replayWindow: "N/A · FIX-106 changes read-only Trade Inspector retrieval only; Production and Replay decision/execution logic are untouched.",
+            location: "TradeInspectorController / TradeInspectorService / WalletTradeRepository / Trade Inspector UI",
+            classes: ["TradeInspectorController", "TradeInspectorService", "TradeInspectorResponse", "WalletTradeRepository", "trade-inspector.html", "trade-inspector.js", "trade-inspector.css", "fix-registry.js"],
+            cause: "The inspector queried only findRecentClosedTrades(PageRequest.of(0,100)) and filtered symbol afterward. Therefore any matching trade outside the newest global 100 was impossible to display. Historical SELL-to-BUY pairing also searched only findTop100ByOrderByExecutedAtDesc(), causing older paged SELLs to disappear when their BUY was outside that ledger slice.",
+            solution: "Apply symbol filtering and PageRequest directly in the closed-SELL database query, return page/size/total metadata, populate symbols from all persisted closed trades, and resolve each paged SELL from historical prior-BUY candidates for that symbol. Add Previous/Next controls and 25/50/100 page-size selection while preserving View Chart/View Path behavior.",
+            behavior: "All historical completed wallet trades are reachable page-by-page without loading the full table into the browser. Filters are applied before pagination. The change is strictly read-only and does not mutate wallet, trading, signal, Replay or execution behavior.",
+            regression: "Verify ALL and symbol-specific pagination beyond 100 closed trades; changing symbol/page size resets to page 1; Previous/Next preserve filters; total counts/pages come from the filtered DB query; historical rows still resolve their BUY and View Chart/View Path. No Production/Replay behavioral classes are changed."
+        },
+        {
             id: "FIX-105",
             title: "Bounded opportunity-anchor authority for chase quality",
             status: "IMPLEMENTED · PRODUCTION/REPLAY SHARED LOGIC",

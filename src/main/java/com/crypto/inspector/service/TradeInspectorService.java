@@ -22,6 +22,7 @@ import com.crypto.wallet.domain.WalletManagedPosition;
 import com.crypto.wallet.repository.WalletTradeRepository;
 import com.crypto.wallet.repository.WalletManagedPositionRepository;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -68,42 +69,39 @@ public class TradeInspectorService {
     }
 
     @Transactional(readOnly = true)
-    public TradeInspectorResponse inspect(String requestedSymbol, String requestedVenue, int requestedLimit) {
-        int limit = Math.max(1, Math.min(requestedLimit, 100));
+    public TradeInspectorResponse inspect(String requestedSymbol, String requestedVenue, int requestedPage, int requestedPageSize) {
+        // FIX-106: database-first pagination. Previously this method fetched only the newest
+        // 100 closed SELLs and filtered symbol in memory, which made older trades unreachable.
+        int pageNumber = Math.max(0, requestedPage);
+        int pageSize = Math.max(1, Math.min(requestedPageSize, 100));
         String symbol = normalizeSymbol(requestedSymbol);
         String venue = requestedVenue == null ? "ALL" : requestedVenue.trim().toUpperCase(Locale.ROOT);
 
-        // FIX-032: current persisted inspector rows come from wallet_trade and are therefore WALLET.
-        // BINANCE is intentionally an empty prepared filter until the LIVE_MICRO execution bridge
-        // writes real executions; never mislabel shadow trades as real Binance fills.
+        // FIX-032 remains unchanged: current persisted inspector rows are WALLET evidence.
         if ("BINANCE".equals(venue)) {
-            return new TradeInspectorResponse(summary(List.of()), List.of(), List.of());
+            return new TradeInspectorResponse(summary(List.of()), List.of(),
+                    walletTradeRepository.findDistinctClosedTradeSymbols(), pageNumber, pageSize, 0, 0);
         }
         if (!venue.equals("ALL") && !venue.equals("WALLET")) {
             throw new IllegalArgumentException("Trade Inspector venue must be ALL, WALLET or BINANCE.");
         }
 
-        List<WalletTrade> closed = walletTradeRepository.findRecentClosedTrades(PageRequest.of(0, 100));
-        if (symbol != null) {
-            closed = closed.stream().filter(t -> symbol.equalsIgnoreCase(t.getSymbol())).toList();
-        }
-        List<WalletTrade> selectedSells = closed.stream().limit(limit).toList();
+        Page<WalletTrade> closedPage = walletTradeRepository.findClosedTradesForInspector(
+                symbol, PageRequest.of(pageNumber, pageSize));
 
-        List<WalletTrade> ledger = walletTradeRepository.findTop100ByOrderByExecutedAtDesc();
         List<TradeInspectorTradeView> views = new ArrayList<>();
-        for (WalletTrade sell : selectedSells) {
-            WalletTrade buy = findEntryTrade(sell, ledger);
+        for (WalletTrade sell : closedPage.getContent()) {
+            // FIX-106: resolve the BUY from historical candidates for this SELL. This removes
+            // the second latest-100 ceiling that could make a paged SELL silently disappear.
+            WalletTrade buy = findEntryTrade(sell);
             if (buy != null) {
                 views.add(toView(buy, sell));
             }
         }
 
-        List<String> symbols = closed.stream().map(WalletTrade::getSymbol).filter(Objects::nonNull)
-                .distinct().sorted().toList();
-        if (symbols.isEmpty()) {
-            symbols = ledger.stream().map(WalletTrade::getSymbol).filter(Objects::nonNull).distinct().sorted().toList();
-        }
-        return new TradeInspectorResponse(summary(views), views, symbols);
+        List<String> symbols = walletTradeRepository.findDistinctClosedTradeSymbols();
+        return new TradeInspectorResponse(summary(views), views, symbols,
+                closedPage.getNumber(), closedPage.getSize(), closedPage.getTotalElements(), closedPage.getTotalPages());
     }
 
 
@@ -427,6 +425,21 @@ public class TradeInspectorService {
         m.put("closeExplanation", a.getCloseExplanation());
         m.put("auditedAt", a.getAuditedAt());
         return m;
+    }
+
+    /**
+     * FIX-106: historical-safe entry pairing for the paginated Trade Inspector.
+     * Preserve the existing quantity-match-first behavior, then fall back to the most recent
+     * prior BUY for the symbol. The bounded candidate query is per selected SELL page only.
+     */
+    private WalletTrade findEntryTrade(WalletTrade sell) {
+        if (sell == null || sell.getExecutedAt() == null || sell.getSymbol() == null) return null;
+        List<WalletTrade> candidates = walletTradeRepository.findEntryCandidatesBefore(
+                sell.getSymbol(), sell.getExecutedAt(), PageRequest.of(0, 100));
+        return candidates.stream()
+                .filter(t -> quantitiesMatch(t.getQuantity(), sell.getQuantity()))
+                .findFirst()
+                .orElse(candidates.isEmpty() ? null : candidates.get(0));
     }
 
     private WalletTrade findEntryTrade(WalletTrade sell, List<WalletTrade> ledger) {

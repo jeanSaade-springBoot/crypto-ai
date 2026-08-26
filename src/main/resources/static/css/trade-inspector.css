@@ -188,3 +188,12 @@ body.inspector-modal-open{overflow:hidden}
 /* FIX-100: restored all-signal Trade Signal Analysis grid. Read-only presentation only. */
 /* FIX-102: Trade Analysis styles moved to trade-activity.css. */
 
+
+
+/* FIX-106: compact pagination for historical completed positions. */
+.inspector-pagination{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:18px;padding-top:14px;border-top:1px solid var(--border)}
+.inspector-pagination span{min-width:180px;text-align:center;color:var(--muted);font-size:12px;font-weight:700}
+.inspector-pagination button{padding:8px 13px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,.025);color:var(--text);font-weight:700;cursor:pointer}
+.inspector-pagination button:hover:not(:disabled){border-color:var(--accent);background:rgba(57,217,138,.07)}
+.inspector-pagination button:disabled{opacity:.35;cursor:not-allowed}
+@media(max-width:600px){.inspector-pagination{gap:8px}.inspector-pagination span{min-width:120px;font-size:11px}}

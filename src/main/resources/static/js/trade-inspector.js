@@ -2,6 +2,8 @@ const $ = id => document.getElementById(id);
 let symbolsLoaded = false;
 let inspectedTradeChart = null;
 let inspectedTradeFocus = null;
+// FIX-106: zero-based server page. Filters reset this to page 0; Prev/Next mutate it.
+let inspectorPage = 0;
 
 function money(v){if(v===null||v===undefined)return '—';const n=Number(v);return `${n<0?'-':''}$${Math.abs(n).toLocaleString(undefined,{maximumFractionDigits:8})}`}
 function price(v){if(v===null||v===undefined)return '—';const n=Number(v);return n>=1?`$${n.toLocaleString(undefined,{maximumFractionDigits:6})}`:`$${n.toLocaleString(undefined,{maximumFractionDigits:12})}`}
@@ -188,17 +190,36 @@ async function loadProductionExits(){
 }
 
 // FIX-102: Trade Analysis moved to Trade Activity. Trade Inspector keeps completed-trade inspection only.
+// FIX-106: completed positions are now fetched page-by-page from the database. Symbol filtering
+// is part of the SQL query, so older matching trades are no longer hidden behind a latest-100 cap.
 async function load(){
  $('inspector-error').classList.add('hidden');
  try{
-  const symbol=encodeURIComponent($('symbol-filter').value||'ALL'),venue=encodeURIComponent($('venue-filter').value||'ALL'),limit=encodeURIComponent($('limit-filter').value||20);
-  const r=await fetch(`/api/trade-inspector?symbol=${symbol}&venue=${venue}&limit=${limit}`,{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);
-  const d=await r.json();window.__inspectorTrades=d.trades||[];renderSummary(d.summary);renderSymbols(d.symbols);
+  const symbol=encodeURIComponent($('symbol-filter').value||'ALL');
+  const venue=encodeURIComponent($('venue-filter').value||'ALL');
+  const pageSize=encodeURIComponent($('limit-filter').value||50);
+  const r=await fetch(`/api/trade-inspector?symbol=${symbol}&venue=${venue}&page=${inspectorPage}&pageSize=${pageSize}`,{cache:'no-store'});
+  if(!r.ok)throw new Error(`HTTP ${r.status}`);
+  const d=await r.json();
+  // If data was deleted while viewing the last page, step back to the new last page once.
+  if(Number(d.totalPages||0)>0 && inspectorPage>=Number(d.totalPages)){inspectorPage=Math.max(0,Number(d.totalPages)-1);return load();}
+  inspectorPage=Number(d.page||0);
+  window.__inspectorTrades=d.trades||[];renderSummary(d.summary);renderSymbols(d.symbols);
   $('trade-cards').innerHTML=d.trades?.length?d.trades.map(tradeCard).join(''):'<div class="empty">No completed trades match this filter.</div>';
+  const totalPages=Number(d.totalPages||0),total=Number(d.totalElements||0);
+  $('inspector-page-info').textContent=totalPages?`Page ${inspectorPage+1} of ${totalPages} · ${total} trades`:`Page 0 of 0 · ${total} trades`;
+  $('inspector-prev').disabled=inspectorPage<=0;
+  $('inspector-next').disabled=totalPages===0||inspectorPage>=totalPages-1;
   $('inspector-updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
  }catch(e){$('inspector-error').textContent=`Trade Inspector could not load: ${e.message}`;$('inspector-error').classList.remove('hidden')}
 }
-$('refresh-inspector').addEventListener('click',load);$('symbol-filter').addEventListener('change',load);$('venue-filter').addEventListener('change',load);$('limit-filter').addEventListener('change',load);
+function resetInspectorPageAndLoad(){inspectorPage=0;return load();}
+$('refresh-inspector').addEventListener('click',load);
+$('symbol-filter').addEventListener('change',resetInspectorPageAndLoad);
+$('venue-filter').addEventListener('change',resetInspectorPageAndLoad);
+$('limit-filter').addEventListener('change',resetInspectorPageAndLoad);
+$('inspector-prev').addEventListener('click',()=>{if(inspectorPage>0){inspectorPage--;load();}});
+$('inspector-next').addEventListener('click',()=>{inspectorPage++;load();});
 load();
 
 

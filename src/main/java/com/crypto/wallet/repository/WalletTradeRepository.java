@@ -2,6 +2,7 @@ package com.crypto.wallet.repository;
 
 import com.crypto.wallet.domain.WalletTrade;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Page;
 import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
 
@@ -37,6 +38,46 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
             order by t.executedAt desc
             """)
     List<WalletTrade> findRecentClosedTrades(Pageable pageable);
+
+    // FIX-106: paginate completed Trade Inspector exits in SQL. Symbol filtering happens
+    // before LIMIT/OFFSET so a symbol is never hidden merely because it is outside the
+    // newest global batch of wallet trades. A null symbol means ALL.
+    @Query("""
+            select t from WalletTrade t
+            where t.status = 'EXECUTED'
+              and t.side = 'SELL'
+              and t.realizedPnlUsdt is not null
+              and (:symbol is null or upper(t.symbol) = upper(:symbol))
+            order by t.executedAt desc
+            """)
+    Page<WalletTrade> findClosedTradesForInspector(@Param("symbol") String symbol, Pageable pageable);
+
+    // FIX-106: populate the symbol dropdown from the complete persisted closed-trade set,
+    // not from whichever page happens to be loaded.
+    @Query("""
+            select distinct t.symbol from WalletTrade t
+            where t.status = 'EXECUTED'
+              and t.side = 'SELL'
+              and t.realizedPnlUsdt is not null
+              and t.symbol is not null
+            order by t.symbol
+            """)
+    List<String> findDistinctClosedTradeSymbols();
+
+    // FIX-106: historical pages must pair each SELL with a historical BUY without relying
+    // on findTop100ByOrderByExecutedAtDesc(). We fetch prior BUY candidates for this symbol
+    // and retain the existing quantity-match-first/fallback semantics in the service.
+    @Query("""
+            select t from WalletTrade t
+            where t.status = 'EXECUTED'
+              and t.side = 'BUY'
+              and upper(t.symbol) = upper(:symbol)
+              and t.executedAt < :before
+            order by t.executedAt desc
+            """)
+    List<WalletTrade> findEntryCandidatesBefore(@Param("symbol") String symbol,
+                                                 @Param("before") Instant before,
+                                                 Pageable pageable);
 
     @Query("""
             select t from WalletTrade t

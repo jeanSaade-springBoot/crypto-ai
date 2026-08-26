@@ -29,8 +29,11 @@ public class TradeInspectorController {
     public TradeInspectorResponse inspect(
             @RequestParam(required = false, defaultValue = "ALL") String symbol,
             @RequestParam(required = false, defaultValue = "ALL") String venue,
-            @RequestParam(required = false, defaultValue = "20") int limit) {
-        return service.inspect(symbol, venue, limit);
+            @RequestParam(required = false, defaultValue = "0") int page,
+            @RequestParam(required = false, defaultValue = "50") int pageSize) {
+        // FIX-106: completed trades are paged at the database boundary. The filters are
+        // part of the paged query, so changing symbol never searches only a recent subset.
+        return service.inspect(symbol, venue, page, pageSize);
     }
     // FIX-039: blocked BUY/SELL diagnostics accept an explicit UTC window. When omitted,
     // the service defaults to the last three hours. The UI presents the timestamps in KSA.
