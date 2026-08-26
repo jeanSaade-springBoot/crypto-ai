@@ -107,7 +107,12 @@ async function loadCatchChart(){
     // FIX-095: backend chooses the blamed signal native interval; no popup timeframe can hide it.
     const data=await api(`/api/administration/debug/price-moves/${encodeURIComponent(catchFocusId)}/chart`);
     const e=data.event;catchFocusEvent=e;catchFocusSignal=data.blamedSignal||null;
+    // FIX-096: backend returns the actual candle interval used for this popup. It is normally the
+    // blamed signal's native interval, with a truthful 1m fallback only when that historical native
+    // candle series is absent. The signal's own interval remains visible in the context label.
     const interval=String(data.interval||catchFocusSignal?.interval||'1m');
+    const signalInterval=String(data.signalInterval||catchFocusSignal?.interval||interval);
+    if(catchFocusSignal)catchFocusSignal.__chartInterval=interval;
     const candles=(data.candles||[]).map(c=>({
         x:parseUtc(c.openTime)?.getTime(),
         y:[+c.openPrice,+c.highPrice,+c.lowPrice,+c.closePrice],
@@ -117,14 +122,24 @@ async function loadCatchChart(){
     if(!candles.length){
         if(catchChart){catchChart.destroy();catchChart=null;}
         const host=document.getElementById('catch-chart');if(host)host.innerHTML='';
-        if(empty){empty.textContent='Historical candles are not available for the blamed signal interval.';empty.classList.remove('hidden');}
+        if(empty){empty.textContent=`No persisted candles are available around blamed signal #${catchFocusSignal?.id??'—'} (${signalInterval}). The chart was not rendered.`;empty.classList.remove('hidden');}
         return;
     }
     empty?.classList.add('hidden');
     const step=intervalMs(interval);
     const signalX=parseUtc(catchFocusSignal?.candleOpenTime||catchFocusSignal?.generatedAt)?.getTime();
     const signalY=Number(catchFocusSignal?.latestPrice);
-    const focus=Number.isFinite(signalX)?{min:signalX-step*45,max:signalX+step*75}:{min:candles[0].x,max:candles[candles.length-1].x};
+    // FIX-096: never hand Apex an X window that lies outside the returned candle series. That can
+    // create a valid chart instance with an entirely black viewport. Center on the blamed signal when
+    // it falls inside the candle range; otherwise show the nearest real candle range explicitly.
+    const firstX=candles[0].x,lastX=candles[candles.length-1].x;
+    let focus;
+    if(Number.isFinite(signalX)&&signalX>=firstX-step&&signalX<=lastX+step){
+        focus={min:Math.max(firstX,signalX-step*45),max:Math.min(lastX,signalX+step*75)};
+        if(focus.max-focus.min<step*8)focus={min:firstX,max:lastX};
+    }else{
+        focus={min:firstX,max:lastX};
+    }
     const metaByTime=new Map(candles.map(c=>[c.x,c.meta]));
     const original=String(catchFocusSignal?.originalDecision||'').toUpperCase();
     const finalDecision=String(catchFocusSignal?.decision||'').toUpperCase();
@@ -132,7 +147,8 @@ async function loadCatchChart(){
     const blocked=catchFocusSignal?.finalEntryAllowed===false;
 
     document.getElementById('catch-chart-title').textContent=`${String(e.symbol||'').toUpperCase()} · Blamed ${side} signal #${catchFocusSignal?.id??'—'}`;
-    document.getElementById('catch-chart-context').textContent=`${interval} · ${blocked?'BLOCKED · ':''}score ${catchFocusSignal?.totalScore??'—'} · confidence ${catchFocusSignal?.confidenceScore??'—'} · KSA chart context`;
+    const intervalContext=data.fallbackIntervalUsed?`${signalInterval} signal · ${interval} candle fallback`:`${signalInterval}`;
+    document.getElementById('catch-chart-context').textContent=`${intervalContext} · ${blocked?'BLOCKED · ':''}score ${catchFocusSignal?.totalScore??'—'} · confidence ${catchFocusSignal?.confidenceScore??'—'} · KSA chart context`;
 
     const tooltip=({seriesIndex,dataPointIndex,w})=>{
         const point=w?.config?.series?.[seriesIndex]?.data?.[dataPointIndex];
@@ -209,7 +225,7 @@ function closeCatchChart(){
 }
 function navigateCatch(mode){
     if(!catchChart||!catchFocusSignal)return;
-    const interval=String(catchFocusSignal.interval||'1m');
+    const interval=String(catchFocusSignal.__chartInterval||catchFocusSignal.interval||'1m');
     const step=intervalMs(interval);
     const signalX=parseUtc(catchFocusSignal.candleOpenTime||catchFocusSignal.generatedAt)?.getTime();
     if(!Number.isFinite(signalX))return;

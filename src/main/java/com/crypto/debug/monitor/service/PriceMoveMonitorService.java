@@ -226,21 +226,71 @@ public class PriceMoveMonitorService {
 
         Instant signalTime = blamedSignal.getCandleOpenTime() != null
                 ? blamedSignal.getCandleOpenTime() : blamedSignal.getGeneratedAt();
-        Instant blockFrom=e.getBlockStartTime()!=null?e.getBlockStartTime():e.getStartTime().minus(2,ChronoUnit.HOURS);
-        Instant blockTo=e.getBlockEndTime()!=null?e.getBlockEndTime():e.getEndTime().plus(2,ChronoUnit.HOURS);
-        // Keep enough surrounding candles for Trade-Inspector-style context while never changing
-        // any trading/replay state. The event block remains the outer historical boundary.
-        Instant from = signalTime == null ? blockFrom : (signalTime.minus(2, ChronoUnit.HOURS).isAfter(blockFrom)
-                ? signalTime.minus(2, ChronoUnit.HOURS) : blockFrom);
-        Instant to = signalTime == null ? blockTo : (signalTime.plus(2, ChronoUnit.HOURS).isBefore(blockTo)
-                ? signalTime.plus(2, ChronoUnit.HOURS) : blockTo);
+        if (signalTime == null) {
+            throw new IllegalArgumentException("Blamed signal has no candle/generated timestamp to anchor the chart");
+        }
+
+        /*
+         * FIX-096: the focused blame chart must be anchored to the blamed signal, not clipped to the
+         * caught move's 8-hour monitoring block. A retrospective bestSignalId can legitimately point
+         * to a signal near/outside that block boundary. FIX-095 clipped the candle query to blockFrom /
+         * blockTo, which could produce an inverted/empty range and render a completely black popup.
+         *
+         * Build a deterministic read-only window around the persisted signal timestamp instead. The
+         * window grows with timeframe so 1h/4h signals still receive enough candles for context.
+         * This changes dashboard diagnostics only; no signal, Replay, execution or wallet state is used.
+         */
+        Duration nativeRadius = blameChartRadius(interval);
+        Instant from = signalTime.minus(nativeRadius);
+        Instant to = signalTime.plus(nativeRadius);
+        List<com.crypto.domain.Candle> candles = candleRepository
+                .findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(e.getSymbol(), interval, from, to)
+                .stream().filter(com.crypto.domain.Candle::isClosed).toList();
+
+        String chartInterval = interval;
+        boolean fallbackIntervalUsed = false;
+
+        /*
+         * FIX-096: older DB periods may not contain candles for every signal timeframe. The blamed
+         * signal still has a valid immutable candleOpenTime/price, so fall back to 1m candle context
+         * when the native interval has no stored candles. We keep the signal interval separately and
+         * still highlight only that one blamed signal. We never synthesize candles.
+         */
+        if (candles.isEmpty() && !"1m".equals(interval)) {
+            chartInterval = "1m";
+            fallbackIntervalUsed = true;
+            Duration fallbackRadius = blameChartRadius(chartInterval);
+            Instant fallbackFrom = signalTime.minus(fallbackRadius);
+            Instant fallbackTo = signalTime.plus(fallbackRadius);
+            candles = candleRepository
+                    .findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(e.getSymbol(), chartInterval, fallbackFrom, fallbackTo)
+                    .stream().filter(com.crypto.domain.Candle::isClosed).toList();
+        }
 
         Map<String,Object> out=new LinkedHashMap<>();
         out.put("event",e);
-        out.put("interval", interval);
+        out.put("interval", chartInterval);
+        out.put("signalInterval", interval);
+        out.put("fallbackIntervalUsed", fallbackIntervalUsed);
+        out.put("signalTime", signalTime);
         out.put("blamedSignal", blamedSignal);
-        out.put("candles",candleRepository.findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(e.getSymbol(),interval,from,to));
+        out.put("candles", candles);
         return out;
+    }
+
+    /**
+     * FIX-096: timeframe-aware radius for the read-only blamed-signal popup. The radius is deliberately
+     * based on the signal timeframe rather than the caught move block so the selected signal stays in
+     * the middle of a useful candle context window.
+     */
+    private Duration blameChartRadius(String interval) {
+        return switch (interval == null ? "1m" : interval) {
+            case "4h" -> Duration.ofDays(10);
+            case "1h" -> Duration.ofDays(3);
+            case "15m" -> Duration.ofHours(18);
+            case "5m" -> Duration.ofHours(8);
+            default -> Duration.ofHours(2);
+        };
     }
 
     @Transactional

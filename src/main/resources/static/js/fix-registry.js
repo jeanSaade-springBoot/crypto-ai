@@ -1,6 +1,36 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-096",
+            title: "Blamed signal popup empty-black chart hardening",
+            status: "IMPLEMENTED · UI / READ-ONLY DIAGNOSTICS",
+            scenario: "Some Catching Market blamed-signal popups opened as an all-black chart because the historical candle query was clipped to the caught move block or Apex was focused outside the returned candle timestamps.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A · visualization only", exitTime: "N/A",
+            replayWindow: "Replay behavior is unchanged. FIX-096 reads persisted production candles/signals only for the Catching Market diagnostic popup.",
+            location: "PriceMoveMonitorService.eventChart() blamed-signal candle window + Catching Market popup viewport",
+            classes: ["PriceMoveMonitorService", "catching-market.js", "catching-market.html", "fix-registry.js"],
+            cause: "FIX-095 bounded candle history by the 8-hour caught-move block even though bestSignalId can point near/outside that boundary. This could create an empty/inverted historical range. Separately, the browser centered Apex on the signal time without verifying that time lay inside the returned candle series, producing a valid but visually black viewport.",
+            solution: "Anchor the read-only candle query directly to the persisted blamed signal timestamp with a timeframe-aware radius; filter to closed candles; if an older native timeframe has no stored candles, truthfully fall back to persisted 1m candles without changing the blamed signal; clamp the initial Apex X-axis to the real returned candle range; and show an explicit no-candle message instead of rendering an empty black graph.",
+            behavior: "The popup still highlights exactly one persisted blamed BUY/SELL signal. It now opens with real candle context whenever stored candles exist, labels any 1m fallback, and never intentionally renders an empty black chart. Trading, Replay, FinalDecision, ExecutionIntelligence and wallet behavior are unchanged.",
+            regression: "Open multiple blamed signals across 1m/5m/1h/4h and across caught-block boundaries. Verify the selected signal remains highlighted, native candle context loads when present, 1m fallback is labeled when required, no-candle cases show a message, and the X-axis never opens outside the returned candles."
+        },
+        {
+            id: "FIX-095",
+            title: "Focused single blamed-signal Trade Inspector popup",
+            status: "IMPLEMENTED · UI / READ-ONLY DIAGNOSTICS",
+            scenario: "The blame graph mixed unrelated caught-move, signal and trade markers when the operator wanted a Trade Inspector-style popup focused only on the persisted blamed signal.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A · visualization only", exitTime: "N/A",
+            replayWindow: "Replay behavior is unchanged. The popup uses immutable production blame/signal/candle history for display only.",
+            location: "Catching Market blamed-signal popup and PriceMoveMonitorService.eventChart()",
+            classes: ["PriceMoveMonitorService", "catching-market.js", "catching-market.html", "fix-registry.js"],
+            cause: "The prior Catching Market chart endpoint returned broad event context and multiple markers instead of treating PriceMoveEvent.bestSignalId as the single diagnostic focus.",
+            solution: "Resolve bestSignalId directly, use the blamed signal's own timeframe, return only that signal plus candle context, and render one large BLAMED BUY/SELL marker with BLOCKED state when applicable. Remove unrelated trade/signal/move annotations from this popup.",
+            behavior: "View chart opens above the page using the Trade Inspector modal style and highlights only the persisted blamed signal at its candleOpenTime/latestPrice.",
+            regression: "Open blamed BUY, SELL and blocked blamed signals and verify exactly one signal marker is visible, no wallet/trade markers are mixed in, and Replay/trading/wallet behavior is unchanged."
+        },
+        {
             id: "FIX-094B",
             title: "Catching Market View chart click wiring hardening",
             status: "IMPLEMENTED · UI / READ-ONLY DIAGNOSTICS",
