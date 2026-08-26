@@ -32,7 +32,12 @@ public class PriceMoveMonitorController {
     public Map<String, Long> blameCount() { return Map.of("count", service.outstandingBlameCount()); }
 
     @GetMapping("/{id}/chart")
-    public Map<String, Object> chart(@PathVariable Long id) { return service.eventChart(id); }
+    public Map<String, Object> chart(@PathVariable Long id,
+                                     @RequestParam(defaultValue = "1m") String interval) {
+        // FIX-094: Catching Market reuses the Trade Inspector popup experience. The selected
+        // interval is display-only and is passed into the existing read-only catch chart loader.
+        return service.eventChart(id, interval);
+    }
 
     @GetMapping("/settings")
     public PriceMoveMonitorSettings settings() {

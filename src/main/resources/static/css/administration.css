@@ -267,15 +267,14 @@ body:has(#ai-regression-tests) main.administration-content{padding-top:0}
 #ai-regression-tests>.section-heading:first-child{margin-top:0;padding-top:0}
 .regression-archive-section{margin-top:28px;padding-top:22px;border-top:2px solid var(--border,#203342)}
 .regression-archive-section>h3{margin:0 0 12px}
-.catching-blame-badge{margin-left:auto;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:#dc2626;color:#fff;font-size:11px;font-weight:800;display:inline-flex;align-items:center;justify-content:center}.catching-blame-pill{color:#dc2626;font-weight:800}.blame-summary{color:#dc2626}.status-pill.normal{opacity:.9}.status-pill.extreme{font-weight:900}
 
-/* Catching Market: keep blame/review controls visible on normal desktop widths. */
+
 .price-move-table{width:100%;table-layout:fixed;font-size:12px}
 .price-move-table th,.price-move-table td{padding:7px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
-.price-move-table th:nth-child(1){width:8%}.price-move-table th:nth-child(2){width:7%}.price-move-table th:nth-child(3){width:6%}.price-move-table th:nth-child(4){width:7%}.price-move-table th:nth-child(5){width:7%}.price-move-table th:nth-child(6),.price-move-table th:nth-child(7){width:10%}.price-move-table th:nth-child(8){width:5%}.price-move-table th:nth-child(9){width:8%}.price-move-table th:nth-child(10){width:9%}.price-move-table th:nth-child(11){width:8%}.price-move-table th:nth-child(12){width:15%}
+/* FIX-093: compact price-catch grid after removing Trade/Signal/Blame/Review columns. */
+.price-move-table th:nth-child(1){width:10%}.price-move-table th:nth-child(2){width:8%}.price-move-table th:nth-child(3){width:8%}.price-move-table th:nth-child(4){width:9%}.price-move-table th:nth-child(5){width:9%}.price-move-table th:nth-child(6),.price-move-table th:nth-child(7){width:14%}.price-move-table th:nth-child(8){width:11%}.price-move-table th:nth-child(9){width:17%}
 .price-move-table .secondary-button{padding:5px 7px;font-size:11px;line-height:1.15;margin:1px}
 .price-move-table td:last-child{white-space:normal;overflow:visible}
-.price-move-table .catching-blame-pill{font-size:11px}
 @media(max-width:1200px){.price-move-table{font-size:11px}.price-move-table th,.price-move-table td{padding:6px 4px}.price-move-table .secondary-button{padding:4px 5px;font-size:10px}}
 
 
@@ -352,3 +351,6 @@ body.proven-modal-open{overflow:hidden}
 .global-system-health-banner strong{white-space:nowrap;color:#ff8d93}.global-system-health-banner span{flex:1;color:inherit}.global-system-health-banner em{white-space:nowrap;font-style:normal;font-weight:700}
 .sidebar.collapsed .global-health-badge{position:absolute;right:3px;top:3px;min-width:8px;width:8px;height:8px;padding:0;font-size:0}.sidebar-nav a{position:relative}
 @media(max-width:620px){.global-system-health-banner{margin:8px 10px 0;align-items:flex-start;flex-wrap:wrap}.global-system-health-banner span{flex-basis:70%}}
+
+/* FIX-093: level selector is display-only and defaults to HIGH in the page markup. */
+.catch-level-filter{display:grid;gap:.3rem;min-width:145px;font-size:.82rem}.catch-level-filter select{min-width:145px}

@@ -205,14 +205,41 @@ public class PriceMoveMonitorService {
     public long outstandingBlameCount() { return eventRepository.countByBlameRequiredTrueAndBlameReviewedFalse(); }
 
     @Transactional(readOnly = true)
-    public Map<String,Object> eventChart(Long id) {
+    public Map<String,Object> eventChart(Long id, String rawInterval) {
         PriceMoveEvent e=eventRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Market move event was not found"));
-        Instant from=e.getBlockStartTime()!=null?e.getBlockStartTime():e.getStartTime().minus(2,ChronoUnit.HOURS);
-        Instant to=e.getBlockEndTime()!=null?e.getBlockEndTime():e.getEndTime().plus(2,ChronoUnit.HOURS);
-        Map<String,Object> out=new LinkedHashMap<>(); out.put("event",e);
-        out.put("candles",candleRepository.findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(e.getSymbol(),"1m",from,to));
-        out.put("signals",signalRepository.findBySymbolAndGeneratedAtBetweenOrderByGeneratedAtAsc(e.getSymbol(),from,to));
-        out.put("trades",walletTradeRepository.findTop100BySymbolAndStatusOrderByExecutedAtDesc(e.getSymbol(),"EXECUTED").stream().filter(t->!t.getExecutedAt().isBefore(from)&&!t.getExecutedAt().isAfter(to)).toList());
+
+        // FIX-095: the blame chart is intentionally focused on exactly the signal selected by the
+        // retrospective blame analysis. Do not mix unrelated signals or wallet executions into this
+        // diagnostic popup; the operator asked to inspect the one persisted best/blamed signal only.
+        TradeSignal blamedSignal = e.getBestSignalId() == null ? null
+                : signalRepository.findById(e.getBestSignalId()).orElse(null);
+        if (blamedSignal == null) {
+            throw new IllegalArgumentException("No blamed signal is persisted for this caught move");
+        }
+
+        // FIX-095: always render the blamed signal on its native interval so its highlight cannot
+        // disappear because the popup was switched to a different timeframe. rawInterval is kept in
+        // the controller signature for backward compatibility with existing URLs, but the persisted
+        // signal interval is authoritative for this focused diagnostic chart.
+        String interval = blamedSignal.getInterval();
+        if (interval == null || interval.isBlank()) interval = "1m";
+
+        Instant signalTime = blamedSignal.getCandleOpenTime() != null
+                ? blamedSignal.getCandleOpenTime() : blamedSignal.getGeneratedAt();
+        Instant blockFrom=e.getBlockStartTime()!=null?e.getBlockStartTime():e.getStartTime().minus(2,ChronoUnit.HOURS);
+        Instant blockTo=e.getBlockEndTime()!=null?e.getBlockEndTime():e.getEndTime().plus(2,ChronoUnit.HOURS);
+        // Keep enough surrounding candles for Trade-Inspector-style context while never changing
+        // any trading/replay state. The event block remains the outer historical boundary.
+        Instant from = signalTime == null ? blockFrom : (signalTime.minus(2, ChronoUnit.HOURS).isAfter(blockFrom)
+                ? signalTime.minus(2, ChronoUnit.HOURS) : blockFrom);
+        Instant to = signalTime == null ? blockTo : (signalTime.plus(2, ChronoUnit.HOURS).isBefore(blockTo)
+                ? signalTime.plus(2, ChronoUnit.HOURS) : blockTo);
+
+        Map<String,Object> out=new LinkedHashMap<>();
+        out.put("event",e);
+        out.put("interval", interval);
+        out.put("blamedSignal", blamedSignal);
+        out.put("candles",candleRepository.findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(e.getSymbol(),interval,from,to));
         return out;
     }
 

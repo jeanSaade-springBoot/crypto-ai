@@ -101,4 +101,9 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
     List<TradeSignal> findBySymbolAndGeneratedAtBetweenOrderByGeneratedAtAsc(
             String symbol, Instant from, Instant to
     );
+
+    // FIX-093: Catching Market graph markers must align to the analyzed candle, not the later persistence time.
+    List<TradeSignal> findBySymbolAndCandleOpenTimeBetweenOrderByCandleOpenTimeAsc(
+            String symbol, Instant from, Instant to
+    );
 }
