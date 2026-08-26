@@ -1,6 +1,36 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-103",
+            title: "Trade Activity dedicated Signals & executions workspace",
+            status: "IMPLEMENTED · READ-ONLY UI CONSOLIDATION",
+            scenario: "The operator preferred the compact Signals & executions browser but did not want the same workflow duplicated across Trade Inspector and Trade Activity, nor the old forensic graph/KPI workspace below it.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A · diagnostics only", exitTime: "N/A",
+            replayWindow: "Replay and trading behavior are unchanged. FIX-103 changes Trade Activity presentation only and reads persisted production evidence.",
+            location: "Trade Activity HTML/JS/CSS only; Trade Inspector remains unchanged from the post-FIX-102 completed-trade inspection layout",
+            classes: ["trade-activity.html", "trade-activity.js", "trade-activity.css", "fix-registry.js"],
+            cause: "FIX-102 correctly moved the compact analysis workflow to Trade Activity but retained the legacy KPI/Forensic Trade Graph/technical-summary workspace below it, leaving two different workflows on one page.",
+            solution: "Make Trade Activity exclusively the compact Signals & executions browser: Symbol, Period, Type, Analyze, unified results grid and persisted-evidence Analyze modal. Remove the legacy KPI strip, forensic chart, volume chart, technical entry/exit summaries, outcome card and chart-detail blocks from this page. Remove their JavaScript bindings so deleted DOM cannot cause runtime errors. Do not add the analysis grid or graph back into Trade Inspector.",
+            behavior: "Trade Activity now opens directly into the exact compact analysis workflow. There is no second graph/workspace below the grid. Trade Inspector remains dedicated to its existing completed-trade inspection behavior.",
+            regression: "Verify Trade Activity contains only the compact filter/grid plus Analyze modal; Symbol/Period/Type filters work; default period is one day and default type is Blocked BUY; Trade Inspector is unchanged; no chart code executes on Trade Activity; no signal, Replay, execution, position or wallet state is mutated."
+        },
+        {
+            id: "FIX-102",
+            title: "Trade Analysis moved into Trade Activity",
+            status: "IMPLEMENTED · READ-ONLY UI CONSOLIDATION",
+            scenario: "The compact Symbol/Period/Type Trade Analysis workflow was added inside Trade Inspector, while Trade Activity still exposed the older checkbox/couple search UI. This split analysis across two pages and left Trade Activity looking disabled until legacy filters were configured.",
+            symbol: "ALL", entry: "UNCHANGED", exit: "UNCHANGED",
+            entryTime: "N/A · diagnostics only", exitTime: "N/A",
+            replayWindow: "Replay and trading behavior are unchanged. FIX-102 only relocates read-only persisted evidence browsing and reuses the existing forensic chart.",
+            location: "Trade Activity primary filters/results + removal of FIX-101 panel from Trade Inspector",
+            classes: ["trade-activity.html", "trade-activity.js", "trade-activity.css", "trade-inspector.html", "trade-inspector.js", "fix-registry.js"],
+            cause: "Trade Analysis belonged operationally in Trade Activity, but FIX-101 placed its grid in Trade Inspector and left the older checkbox-driven Trade Activity workflow in place.",
+            solution: "Remove the FIX-101 Trade Analysis panel/modal/listeners from Trade Inspector. Replace Trade Activity's Direction/State/COUPLE controls and old results grid with always-enabled Symbol, Period (15m/1h/4h/1d/1w), and Type (Blocked BUY, Blocked SELL, BUY/SELL done, BUY open) controls. Auto-refresh on filter changes, retain a manual Analyze refresh, show persisted evidence in a unified grid/modal, and keep the existing read-only forensic graph below it.",
+            behavior: "Trade Activity opens immediately as the single signal/execution analysis workspace. No checkbox mode can disable the page. Analyze opens immutable signal evidence; Graph loads the selected symbol into the existing forensic chart. Trade Inspector returns to completed-trade inspection only.",
+            regression: "Verify Trade Inspector no longer shows the FIX-101 analysis grid; Trade Activity shows all three dropdowns enabled on first load; each Type and Period refreshes automatically; Analyze opens persisted evidence; the forensic chart and completed-trade summaries still work; no signal, execution, Replay or wallet state is mutated."
+        },
+        {
             id: "FIX-101",
             title: "Trade Analysis compact business-state redesign",
             status: "IMPLEMENTED · READ-ONLY ANALYSIS UI",

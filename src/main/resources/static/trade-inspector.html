@@ -49,58 +49,7 @@
         </section>
 
 
-        <!-- FIX-101: Trade Analysis is a compact read-only browser across the four business states
-             requested by the operator. It combines persisted signals/executions/positions for inspection only;
-             no analysis, execution, replay, or wallet state is recalculated or mutated here. -->
-        <section class="panel inspector-signal-analysis-panel">
-            <div class="section-heading">
-                <div><p class="eyebrow">TRADE ANALYSIS</p><h2>Signals &amp; executions</h2></div>
-                <span id="signal-analysis-count">0 rows</span>
-            </div>
-            <div class="signal-analysis-filters signal-analysis-filters-compact">
-                <label>Symbol
-                    <select id="signal-analysis-symbol"><option value="ALL">All symbols</option></select>
-                </label>
-                <label>Period
-                    <select id="signal-analysis-period">
-                        <option value="15m">Last 15 minutes</option>
-                        <option value="1h" selected>Last 1 hour</option>
-                        <option value="4h">Last 4 hours</option>
-                        <option value="1d">Last 1 day</option>
-                        <option value="1w">Last 1 week</option>
-                    </select>
-                </label>
-                <label>Type
-                    <select id="signal-analysis-type">
-                        <option value="BLOCKED_BUY" selected>Blocked BUY</option>
-                        <option value="BLOCKED_SELL">Blocked SELL</option>
-                        <option value="DONE">BUY / SELL done</option>
-                        <option value="OPEN_BUY">BUY open</option>
-                    </select>
-                </label>
-                <button id="signal-analysis-search" type="button">Analyze</button>
-            </div>
-            <p class="form-note">Read-only production evidence. Signal/candle timestamps are stored in UTC and displayed here in KSA.</p>
-            <div id="signal-analysis-error" class="error-banner hidden"></div>
-            <div class="signal-analysis-table-wrap">
-                <table class="signal-analysis-table">
-                    <thead><tr><th>Time (KSA)</th><th>Symbol</th><th>Type</th><th>Signal</th><th>Score / Conf.</th><th>State</th><th>Regime / Strategy</th><th>Reason / P&amp;L</th><th>Action</th></tr></thead>
-                    <tbody id="signal-analysis-rows"><tr><td colspan="9" class="empty-cell">Loading trade analysis…</td></tr></tbody>
-                </table>
-            </div>
-        </section>
-
-        <div id="signal-analysis-modal" class="inspector-trade-chart-modal hidden" aria-hidden="true">
-            <div class="inspector-trade-chart-backdrop" data-signal-analysis-close="1"></div>
-            <section class="inspector-trade-path-dialog signal-analysis-dialog" role="dialog" aria-modal="true" aria-labelledby="signal-analysis-title">
-                <div class="section-heading inspector-popup-head">
-                    <div><p class="eyebrow">PERSISTED SIGNAL EVIDENCE</p><h2 id="signal-analysis-title">Signal analysis</h2><p id="signal-analysis-subtitle" class="trade-path-summary">—</p></div>
-                    <button id="signal-analysis-close" type="button" class="trade-path-close">Close</button>
-                </div>
-                <div id="signal-analysis-content" class="signal-analysis-content"><div class="empty">Select a signal to analyze.</div></div>
-            </section>
-        </div>
-
+        <!-- FIX-102: compact Trade Analysis moved to Trade Activity; Trade Inspector remains focused on completed-trade inspection. -->
 
         <!-- FIX-019: Trade Inspector uses the same focused popup chart as Proven Trades.
              The parent inspector remains visible but dimmed while the selected trade stays in context. -->
@@ -176,7 +125,7 @@
 </div>
 <script src="/js/time-utils.js"></script>
 <script src="/js/chart-crosshair.js"></script>
-<script src="/js/trade-inspector.js?v=101"></script>
+<script src="/js/trade-inspector.js?v=102"></script>
 <script src="/js/catching-market-badge.js"></script><script src="/js/global-system-health.js"></script>
 </body>
 </html>

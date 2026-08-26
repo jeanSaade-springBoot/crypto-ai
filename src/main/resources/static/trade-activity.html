@@ -1,35 +1,30 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Trade Activity</title><link rel="stylesheet" href="/css/dashboard.css"><link rel="stylesheet" href="/css/trade-activity.css"><link rel="stylesheet" href="/css/chart-crosshair.css">
-    <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1"></script></head><body>
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Trade Activity</title><link rel="stylesheet" href="/css/dashboard.css"><link rel="stylesheet" href="/css/trade-activity.css?v=103"></head><body>
 <div class="app-shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">CT</span><div class="sidebar-label"><strong>Crypto Trader</strong><small>AI trading command center</small></div></div><nav class="sidebar-nav"><div class="nav-group"><span class="nav-group-label">OVERVIEW</span><a href="/dashboard"><span class="nav-icon">⌂</span><span class="nav-text">Dashboard</span></a><a href="/catching-market"><span class="nav-icon">⌁</span><span class="nav-text">Catching Market</span></a></div><div class="nav-group"><span class="nav-group-label">EXECUTION</span><a href="/opportunity-center"><span class="nav-icon">⚡</span><span class="nav-text">Opportunity Center</span></a><a href="/wallet"><span class="nav-icon">◫</span><span class="nav-text">Wallet</span></a><a href="/binance"><span class="nav-icon">₿</span><span class="nav-text">Binance</span></a></div><div class="nav-group"><span class="nav-group-label">ANALYSIS</span><a href="/trade-inspector"><span class="nav-icon">⌕</span><span class="nav-text">Trade Inspector</span></a><a class="active" href="/trade-activity"><span class="nav-icon">↕</span><span class="nav-text">Trade Activity</span></a><a href="/crypto-fundamentals"><span class="nav-icon">ƒ</span><span class="nav-text">Crypto Fundamentals</span></a><a href="/proven-analyzed-trades"><span class="nav-icon">✓</span><span class="nav-text">Proven Analyzed Trades</span></a></div><div class="nav-group"><span class="nav-group-label">SYSTEM</span><a href="/administration"><span class="nav-icon">⚙</span><span class="nav-text">Administration</span></a><a href="/fix-registry"><span class="nav-icon">•</span><span class="nav-text">Fix Registry</span></a><a href="/system-health"><span class="nav-icon">♥</span><span class="nav-text">System Health</span></a></div></nav></aside>
-<main><header class="topbar"><div><p class="eyebrow">ON-DEMAND AUDIT</p><h1>Trade Activity</h1><p>Choose BUY/SELL for normal activity, or COUPLE for completed BUY→SELL trades. Couple mode can be filtered by WIN/LOST. Symbol and time range always apply.</p></div></header>
+<main><header class="topbar"><div><p class="eyebrow">READ-ONLY PRODUCTION ANALYSIS</p><h1>Trade Activity</h1><p>Browse blocked signals, completed BUY→SELL trades, and currently open BUY positions from persisted production evidence. All displayed times are KSA.</p></div></header>
 <section id="activity-error" class="error-banner hidden"></section>
-<section class="panel activity-filter-panel"><div class="activity-filters"><div class="filter-group"><span>Direction</span><label><input type="checkbox" value="BUY" class="activity-side" checked> BUY</label><label><input type="checkbox" value="SELL" class="activity-side"> SELL</label><label><input type="checkbox" value="COUPLE" id="activity-couple"> COUPLE</label></div><div class="filter-group"><span>State / result</span><label><input type="checkbox" value="EXECUTED" class="activity-state" checked> EXECUTED</label><label><input type="checkbox" value="BLOCKED" class="activity-state"> BLOCKED</label><label><input type="checkbox" value="WIN" class="activity-outcome" disabled> WIN</label><label><input type="checkbox" value="LOST" class="activity-outcome" checked disabled> LOST</label></div><label>Symbol<select id="activity-symbol"><option value="ALL">All symbols</option></select></label><label>Time range<select id="activity-hours"><option value="1">1 hour</option><option value="2">2 hours</option><option value="4">4 hours</option><option value="24">24 hours</option></select></label><button id="activity-search" type="button">Search</button></div></section>
-<section class="activity-kpi-strip" id="activity-kpi-strip">
-  <div class="activity-kpi"><small>Selected trade</small><strong id="trade-kpi-result">—</strong></div>
-  <div class="activity-kpi"><small>Start (BUY) KSA</small><strong id="trade-kpi-start">—</strong></div>
-  <div class="activity-kpi"><small>End (SELL) KSA</small><strong id="trade-kpi-end">—</strong></div>
-  <div class="activity-kpi"><small>Duration</small><strong id="trade-kpi-duration">—</strong></div>
-  <div class="activity-kpi"><small>Realized P/L</small><strong id="trade-kpi-pnl">—</strong></div>
+<!-- FIX-103: Trade Activity is intentionally only the compact Signals & executions browser.
+     The old activity/KPI/forensic-chart workspace is removed from this page. The data source
+     stays read-only and no trading, Replay, position or wallet mutation service is invoked. -->
+<section class="panel activity-list-panel activity-analysis-only">
+  <div class="section-heading"><div><p class="eyebrow">TRADE ANALYSIS</p><h2>Signals &amp; executions</h2></div><span id="activity-count">Loading…</span></div>
+  <div class="activity-analysis-filters">
+    <label>Symbol<select id="activity-symbol"><option value="ALL">All symbols</option></select></label>
+    <label>Period<select id="activity-period"><option value="15m">Last 15 minutes</option><option value="1h">Last 1 hour</option><option value="4h">Last 4 hours</option><option value="1d" selected>Last 1 day</option><option value="1w">Last 1 week</option></select></label>
+    <label>Type<select id="activity-type"><option value="BLOCKED_BUY" selected>Blocked BUY</option><option value="BLOCKED_SELL">Blocked SELL</option><option value="DONE">BUY / SELL done</option><option value="OPEN_BUY">BUY open</option></select></label>
+    <button id="activity-search" type="button">Analyze</button>
+  </div>
+  <p class="activity-analysis-note">Read-only production evidence. Signal/candle timestamps are stored in UTC and displayed here in KSA.</p>
+  <div class="activity-analysis-table-wrap"><table class="activity-analysis-table"><thead><tr><th>Time (KSA)</th><th>Symbol</th><th>Type</th><th>Signal</th><th>Score / Conf.</th><th>State</th><th>Regime / Strategy</th><th>Reason / P&amp;L</th><th>Action</th></tr></thead><tbody id="activity-rows"><tr><td colspan="9" class="empty-cell">Loading trade analysis…</td></tr></tbody></table></div>
 </section>
-<section class="activity-workspace">
-  <section class="panel activity-list-panel">
-    <div class="section-heading"><div><p class="eyebrow">RESULTS</p><h2>Activity</h2></div><span id="activity-count">Not loaded</span></div>
-    <div class="activity-table-wrap"><table class="activity-table"><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Result</th><th>Price</th><th>P/L</th><th>Action</th></tr></thead><tbody id="activity-rows"><tr><td colspan="7" class="empty-cell">Choose filters and press Search.</td></tr></tbody></table></div>
+<!-- FIX-103: Analyze remains a focused persisted-evidence popup; there is no chart on this page. -->
+<div id="activity-analysis-modal" class="activity-analysis-modal hidden" aria-hidden="true">
+  <div class="activity-analysis-backdrop" data-activity-analysis-close="1"></div>
+  <section class="activity-analysis-dialog" role="dialog" aria-modal="true" aria-labelledby="activity-analysis-title">
+    <div class="section-heading activity-analysis-modal-head"><div><p class="eyebrow">PERSISTED SIGNAL EVIDENCE</p><h2 id="activity-analysis-title">Trade analysis</h2><p id="activity-analysis-subtitle" class="activity-analysis-subtitle">—</p></div><button id="activity-analysis-close" type="button" class="activity-analysis-close">Close</button></div>
+    <div id="activity-analysis-content" class="activity-analysis-content"><div class="empty-cell">Select a row to analyze.</div></div>
   </section>
-  <section class="panel activity-graph-panel">
-    <div class="section-heading activity-graph-heading"><div><p class="eyebrow">REAL ACTIVITY PATH</p><div class="activity-graph-title-row"><h2 id="activity-chart-title">Forensic Trade Graph</h2><strong id="activity-chart-symbol" class="activity-chart-symbol">SELECT SYMBOL</strong></div><p class="activity-graph-help">Real closed 1m candles, persisted technical indicators, every persisted analysis and exact wallet BUY/SELL fills. All displayed times are KSA.</p></div><span id="activity-graph-count">Select a symbol</span></div>
-    <div id="activity-chart-meta" class="activity-chart-meta"><span>Select a symbol to load the KSA timeline.</span></div><div id="activity-trade-facts" class="activity-trade-facts"><span class="muted">Select a completed trade to display execution facts.</span></div>
-    <div class="activity-indicator-legend"><span>Price close</span><span>EMA20</span><span>EMA50</span><span>EMA200</span><span>SMA20</span><span>Bollinger bands</span><span>ATR retracement</span><span>Analysis markers</span></div>
-    <div id="activity-chart" class="activity-chart"><div class="empty-cell">Choose a specific symbol to display its activity graph.</div></div>
-    <div id="activity-volume-chart" class="activity-volume-chart"></div>
-  </section>
-</section>
-<section class="activity-analysis-summary" id="activity-analysis-summary">
-  <section class="panel activity-tech-card"><p class="eyebrow">TECHNICAL SUMMARY</p><h2>At entry</h2><div id="activity-entry-summary" class="activity-tech-grid"><span class="muted">Select a completed trade.</span></div></section>
-  <section class="panel activity-tech-card"><p class="eyebrow">TECHNICAL SUMMARY</p><h2>At exit</h2><div id="activity-exit-summary" class="activity-tech-grid"><span class="muted">Select a completed trade.</span></div></section>
-  <section class="panel activity-outcome-card"><p class="eyebrow">TRADE OUTCOME</p><div class="activity-outcome-layout"><div id="activity-outcome-summary" class="activity-outcome-body"><strong>—</strong><span>Select a completed trade.</span></div><div id="activity-win-rate" class="activity-win-rate"><div class="activity-win-donut"><span>—</span></div><small>Window win rate</small></div></div></section>
-</section>
-<section class="panel activity-detail-panel"><div id="activity-chart-detail" class="activity-chart-detail"><strong>Analysis details</strong><span>Click an analysis marker to inspect its persisted evidence.</span></div><div id="activity-couple-summary" class="activity-couple-summary"></div></section></main></div>
+</div>
+</main></div>
 <script src="/js/time-utils.js"></script>
-<script src="/js/chart-crosshair.js"></script><script src="/js/trade-activity.js"></script><script src="/js/catching-market-badge.js"></script><script src="/js/global-system-health.js"></script>
+<script src="/js/trade-activity.js?v=103"></script><script src="/js/catching-market-badge.js"></script><script src="/js/global-system-health.js"></script>
 </body></html>

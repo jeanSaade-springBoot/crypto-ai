@@ -46,10 +46,9 @@ function renderSummary(s){
 
 function renderSymbols(symbols){
   if(symbolsLoaded)return;
-  const sel=$('symbol-filter'),analysisSel=$('signal-analysis-symbol');
+  const sel=$('symbol-filter');
   (symbols||[]).forEach(symbol=>{
     const o=document.createElement('option');o.value=symbol;o.textContent=symbol;sel.appendChild(o);
-    if(analysisSel){const a=document.createElement('option');a.value=symbol;a.textContent=symbol;analysisSel.appendChild(a);}
   });
   symbolsLoaded=true;
 }
@@ -188,88 +187,7 @@ async function loadProductionExits(){
   }catch(e){$('production-exit-rows').innerHTML=`<tr><td colspan="8" class="empty-cell negative">${esc(e.message)}</td></tr>`;}
 }
 
-// FIX-101: compact Trade Analysis browser. The three requested filters map to persisted
-// production evidence only: blocked signals, completed BUY->SELL trades, and current open BUY positions.
-let signalAnalysisRows=[];
-function signalDecisionText(row){return `${row.originalDecision||'—'} → ${row.decision||'—'}`}
-function signalEntryClass(row){return row.rowKind==='DONE'?'good':row.rowKind==='OPEN_BUY'?'pending':row.finalEntryAllowed?'good':'early'}
-function signalAnalysisTypeLabel(row){
-  return ({BLOCKED_BUY:'BLOCKED BUY',BLOCKED_SELL:'BLOCKED SELL',DONE:'BUY / SELL DONE',OPEN_BUY:'BUY OPEN'})[row.rowKind]||row.rowKind||'SIGNAL';
-}
-function signalAnalysisStateText(row){
-  if(row.rowKind==='DONE')return row.executionStatus||'EXECUTED';
-  if(row.rowKind==='OPEN_BUY')return 'OPEN';
-  return row.finalEntryAllowed?'ALLOWED':'BLOCKED';
-}
-function signalAnalysisReason(row){
-  if(row.rowKind==='DONE')return row.realizedPnlPercent!=null?`P/L ${Number(row.realizedPnlPercent).toFixed(3)}%`:(row.executionReason||'Completed trade');
-  if(row.rowKind==='OPEN_BUY')return row.allocatedPositionPercent!=null?`${row.allocatedPositionPercent}% allocated`:'Open position';
-  return row.primaryBlockingStage||(!row.finalEntryAllowed?'FINAL DECISION':'—');
-}
-function signalAnalysisRow(row,index){
-  const raw=row.rawConfidence??row.confidence??'—',effective=row.effectiveConfidence??row.confidence??'—';
-  return `<tr>
-    <td>${esc(ksaDate(row.eventTime||row.candleOpenTime||row.generatedAt))}</td>
-    <td><strong>${esc(row.symbol||'—')}</strong><small>${row.signalId!=null?'#'+esc(row.signalId):''}</small></td>
-    <td><span class="quality ${signalEntryClass(row)}">${esc(signalAnalysisTypeLabel(row))}</span></td>
-    <td><span class="badge ${String(row.decision||'').includes('SELL')?'sell':String(row.decision||'').includes('BUY')?'buy':''}">${esc(signalDecisionText(row))}</span><small>${esc(row.interval||'—')}</small></td>
-    <td><strong>${esc(row.score??'—')}</strong> / ${esc(raw)}<small>effective ${esc(effective)}</small></td>
-    <td><span class="quality ${signalEntryClass(row)}">${esc(signalAnalysisStateText(row))}</span></td>
-    <td>${esc(row.regime||'—')}<small>${esc(row.strategy||'—')}</small></td>
-    <td>${esc(signalAnalysisReason(row))}</td>
-    <td><button type="button" class="trade-chart-link signal-analysis-open" data-signal-index="${index}"><span>⌕</span> Analyze</button></td>
-  </tr>`;
-}
-function signalAnalysisField(label,value){return `<div class="signal-analysis-field"><small>${esc(label)}</small><strong>${esc(value??'—')}</strong></div>`}
-function prettyDecisionPath(value){
-  if(value==null||value==='')return 'No persisted decision path.';
-  try{const parsed=typeof value==='string'?JSON.parse(value):value;return JSON.stringify(parsed,null,2);}catch(_){return String(value);}
-}
-function openSignalAnalysis(index){
-  const row=signalAnalysisRows[Number(index)];if(!row)return;
-  const modal=$('signal-analysis-modal');
-  $('signal-analysis-title').textContent=`${row.symbol||'Trade'}${row.signalId!=null?' #'+row.signalId:''} · ${signalAnalysisTypeLabel(row)}`;
-  $('signal-analysis-subtitle').textContent=`${ksaDate(row.eventTime||row.candleOpenTime||row.generatedAt)} KSA · ${signalDecisionText(row)} · ${signalAnalysisStateText(row)}`;
-  const confidence=`raw ${row.rawConfidence??row.confidence??'—'} · effective ${row.effectiveConfidence??row.confidence??'—'}`;
-  $('signal-analysis-content').innerHTML=`
-    <div class="signal-analysis-detail-grid">
-      ${signalAnalysisField('Type',signalAnalysisTypeLabel(row))}${signalAnalysisField('Price',price(row.price))}${signalAnalysisField('Score',row.score)}${signalAnalysisField('Confidence',confidence)}
-      ${signalAnalysisField('State',signalAnalysisStateText(row))}${signalAnalysisField('Primary blocker',row.primaryBlockingStage||'—')}${signalAnalysisField('Trend / Volume / Momentum',`${row.trendScore??'—'} / ${row.volumeScore??'—'} / ${row.momentumScore??'—'}`)}${signalAnalysisField('Regime',`${row.regime||'—'} (${row.regimeConfidence??'—'})`)}
-      ${signalAnalysisField('Strategy',row.strategy)}${signalAnalysisField('ATR entry',`${row.atrEntryType||'—'} · immediate=${row.atrImmediateEntryAllowed==null?'—':row.atrImmediateEntryAllowed?'YES':'NO'}`)}${signalAnalysisField('Confluence',`${row.confluenceStatus||'—'} · ${row.confluenceHigherInterval||'—'}=${row.confluenceHigherDecision||'—'}`)}${signalAnalysisField('BTC context',row.btcContextStatus)}
-      ${signalAnalysisField('Liquidity',row.liquidityStatus)}${signalAnalysisField('Derivatives',row.derivativesStatus)}${signalAnalysisField('Stop / Take profit',`${price(row.stopLoss)} / ${price(row.takeProfit)}`)}${signalAnalysisField('Realized P/L',row.realizedPnlPercent!=null?`${row.realizedPnlPercent}%`:'—')}
-    </div>
-    <div class="signal-analysis-explanations">
-      <section><strong>Final decision / execution</strong><p>${esc(row.finalExplanation||row.executionReason||'—')}</p></section>
-      <section><strong>ATR</strong><p>${esc(row.atrExplanation||'—')}</p></section>
-      <section><strong>Multi-timeframe</strong><p>${esc(row.confluenceExplanation||'—')}</p></section>
-      <section><strong>BTC</strong><p>${esc(row.btcContextExplanation||'—')}</p></section>
-      <section><strong>Liquidity</strong><p>${esc(row.liquidityExplanation||'—')}</p></section>
-      <section><strong>Derivatives</strong><p>${esc(row.derivativesExplanation||'—')}</p></section>
-    </div>
-    <section class="signal-analysis-path"><strong>Persisted decision path</strong><pre>${esc(prettyDecisionPath(row.decisionPath))}</pre></section>`;
-  modal.classList.remove('hidden');modal.setAttribute('aria-hidden','false');document.body.classList.add('inspector-modal-open');
-}
-function closeSignalAnalysis(){const modal=$('signal-analysis-modal');if(!modal)return;modal.classList.add('hidden');modal.setAttribute('aria-hidden','true');document.body.classList.remove('inspector-modal-open');}
-async function loadSignalAnalysisSymbols(){
-  const sel=$('signal-analysis-symbol');if(!sel)return;
-  try{
-    const r=await fetch('/api/trade-inspector/signals/symbols',{cache:'no-store'});if(!r.ok)return;
-    const symbols=await r.json(),existing=new Set([...sel.options].map(o=>String(o.value).toUpperCase()));
-    (symbols||[]).forEach(symbol=>{const v=String(symbol||'').toUpperCase();if(!v||existing.has(v))return;const o=document.createElement('option');o.value=v;o.textContent=v;sel.appendChild(o);existing.add(v);});
-  }catch(_){/* Main inspector remains usable if symbol discovery fails. */}
-}
-async function loadSignalAnalysis(){
-  if(!$('signal-analysis-rows'))return;
-  const err=$('signal-analysis-error');err.classList.add('hidden');
-  const p=new URLSearchParams({symbol:$('signal-analysis-symbol').value||'ALL',period:$('signal-analysis-period').value||'1h',type:$('signal-analysis-type').value||'BLOCKED_BUY',limit:'250'});
-  $('signal-analysis-rows').innerHTML='<tr><td colspan="9" class="empty-cell">Loading trade analysis…</td></tr>';
-  try{
-    const r=await fetch(`/api/trade-inspector/signals?${p.toString()}`,{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);
-    signalAnalysisRows=await r.json();$('signal-analysis-count').textContent=`${signalAnalysisRows.length} rows`;
-    $('signal-analysis-rows').innerHTML=signalAnalysisRows.length?signalAnalysisRows.map(signalAnalysisRow).join(''):'<tr><td colspan="9" class="empty-cell">No rows match these filters.</td></tr>';
-  }catch(e){err.textContent=`Trade Analysis could not load: ${e.message}`;err.classList.remove('hidden');$('signal-analysis-rows').innerHTML='<tr><td colspan="9" class="empty-cell negative">Trade analysis unavailable.</td></tr>';}
-}
-
+// FIX-102: Trade Analysis moved to Trade Activity. Trade Inspector keeps completed-trade inspection only.
 async function load(){
  $('inspector-error').classList.add('hidden');
  try{
@@ -281,13 +199,7 @@ async function load(){
  }catch(e){$('inspector-error').textContent=`Trade Inspector could not load: ${e.message}`;$('inspector-error').classList.remove('hidden')}
 }
 $('refresh-inspector').addEventListener('click',load);$('symbol-filter').addEventListener('change',load);$('venue-filter').addEventListener('change',load);$('limit-filter').addEventListener('change',load);
-$('signal-analysis-search')?.addEventListener('click',loadSignalAnalysis);
-['signal-analysis-symbol','signal-analysis-period','signal-analysis-type'].forEach(id=>$(id)?.addEventListener('change',loadSignalAnalysis));
-$('signal-analysis-rows')?.addEventListener('click',e=>{const b=e.target.closest('.signal-analysis-open');if(b)openSignalAnalysis(b.dataset.signalIndex);});
-$('signal-analysis-close')?.addEventListener('click',closeSignalAnalysis);
-$('signal-analysis-modal')?.addEventListener('click',e=>{if(e.target?.dataset?.signalAnalysisClose==='1')closeSignalAnalysis();});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('signal-analysis-modal')?.classList.contains('hidden'))closeSignalAnalysis();});
-load();loadSignalAnalysisSymbols().finally(loadSignalAnalysis);
+load();
 
 
 function inspectorTradeKey(t){return String(t.tradeHistoryId??t.walletSellTradeId??'')}
