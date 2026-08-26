@@ -45,6 +45,21 @@ public class ExecutionIntelligenceService {
     private static final String CONFIRMATION_INTERVAL = "5m";
     private static final String TREND_INTERVAL = "1h";
     private static final Duration EVIDENCE_WINDOW = Duration.ofMinutes(30);
+    /**
+     * FIX-105 / BICOUSDT 26 Aug 2026: FIX-055 intentionally lets the opportunity anchor/best
+     * price override the rolling 30-minute low for a fresh opportunity. That protects short-lived
+     * setups such as the verified ~71-minute PEPE case from looking artificially cheap merely
+     * because the rolling window advanced with price.
+     *
+     * A multi-hour opportunity must not keep that historical floor forever. BICO replay showed
+     * expansion growing monotonically against the opportunity origin and repeatedly producing
+     * CHASE_ENTRY_BLOCKED even when fresh 5m confirmation tried to reactivate the setup. Bound the
+     * authority of the FIX-055 anchor/best reference to two hours; after that, the exact same shared
+     * Production/Replay entry-quality algorithm returns to EVIDENCE_WINDOW's rolling reference.
+     * This is not a BUY bypass: ATR extension, reward/risk, opportunity age, rejection-zone risk,
+     * volatility penalties and all downstream validation gates remain authoritative.
+     */
+    private static final Duration ANCHOR_MAX_AGE = Duration.ofHours(2);
     // FIX-055: STOP_EXPOSED is a warning rather than a hard liquidity veto, but it
     // must materially reduce price quality so a late breakout cannot still be called GOOD_ENTRY.
     private static final int STOP_EXPOSED_ENTRY_QUALITY_PENALTY = 15;
@@ -821,19 +836,45 @@ public class ExecutionIntelligenceService {
             }
         }
 
-        // FIX-055 / PEPEUSDT 22 Aug 2026: a 71-minute opportunity started near
-        // 0.00000407 but the rolling window had advanced to roughly 0.00000413 by
-        // execution. That allowed 0.00000418 to remain GOOD_ENTRY even though most
-        // of the move had already happened. Use the persisted opportunity anchor/best
-        // price whenever it is cheaper than the rolling reference. Replay reaches the
-        // same object through ExecutionReplayScope, so Production and Replay stay aligned.
+        // FIX-055 + FIX-105: keep the opportunity anchor/best floor only while the opportunity
+        // is fresh. currentOpportunity() is Replay-aware, and age is measured exclusively from
+        // persisted/replayed candle-time evidence (startedAt -> signal.generatedAt), never wall-clock
+        // time. Therefore Production and Replay execute this exact same branch deterministically.
         java.util.Optional<ExecutionOpportunity> activeOpportunity = currentOpportunity(
                 current.getSymbol(), List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"));
+        String chaseReferenceSource = "ROLLING_30M";
         if (activeOpportunity.isPresent()) {
-            BigDecimal anchor = activeOpportunity.get().getAnchorEntryPrice();
-            BigDecimal best = activeOpportunity.get().getBestEntryPrice();
-            if (anchor != null && anchor.signum() > 0 && anchor.compareTo(reference) < 0) reference = anchor;
-            if (best != null && best.signum() > 0 && best.compareTo(reference) < 0) reference = best;
+            ExecutionOpportunity opp = activeOpportunity.get();
+            boolean anchorStillFresh = false;
+            long opportunityAgeMinutesForReference = 0L;
+
+            if (opp.getStartedAt() != null) {
+                Duration opportunityAge = Duration.between(opp.getStartedAt(), current.getGeneratedAt());
+                opportunityAgeMinutesForReference = Math.max(0L, opportunityAge.toMinutes());
+                // FIX-105 boundary is inclusive: exactly 120 minutes keeps FIX-055 protection;
+                // the first instant beyond two hours returns authority to the rolling 30m reference.
+                anchorStillFresh = !opportunityAge.isNegative()
+                        && opportunityAge.compareTo(ANCHOR_MAX_AGE) <= 0;
+            }
+
+            if (anchorStillFresh) {
+                BigDecimal anchor = opp.getAnchorEntryPrice();
+                BigDecimal best = opp.getBestEntryPrice();
+                if (anchor != null && anchor.signum() > 0 && anchor.compareTo(reference) < 0) {
+                    reference = anchor;
+                    chaseReferenceSource = "OPPORTUNITY_ANCHOR";
+                }
+                if (best != null && best.signum() > 0 && best.compareTo(reference) < 0) {
+                    reference = best;
+                    chaseReferenceSource = "OPPORTUNITY_BEST";
+                }
+            }
+
+            // FIX-105 diagnostics are deliberately log-only in v1: no schema expansion is required
+            // to prove which reference won in Production or Replay. Persisted decision/opportunity
+            // evidence remains unchanged.
+            log.debug("FIX-105 chase reference symbol={} source={} reference={} opportunityAgeMinutes={} anchorFresh={}",
+                    current.getSymbol(), chaseReferenceSource, reference, opportunityAgeMinutesForReference, anchorStillFresh);
         }
 
         double expansionPercent = executionPrice.subtract(reference)

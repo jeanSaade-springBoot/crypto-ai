@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-105",
+            title: "Bounded opportunity-anchor authority for chase quality",
+            status: "IMPLEMENTED · PRODUCTION/REPLAY SHARED LOGIC",
+            scenario: "BICOUSDT 26 Aug 2026 sustained multi-hour uptrend: CHASE_ENTRY_BLOCKED expansion kept growing against the opportunity origin and immediately re-blocked later fresh-confirmation attempts because FIX-055's anchor/best floor never expired.",
+            symbol: "BICOUSDT / PEPEUSDT regression", entry: "PRE-WALLET ONLY", exit: "UNCHANGED",
+            entryTime: "BICO replay multi-hour opportunity; boundary regression at 71m/120m/121m", exitTime: "N/A",
+            replayWindow: "Replay uses ExecutionReplayScope.currentOpportunity() and the same ExecutionIntelligenceService.assessEntryQuality() method as Production. Age is derived from opportunity.startedAt to signal.generatedAt; Instant.now() is never used. Added an explicit Production-vs-Replay parity regression for an expired anchor.",
+            location: "ExecutionIntelligenceService.assessEntryQuality() chase-reference selection",
+            classes: ["ExecutionIntelligenceService", "ExecutionIntelligenceServiceTest", "ExecutionReplayScope (existing shared replay authority; no behavior fork)", "fix-registry.js"],
+            cause: "FIX-055 correctly protected short-lived opportunities by allowing anchorEntryPrice/bestEntryPrice to undercut the rolling 30-minute low, but those prices could remain the reference for the entire lifetime of a multi-hour opportunity. In a sustained rising trend, expansion therefore measured distance from the trend origin rather than recent extension and could never normalize.",
+            solution: "Add ANCHOR_MAX_AGE=2h. For opportunity age <=2h, preserve FIX-055 exactly. Beyond 2h, anchor/best no longer override the rolling EVIDENCE_WINDOW reference. Use Duration.between(startedAt, generatedAt) with an inclusive 120-minute boundary and reject negative age from anchor authority. Add debug diagnostics for reference source/price/age without schema expansion.",
+            behavior: "The fix does not force a BUY and does not bypass validateBuy(). A multi-hour opportunity can stop being chase-blocked solely by its stale origin, while rolling 30m expansion, ATR extension, reward/risk, age penalty, rejection-zone risk, volatility and all downstream BTC/MTF/liquidity/validation gates remain authoritative.",
+            regression: "Verify PEPE ~71m retains anchor protection; exactly 120m retains it; 121m uses rolling 30m evidence; an expired-anchor BICO-shaped case normalizes recent expansion; Production and Replay return identical EntryQuality score/classification/expansion/ATR-extension/age from identical evidence. Historical BICO timestamps should be inspected for gate outcomes, but tests must not assert that BICO is forced to BUY."
+        },
+        {
             id: "FIX-104",
             title: "Trade Activity symbol-filter stale-response guard",
             status: "IMPLEMENTED · READ-ONLY UI RACE FIX",

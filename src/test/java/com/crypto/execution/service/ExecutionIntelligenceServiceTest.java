@@ -1435,6 +1435,134 @@ class ExecutionIntelligenceServiceTest {
         assertThat(quality.opportunityAgeMinutes()).isEqualTo(71L);
     }
 
+    @Test
+    void fix105KeepsFix055AnchorProtectionForVerifiedSeventyOneMinutePepeCase() {
+        // FIX-105 regression guard: the new expiry must not undo FIX-055's verified PEPE protection.
+        TradeSignal current = signal(15001L, "PEPEUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 83, 77);
+        current.setLatestPrice(new BigDecimal("0.000004180000"));
+        current.setAtrAtSignal(new BigDecimal("0.000000018666"));
+
+        var opportunity = com.crypto.execution.domain.ExecutionOpportunity.builder()
+                .symbol("PEPEUSDT").direction("BUY").status("BUILDING")
+                .startedAt(now.minusSeconds(71 * 60L))
+                .anchorEntryPrice(new BigDecimal("0.000004070000"))
+                .bestEntryPrice(new BigDecimal("0.000004070000"))
+                .build();
+
+        when(opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(any(), any(), any()))
+                .thenReturn(Optional.of(opportunity));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("PEPEUSDT", "1m"))
+                .thenReturn(List.of(current));
+
+        var quality = service.assessEntryQuality(current);
+
+        assertThat(quality.expansionPercent()).isGreaterThan(2.5d);
+        assertThat(quality.opportunityAgeMinutes()).isEqualTo(71L);
+    }
+
+    @Test
+    void fix105AnchorAuthorityIsInclusiveAtExactlyTwoHours() {
+        // FIX-105 boundary contract: exactly 120 minutes still receives FIX-055 anchor protection.
+        TradeSignal current = signal(15002L, "BICOUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 82, 80);
+        current.setLatestPrice(new BigDecimal("1.120000000000"));
+        current.setAtrAtSignal(new BigDecimal("0.010000000000"));
+        TradeSignal recentLow = signal(15001L, "BICOUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(10 * 60L), 68, 72);
+        recentLow.setLatestPrice(new BigDecimal("1.100000000000"));
+
+        var opportunity = com.crypto.execution.domain.ExecutionOpportunity.builder()
+                .symbol("BICOUSDT").direction("BUY").status("BUILDING")
+                .startedAt(now.minusSeconds(120 * 60L))
+                .anchorEntryPrice(new BigDecimal("1.000000000000"))
+                .bestEntryPrice(new BigDecimal("1.000000000000"))
+                .build();
+
+        when(opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(any(), any(), any()))
+                .thenReturn(Optional.of(opportunity));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("BICOUSDT", "1m"))
+                .thenReturn(List.of(current, recentLow));
+
+        var quality = service.assessEntryQuality(current);
+
+        assertThat(quality.opportunityAgeMinutes()).isEqualTo(120L);
+        assertThat(quality.expansionPercent()).isGreaterThan(11d); // still measured from the 1.00 anchor
+    }
+
+    @Test
+    void fix105ExpiredAnchorReturnsChaseReferenceToRollingThirtyMinuteEvidence() {
+        // FIX-105 BICO-shaped regression: once older than two hours, a stale opportunity origin
+        // cannot permanently dominate chase quality. The recent 30m low becomes authoritative.
+        TradeSignal current = signal(15004L, "BICOUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 82, 80);
+        current.setLatestPrice(new BigDecimal("1.120000000000"));
+        current.setAtrAtSignal(new BigDecimal("0.010000000000"));
+        TradeSignal recentLow = signal(15003L, "BICOUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(10 * 60L), 68, 72);
+        recentLow.setLatestPrice(new BigDecimal("1.100000000000"));
+
+        var opportunity = com.crypto.execution.domain.ExecutionOpportunity.builder()
+                .symbol("BICOUSDT").direction("BUY").status("BUILDING")
+                .startedAt(now.minusSeconds(121 * 60L))
+                .anchorEntryPrice(new BigDecimal("1.000000000000"))
+                .bestEntryPrice(new BigDecimal("0.990000000000"))
+                .build();
+
+        when(opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(any(), any(), any()))
+                .thenReturn(Optional.of(opportunity));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("BICOUSDT", "1m"))
+                .thenReturn(List.of(current, recentLow));
+
+        var quality = service.assessEntryQuality(current);
+
+        assertThat(quality.opportunityAgeMinutes()).isEqualTo(121L);
+        assertThat(quality.expansionPercent()).isBetween(1.81d, 1.82d); // (1.12 - 1.10) / 1.10
+        assertThat(quality.expansionPercent()).isLessThan(3d);
+    }
+
+    @Test
+    void fix105ReplayAndProductionUseSameExpiredAnchorReference() {
+        // FIX-105 parity regression: Replay must not implement a separate chase rule. It activates
+        // ExecutionReplayScope, then calls the same assessEntryQuality() production method.
+        TradeSignal current = signal(15006L, "BICOUSDT", "1m", SignalDecision.BUY, SignalDecision.BUY,
+                now, 82, 80);
+        current.setLatestPrice(new BigDecimal("1.120000000000"));
+        current.setAtrAtSignal(new BigDecimal("0.010000000000"));
+        TradeSignal recentLow = signal(15005L, "BICOUSDT", "1m", SignalDecision.WATCH, SignalDecision.WATCH,
+                now.minusSeconds(10 * 60L), 68, 72);
+        recentLow.setLatestPrice(new BigDecimal("1.100000000000"));
+
+        var opportunity = com.crypto.execution.domain.ExecutionOpportunity.builder()
+                .symbol("BICOUSDT").direction("BUY").status("BUILDING")
+                .startedAt(now.minusSeconds(4 * 60 * 60L))
+                .anchorEntryPrice(new BigDecimal("1.000000000000"))
+                .bestEntryPrice(new BigDecimal("0.990000000000"))
+                .build();
+
+        // Production path: repositories provide the exact evidence.
+        when(opportunityRepository.findTopBySymbolAndDirectionAndStatusInOrderByUpdatedAtDesc(any(), any(), any()))
+                .thenReturn(Optional.of(opportunity));
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("BICOUSDT", "1m"))
+                .thenReturn(List.of(current, recentLow));
+        var productionQuality = service.assessEntryQuality(current);
+
+        // Replay path: same service/algorithm, but lookups are redirected to replay-generated evidence.
+        ExecutionReplayScope replayScope = new ExecutionReplayScope();
+        ReflectionTestUtils.setField(service, "replayScope", replayScope);
+        try (ExecutionReplayScope.Scope ignored = replayScope.open(105L, List.of(recentLow, current), o -> { })) {
+            replayScope.reference(now);
+            replayScope.saveOpportunity(opportunity);
+            var replayQuality = service.assessEntryQuality(current);
+
+            assertThat(replayQuality.expansionPercent()).isEqualTo(productionQuality.expansionPercent());
+            assertThat(replayQuality.atrExtension()).isEqualTo(productionQuality.atrExtension());
+            assertThat(replayQuality.opportunityAgeMinutes()).isEqualTo(productionQuality.opportunityAgeMinutes());
+            assertThat(replayQuality.classification()).isEqualTo(productionQuality.classification());
+            assertThat(replayQuality.score()).isEqualTo(productionQuality.score());
+        }
+    }
+
     private PressureReadinessService.Result readyPressureResult() {
         return new PressureReadinessService.Result(
                 PressureReadinessService.State.PROBE_READY, true,
