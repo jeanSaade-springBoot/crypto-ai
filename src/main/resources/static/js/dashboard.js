@@ -330,12 +330,8 @@ function render(data) {
     // FIX-035: do not let the normal dashboard renderer overwrite the independently
     // loaded BUY/SELL evidence table. A new symbol/timeframe gets one dedicated load;
     // subsequent updates happen only via its Load button or its own refresh timer.
-    const signalContextKey = `${data.symbol}|${el('signal-evidence-period')?.value || '1H'}|${el('signal-evidence-mode')?.value || 'OPEN_POSITION'}`;
-    if (signalEvidenceLoadedContextKey !== signalContextKey) {
-        const signalBody = el('signals-body');
-        if (signalBody) signalBody.innerHTML = '<tr><td colspan="7" class="empty">Loading active-position analysis path…</td></tr>';
-        void refreshSignalEvidence(false);
-    }
+    // FIX-107: the Dashboard Signals section is owned by SignalExecutionsBrowser. The main
+    // dashboard refresh must never overwrite/reload it; signal evidence loads only on its Analyze button.
     renderTradeHistory(data.closedPositions || []);
     window.requestAnimationFrame(syncDashboardHeaderOffset);
 }
@@ -2737,15 +2733,15 @@ function setupSidebar() {
     }
 }
 
-const signalEvidencePeriod = el('signal-evidence-period');
-const signalEvidenceMode = el('signal-evidence-mode');
-const signalEvidenceRefresh = el('signal-evidence-refresh');
-// Filters are intentionally applied on Load / the dedicated auto-refresh timer. This
-// keeps the table predictable while the user is choosing multiple filter values.
-if (signalEvidenceRefresh) signalEvidenceRefresh.addEventListener('click', () => refreshSignalEvidence(true));
-if (signalEvidencePeriod) signalEvidencePeriod.addEventListener('change', () => refreshSignalEvidence(true));
-if (signalEvidenceMode) signalEvidenceMode.addEventListener('change', () => refreshSignalEvidence(true));
-configureSignalEvidenceRefreshTimer();
+// FIX-107: shared Dashboard/Trade Activity Signals & executions browser. No timer and no
+// filter-change auto-refresh: the operator explicitly presses Analyze.
+const dashboardSignalBrowser = new window.SignalExecutionsBrowser({
+    symbol:'dashboard-signal-symbol', period:'dashboard-signal-period', type:'dashboard-signal-type',
+    search:'dashboard-signal-search', count:'dashboard-signal-count', rows:'dashboard-signal-rows',
+    error:'dashboard-signal-error', modal:'dashboard-signal-modal', close:'dashboard-signal-close',
+    title:'dashboard-signal-title', subtitle:'dashboard-signal-subtitle', content:'dashboard-signal-content'
+});
+window.dashboardSignalBrowser = dashboardSignalBrowser;
 
 el('refresh-button').addEventListener('click', refreshDashboard);
 el('analyze-sentiment-button').addEventListener('click', analyzeSentiment);
@@ -2762,13 +2758,14 @@ if (aiPeriodSelect) {
     });
 }
 
-el('symbol-select').addEventListener('change', refreshDashboardForSelection);
+el('symbol-select').addEventListener('change', () => { dashboardSignalBrowser.setSymbol(el('symbol-select').value, false); refreshDashboardForSelection(); });
 el('interval-select').addEventListener('change', refreshDashboardForSelection);
 setupCollapsibleSections();
 setupSidebar();
 (async () => {
     await loadSymbols();
     applyDashboardDeepLinkSelection();
+    await dashboardSignalBrowser.init(el('symbol-select').value);
     await refreshDashboard();
     if (debugMoveFocus) {
         window.requestAnimationFrame(() => {

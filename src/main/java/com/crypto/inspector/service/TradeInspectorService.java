@@ -232,9 +232,12 @@ public class TradeInspectorService {
     }
 
     private Map<String, Object> completedTradeAnalysisView(WalletTrade sell) {
-        // FIX-101: a completed row represents the real executed SELL that closed a BUY lifecycle.
-        // The linked exit TradeSignal is copied into the same diagnostic shape when present.
+        // FIX-107: Signals & executions is shared by Trade Activity and Dashboard. A completed
+        // row therefore carries both persisted lifecycle endpoints so the common View action can
+        // deep-link to the Dashboard chart and highlight the BUY -> SELL area exactly like Trade
+        // Inspector. This is read-only enrichment; no wallet or trading state is changed.
         TradeSignal signal = sell.getSignal();
+        WalletTrade buy = findEntryTrade(sell);
         Map<String, Object> m = signal == null ? new LinkedHashMap<>() : signalAnalysisView(signal);
         m.put("rowKind", "DONE");
         m.put("eventTime", sell.getExecutedAt());
@@ -244,6 +247,20 @@ public class TradeInspectorService {
         m.put("executionReason", safeText(sell.getExecutionReason(), sell.getExecutionMessage()));
         m.put("realizedPnlPercent", sell.getRealizedPnlPercent());
         m.put("realizedPnlUsdt", sell.getRealizedPnlUsdt());
+        m.put("sellTradeId", sell.getId());
+        m.put("sellSignalId", signal == null ? null : signal.getId());
+        m.put("sellTime", sell.getExecutedAt());
+        m.put("sellPrice", sell.getPriceUsdt());
+        if (buy != null) {
+            m.put("buyTradeId", buy.getId());
+            m.put("buySignalId", buy.getSignal() == null ? null : buy.getSignal().getId());
+            m.put("buyTime", buy.getExecutedAt());
+            m.put("buyPrice", buy.getPriceUsdt());
+            // Prefer the immutable entry signal interval for the chart when it is available.
+            if (buy.getSignal() != null && buy.getSignal().getInterval() != null) {
+                m.put("interval", buy.getSignal().getInterval());
+            }
+        }
         if (signal == null) {
             m.put("originalDecision", "BUY");
             m.put("decision", "SELL");

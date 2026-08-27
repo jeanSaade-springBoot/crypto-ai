@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-107",
+            title: "Shared Dashboard and Trade Activity Signals & executions browser",
+            status: "IMPLEMENTED · READ-ONLY SHARED UI",
+            scenario: "Dashboard Signals and Trade Activity had separate grids/filter logic. The requested operator workflow is one common Symbol/Period/Type browser on both pages, with Dashboard initially following its header symbol but allowing independent signal-symbol research and explicit user-triggered loading only.",
+            symbol: "ALL", entry: "READ-ONLY ANALYSIS", exit: "READ-ONLY ANALYSIS",
+            entryTime: "Persisted signal/execution timestamps", exitTime: "Persisted signal/execution timestamps",
+            replayWindow: "N/A · FIX-107 is presentation/read-only retrieval only. Production and Replay signal-generation/execution logic are untouched.",
+            location: "Dashboard Signals section + Trade Activity + shared Signals & executions browser + TradeInspectorService read-only projection",
+            classes: ["signal-executions-browser.js", "dashboard.html", "dashboard.js", "trade-activity.html", "trade-activity.js", "trade-activity.css", "TradeInspectorService", "fix-registry.js"],
+            cause: "Two independently maintained signal browsers could drift in filters, row semantics, chart navigation and refresh behavior. Completed rows also lacked both lifecycle endpoints in the compact analysis payload, preventing one common View action from highlighting the full BUY-to-SELL area.",
+            solution: "Create one shared SignalExecutionsBrowser used by both pages with identical Symbol, Period (15m/1h/4h/1d/1w), Type (Blocked BUY/Blocked SELL/BUY+SELL done/BUY open), grid and Analyze modal. Remove filter-change/timer refresh authority: Analyze is the explicit reload action. Dashboard header symbol preselects the Signal symbol but the Signal dropdown remains independently changeable and never changes the Dashboard header. Enrich DONE rows read-only with their historical BUY and SELL timestamps/prices and use the existing Dashboard debug deep-link format to highlight both points; blocked/open rows highlight their exact signal point.",
+            behavior: "Trade Activity and Dashboard now show the same filters, rows and actions. Dashboard header symbol changes preselect the common browser without automatically fetching; a manual Signal symbol choice remains local to the browser. View navigates directly to the Dashboard market chart with persisted BUY/SELL or blocked/open signal markers. No automatic periodic refresh exists for this component.",
+            regression: "Verify both pages render identical filters/grid for the same Symbol/Period/Type; changing filters alone does not fetch until Analyze; Dashboard header symbol updates only the Signal symbol selector; manually changing the Signal selector does not change the header; Blocked BUY/SELL and OPEN BUY View highlights one exact point; DONE View highlights both BUY and SELL and the focused trade window; Trade Inspector, Production, Replay, Execution Intelligence and wallet writes remain unchanged."
+        },
+        {
             id: "FIX-106",
             title: "Trade Inspector database pagination and historical BUY pairing",
             status: "IMPLEMENTED · READ-ONLY INSPECTOR FETCHING",

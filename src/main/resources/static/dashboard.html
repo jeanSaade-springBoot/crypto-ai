@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Crypto Trading Dashboard</title>
-    <link rel="stylesheet" href="/css/dashboard.css">
+    <link rel="stylesheet" href="/css/dashboard.css"><link rel="stylesheet" href="/css/trade-activity.css?v=107">
     <link rel="stylesheet" href="/css/chart-crosshair.css">
     <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1"></script>
 </head>
@@ -195,36 +195,26 @@
             </div>
         </section>
 
-        <section id="signals" class="panel active-position-analysis-panel">
-            <div class="section-heading signal-evidence-heading">
-                <div><p class="eyebrow">SIGNALS</p><h2>Signals</h2></div>
-                <div class="signal-evidence-controls">
-                    <!-- FIX-092: OPEN_POSITION is intentionally the default so the existing
-                         dashboard behavior is preserved until the operator selects another view. -->
-                    <label>Signal view
-                        <select id="signal-evidence-mode">
-                            <option value="OPEN_POSITION" selected>Open positions</option>
-                            <option value="BUY_BLOCKED">Blocked BUY</option>
-                            <option value="SELL_SIGNAL">SELL signals</option>
-                            <option value="BUY_SELL">BUY / SELL signals</option>
-                        </select>
-                    </label>
-                    <label>Analysis window
-                        <select id="signal-evidence-period">
-                            <option value="15M">15 minutes</option>
-                            <option value="1H" selected>1 hour</option>
-                            <option value="4H">4 hours</option>
-                            <option value="1D">1 day</option>
-                            <option value="1W">1 week</option>
-                        </select>
-                    </label>
-                    <button id="signal-evidence-refresh" type="button" class="secondary-button">Refresh path</button>
-                    <span id="signal-evidence-status">Open positions</span>
-                </div>
+        <!-- FIX-107: Dashboard Signals uses the exact same shared Signals & executions browser as Trade Activity. -->
+        <section id="signals" class="panel activity-list-panel activity-analysis-only">
+            <div id="dashboard-signal-error" class="error-banner hidden"></div>
+            <div class="section-heading"><div><p class="eyebrow">SIGNALS</p><h2>Signals &amp; executions</h2></div><span id="dashboard-signal-count">Loading…</span></div>
+            <div class="activity-analysis-filters">
+                <label>Symbol<select id="dashboard-signal-symbol"><option value="ALL">All symbols</option></select></label>
+                <label>Period<select id="dashboard-signal-period"><option value="15m">Last 15 minutes</option><option value="1h">Last 1 hour</option><option value="4h">Last 4 hours</option><option value="1d" selected>Last 1 day</option><option value="1w">Last 1 week</option></select></label>
+                <label>Type<select id="dashboard-signal-type"><option value="BLOCKED_BUY" selected>Blocked BUY</option><option value="BLOCKED_SELL">Blocked SELL</option><option value="DONE">BUY / SELL done</option><option value="OPEN_BUY">BUY open</option></select></label>
+                <button id="dashboard-signal-search" type="button">Analyze</button>
             </div>
-            <div id="active-position-analysis-summary" class="active-position-analysis-summary"></div>
-            <div class="table-wrap signal-board-wrap"><table class="signal-board-table active-position-path-table"><thead><tr><th>Time</th><th>TF</th><th>Decision</th><th>Recommendation</th><th>Score / Confidence</th><th>Price</th><th>Graph</th></tr></thead><tbody id="signals-body"></tbody></table></div>
+            <p class="activity-analysis-note">The Dashboard header symbol preselects this browser. Its Symbol dropdown remains independent so you can inspect another market without changing the Dashboard header.</p>
+            <div class="activity-analysis-table-wrap"><table class="activity-analysis-table"><thead><tr><th>Time (KSA)</th><th>Symbol</th><th>Type</th><th>Signal</th><th>Score / Conf.</th><th>State</th><th>Regime / Strategy</th><th>Reason / P&amp;L</th><th>Action</th></tr></thead><tbody id="dashboard-signal-rows"><tr><td colspan="9" class="empty-cell">Loading trade analysis…</td></tr></tbody></table></div>
         </section>
+        <div id="dashboard-signal-modal" class="activity-analysis-modal hidden" aria-hidden="true">
+          <div class="activity-analysis-backdrop" data-signal-analysis-close="1"></div>
+          <section class="activity-analysis-dialog" role="dialog" aria-modal="true" aria-labelledby="dashboard-signal-title">
+            <div class="section-heading activity-analysis-modal-head"><div><p class="eyebrow">PERSISTED SIGNAL EVIDENCE</p><h2 id="dashboard-signal-title">Trade analysis</h2><p id="dashboard-signal-subtitle" class="activity-analysis-subtitle">—</p></div><button id="dashboard-signal-close" type="button" class="activity-analysis-close">Close</button></div>
+            <div id="dashboard-signal-content" class="activity-analysis-content"><div class="empty-cell">Select a row to analyze.</div></div>
+          </section>
+        </div>
 
         <section id="trade-history" class="panel">
             <div class="section-heading">
@@ -270,7 +260,7 @@
 </div>
 <script src="/js/time-utils.js"></script>
 <script src="/js/chart-crosshair.js"></script>
-<script src="/js/dashboard.js"></script>
+<script src="/js/signal-executions-browser.js?v=107"></script><script src="/js/dashboard.js?v=107"></script>
 <script src="/js/catching-market-badge.js"></script><script src="/js/global-system-health.js"></script>
 </body>
 </html>
