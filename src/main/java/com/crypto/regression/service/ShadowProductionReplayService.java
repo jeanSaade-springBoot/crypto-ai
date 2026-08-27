@@ -83,6 +83,9 @@ public class ShadowProductionReplayService {
                     .toList();
         boolean exactPriceReplay = !livePrices.isEmpty();
         int livePriceIndex = 0;
+        // FIX-109: normal Regression/Replay runs are Production-Parity by default.
+        // Experimental rules require an explicitly opened EXPERIMENTAL scope.
+        String replayLogicMode = ExecutionReplayScope.ReplayLogicMode.PRODUCTION_PARITY.name();
 
         try (ExecutionReplayScope.Scope ignored = replayScope.open(runId, timeline,
                 opportunity -> {
@@ -302,7 +305,12 @@ public class ShadowProductionReplayService {
                     simulated_realized_pnl=?, simulated_final_wallet=?
                 WHERE id=?
                 """, trades, wins, losses, realized, finalWallet, runId);
-        return new ReplayStats(trades, wins, losses, realized, finalWallet);
+        // FIX-109: expose whether this run had the persisted live-price stream required
+        // for tick-exact production ordering. Older windows remain explicitly labelled
+        // as fallback instead of being mistaken for exact parity.
+        return new ReplayStats(trades, wins, losses, realized, finalWallet,
+                exactPriceReplay ? "EXACT_PRICE_REPLAY" : "SIGNAL_PRICE_FALLBACK",
+                replayLogicMode);
     }
 
     /**
@@ -624,7 +632,8 @@ public class ShadowProductionReplayService {
     private int intervalOrder(String i){return "1h".equals(i)?0:"5m".equals(i)?1:2;}
     private boolean equalsNullable(BigDecimal a,BigDecimal b){return a==null?b==null:b!=null&&a.compareTo(b)==0;}
 
-    public record ReplayStats(int trades,int wins,int losses,BigDecimal realizedPnl,BigDecimal finalWallet){}
+    public record ReplayStats(int trades, int wins, int losses, BigDecimal realizedPnl, BigDecimal finalWallet,
+                              String priceReplayMode, String logicMode) {}
     private record LivePriceEvaluation(ExitDecision decision, ShadowPosition position) {}
     private record ExitDecision(boolean exit,String reason,String explanation,BigDecimal newTakeProfit){
         ExitDecision(boolean exit,String reason,String explanation){this(exit,reason,explanation,null);}

@@ -1,6 +1,36 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-109",
+            title: "Replay Production-Parity contract and explicit evaluation clock",
+            status: "IMPLEMENTED · PARITY SAFETY FOUNDATION",
+            scenario: "Replay is used as evidence for Production changes, but replay-only FIX-091 experiments and an ExecutionPriceAuthority wall-clock fallback could make a historical run behave differently from the Production brain it was intended to reproduce.",
+            symbol: "ALL", entry: "PRE-WALLET PARITY", exit: "SHADOW EXECUTION",
+            entryTime: "Historical signal/price time", exitTime: "Historical signal/price time",
+            replayWindow: "All Replay/Test windows; exact tick parity additionally requires persisted V64 market-price events.",
+            location: "ExecutionReplayScope + ExecutionPriceAuthorityService + RegimeStateService + EntryAuthorityService + RegressionTestWorker + ShadowProductionReplayService",
+            classes: ["ExecutionReplayScope", "ExecutionPriceAuthorityService", "RegimeStateService", "EntryAuthorityService", "RegressionTestWorker", "ShadowProductionReplayService", "V73__fix_109_replay_parity_metadata.sql"],
+            cause: "Production-Parity and Experimental behavior shared one implicit Replay scope. FIX-091 regime persistence/transition authority could therefore alter normal Replay even though Production bypasses them. ExecutionPriceAuthorityService also accepted null and silently substituted Instant.now(), which is unsafe for historical evaluation.",
+            solution: "Make PRODUCTION_PARITY the default ReplayLogicMode and require EXPERIMENTAL explicitly for FIX-091 candidate behavior. Remove the execution-price wall-clock fallback and require an explicit reference timestamp. Persist replay_logic_mode plus EXACT_PRICE_REPLAY/SIGNAL_PRICE_FALLBACK on each run. Keep the existing tick-driven continuation path unchanged because it already mirrors Production ordering when V64 price events exist. Profit-lock continues through the existing shared ProfitLockPolicy; Replay never calls stateful Production wallet services.",
+            behavior: "Normal Replay/Test now disables Replay-only regime persistence and transition-probe authority, matching current Production behavior. Experimental capability remains available only through an explicit EXPERIMENTAL scope. Historical price authority cannot silently use the machine clock. Runs state whether price replay was exact or fallback.",
+            regression: "Verify null execution reference fails loudly; normal Replay reports PRODUCTION_PARITY; FIX-091 state/authority is inactive in parity mode and available only in EXPERIMENTAL mode; V64 windows report EXACT_PRICE_REPLAY and older windows SIGNAL_PRICE_FALLBACK; Replay writes no Production wallet/position state."
+        },
+        {
+            id: "FIX-108",
+            title: "Signal View chart-first loading performance",
+            status: "IMPLEMENTED · UI PERFORMANCE",
+            scenario: "View from Dashboard/Trade Activity navigated to the correct highlighted chart but looked broken because Dashboard startup waited for the independent Signals grid request before starting the market chart request.",
+            symbol: "ALL", entry: "READ-ONLY VIEW", exit: "READ-ONLY VIEW",
+            entryTime: "Persisted signal timestamp", exitTime: "Persisted signal timestamp",
+            replayWindow: "N/A · presentation only",
+            location: "dashboard.js startup + shared Signals browser asset version",
+            classes: ["dashboard.js", "dashboard.html", "trade-activity.html"],
+            cause: "Dashboard startup awaited SignalExecutionsBrowser.init(), including its API load, before refreshDashboard() could render the highlighted market chart.",
+            solution: "Prioritize the lightweight /api/dashboard/chart request immediately after symbol/deep-link selection, show a loading-chart message for View deep links, and hydrate the Signals browser/full overview independently in the background.",
+            behavior: "View starts chart loading immediately; Signals data cannot block chart rendering. No trading, Replay, wallet or decision logic changes.",
+            regression: "Open Blocked BUY/SELL, OPEN BUY and completed BUY/SELL View links and verify the chart request starts immediately and exact marker(s) remain highlighted after background Dashboard hydration."
+        },
+        {
             id: "FIX-107",
             title: "Shared Dashboard and Trade Activity Signals & executions browser",
             status: "IMPLEMENTED · READ-ONLY SHARED UI",

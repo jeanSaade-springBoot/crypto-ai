@@ -2765,8 +2765,16 @@ setupSidebar();
 (async () => {
     await loadSymbols();
     applyDashboardDeepLinkSelection();
-    await dashboardSignalBrowser.init(el('symbol-select').value);
-    await refreshDashboard();
+
+    // FIX-108: View-from-Signals is a chart-first navigation. FIX-107 waited for the
+    // independent Signals grid API before even starting the market request, which made
+    // the View action look broken on larger signal searches. Start the lightweight chart
+    // endpoint immediately; Signals and the full overview hydrate independently afterward.
+    const marketSubtitle = el('market-subtitle');
+    if (debugTradeEnabled && marketSubtitle) marketSubtitle.textContent = 'Loading highlighted signal chart…';
+    void refreshDashboardForSelection();
+    void dashboardSignalBrowser.init(el('symbol-select').value);
+
     if (debugMoveFocus) {
         window.requestAnimationFrame(() => {
             const marketSection = el('market');

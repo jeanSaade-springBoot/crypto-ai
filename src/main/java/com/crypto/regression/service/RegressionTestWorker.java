@@ -156,6 +156,11 @@ public class RegressionTestWorker {
             ShadowProductionReplayService.ReplayStats shadow = shadowReplayService.replay(
                     runId, symbol, start, end, fresh.generatedSignals(), productionPriceEvents,
                     () -> isStopRequested(runId));
+            // FIX-109: persist the parity contract with the run. A SIGNAL_PRICE_FALLBACK
+            // result is useful historical evidence, but must never be presented as tick-exact
+            // Production reproduction. Production parity is the default logic mode.
+            jdbcTemplate.update("UPDATE analysis_test_run SET replay_price_mode=?, replay_logic_mode=? WHERE id=?",
+                    shadow.priceReplayMode(), shadow.logicMode(), runId);
             checkStopRequested(runId);
 
             updateRun(runId, "RUNNING", 82, "Comparing historical decision authority", null);

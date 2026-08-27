@@ -22,20 +22,32 @@ import java.util.function.Consumer;
 @Component
 public class ExecutionReplayScope {
 
+    /** FIX-109: Production parity is the default replay contract. Experimental mode is
+     * explicit so replay-only candidate rules can never contaminate a parity result. */
+    public enum ReplayLogicMode { PRODUCTION_PARITY, EXPERIMENTAL }
+
     private final ThreadLocal<State> state = new ThreadLocal<>();
 
     public Scope open(long runId, List<TradeSignal> replaySignals, Consumer<ExecutionOpportunity> opportunitySink) {
+        return open(runId, replaySignals, opportunitySink, ReplayLogicMode.PRODUCTION_PARITY);
+    }
+
+    public Scope open(long runId, List<TradeSignal> replaySignals, Consumer<ExecutionOpportunity> opportunitySink,
+                      ReplayLogicMode logicMode) {
         if (state.get() != null) throw new IllegalStateException("Execution replay scope is already active on this thread");
         List<TradeSignal> immutable = replaySignals == null ? List.of() : replaySignals.stream()
                 .filter(s -> s != null && s.getGeneratedAt() != null)
                 .sorted(Comparator.comparing(TradeSignal::getGeneratedAt))
                 .toList();
-        state.set(new State(runId, immutable, opportunitySink));
+        state.set(new State(runId, immutable, opportunitySink, logicMode == null ? ReplayLogicMode.PRODUCTION_PARITY : logicMode));
         return new Scope();
     }
 
     public boolean active() { return state.get() != null; }
     public long runId() { return required().runId; }
+    public ReplayLogicMode logicMode() { return required().logicMode; }
+    public boolean experimental() { return active() && required().logicMode == ReplayLogicMode.EXPERIMENTAL; }
+    public boolean productionParity() { return active() && required().logicMode == ReplayLogicMode.PRODUCTION_PARITY; }
 
     public void reference(Instant reference) { required().reference = reference; }
 
@@ -123,13 +135,15 @@ public class ExecutionReplayScope {
         final long runId;
         final List<TradeSignal> signals;
         final Consumer<ExecutionOpportunity> opportunitySink;
+        final ReplayLogicMode logicMode;
         Instant reference;
         ExecutionOpportunity opportunity;
         ReplayPrice latestPrice;
-        State(long runId, List<TradeSignal> signals, Consumer<ExecutionOpportunity> opportunitySink) {
+        State(long runId, List<TradeSignal> signals, Consumer<ExecutionOpportunity> opportunitySink, ReplayLogicMode logicMode) {
             this.runId = runId;
             this.signals = new ArrayList<>(signals);
             this.opportunitySink = opportunitySink;
+            this.logicMode = logicMode;
         }
     }
 }

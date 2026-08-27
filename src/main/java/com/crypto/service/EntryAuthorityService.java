@@ -15,7 +15,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 
 /**
- * FIX-091 / Fix 5: Replay-only RANGE -> BREAKOUT transition authority.
+ * FIX-091 / Fix 5 + FIX-109: Experimental-Replay-only RANGE -> BREAKOUT transition authority.
  * It reuses existing structural evidence and only grants a maximum probe size.
  * It never executes a trade and never bypasses ExecutionIntelligenceService.validateBuy().
  */
@@ -45,7 +45,7 @@ public class EntryAuthorityService {
                                            MultiTimeframeConfluenceResult confluence,
                                            BtcMarketContextResult btc,
                                            OrderBookLiquidityResult liquidity) {
-        if (!replayScope.active() || indicator == null || regimeState == null || profile == null || score == null) {
+        if (!replayScope.active() || !replayScope.experimental() || indicator == null || regimeState == null || profile == null || score == null) {
             return EntryAuthorityDecision.normal();
         }
         boolean rangeBoundary = regimeState.confirmedRegime() == MarketRegime.RANGE

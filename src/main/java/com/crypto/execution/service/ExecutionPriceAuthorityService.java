@@ -8,6 +8,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.Objects;
 
 /**
  * FIX-056 fresh execution-price authority.
@@ -27,7 +28,11 @@ public class ExecutionPriceAuthorityService {
     private final ExecutionReplayScope replayScope;
 
     public Optional<ExecutionPrice> resolve(String symbol, Instant referenceTime) {
-        Instant reference = referenceTime == null ? Instant.now() : referenceTime;
+        // FIX-109 / Replay parity: wall-clock fallback is forbidden. Every caller must
+        // supply the evaluation clock explicitly so historical Replay can never silently
+        // compare an old market event with the machine clock used by Production today.
+        Instant reference = Objects.requireNonNull(referenceTime,
+                "Execution price reference time is required");
 
         if (replayScope.active()) {
             return replayScope.latestPrice()

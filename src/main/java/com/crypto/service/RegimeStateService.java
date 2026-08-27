@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * FIX-091 / Fix 4: Replay-only regime persistence state machine.
+ * FIX-091 / Fix 4 + FIX-109: Experimental-Replay-only regime persistence state machine.
  * Production behavior is intentionally untouched until the parity gate is passed.
  * State is keyed by replay run + symbol + interval and advances only on candle timestamps.
  */
@@ -32,7 +32,7 @@ public class RegimeStateService {
 
     public synchronized Decision apply(String symbol, String interval, Instant candleTime,
                                        MarketRegimeAssessment detectedAssessment) {
-        if (detectedAssessment == null || !replayScope.active()) {
+        if (detectedAssessment == null || !replayScope.active() || !replayScope.experimental()) {
             MarketRegime regime = detectedAssessment == null ? MarketRegime.UNKNOWN : detectedAssessment.regime();
             return new Decision(detectedAssessment, regime, null, regime, 0, false);
         }
