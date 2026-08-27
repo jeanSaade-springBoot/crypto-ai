@@ -95,6 +95,12 @@ const debugExitPrice = dashboardUrlParams.get('debugExitPrice');
 const debugPointTime = dashboardUrlParams.get('debugPointTime');
 const debugPointPrice = dashboardUrlParams.get('debugPointPrice');
 const debugPointSide = String(dashboardUrlParams.get('debugPointSide') || 'ANALYSIS').trim().toUpperCase();
+// FIX-111: preserve the independent Signals browser criteria across View -> Dashboard navigation.
+const requestedSignalFilters = {
+    symbol: String(dashboardUrlParams.get('signalSymbol') || '').trim().toUpperCase(),
+    period: String(dashboardUrlParams.get('signalPeriod') || '').trim(),
+    type: String(dashboardUrlParams.get('signalType') || '').trim().toUpperCase()
+};
 const debugTradePoints = (() => {
     if (!debugTradeEnabled) return [];
     const points = [];
@@ -1206,6 +1212,8 @@ async function applyChartViewport(min, max) {
     if (candleChart) candleChart.zoomX(min, max);
     if (volumeChart) volumeChart.zoomX(min, max);
     if (atrChart) atrChart.zoomX(min, max);
+    // FIX-111: wheel/pan changes Apex's visible grid. Refresh the hover layer immediately.
+    window.requestAnimationFrame(bindDashboardChartCrosshair);
 }
 
 function goToLatestChart() {
@@ -1456,7 +1464,7 @@ function renderCharts(candles, executions = [], options = {}) {
             bindDebugTradeDotTitles();
             bindChartNavigation();
             // FIX-070: Dashboard uses the same display-only X/Y pointer layer as every trade chart.
-            window.CryptoChartCrosshair?.bind(el('candlestick-chart'), candleChart, { valueFormatter: candleTooltipPrice });
+            bindDashboardChartCrosshair();
         });
         volumeChart = new ApexCharts(el('volume-chart'), { ...common, chart: { ...common.chart, type: 'bar', height: 150 }, series: [{ name: 'Volume', data: volumeSeries }], dataLabels: { enabled: false }, yaxis: { labels: { formatter: v => Number(v).toLocaleString(undefined, { notation: 'compact' }) } } });
         volumeChart.render();
@@ -1483,11 +1491,44 @@ function renderCharts(candles, executions = [], options = {}) {
                 if (volumeChart) volumeChart.zoomX(chartViewport.min, chartViewport.max);
                 if (atrChart) atrChart.zoomX(chartViewport.min, chartViewport.max);
             }
+            bindDashboardChartCrosshair();
         });
         volumeChart.updateSeries([{ name: 'Volume', data: volumeSeries }], false);
         if (atrChart) atrChart.updateSeries([{ name: 'ATR 14', data: atrSeries }], false);
     }
     updateChartLatestButton();
+}
+
+function dashboardCrosshairYRange() {
+    // FIX-111: do not depend on Apex's transient minYArr/maxYArr after zoom/pan redraws.
+    // Derive hover-price authority from the candles currently visible in our own viewport.
+    const minX = Number.isFinite(chartViewport.min) ? chartViewport.min : -Infinity;
+    const maxX = Number.isFinite(chartViewport.max) ? chartViewport.max : Infinity;
+    const visible = (chartLoadedCandles || []).filter(c => {
+        const t = window.CryptoTime.parseUtc(c.time)?.getTime();
+        return Number.isFinite(t) && t >= minX && t <= maxX;
+    });
+    const pool = visible.length ? visible : (chartLoadedCandles || []);
+    const lows = pool.map(c => Number(c.low)).filter(Number.isFinite);
+    const highs = pool.map(c => Number(c.high)).filter(Number.isFinite);
+    if (!lows.length || !highs.length) return window.CryptoChartCrosshair?.liveYRange(candleChart) || null;
+    const min = Math.min(...lows), max = Math.max(...highs);
+    if (!(max > min)) return null;
+    const pad = (max - min) * 0.03;
+    return {min:min-pad,max:max+pad};
+}
+
+function bindDashboardChartCrosshair() {
+    const host = el('candlestick-chart');
+    if (!host || !candleChart) return;
+    // FIX-111: Apex can rebuild internal SVG/grid nodes during wheel zoom, pan/history load,
+    // updateSeries and updateOptions. Rebind the host-level pointer layer after each redraw;
+    // bind() cleans the previous listener/DOM first, so there is never more than one handler.
+    window.CryptoChartCrosshair?.bind(host, candleChart, {
+        chartProvider: () => candleChart,
+        yRange: () => dashboardCrosshairYRange(),
+        valueFormatter: candleTooltipPrice
+    });
 }
 
 function bindDebugTradeDotTitles() {
@@ -2773,7 +2814,7 @@ setupSidebar();
     const marketSubtitle = el('market-subtitle');
     if (debugTradeEnabled && marketSubtitle) marketSubtitle.textContent = 'Loading highlighted signal chart…';
     void refreshDashboardForSelection();
-    void dashboardSignalBrowser.init(el('symbol-select').value);
+    void dashboardSignalBrowser.init(el('symbol-select').value, requestedSignalFilters);
 
     if (debugMoveFocus) {
         window.requestAnimationFrame(() => {

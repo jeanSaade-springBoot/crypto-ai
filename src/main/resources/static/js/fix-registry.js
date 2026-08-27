@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-111",
+            title: "Dashboard persistent chart hover and Signal View filter state",
+            status: "IMPLEMENTED · UI STABILITY",
+            scenario: "Dashboard chart hover could stop after wheel zoom/pan/redraw, and View navigation from Signals reloaded the Dashboard without the independent Signal Symbol/Period/Type criteria.",
+            symbol: "ALL", entry: "READ-ONLY VIEW", exit: "READ-ONLY VIEW",
+            entryTime: "Persisted signal timestamp", exitTime: "Persisted signal timestamp",
+            replayWindow: "N/A · presentation only",
+            location: "dashboard chart crosshair lifecycle + shared Signals View deep link",
+            classes: ["dashboard.js", "signal-executions-browser.js", "dashboard.html", "trade-activity.html", "fix-registry.js"],
+            cause: "The custom crosshair was bound on first Apex render but was not explicitly refreshed after zoom/pan/update redraws. Signal View links carried chart focus but not the browser's independent filter state, so a full Dashboard navigation restored default criteria.",
+            solution: "Rebind the single host-level crosshair after chart redraw and viewport changes, calculate hover Y authority from the currently visible candle range rather than transient Apex globals, and carry signalSymbol/signalPeriod/signalType through View links so Dashboard restores the exact Signals criteria before reloading the shared grid.",
+            behavior: "Hover price/time remains available after wheel zoom, drag/pan and chart updates. View still jumps to and highlights the selected signal/trade, while the Signals grid returns with the same Symbol/Period/Type criteria and matching results. No trading, Production, Replay, wallet or decision logic changes.",
+            regression: "Hover before and after repeated wheel zoom/pan/history loads; open View from every row type and verify highlight plus unchanged Signal Symbol/Period/Type and reloaded matching grid; verify Dashboard header symbol remains independent from manually selected Signal symbol."
+        },
+        {
             id: "FIX-109",
             title: "Replay Production-Parity contract and explicit evaluation clock",
             status: "IMPLEMENTED · PARITY SAFETY FOUNDATION",
