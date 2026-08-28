@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-116",
+            title: "System Health request deduplication and diagnostic query protection",
+            status: "IMPLEMENTED · OBSERVABILITY / DB RESOURCE PROTECTION",
+            scenario: "The global System Health badge polls every 60 seconds, while /api/system-health/daily can exceed that duration under load. Identical requests then overlapped and competed for DB connections, making unrelated Dashboard/chart endpoints appear slow.",
+            symbol: "ALL", entry: "READ-ONLY HEALTH", exit: "N/A",
+            entryTime: "Global 60-second poll", exitTime: "N/A",
+            replayWindow: "N/A · observability only. Replay = Production trading behavior is unchanged.",
+            location: "Global System Health poll + daily diagnostics + Catching Market summary index",
+            classes: ["global-system-health.js", "SystemHealthDailyService", "SystemHealthDailyServiceCacheTest", "V75__catching_market_summary_lookup_index.sql", "md/FIX-116.md"],
+            cause: "The browser interval had no in-flight guard and dailyHealth() recomputed all daily/7-day diagnostics for every caller. The Catching Market global summary also lacked an index led by its end_time lookback predicate.",
+            solution: "Skip overlapping browser health ticks, cache one completed daily-health snapshot briefly with single-flight cache misses, and add a read-only Catching Market summary range index.",
+            behavior: "Reduces duplicate diagnostic SQL and DB-pool contention without changing Health calculations themselves. Catching Market detection/rows remain unchanged; only query access is indexed. No Order Book, signal, FinalDecision, execution, wallet, Production or Replay semantics change. Golden rule: Replay = Production.",
+            regression: "Maven includes SystemHealthDailyServiceCacheTest for cache reuse and concurrent single-flight behavior. Verify browser Network shows at most one unresolved /api/system-health/daily request and inspect Catching Market summary latency after V75 is applied."
+        },
+        {
             id: "FIX-11E",
             title: "Parallel Order Book collection with per-symbol single-flight",
             status: "IMPLEMENTED · PRODUCTION-CRITICAL INFRASTRUCTURE",

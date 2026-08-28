@@ -412,3 +412,8 @@ fundamentals:
 crypto:
   account:
     master-key: ${CRYPTO_ACCOUNT_MASTER_KEY:}
+
+# FIX-116: short read-only cache for the expensive System Health daily/baseline diagnostics.
+# This protects the DB pool from duplicate global-health polling; it does not affect trading logic.
+system-health:
+  daily-cache-ms: ${SYSTEM_HEALTH_DAILY_CACHE_MS:45000}

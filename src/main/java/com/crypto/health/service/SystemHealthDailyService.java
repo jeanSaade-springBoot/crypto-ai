@@ -3,6 +3,7 @@ package com.crypto.health.service;
 import com.crypto.administration.service.CoinConfigurationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,8 +37,42 @@ public class SystemHealthDailyService {
     private final JdbcTemplate jdbc;
     private final CoinConfigurationService coinConfigurationService;
 
+    // FIX-116: System Health is read-only observability, but its 7-day diagnostic aggregations are
+    // intentionally heavier than trading-path lookups. Cache one completed snapshot briefly and
+    // serialize cache misses so concurrent browser callers cannot execute the same heavy SQL in parallel.
+    @Value("${system-health.daily-cache-ms:45000}")
+    private long dailyCacheMs;
+    private final Object dailyHealthCacheLock = new Object();
+    private volatile DailyHealthCache dailyHealthCache;
+
     @Transactional(readOnly = true)
     public Map<String, Object> dailyHealth() {
+        long nowMs = System.currentTimeMillis();
+        DailyHealthCache cached = dailyHealthCache;
+        if (cached != null && nowMs < cached.expiresAtMs()) {
+            return cached.payload();
+        }
+
+        synchronized (dailyHealthCacheLock) {
+            // Double-check after acquiring the single-flight lock: another request may have
+            // completed the calculation while this caller was waiting.
+            nowMs = System.currentTimeMillis();
+            cached = dailyHealthCache;
+            if (cached != null && nowMs < cached.expiresAtMs()) {
+                return cached.payload();
+            }
+
+            Map<String, Object> computed = computeDailyHealth();
+            dailyHealthCache = new DailyHealthCache(computed, nowMs + Math.max(1000L, dailyCacheMs));
+            return computed;
+        }
+    }
+
+    /**
+     * FIX-116: package-visible only to permit focused Maven regression tests of cache/single-flight
+     * behavior without changing any of the existing Health SQL or trading semantics.
+     */
+    Map<String, Object> computeDailyHealth() {
         Instant now = Instant.now();
         LocalDate today = LocalDate.now(DISPLAY_ZONE);
         Instant from = today.atStartOfDay(DISPLAY_ZONE).toInstant();
@@ -116,6 +151,8 @@ public class SystemHealthDailyService {
         response.put("opportunityOutcomes", opportunityOutcomes);
         return response;
     }
+
+    private record DailyHealthCache(Map<String, Object> payload, long expiresAtMs) {}
 
     private <T> T safe(String component, List<Map<String, Object>> errors, java.util.function.Supplier<T> action, T fallback) {
         try {

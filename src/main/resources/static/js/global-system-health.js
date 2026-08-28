@@ -2,6 +2,10 @@
 (() => {
     const HEALTH_URL = '/api/system-health/daily';
     const REFRESH_MS = 60000;
+    // FIX-116: never allow the 60-second global Health poll to overlap itself.
+    // Under DB pressure /api/system-health/daily can exceed one minute; without this guard,
+    // each interval starts another expensive request and can starve unrelated dashboard calls.
+    let refreshInFlight = false;
 
     function normalize(value) {
         const v = String(value || 'OK').toUpperCase();
@@ -71,6 +75,10 @@
     }
 
     async function refresh() {
+        // FIX-116: skip this timer tick while the previous Health request is unresolved.
+        // This is UI/resource protection only; it never changes Production or Replay trading state.
+        if (refreshInFlight) return;
+        refreshInFlight = true;
         try {
             const response = await fetch(HEALTH_URL, {headers: {'Accept': 'application/json'}, cache: 'no-store'});
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -78,6 +86,9 @@
         } catch (_) {
             // Endpoint failure is itself operationally important: make the menu visible without inventing a trading diagnosis.
             render({status: 'WARNING', alerts: [{status: 'WARNING', message: 'System Health status could not be refreshed.'}]});
+        } finally {
+            // Always release after success/failure so one network error cannot permanently stop Health refresh.
+            refreshInFlight = false;
         }
     }
 
