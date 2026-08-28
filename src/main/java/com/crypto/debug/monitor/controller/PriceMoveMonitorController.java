@@ -4,6 +4,7 @@ import com.crypto.debug.monitor.domain.PriceMoveEvent;
 import com.crypto.debug.monitor.domain.PriceMoveMonitorSettings;
 import com.crypto.debug.monitor.dto.PriceMoveMonitorSettingsRequest;
 import com.crypto.debug.monitor.dto.PriceMoveReviewRequest;
+import com.crypto.debug.monitor.dto.CatchingMarketPageResponse;
 import com.crypto.debug.monitor.service.PriceMoveMonitorService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -21,6 +22,24 @@ public class PriceMoveMonitorController {
     @GetMapping
     public List<PriceMoveEvent> events(@RequestParam(required = false) String symbol) {
         return service.recentEvents(symbol);
+    }
+
+
+    @GetMapping("/summary")
+    public CatchingMarketPageResponse summary(
+            @RequestParam(required = false) String symbols,
+            @RequestParam(defaultValue = "HIGH") String level,
+            @RequestParam(defaultValue = "24") int hours,
+            @RequestParam(defaultValue = "0") int page) {
+        // FIX-113: read-only database aggregation, fixed 20 rows/page.
+        return service.summaryPage(symbols, level, hours, page);
+    }
+
+    @GetMapping("/{id}/start-chart")
+    public Map<String, Object> startChart(@PathVariable Long id,
+                                          @RequestParam(required = false) String interval) {
+        // FIX-113: fast chart path highlights only the persisted catch start time.
+        return service.eventStartChart(id, interval);
     }
 
     @GetMapping("/active")

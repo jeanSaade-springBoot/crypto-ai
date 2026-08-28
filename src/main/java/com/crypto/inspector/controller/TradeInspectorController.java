@@ -30,9 +30,10 @@ public class TradeInspectorController {
             @RequestParam(required = false, defaultValue = "ALL") String symbol,
             @RequestParam(required = false, defaultValue = "ALL") String venue,
             @RequestParam(required = false, defaultValue = "0") int page,
-            @RequestParam(required = false, defaultValue = "50") int pageSize) {
-        // FIX-106: completed trades are paged at the database boundary. The filters are
-        // part of the paged query, so changing symbol never searches only a recent subset.
+            @RequestParam(required = false, defaultValue = "10") int pageSize) {
+        // FIX-113: completed trades remain paged at the database boundary. The simplified UI requests
+        // a fixed 10 newest-first records and walks history with Previous/Next; API filters remain
+        // backward-compatible for callers outside the Trade Inspector page.
         return service.inspect(symbol, venue, page, pageSize);
     }
     // FIX-039: blocked BUY/SELL diagnostics accept an explicit UTC window. When omitted,

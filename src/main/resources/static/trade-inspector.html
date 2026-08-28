@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Trade Inspector</title>
     <link rel="stylesheet" href="/css/dashboard.css">
-    <link rel="stylesheet" href="/css/trade-inspector.css?v=106">
+    <link rel="stylesheet" href="/css/trade-inspector.css?v=113">
     <link rel="stylesheet" href="/css/chart-crosshair.css">
     <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1"></script>
 </head>
@@ -22,10 +22,8 @@
                 <p class="inspector-subtitle">Measure entry quality, exit quality and what happened after every executed trade.</p>
             </div>
             <div class="filters inspector-filters">
-                <label>Symbol<select id="symbol-filter"><option value="ALL">All coins</option></select></label>
-                <label>Venue<select id="venue-filter"><option value="ALL">All</option><option value="WALLET">Wallet</option><option value="BINANCE">Binance</option></select></label>
-                <label>Per page<select id="limit-filter"><option>25</option><option selected>50</option><option>100</option></select></label>
-                <button id="refresh-inspector" type="button">Refresh</button>
+                <!-- FIX-113: Trade Inspector is deliberately filter-free: newest 10 first, then Prev/Next. -->
+                <button id="refresh-inspector" type="button">Refresh latest</button>
             </div>
         </header>
 
@@ -114,7 +112,7 @@
 
         <section class="panel">
             <div class="section-heading">
-                <div><p class="eyebrow">COMPLETED POSITIONS</p><h2>Recent inspected trades</h2></div>
+                <div><p class="eyebrow">COMPLETED POSITIONS</p><h2>Latest inspected trades</h2></div>
                 <span id="inspector-updated">—</span>
             </div>
             <div id="trade-cards" class="trade-inspector-list">
@@ -131,7 +129,7 @@
 </div>
 <script src="/js/time-utils.js"></script>
 <script src="/js/chart-crosshair.js"></script>
-<script src="/js/trade-inspector.js?v=106"></script>
+<script src="/js/trade-inspector.js?v=113"></script>
 <script src="/js/catching-market-badge.js"></script><script src="/js/global-system-health.js"></script>
 </body>
 </html>

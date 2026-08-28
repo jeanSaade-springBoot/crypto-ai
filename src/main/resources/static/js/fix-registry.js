@@ -1,6 +1,36 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-113A",
+            title: "Dashboard Signal View Chart isolation",
+            status: "IMPLEMENTED · UI / READ-ONLY PERFORMANCE",
+            scenario: "Clicking View chart inside the Dashboard Signals section navigated back to /dashboard with deep-link parameters. That full page navigation rebuilt the Dashboard and refreshed the Signals grid even though the operator only wanted to inspect one signal on the existing chart.",
+            symbol: "ALL", entry: "DISPLAY ONLY", exit: "N/A",
+            entryTime: "Selected persisted signal timestamp", exitTime: "N/A",
+            replayWindow: "N/A · presentation-only. Replay = Production trading behavior is unchanged.",
+            location: "Dashboard Signals grid -> View chart",
+            classes: ["dashboard.js", "DashboardApiController existing /api/dashboard/chart endpoint", "fix-registry.js"],
+            cause: "View chart was an ordinary /dashboard hyperlink and shared the signal-detail-button CSS class. The broad analysis-toggle selector also bound to that anchor. Browser navigation then reloaded the complete page and its Signals grid.",
+            solution: "Restrict the analysis toggle listener to real button elements and intercept only signal-chart-button clicks. Resolve the existing deep-link parameters in place, request only the bounded chart payload from /api/dashboard/chart, render the existing chart and temporary signal marker, then scroll to Market without calling the Dashboard overview or Signals-grid refresh path.",
+            behavior: "View chart updates only the chart needed for inspection. The Signals grid remains in its current state instead of being reloaded/reordered by the click. Existing deep-link URLs remain as a fallback, and no signal generation, FinalDecision, ExecutionIntelligence, wallet execution, Production or Replay logic changes.",
+            regression: "Open Dashboard Signals, note the current rows, click View chart repeatedly on BUY rows and verify the chart focuses the selected signal while the Signals grid DOM is not refreshed by the click. Verify View analysis/Close/Pin still work and normal manual/periodic Dashboard refresh remains unchanged."
+        },
+        {
+            id: "FIX-113",
+            title: "Catching Market aggregation + fast start chart + simplified Trade Inspector pagination",
+            status: "IMPLEMENTED · UI / READ-ONLY PERFORMANCE",
+            scenario: "Catching Market exposed individual catch rows instead of a direction summary, its blame-oriented View Chart performed unnecessary signal/execution reconstruction and loaded large historical windows, and Trade Inspector required filters/page-size choices when the operator wanted a simple newest-first history.",
+            symbol: "ALL", entry: "DISPLAY ONLY", exit: "N/A",
+            entryTime: "Persisted catch/trade timestamps", exitTime: "N/A",
+            replayWindow: "N/A · read-only presentation/retrieval only. Replay = Production trading behavior is unchanged.",
+            location: "Catching Market API/repository/UI + Trade Inspector completed-trade UI",
+            classes: ["PriceMoveEventRepository", "PriceMoveMonitorService", "PriceMoveMonitorController", "CatchingMarketSummaryView", "CatchingMarketPageResponse", "catching-market.html", "catching-market.js", "trade-inspector.html", "trade-inspector.js", "TradeInspectorController", "fix-registry.js"],
+            cause: "The Catching Market browser loaded per-symbol recent rows and grouped/sorted in JavaScript, while View Chart resolved blamed signals and multi-day candle context. Trade Inspector already had SQL pagination but defaulted to 50 and exposed Symbol/Venue/Page-size controls that were unnecessary for the requested latest-history workflow.",
+            solution: "Aggregate Catching Market in MySQL by symbol + direction + persisted catcher window, calculate count/average progress/start/end, order by latest activity and page at a fixed 20 rows. Add 1h/4h/24h history filters. View Chart now calls a lightweight endpoint that reads only a bounded 5m/1h/4h candle window around the aggregate's earliest persisted event and highlights START only. Trade Inspector UI removes browsing filters and always requests the latest 10 completed trades per server page; Previous/Next walks the complete history.",
+            behavior: "Catching Market becomes a compact direction-strength summary and its chart opens with less backend work and less candle data. Trade Inspector page 1 is always the latest 10 records. No price-catcher detection threshold, signal generation, FinalDecision, ExecutionIntelligence, wallet execution, Replay logic or parity authority is changed.",
+            regression: "Verify Catching Market 1h/4h/24h filters reset to page 1, pages contain at most 20 aggregate rows ordered by latest end time, direction count/average/start/end are database-derived, View Chart highlights START only, and Trade Inspector shows exactly 10 newest records per page with working Previous/Next and no browsing filters. Confirm Production/Replay trading paths are untouched."
+        },
+        {
             id: "FIX-112D",
             title: "Exact Production source-signal lineage for Replay parity",
             status: "IMPLEMENTED · PARITY INFRASTRUCTURE",

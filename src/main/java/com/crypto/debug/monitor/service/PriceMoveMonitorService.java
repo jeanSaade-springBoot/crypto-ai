@@ -3,6 +3,7 @@ package com.crypto.debug.monitor.service;
 import com.crypto.debug.monitor.domain.PriceMoveEvent;
 import com.crypto.debug.monitor.domain.PriceMoveMonitorSettings;
 import com.crypto.debug.monitor.dto.PriceMoveMonitorSettingsRequest;
+import com.crypto.debug.monitor.dto.CatchingMarketPageResponse;
 import com.crypto.debug.monitor.repository.PriceMoveEventRepository;
 import com.crypto.debug.monitor.repository.PriceMoveMonitorSettingsRepository;
 import com.crypto.domain.BtcContextStatus;
@@ -20,6 +21,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -387,6 +390,73 @@ public class PriceMoveMonitorService {
                 : eventRepository.findTop250BySymbolOrderByEndTimeDesc(rawSymbol.trim().toUpperCase(Locale.ROOT));
     }
     public long outstandingBlameCount() { return eventRepository.countByBlameRequiredTrueAndBlameReviewedFalse(); }
+
+    /**
+     * FIX-113: server-side Catching Market aggregation/pagination. The lookback changes only which
+     * persisted price_move_event rows are summarized. Detection itself and all Production/Replay
+     * trading behavior remain untouched. Page size is intentionally fixed at 20 for a predictable UI.
+     */
+    @Transactional(readOnly = true)
+    public CatchingMarketPageResponse summaryPage(String rawSymbols, String rawLevel, int lookbackHours, int requestedPage) {
+        int hours = List.of(1, 4, 24).contains(lookbackHours) ? lookbackHours : 24;
+        int page = Math.max(0, requestedPage);
+        String symbols = normalizeCsvSymbols(rawSymbols);
+        String level = rawLevel == null ? "HIGH" : rawLevel.trim().toUpperCase(Locale.ROOT);
+        if (!List.of("HIGH", "EXTREME", "NORMAL", "ALL").contains(level)) level = "HIGH";
+
+        Page<com.crypto.debug.monitor.dto.CatchingMarketSummaryView> result = eventRepository.findSummaryPage(
+                Instant.now().minus(Duration.ofHours(hours)), symbols, level, PageRequest.of(page, 20));
+        return new CatchingMarketPageResponse(result.getContent(), result.getNumber(), result.getSize(),
+                result.getTotalElements(), result.getTotalPages());
+    }
+
+    private String normalizeCsvSymbols(String rawSymbols) {
+        if (rawSymbols == null || rawSymbols.isBlank()) return null;
+        List<String> normalized = Arrays.stream(rawSymbols.split(","))
+                .map(String::trim).filter(v -> !v.isBlank()).map(v -> v.toUpperCase(Locale.ROOT))
+                .distinct().toList();
+        return normalized.isEmpty() ? null : String.join(",", normalized);
+    }
+
+    /**
+     * FIX-113: lightweight View Chart payload. Unlike the older blame chart this does not resolve
+     * TradeSignal, ExecutionOpportunity or wallet evidence and does not load multi-day context. It
+     * fetches only a bounded candle window around the persisted catch START time and highlights that
+     * start point. This is presentation-only and cannot influence Production or Replay.
+     */
+    @Transactional(readOnly = true)
+    public Map<String,Object> eventStartChart(Long id, String rawInterval) {
+        PriceMoveEvent event = eventRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Market move event was not found"));
+        String interval = normalizeChartInterval(rawInterval, event.getDetectionWindow());
+        Instant anchor = event.getStartTime();
+        Duration radius = switch (interval) {
+            case "4h" -> Duration.ofDays(3);
+            case "1h" -> Duration.ofHours(18);
+            case "5m" -> Duration.ofHours(3);
+            default -> Duration.ofHours(2);
+        };
+        List<com.crypto.domain.Candle> candles = candleRepository
+                .findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(
+                        event.getSymbol(), interval, anchor.minus(radius), anchor.plus(radius))
+                .stream().filter(com.crypto.domain.Candle::isClosed).toList();
+
+        Map<String,Object> out = new LinkedHashMap<>();
+        out.put("event", event);
+        out.put("interval", interval);
+        out.put("startTime", anchor);
+        out.put("startPrice", event.getStartPrice());
+        out.put("candles", candles);
+        return out;
+    }
+
+    private String normalizeChartInterval(String rawInterval, String detectionWindow) {
+        String requested = rawInterval == null ? "" : rawInterval.trim().toLowerCase(Locale.ROOT);
+        if (List.of("5m", "1h", "4h").contains(requested)) return requested;
+        if ("4h".equalsIgnoreCase(detectionWindow)) return "4h";
+        if ("1h".equalsIgnoreCase(detectionWindow) || "2h".equalsIgnoreCase(detectionWindow)) return "1h";
+        return "5m";
+    }
 
     @Transactional(readOnly = true)
     public Map<String,Object> eventChart(Long id, String rawInterval) {

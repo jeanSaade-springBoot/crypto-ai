@@ -101,6 +101,11 @@ const requestedSignalFilters = {
     period: String(dashboardUrlParams.get('signalPeriod') || '').trim(),
     type: String(dashboardUrlParams.get('signalType') || '').trim().toUpperCase()
 };
+// FIX-113A: View Chart from the Dashboard Signals grid is now an in-page chart focus.
+// Keep a mutable presentation-only point so opening the chart never navigates/reloads the page
+// and therefore never refreshes/reorders the Signals grid. It is never consumed by trading logic.
+let interactiveSignalChartPoint = null;
+
 const debugTradePoints = (() => {
     if (!debugTradeEnabled) return [];
     const points = [];
@@ -1375,7 +1380,7 @@ function renderCharts(candles, executions = [], options = {}) {
             }
         };
     });
-    debugTradePoints.forEach((point, index) => {
+    [...debugTradePoints, ...(interactiveSignalChartPoint ? [interactiveSignalChartPoint] : [])].forEach((point, index) => {
         const isBuy = point.side === 'BUY';
         const isSell = point.side === 'SELL';
         const markerColor = isBuy ? '#39d98a' : isSell ? '#ff6b72' : '#f4c95d';
@@ -1532,7 +1537,7 @@ function bindDashboardChartCrosshair() {
 }
 
 function bindDebugTradeDotTitles() {
-    debugTradePoints.forEach((point, index) => {
+    [...debugTradePoints, ...(interactiveSignalChartPoint ? [interactiveSignalChartPoint] : [])].forEach((point, index) => {
         const label = document.querySelector(`.debug-trade-marker-${index}`);
         const target = label?.parentElement?.querySelector('circle') || label;
         if (!target) return;
@@ -1801,7 +1806,10 @@ function renderSignals(signals, displayOnlyInterval = false, timeframeSnapshot =
             </tr>`;
     }).join('');
 
-    body.querySelectorAll('.signal-detail-button').forEach(button => {
+    // FIX-113A: Bind only the analysis toggle buttons here. The View chart anchor also
+    // carries signal-detail-button styling, and the old broad selector accidentally treated
+    // that navigation link as an analysis toggle before the browser reloaded /dashboard.
+    body.querySelectorAll('button.signal-detail-button[data-signal-id][data-detail-id]').forEach(button => {
         button.addEventListener('click', () => {
             const signalId = button.dataset.signalId;
             const detail = document.getElementById(button.dataset.detailId);
@@ -1816,6 +1824,46 @@ function renderSignals(signals, displayOnlyInterval = false, timeframeSnapshot =
             button.textContent = opening ? 'Hide analysis' : 'View analysis';
         });
     });
+    // FIX-113A: View chart is presentation-only and must not reload the Dashboard or Signals grid.
+    // Fetch only the bounded 5m candle window needed to inspect this signal, render it into the
+    // existing chart, and add one temporary signal marker. No overview/signal endpoint is called.
+    body.querySelectorAll('a.signal-chart-button').forEach(link => {
+        link.addEventListener('click', async event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const href = new URL(link.href, window.location.origin);
+            const symbol = String(href.searchParams.get('symbol') || '').toUpperCase();
+            const interval = String(href.searchParams.get('interval') || '5m').toLowerCase();
+            const focusStart = href.searchParams.get('focusStart');
+            const focusEnd = href.searchParams.get('focusEnd');
+            const pointTime = href.searchParams.get('debugEntryTime');
+            const pointPrice = Number(href.searchParams.get('debugEntryPrice'));
+            const pointDate = pointTime ? window.CryptoTime.parseUtc(pointTime) : null;
+            if (!symbol || !focusStart || !focusEnd || !pointDate || Number.isNaN(pointDate.getTime()) || !Number.isFinite(pointPrice)) return;
+
+            interactiveSignalChartPoint = { side: 'BUY', time: pointDate, price: pointPrice };
+            const symbolSelect = el('symbol-select');
+            const intervalSelect = el('interval-select');
+            if ([...symbolSelect.options].some(option => option.value === symbol)) symbolSelect.value = symbol;
+            if ([...intervalSelect.options].some(option => option.value === interval)) intervalSelect.value = interval;
+            resetChartHistoryNavigation();
+
+            link.classList.add('loading');
+            try {
+                const params = new URLSearchParams({symbol, interval, focusStart, focusEnd});
+                const response = await fetch(`/api/dashboard/chart?${params.toString()}`);
+                if (!response.ok) throw new Error(`Chart API returned ${response.status}`);
+                renderFastMarket(await response.json());
+                el('market')?.scrollIntoView({behavior: 'smooth', block: 'start'});
+            } catch (error) {
+                el('error-banner').textContent = `Signal chart could not load: ${error.message}`;
+                el('error-banner').classList.remove('hidden');
+            } finally {
+                link.classList.remove('loading');
+            }
+        });
+    });
+
     body.querySelectorAll('.analysis-close-button').forEach(button => {
         button.addEventListener('click', () => {
             const signalId = button.dataset.signalId;
