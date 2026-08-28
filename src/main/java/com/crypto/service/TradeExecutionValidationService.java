@@ -1,5 +1,6 @@
 package com.crypto.service;
 
+import com.crypto.domain.BtcContextStatus;
 import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
 import com.crypto.repository.TradeSignalRepository;
@@ -45,7 +46,7 @@ public class TradeExecutionValidationService {
     @Autowired(required = false)
     private ExecutionReplayScope replayScope;
 
-    public ValidationResult validateBuy(TradeSignal executionSignal) {
+    public ValidationResult validateBuy(TradeSignal executionSignal, int entryQualityScore) {
         ValidationResult structural = validateBaseSignal(executionSignal, true);
         if (!structural.allowed()) return structural;
 
@@ -88,7 +89,11 @@ public class TradeExecutionValidationService {
         ExecutionProfile profile = ExecutionProfile.from(settings.getExecutionProfile());
         return switch (profile) {
             case CONSERVATIVE -> conservativeBuy(fiveMinute, oneHour);
-            case BALANCED -> balancedBuy(fiveMinute, oneHour);
+            // FIX-112B: only the fresh direct-BUY BALANCED path receives the narrow
+            // 5m-NEUTRAL exception. validateBuyContext() and AGGRESSIVE fallback keep
+            // calling balancedBuy() directly so their proven Production behavior is unchanged.
+            case BALANCED -> balancedBuyWithNeutralFiveException(
+                    executionSignal, fiveMinute, oneHour, entryQualityScore);
             case AGGRESSIVE -> aggressiveBuy(executionSignal, fiveMinute, oneHour);
         };
     }
@@ -172,6 +177,50 @@ public class TradeExecutionValidationService {
         }
         return ValidationResult.allow(100, "CONSERVATIVE_FULL",
                 "Conservative profile approved a full-size entry: 1m BUY, bullish 5m confirmation, and non-bearish 1h context.");
+    }
+
+    /**
+     * FIX-112B / Production behavior change:
+     * 5m NEUTRAL means short-term confirmation is absent, but it is not bearish
+     * opposition. After the existing BALANCED rules reject, allow only a small
+     * exploratory entry when the fresh 1m BUY is high-confidence, 1h is genuinely
+     * bullish, independent Entry Quality is strong, and BTC has no conflict state.
+     *
+     * Golden rule: Replay = Production. This method lives in the shared Production
+     * validation service and Replay must call this exact path with historical inputs;
+     * there is no Replay-only copy, threshold, or behavior fork.
+     *
+     * balancedBuy() intentionally remains unchanged. Existing BALANCED_FULL,
+     * BALANCED_STRONG and BALANCED_EARLY authority always wins before this exception.
+     */
+    private ValidationResult balancedBuyWithNeutralFiveException(
+            TradeSignal executionSignal, TradeSignal fiveMinute, TradeSignal oneHour, int entryQualityScore) {
+        ValidationResult balanced = balancedBuy(fiveMinute, oneHour);
+        if (balanced.allowed()) return balanced;
+
+        boolean neutralFiveBullishOne = fiveMinute.getDecision() == SignalDecision.NEUTRAL
+                && isBullish(oneHour.getDecision());
+        BtcContextStatus btcStatus = executionSignal.getBtcContextStatus();
+        // FIX-112B: plain/strong BTC conflict cannot be rescued by this exception.
+        // Other BTC states retain their existing upstream Production semantics.
+        boolean btcSafeForException = btcStatus != BtcContextStatus.CONFLICT
+                && btcStatus != BtcContextStatus.STRONG_CONFLICT;
+        boolean strongEnough = executionSignal.getConfidenceScore() >= 72
+                && entryQualityScore >= 70
+                && btcSafeForException;
+
+        if (neutralFiveBullishOne && strongEnough) {
+            return ValidationResult.allow(25, "BALANCED_NEUTRAL_5M",
+                    "BALANCED_NEUTRAL_5M: 25% exploratory entry approved because 5m is NEUTRAL "
+                            + "rather than bearish while 1h remains " + oneHour.getDecision()
+                            + ". 1m=" + executionSignal.getDecision()
+                            + ", confidence=" + executionSignal.getConfidenceScore()
+                            + ", 5m=NEUTRAL, 1h=" + oneHour.getDecision()
+                            + ", entryQuality=" + entryQualityScore
+                            + ", btcStatus=" + btcStatus
+                            + ", position=25%.");
+        }
+        return balanced;
     }
 
     private ValidationResult balancedBuy(TradeSignal fiveMinute, TradeSignal oneHour) {

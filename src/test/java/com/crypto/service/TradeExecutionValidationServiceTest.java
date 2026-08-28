@@ -1,5 +1,6 @@
 package com.crypto.service;
 
+import com.crypto.domain.BtcContextStatus;
 import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
 import com.crypto.repository.TradeSignalRepository;
@@ -42,7 +43,7 @@ class TradeExecutionValidationServiceTest {
         // A non-1m BUY is rejected before wallet execution settings are consulted,
         // so this test must not stub settingsRepository.
         var result = service.validateBuy(
-                signal("BTCUSDT", "5m", SignalDecision.BUY, now, 80, 23, 18, 13)
+                signal("BTCUSDT", "5m", SignalDecision.BUY, now, 80, 23, 18, 13), 100
         );
 
         assertThat(result.allowed()).isFalse();
@@ -55,7 +56,7 @@ class TradeExecutionValidationServiceTest {
         TradeSignal oneMinute = signal("BTCUSDT", "1m", SignalDecision.BUY, now, 80, 23, 18, 13);
         latest("BTCUSDT", "5m", signal("BTCUSDT", "5m", SignalDecision.WATCH, now.minusSeconds(120), 70, 20, 15, 10));
         latest("BTCUSDT", "1h", signal("BTCUSDT", "1h", SignalDecision.BUY, now.minusSeconds(1800), 80, 23, 18, 13));
-        var result = service.validateBuy(oneMinute);
+        var result = service.validateBuy(oneMinute, 100);
         assertThat(result.allowed()).isFalse();
         assertThat(result.code()).isEqualTo("5M_NOT_BULLISH");
     }
@@ -66,7 +67,7 @@ class TradeExecutionValidationServiceTest {
         TradeSignal oneMinute = signal("BTCUSDT", "1m", SignalDecision.BUY, now, 80, 23, 18, 13);
         latest("BTCUSDT", "5m", signal("BTCUSDT", "5m", SignalDecision.BUY, now.minusSeconds(120), 80, 23, 18, 13));
         latest("BTCUSDT", "1h", signal("BTCUSDT", "1h", SignalDecision.NEUTRAL, now.minusSeconds(1800), 55, 15, 10, 8));
-        var result = service.validateBuy(oneMinute);
+        var result = service.validateBuy(oneMinute, 100);
         assertThat(result.allowed()).isTrue();
         assertThat(result.positionPercent()).isEqualTo(75);
     }
@@ -77,7 +78,7 @@ class TradeExecutionValidationServiceTest {
         TradeSignal oneMinute = signal("BNBUSDT", "1m", SignalDecision.BUY, now, 79, 22, 17, 13);
         latest("BNBUSDT", "5m", signal("BNBUSDT", "5m", SignalDecision.WATCH, now.minusSeconds(120), 68, 18, 13, 10));
         latest("BNBUSDT", "1h", signal("BNBUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1800), 69, 19, 14, 10));
-        var result = service.validateBuy(oneMinute);
+        var result = service.validateBuy(oneMinute, 100);
         assertThat(result.allowed()).isTrue();
         assertThat(result.positionPercent()).isEqualTo(50);
     }
@@ -88,7 +89,7 @@ class TradeExecutionValidationServiceTest {
         TradeSignal oneMinute = signal("SOLUSDT", "1m", SignalDecision.BUY, now, 88, 23, 17, 13);
         latest("SOLUSDT", "5m", signal("SOLUSDT", "5m", SignalDecision.WATCH, now.minusSeconds(120), 68, 18, 13, 10));
         latest("SOLUSDT", "1h", signal("SOLUSDT", "1h", SignalDecision.NEUTRAL, now.minusSeconds(1800), 55, 15, 10, 8));
-        var result = service.validateBuy(oneMinute);
+        var result = service.validateBuy(oneMinute, 100);
         assertThat(result.allowed()).isTrue();
         assertThat(result.positionPercent()).isEqualTo(25);
         assertThat(result.code()).isEqualTo("AGGRESSIVE_PROBE");
@@ -100,7 +101,7 @@ class TradeExecutionValidationServiceTest {
         TradeSignal oneMinute = signal("SOLUSDT", "1m", SignalDecision.BUY, now, 80, 20, 12, 10);
         latest("SOLUSDT", "5m", signal("SOLUSDT", "5m", SignalDecision.WATCH, now.minusSeconds(120), 68, 18, 13, 10));
         latest("SOLUSDT", "1h", signal("SOLUSDT", "1h", SignalDecision.NEUTRAL, now.minusSeconds(1800), 55, 15, 10, 8));
-        var result = service.validateBuy(oneMinute);
+        var result = service.validateBuy(oneMinute, 100);
         assertThat(result.allowed()).isFalse();
         assertThat(result.code()).isEqualTo("AGGRESSIVE_PROBE_QUALITY");
     }
@@ -111,7 +112,7 @@ class TradeExecutionValidationServiceTest {
         TradeSignal oneMinute = signal("BTCUSDT", "1m", SignalDecision.BUY, now, 90, 25, 20, 15);
         latest("BTCUSDT", "5m", signal("BTCUSDT", "5m", SignalDecision.STRONG_BUY, now.minusSeconds(120), 90, 25, 20, 15));
         latest("BTCUSDT", "1h", signal("BTCUSDT", "1h", SignalDecision.SELL, now.minusSeconds(1800), 35, 8, 6, 5));
-        var result = service.validateBuy(oneMinute);
+        var result = service.validateBuy(oneMinute, 100);
         assertThat(result.allowed()).isFalse();
         assertThat(result.code()).isEqualTo("1H_BEARISH_VETO");
     }
@@ -124,7 +125,7 @@ class TradeExecutionValidationServiceTest {
                 "ETHUSDT", "1m", now)).thenReturn(Optional.of(
                 signal("ETHUSDT", "1m", SignalDecision.BUY, now.minusSeconds(60), 79, 22, 17, 13)));
         when(entryConsumptionPolicy.resolve(org.mockito.ArgumentMatchers.anyLong())).thenReturn(EntryConsumptionState.CONSUMED);
-        var result = service.validateBuy(oneMinute);
+        var result = service.validateBuy(oneMinute, 100);
         assertThat(result.allowed()).isFalse();
         assertThat(result.code()).isEqualTo("BUY_CONTINUATION");
     }
@@ -139,7 +140,7 @@ class TradeExecutionValidationServiceTest {
         when(entryConsumptionPolicy.resolve(org.mockito.ArgumentMatchers.anyLong())).thenReturn(EntryConsumptionState.NOT_CONSUMED);
         latest("SHIBUSDT", "5m", signal("SHIBUSDT", "5m", SignalDecision.BUY, now.minusSeconds(120), 80, 23, 18, 13));
         latest("SHIBUSDT", "1h", signal("SHIBUSDT", "1h", SignalDecision.BUY, now.minusSeconds(1800), 80, 23, 18, 13));
-        var result = service.validateBuy(oneMinute);
+        var result = service.validateBuy(oneMinute, 100);
         assertThat(result.allowed()).isTrue();
         assertThat(result.code()).isEqualTo("BALANCED_FULL");
     }
@@ -171,6 +172,84 @@ class TradeExecutionValidationServiceTest {
         assertThat(result.allowed()).isTrue();
         assertThat(result.code()).isEqualTo("BALANCED_STRONG");
         assertThat(result.positionPercent()).isEqualTo(75);
+    }
+
+    @Test
+    void balancedNeutralFiveWithBullishOneHourAllowsExploratoryTwentyFivePercent() {
+        settings("BALANCED", false);
+        TradeSignal oneMinute = signal("SHIBUSDT", "1m", SignalDecision.BUY, now, 77, 23, 18, 13);
+        latest("SHIBUSDT", "5m", signal("SHIBUSDT", "5m", SignalDecision.NEUTRAL, now.minusSeconds(120), 60, 15, 10, 8));
+        latest("SHIBUSDT", "1h", signal("SHIBUSDT", "1h", SignalDecision.STRONG_BUY, now.minusSeconds(1800), 90, 25, 18, 14));
+
+        var result = service.validateBuy(oneMinute, 75);
+
+        assertThat(result.allowed()).isTrue();
+        assertThat(result.code()).isEqualTo("BALANCED_NEUTRAL_5M");
+        assertThat(result.positionPercent()).isEqualTo(25);
+    }
+
+    @Test
+    void balancedNeutralFiveExceptionHonorsInclusiveQualityBoundaries() {
+        settings("BALANCED", false);
+        TradeSignal oneMinute = signal("SHIBUSDT", "1m", SignalDecision.BUY, now, 72, 23, 18, 13);
+        latest("SHIBUSDT", "5m", signal("SHIBUSDT", "5m", SignalDecision.NEUTRAL, now.minusSeconds(120), 60, 15, 10, 8));
+        latest("SHIBUSDT", "1h", signal("SHIBUSDT", "1h", SignalDecision.BUY, now.minusSeconds(1800), 82, 23, 17, 13));
+
+        var result = service.validateBuy(oneMinute, 70);
+
+        assertThat(result.allowed()).isTrue();
+        assertThat(result.code()).isEqualTo("BALANCED_NEUTRAL_5M");
+    }
+
+    @Test
+    void balancedNeutralFiveExceptionRejectsBelowConfidenceOrEntryQualityAndBtcConflict() {
+        settings("BALANCED", false);
+        TradeSignal five = signal("SHIBUSDT", "5m", SignalDecision.NEUTRAL, now.minusSeconds(120), 60, 15, 10, 8);
+        TradeSignal one = signal("SHIBUSDT", "1h", SignalDecision.BUY, now.minusSeconds(1800), 82, 23, 17, 13);
+        latest("SHIBUSDT", "5m", five);
+        latest("SHIBUSDT", "1h", one);
+
+        TradeSignal lowConfidence = signal("SHIBUSDT", "1m", SignalDecision.BUY, now, 71, 23, 18, 13);
+        assertThat(service.validateBuy(lowConfidence, 75).code()).isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+
+        TradeSignal enoughConfidence = signal("SHIBUSDT", "1m", SignalDecision.BUY, now, 72, 23, 18, 13);
+        assertThat(service.validateBuy(enoughConfidence, 69).code()).isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+
+        enoughConfidence.setBtcContextStatus(BtcContextStatus.CONFLICT);
+        assertThat(service.validateBuy(enoughConfidence, 75).code()).isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+
+        enoughConfidence.setBtcContextStatus(BtcContextStatus.STRONG_CONFLICT);
+        assertThat(service.validateBuy(enoughConfidence, 75).code()).isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+    }
+
+    @Test
+    void balancedNeutralFiveExceptionDoesNotBroadenOtherRejectedCombinations() {
+        settings("BALANCED", false);
+        TradeSignal oneMinute = signal("BTCUSDT", "1m", SignalDecision.BUY, now, 80, 23, 18, 13);
+
+        latest("BTCUSDT", "5m", signal("BTCUSDT", "5m", SignalDecision.NEUTRAL, now.minusSeconds(120), 60, 15, 10, 8));
+        latest("BTCUSDT", "1h", signal("BTCUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1800), 68, 18, 13, 10));
+        assertThat(service.validateBuy(oneMinute, 80).code()).isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+
+        latest("BTCUSDT", "1h", signal("BTCUSDT", "1h", SignalDecision.NEUTRAL, now.minusSeconds(1800), 60, 15, 10, 8));
+        assertThat(service.validateBuy(oneMinute, 80).code()).isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+    }
+
+    @Test
+    void existingBalancedAuthorityIgnoresNewExceptionThresholds() {
+        settings("BALANCED", false);
+        TradeSignal oneMinute = signal("ETHUSDT", "1m", SignalDecision.BUY, now, 60, 15, 10, 8);
+        latest("ETHUSDT", "5m", signal("ETHUSDT", "5m", SignalDecision.BUY, now.minusSeconds(120), 80, 23, 18, 13));
+        latest("ETHUSDT", "1h", signal("ETHUSDT", "1h", SignalDecision.STRONG_BUY, now.minusSeconds(1800), 90, 25, 20, 15));
+
+        var full = service.validateBuy(oneMinute, 50);
+        assertThat(full.code()).isEqualTo("BALANCED_FULL");
+        assertThat(full.positionPercent()).isEqualTo(100);
+
+        latest("ETHUSDT", "5m", signal("ETHUSDT", "5m", SignalDecision.WATCH, now.minusSeconds(120), 68, 18, 13, 10));
+        var strong = service.validateBuy(oneMinute, 50);
+        assertThat(strong.code()).isEqualTo("BALANCED_STRONG");
+        assertThat(strong.positionPercent()).isEqualTo(75);
     }
 
     @Test
@@ -240,6 +319,7 @@ class TradeExecutionValidationServiceTest {
                 .trendScore(trend)
                 .volumeScore(volume)
                 .momentumScore(momentum)
+                .btcContextStatus(BtcContextStatus.CONFIRMED)
                 .generatedAt(generatedAt)
                 .build();
     }

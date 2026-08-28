@@ -502,7 +502,15 @@ public class RegressionTestWorker {
                     // FIX-069: Persist the exact production TradeSignal shape as replay output.
                     // analysis_test_signal remains for backward-compatible diagnostics, while
                     // trade_signal_test is the canonical parity table used for field-by-field comparison.
-                    persistTradeSignalTest(runId, generated, null);
+                    // FIX-112D: Replay lineage uses exact market-candle identity, never
+                    // generated_at or nearest-time matching. A legitimate Replay-only
+                    // signal remains NULL. This metadata lookup cannot alter Production.
+                    Long sourceSignalId = signalRepository
+                            .findBySymbolAndIntervalAndCandleOpenTime(
+                                    generated.getSymbol(), generated.getInterval(), generated.getCandleOpenTime())
+                            .map(TradeSignal::getId)
+                            .orElse(null);
+                    persistTradeSignalTest(runId, generated, sourceSignalId, null);
                 }
             } catch (ReplayCancellationException stop) {
                 throw stop;
@@ -543,12 +551,15 @@ public class RegressionTestWorker {
      * Reflection is intentional here: whenever production TradeSignal gains another @Column,
      * replay inherits it automatically instead of drifting behind a hand-maintained test schema.
      */
-    private void persistTradeSignalTest(long runId, TradeSignal signal, String generationError) {
+    private void persistTradeSignalTest(long runId, TradeSignal signal, Long sourceSignalId, String generationError) {
         try {
             java.util.List<String> columns = new java.util.ArrayList<>();
             java.util.List<Object> values = new java.util.ArrayList<>();
             columns.add("test_run_id"); values.add(runId);
-            columns.add("source_signal_id"); values.add(null);
+            // FIX-112D / Replay=Production audit lineage: this ID points only to the
+            // exact Production signal for the same symbol + interval + candle_open_time.
+            // It is additive Replay metadata and is never an execution authority.
+            columns.add("source_signal_id"); values.add(sourceSignalId);
             columns.add("replay_generated"); values.add(1);
             columns.add("generation_error"); values.add(generationError);
 

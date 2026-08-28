@@ -118,7 +118,7 @@ class ExecutionIntelligenceServiceTest {
 
     void weakOneMinuteSellKeepsOpportunityMemoryWhenHigherFramesRemainWatch() {
 
-        TradeSignal current = signal(10L, "BNBUSDT", "1m", SignalDecision.NEUTRAL, SignalDecision.SELL,
+        TradeSignal current = signal(10L, "BNBUSDT", "1m", SignalDecision.SELL, SignalDecision.SELL,
 
                 now, 36, 58);
 
@@ -190,7 +190,7 @@ class ExecutionIntelligenceServiceTest {
 
     void weakSellWithBearishFiveMinuteCancelsOpportunity() {
 
-        TradeSignal current = signal(10L, "BNBUSDT", "1m", SignalDecision.NEUTRAL, SignalDecision.SELL,
+        TradeSignal current = signal(10L, "BNBUSDT", "1m", SignalDecision.SELL, SignalDecision.SELL,
 
                 now, 36, 58);
 
@@ -246,7 +246,7 @@ class ExecutionIntelligenceServiceTest {
 
     void bearishCurrentSignalCannotExecuteEvenWhenHigherFramesAreSupportive() {
 
-        TradeSignal current = signal(30L, "ANYUSDT", "1m", SignalDecision.NEUTRAL, SignalDecision.SELL,
+        TradeSignal current = signal(30L, "ANYUSDT", "1m", SignalDecision.SELL, SignalDecision.SELL,
 
                 now, 40, 70);
 
@@ -296,7 +296,17 @@ class ExecutionIntelligenceServiceTest {
 
         context("MKTUSDT", "5m", SignalDecision.WATCH, now.minusSeconds(60));
 
-        context("MKTUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));var decision = service.evaluateBuy(current);
+        context("MKTUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1200));
+
+        // Test fixture only: this regression test is about evidence momentum. Allow the
+        // ordinary BUY validation path so the assertion reaches the evidence calculation.
+        when(validationService.validateBuy(any(TradeSignal.class), anyInt())).thenReturn(
+                TradeExecutionValidationService.ValidationResult.allow(
+                        60,
+                        "EVIDENCE_MOMENTUM_TEST",
+                        "Allow direct BUY validation for evidence-momentum regression test."));
+
+        var decision = service.evaluateBuy(current);
 
         assertThat(decision.evidence().evidenceMomentum()).isPositive();
 
@@ -2332,17 +2342,13 @@ class ExecutionIntelligenceServiceTest {
 
                 .thenReturn(List.of(current));
 
-        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SOLUSDT", "5m"))
-
-                .thenReturn(List.of(fiveSetup));
-
         when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
 
                 "SOLUSDT", "5m", now)).thenReturn(Optional.of(fiveSetup));
 
         when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
 
-                "SOLUSDT", "1h", now)).thenReturn(Optional.of(oneHour));when(properties.minimumBuyScore()).thenReturn(75);
+                "SOLUSDT", "1h", now)).thenReturn(Optional.of(oneHour));
 
         var decision = service.evaluateBuy(current);
 
@@ -2724,7 +2730,7 @@ class ExecutionIntelligenceServiceTest {
 
         when(properties.minimumBuyScore()).thenReturn(75);
 
-        when(validationService.validateBuy(current)).thenReturn(
+        when(validationService.validateBuy(eq(current), anyInt())).thenReturn(
 
                 TradeExecutionValidationService.ValidationResult.allow(60, "NORMAL_BUY", "normal path approved"));
 
@@ -2776,7 +2782,7 @@ class ExecutionIntelligenceServiceTest {
 
         current.setAtrAtSignal(new BigDecimal("0.000209"));
 
-        TradeSignal priorBearish = signal(101268L, "ENAUSDT", "1m", SignalDecision.NEUTRAL, SignalDecision.STRONG_SELL,
+        TradeSignal priorBearish = signal(101268L, "ENAUSDT", "1m", SignalDecision.STRONG_SELL, SignalDecision.STRONG_SELL,
 
                 now.minusSeconds(6 * 60), 15, 61);
 
@@ -2850,7 +2856,7 @@ class ExecutionIntelligenceServiceTest {
 
         when(properties.minimumBuyScore()).thenReturn(78);
 
-        when(validationService.validateBuy(current)).thenReturn(
+        when(validationService.validateBuy(eq(current), anyInt())).thenReturn(
 
                 TradeExecutionValidationService.ValidationResult.allow(50, "BALANCED_EARLY",
 
@@ -2908,7 +2914,7 @@ class ExecutionIntelligenceServiceTest {
 
         when(properties.minimumBuyScore()).thenReturn(78);
 
-        when(validationService.validateBuy(current)).thenReturn(
+        when(validationService.validateBuy(eq(current), anyInt())).thenReturn(
 
                 TradeExecutionValidationService.ValidationResult.allow(50, "BALANCED_EARLY",
 

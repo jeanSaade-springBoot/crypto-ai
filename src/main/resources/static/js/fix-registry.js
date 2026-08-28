@@ -1,6 +1,36 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-112D",
+            title: "Exact Production source-signal lineage for Replay parity",
+            status: "IMPLEMENTED · PARITY INFRASTRUCTURE",
+            scenario: "trade_signal_test.source_signal_id was always persisted as NULL, forcing parity investigations to reconstruct the corresponding Production signal after the fact.",
+            symbol: "ALL", entry: "REPLAY SIGNAL LINEAGE", exit: "N/A",
+            entryTime: "Exact candle_open_time UTC", exitTime: "N/A",
+            replayWindow: "All future Replay/Test runs; matching requires an exact Production signal for the same candle.",
+            location: "RegressionTestWorker trade_signal_test persistence",
+            classes: ["RegressionTestWorker", "TradeSignalRepository (existing exact candle lookup)", "fix-registry.js"],
+            cause: "Replay persisted source_signal_id as NULL unconditionally even when Production already contained the exact signal for the same symbol, interval and candle_open_time.",
+            solution: "Resolve the Production TradeSignal by exact symbol + interval + candle_open_time before persisting trade_signal_test and store its ID as source_signal_id. Never use generated_at or nearest-timestamp matching; a Replay-only candle with no exact Production counterpart legitimately remains NULL.",
+            behavior: "Zero Production trading-behavior impact. The Production trade_signal table is read only for lineage lookup, and source_signal_id is additive Replay audit metadata only. Golden rule: Replay = Production; this linkage makes exact field-by-field Production-vs-Replay comparison explicit without changing either decision path.",
+            regression: "Verify an exact Production candle counterpart populates its real ID; an unmatched Replay-only signal remains NULL; no nearest timestamp is selected; cadencePass, authorityPass, generationPass and livePriceParityPass remain unchanged."
+        },
+        {
+            id: "FIX-112B",
+            title: "BALANCED 5m-neutral exploratory entry",
+            status: "IMPLEMENTED · CONTROLLED PRODUCTION BEHAVIOR CHANGE",
+            scenario: "The BALANCED fresh-BUY path had no branch for exactly 5m=NEUTRAL with a genuinely bullish 1h, so missing tactical confirmation was treated as insufficient even when independent entry evidence was strong.",
+            symbol: "ALL", entry: "Fresh 1m BUY/STRONG_BUY", exit: "UNCHANGED",
+            entryTime: "Current signal time", exitTime: "UNCHANGED",
+            replayWindow: "Production-Parity Replay must execute the same shared TradeExecutionValidationService path with historical inputs.",
+            location: "TradeExecutionValidationService fresh BALANCED BUY dispatch + ExecutionIntelligenceService EntryQuality handoff",
+            classes: ["TradeExecutionValidationService", "ExecutionIntelligenceService", "TradeExecutionValidationServiceTest", "ExecutionIntelligenceServiceTest", "fix-registry.js"],
+            cause: "balancedBuy() intentionally supports bullish/WATCH combinations but has no 5m NEUTRAL + bullish 1h branch. NEUTRAL is weaker than WATCH confirmation but is not bearish opposition.",
+            solution: "Keep balancedBuy() unchanged and evaluate a narrow exception only after its existing result rejects: exact 5m NEUTRAL + bullish 1h + 1m confidence>=72 + independent Entry Quality>=70 + no BTC CONFLICT/STRONG_CONFLICT grants BALANCED_NEUTRAL_5M with a maximum 25% exploratory authority.",
+            behavior: "This is the only intentional Production behavior change in FIX-112B/112D. Existing BALANCED_FULL/BALANCED_STRONG/BALANCED_EARLY results return before the exception; Conservative, Aggressive fallback, validateBuyContext accumulated evidence, continuation, ATR, Order Book, progressive positioning and downstream safety gates are unchanged. Replay = Production: Replay uses this exact shared method, with no Replay-only threshold or duplicated strategy logic.",
+            regression: "Verify 5m NEUTRAL + bullish 1h qualifies only at confidence>=72 and EntryQuality>=70 and is capped at 25%; confidence 71, EQ 69, BTC conflict, neutral+WATCH/NEUTRAL and bearish 5m remain rejected. Verify existing BALANCED_FULL/STRONG/EARLY results are unchanged even below the new exception thresholds, and Aggressive/validateBuyContext continue to use plain balancedBuy()."
+        },
+        {
             id: "FIX-112C",
             title: "Persisted Production Order Book evidence for historical Replay parity",
             status: "IMPLEMENTED · PARITY INFRASTRUCTURE",

@@ -626,7 +626,7 @@ public class ExecutionIntelligenceService {
 
         // Fast path: a normal fresh BUY can execute immediately using the configured profile.
         if (isDirectBuyCandidate(signal)) {
-            TradeExecutionValidationService.ValidationResult validation = validationService.validateBuy(signal);
+            TradeExecutionValidationService.ValidationResult validation = validationService.validateBuy(signal, entryQuality.score());
             if (validation.allowed()) {
                 ExecutionDecision postBearishGuard = balancedEarlyPostBearishGuard(signal, evidence, entryQuality, validation);
                 if (postBearishGuard != null) {

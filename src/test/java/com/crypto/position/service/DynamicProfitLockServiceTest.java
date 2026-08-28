@@ -52,12 +52,18 @@ class DynamicProfitLockServiceTest {
                 .profitLockInitialPercent(new BigDecimal("40"))
                 .profitLockTrailStepPercent(new BigDecimal("10"))
                 .build()));
+    }
+
+    private void stubEthOpenPosition() {
+        // Test fixture only: stub the default ETH open position only in tests that actually use it.
+        // This keeps Mockito strict-stubbing enabled without hiding unused setup with lenient().
         when(positionRepository.findFirstBySymbolAndStatusOrderByOpenedAtDesc("ETHUSDT", "OPEN"))
                 .thenReturn(Optional.of(position));
     }
 
     @Test
     void activatesAndTrailsAfterEightyPercentOfTargetDistance() {
+        stubEthOpenPosition();
         TradeSignal signal = TradeSignal.builder()
                 .id(100L).symbol("ETHUSDT").latestPrice(new BigDecimal("1917.67")).build();
 
@@ -92,6 +98,7 @@ class DynamicProfitLockServiceTest {
 
     @Test
     void highEntryQualityStillUsesAdministrationPercentages() {
+        stubEthOpenPosition();
         position.setEntryTotalScore(88);
         position.setEntryConfidence(90);
 
@@ -103,6 +110,7 @@ class DynamicProfitLockServiceTest {
 
     @Test
     void triggersWhenPriceFallsThroughPreviouslyProtectedLevel() {
+        stubEthOpenPosition();
         position.setHighestPriceUsdt(new BigDecimal("1917.67"));
         position.setProfitLockActive(true);
         position.setProfitLockPriceUsdt(new BigDecimal("1915.70715193"));
@@ -119,6 +127,7 @@ class DynamicProfitLockServiceTest {
     }
     @Test
     void remainsTriggeredWhenPriceFallsBelowMinimumProfitFloorAfterLockWasActive() {
+        stubEthOpenPosition();
         position.setHighestPriceUsdt(new BigDecimal("1917.67"));
         position.setProfitLockActive(true);
         position.setProfitLockPriceUsdt(new BigDecimal("1915.70715193"));
