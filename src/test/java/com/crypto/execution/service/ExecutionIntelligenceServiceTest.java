@@ -2332,9 +2332,6 @@ class ExecutionIntelligenceServiceTest {
 
                 .thenReturn(List.of(current));
 
-        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SOLUSDT", "5m"))
-
-                .thenReturn(List.of(fiveSetup));
 
         when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
 
