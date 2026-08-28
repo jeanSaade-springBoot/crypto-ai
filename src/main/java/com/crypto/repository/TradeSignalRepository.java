@@ -39,6 +39,21 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
             String symbol, String interval, List<SignalDecision> decisions, org.springframework.data.domain.Pageable pageable
     );
     List<TradeSignal> findByGeneratedAtGreaterThanEqualOrderByGeneratedAtDesc(Instant generatedAt);
+
+    // FIX-116A: Score Diagnostics needs scalar score/decision fields only. Do not load the wide
+    // TradeSignal entity (JSON/TEXT context, explanations, snapshots) for this dashboard read.
+    @Query("""
+            select s.symbol as symbol, s.interval as interval, s.totalScore as totalScore,
+                   s.rawScore as rawScore, s.maximumAvailableScore as maximumAvailableScore,
+                   s.trendScore as trendScore, s.volumeScore as volumeScore,
+                   s.momentumScore as momentumScore, s.sentimentScore as sentimentScore,
+                   s.fundamentalScore as fundamentalScore, s.originalDecision as originalDecision,
+                   s.decision as decision, s.selectedStrategy as selectedStrategy
+            from TradeSignal s
+            where s.generatedAt >= :from
+            order by s.generatedAt desc
+            """)
+    List<TradeSignalDiagnosticsProjection> findScoreDiagnosticsSince(@Param("from") Instant from);
     long countByGeneratedAtGreaterThanEqual(Instant generatedAt);
 
     @Query("""

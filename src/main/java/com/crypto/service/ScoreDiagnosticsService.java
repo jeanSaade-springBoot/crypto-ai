@@ -1,9 +1,9 @@
 package com.crypto.service;
 
 import com.crypto.domain.SignalDecision;
-import com.crypto.domain.TradeSignal;
 import com.crypto.domain.TradingStrategy;
 import com.crypto.repository.TradeSignalRepository;
+import com.crypto.repository.TradeSignalDiagnosticsProjection;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,8 +38,8 @@ public class ScoreDiagnosticsService {
         }
 
         Instant from = now.minus(Duration.ofHours(24));
-        List<TradeSignal> signals = tradeSignalRepository
-                .findByGeneratedAtGreaterThanEqualOrderByGeneratedAtDesc(from);
+        List<TradeSignalDiagnosticsProjection> signals = tradeSignalRepository
+                .findScoreDiagnosticsSince(from);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("from", from);
@@ -58,9 +58,9 @@ public class ScoreDiagnosticsService {
             return immutable;
         }
 
-        int minimum = signals.stream().mapToInt(TradeSignal::getTotalScore).min().orElse(0);
-        int maximum = signals.stream().mapToInt(TradeSignal::getTotalScore).max().orElse(0);
-        double average = signals.stream().mapToInt(TradeSignal::getTotalScore).average().orElse(0);
+        int minimum = signals.stream().mapToInt(TradeSignalDiagnosticsProjection::getTotalScore).min().orElse(0);
+        int maximum = signals.stream().mapToInt(TradeSignalDiagnosticsProjection::getTotalScore).max().orElse(0);
+        double average = signals.stream().mapToInt(TradeSignalDiagnosticsProjection::getTotalScore).average().orElse(0);
         long normalizationMismatches = signals.stream().filter(this::normalizationMismatch).count();
 
         result.put("score", Map.of(
@@ -83,13 +83,13 @@ public class ScoreDiagnosticsService {
 
     private record DiagnosticsCacheEntry(Instant expiresAt, Map<String, Object> value) {}
 
-    private List<Map<String, Object>> categoryDiagnostics(List<TradeSignal> signals) {
+    private List<Map<String, Object>> categoryDiagnostics(List<TradeSignalDiagnosticsProjection> signals) {
         return List.of(
-                category("Trend", average(signals, TradeSignal::getTrendScore), TREND_MAXIMUM),
-                category("Volume", average(signals, TradeSignal::getVolumeScore), VOLUME_MAXIMUM),
-                category("Momentum", average(signals, TradeSignal::getMomentumScore), MOMENTUM_MAXIMUM),
-                category("Sentiment", average(signals, TradeSignal::getSentimentScore), SENTIMENT_MAXIMUM),
-                category("Fundamentals", average(signals, TradeSignal::getFundamentalScore), FUNDAMENTAL_MAXIMUM)
+                category("Trend", average(signals, TradeSignalDiagnosticsProjection::getTrendScore), TREND_MAXIMUM),
+                category("Volume", average(signals, TradeSignalDiagnosticsProjection::getVolumeScore), VOLUME_MAXIMUM),
+                category("Momentum", average(signals, TradeSignalDiagnosticsProjection::getMomentumScore), MOMENTUM_MAXIMUM),
+                category("Sentiment", average(signals, TradeSignalDiagnosticsProjection::getSentimentScore), SENTIMENT_MAXIMUM),
+                category("Fundamentals", average(signals, TradeSignalDiagnosticsProjection::getFundamentalScore), FUNDAMENTAL_MAXIMUM)
         );
     }
 
@@ -104,9 +104,9 @@ public class ScoreDiagnosticsService {
         );
     }
 
-    private Map<String, Long> decisionCounts(List<TradeSignal> signals, boolean original) {
+    private Map<String, Long> decisionCounts(List<TradeSignalDiagnosticsProjection> signals, boolean original) {
         Map<SignalDecision, Long> counts = new EnumMap<>(SignalDecision.class);
-        for (TradeSignal signal : signals) {
+        for (TradeSignalDiagnosticsProjection signal : signals) {
             SignalDecision decision = original ? signal.getOriginalDecision() : signal.getDecision();
             counts.merge(decision, 1L, Long::sum);
         }
@@ -117,14 +117,14 @@ public class ScoreDiagnosticsService {
         return result;
     }
 
-    private List<Map<String, Object>> strategyDiagnostics(List<TradeSignal> signals) {
-        Map<TradingStrategy, List<TradeSignal>> groups = new EnumMap<>(TradingStrategy.class);
+    private List<Map<String, Object>> strategyDiagnostics(List<TradeSignalDiagnosticsProjection> signals) {
+        Map<TradingStrategy, List<TradeSignalDiagnosticsProjection>> groups = new EnumMap<>(TradingStrategy.class);
         signals.forEach(signal -> groups.computeIfAbsent(signal.getSelectedStrategy(), ignored -> new ArrayList<>()).add(signal));
         List<Map<String, Object>> result = new ArrayList<>();
         groups.forEach((strategy, items) -> result.add(Map.of(
                 "strategy", strategy.name(),
                 "count", items.size(),
-                "averageScore", round(items.stream().mapToInt(TradeSignal::getTotalScore).average().orElse(0)),
+                "averageScore", round(items.stream().mapToInt(TradeSignalDiagnosticsProjection::getTotalScore).average().orElse(0)),
                 "buyCount", items.stream().filter(s -> isBuy(s.getOriginalDecision())).count(),
                 "finalBuyCount", items.stream().filter(s -> isBuy(s.getDecision())).count()
         )));
@@ -132,8 +132,8 @@ public class ScoreDiagnosticsService {
         return result;
     }
 
-    private List<Map<String, Object>> symbolIntervalDiagnostics(List<TradeSignal> signals) {
-        Map<String, List<TradeSignal>> groups = new LinkedHashMap<>();
+    private List<Map<String, Object>> symbolIntervalDiagnostics(List<TradeSignalDiagnosticsProjection> signals) {
+        Map<String, List<TradeSignalDiagnosticsProjection>> groups = new LinkedHashMap<>();
         signals.forEach(signal -> groups.computeIfAbsent(signal.getSymbol() + "|" + signal.getInterval(), ignored -> new ArrayList<>()).add(signal));
         List<Map<String, Object>> result = new ArrayList<>();
         groups.forEach((key, items) -> {
@@ -142,9 +142,9 @@ public class ScoreDiagnosticsService {
                     "symbol", parts[0],
                     "interval", parts[1],
                     "count", items.size(),
-                    "averageScore", round(items.stream().mapToInt(TradeSignal::getTotalScore).average().orElse(0)),
-                    "minimumScore", items.stream().mapToInt(TradeSignal::getTotalScore).min().orElse(0),
-                    "maximumScore", items.stream().mapToInt(TradeSignal::getTotalScore).max().orElse(0),
+                    "averageScore", round(items.stream().mapToInt(TradeSignalDiagnosticsProjection::getTotalScore).average().orElse(0)),
+                    "minimumScore", items.stream().mapToInt(TradeSignalDiagnosticsProjection::getTotalScore).min().orElse(0),
+                    "maximumScore", items.stream().mapToInt(TradeSignalDiagnosticsProjection::getTotalScore).max().orElse(0),
                     "buyCount", items.stream().filter(s -> isBuy(s.getOriginalDecision())).count()
             ));
         });
@@ -152,10 +152,10 @@ public class ScoreDiagnosticsService {
         return result;
     }
 
-    private List<Map<String, Object>> scoreBuckets(List<TradeSignal> signals) {
+    private List<Map<String, Object>> scoreBuckets(List<TradeSignalDiagnosticsProjection> signals) {
         String[] labels = {"0-29", "30-44", "45-59", "60-74", "75-84", "85-100"};
         long[] counts = new long[labels.length];
-        for (TradeSignal signal : signals) {
+        for (TradeSignalDiagnosticsProjection signal : signals) {
             int score = signal.getTotalScore();
             int index = score >= 85 ? 5 : score >= 75 ? 4 : score >= 60 ? 3 : score >= 45 ? 2 : score >= 30 ? 1 : 0;
             counts[index]++;
@@ -167,7 +167,7 @@ public class ScoreDiagnosticsService {
         return result;
     }
 
-    private List<String> warnings(List<TradeSignal> signals, double average, int maximum, long mismatches) {
+    private List<String> warnings(List<TradeSignalDiagnosticsProjection> signals, double average, int maximum, long mismatches) {
         List<String> warnings = new ArrayList<>();
         long buys = signals.stream().filter(signal -> isBuy(signal.getOriginalDecision())).count();
         double buyRate = buys * 100.0 / signals.size();
@@ -181,7 +181,7 @@ public class ScoreDiagnosticsService {
         return warnings;
     }
 
-    private boolean normalizationMismatch(TradeSignal signal) {
+    private boolean normalizationMismatch(TradeSignalDiagnosticsProjection signal) {
         if (signal.getMaximumAvailableScore() <= 0) return signal.getTotalScore() != 0;
         int expected = (int) Math.round(signal.getRawScore() * 100.0 / signal.getMaximumAvailableScore());
         return Math.abs(expected - signal.getTotalScore()) > 1;
@@ -191,7 +191,7 @@ public class ScoreDiagnosticsService {
         return decision == SignalDecision.BUY || decision == SignalDecision.STRONG_BUY;
     }
 
-    private double average(List<TradeSignal> signals, IntGetter getter) {
+    private double average(List<TradeSignalDiagnosticsProjection> signals, IntGetter getter) {
         return signals.stream().mapToInt(getter::get).average().orElse(0);
     }
 
@@ -201,6 +201,6 @@ public class ScoreDiagnosticsService {
 
     @FunctionalInterface
     private interface IntGetter {
-        int get(TradeSignal signal);
+        int get(TradeSignalDiagnosticsProjection signal);
     }
 }

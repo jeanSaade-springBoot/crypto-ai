@@ -43,6 +43,24 @@ class SystemHealthDailyServiceCacheTest {
     }
 
     @Test
+    void cacheTtlStartsAfterSlowCalculationCompletes() throws Exception {
+        SystemHealthDailyService service = spy(new SystemHealthDailyService(
+                mock(JdbcTemplate.class), mock(CoinConfigurationService.class)));
+        ReflectionTestUtils.setField(service, "dailyCacheMs", 1_000L);
+        Map<String, Object> payload = Map.of("status", "OK");
+        doAnswer(invocation -> {
+            Thread.sleep(1_100L);
+            return payload;
+        }).when(service).computeDailyHealth();
+
+        Map<String, Object> first = service.dailyHealth();
+        Map<String, Object> second = service.dailyHealth();
+
+        assertSame(first, second);
+        verify(service, times(1)).computeDailyHealth();
+    }
+
+    @Test
     void concurrentCacheMissesAreSingleFlight() throws Exception {
         SystemHealthDailyService service = spy(new SystemHealthDailyService(
                 mock(JdbcTemplate.class), mock(CoinConfigurationService.class)));

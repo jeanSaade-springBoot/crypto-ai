@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-116A",
+            title: "System Health slow-query recovery and narrow Score Diagnostics read",
+            status: "IMPLEMENTED · OBSERVABILITY / DB LATENCY PROTECTION",
+            scenario: "Production EXPLAIN ANALYZE showed the 7-day strategy/regime Health aggregation taking about 79 seconds for only 1,240 rows, and processlist also exposed a long-running Hibernate query materializing the wide TradeSignal entity for diagnostics.",
+            symbol: "ALL", entry: "READ-ONLY DIAGNOSTICS", exit: "N/A",
+            entryTime: "Dashboard/System Health reads", exitTime: "N/A",
+            replayWindow: "N/A · read-only diagnostics. Replay = Production trading behavior is unchanged.",
+            location: "SystemHealthDailyService cache TTL + trade_signal Health index + ScoreDiagnostics projection",
+            classes: ["SystemHealthDailyService", "TradeSignalRepository", "TradeSignalDiagnosticsProjection", "ScoreDiagnosticsService", "V76__system_health_trade_signal_covering_index.sql", "md/FIX-116A.md"],
+            cause: "FIX-116 started cache expiry before the expensive calculation. When calculation time exceeded the 45-second TTL, the newly cached result was already expired and the next caller immediately recomputed it. The Health aggregation also lacked a covering index, while Score Diagnostics loaded every wide TradeSignal column although it uses only scalar score/decision fields.",
+            solution: "Start Health cache TTL after calculation completion, add a covering generated_at/strategy/regime index justified by Production EXPLAIN ANALYZE, and replace the Score Diagnostics full-entity read with a narrow projection.",
+            behavior: "Read-only performance correction only. No signal generation, Order Book, FinalDecision, execution, wallet, Catching Market detection, Production trading or Replay semantics change. Golden rule: Replay = Production.",
+            regression: "Run Maven tests, verify Flyway V76 applies, then confirm processlist no longer shows repeated long strategy/regime aggregation or wide Score Diagnostics TradeSignal selects."
+        },
+        {
             id: "FIX-116",
             title: "System Health request deduplication and diagnostic query protection",
             status: "IMPLEMENTED · OBSERVABILITY / DB RESOURCE PROTECTION",

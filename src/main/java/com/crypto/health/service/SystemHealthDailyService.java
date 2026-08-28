@@ -63,7 +63,11 @@ public class SystemHealthDailyService {
             }
 
             Map<String, Object> computed = computeDailyHealth();
-            dailyHealthCache = new DailyHealthCache(computed, nowMs + Math.max(1000L, dailyCacheMs));
+            // FIX-116A: TTL starts AFTER the expensive calculation completes. Previously the TTL
+            // started before computeDailyHealth(); when a stressed DB took >45 seconds, the freshly
+            // computed value was already expired and the very next caller reran all 7-day queries.
+            long completedAtMs = System.currentTimeMillis();
+            dailyHealthCache = new DailyHealthCache(computed, completedAtMs + Math.max(1000L, dailyCacheMs));
             return computed;
         }
     }
