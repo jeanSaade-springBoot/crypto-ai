@@ -2,6 +2,8 @@ package com.crypto.service;
 
 import com.crypto.client.config.binance.BinanceMarketDataProperties;
 import com.crypto.config.SentimentProperties;
+import com.crypto.config.FundamentalCollectionProperties;
+import com.crypto.config.OrderBookProperties;
 import com.crypto.config.TradingProperties;
 import com.crypto.whale.config.WhaleProperties;
 import org.springframework.beans.factory.annotation.Value;
@@ -19,6 +21,8 @@ public class ScheduleConfigurationService {
     private final TradingProperties tradingProperties;
     private final SentimentProperties sentimentProperties;
     private final WhaleProperties whaleProperties;
+    private final OrderBookProperties orderBookProperties;
+    private final FundamentalCollectionProperties fundamentalProperties;
     private final boolean candleCollectorEnabled;
     private final long candleCollectorDelayMs;
     private final long dashboardRefreshMs;
@@ -28,6 +32,8 @@ public class ScheduleConfigurationService {
             TradingProperties tradingProperties,
             SentimentProperties sentimentProperties,
             WhaleProperties whaleProperties,
+            OrderBookProperties orderBookProperties,
+            FundamentalCollectionProperties fundamentalProperties,
             @Value("${collector.candle.enabled:true}") boolean candleCollectorEnabled,
             @Value("${collector.candle.fixed-delay-ms:60000}") long candleCollectorDelayMs,
             @Value("${dashboard.refresh-ms:10000}") long dashboardRefreshMs
@@ -36,6 +42,8 @@ public class ScheduleConfigurationService {
         this.tradingProperties = tradingProperties;
         this.sentimentProperties = sentimentProperties;
         this.whaleProperties = whaleProperties;
+        this.orderBookProperties = orderBookProperties;
+        this.fundamentalProperties = fundamentalProperties;
         this.candleCollectorEnabled = candleCollectorEnabled;
         this.candleCollectorDelayMs = candleCollectorDelayMs;
         this.dashboardRefreshMs = dashboardRefreshMs;
@@ -51,6 +59,60 @@ public class ScheduleConfigurationService {
                 whaleSchedules()
         ));
         return response;
+    }
+
+    /**
+     * FIX-114: compact read-only inventory shown on System Health. Keep this list deliberately
+     * limited to the eight recurring background jobs requested by Operations. Values come from
+     * the same runtime configuration objects used by the jobs; this endpoint does not start, stop,
+     * reschedule or otherwise influence Production/Replay execution. Replay = Production remains
+     * a trading-path rule and this observability metadata is outside that path.
+     */
+    public List<Map<String, Object>> healthScheduledJobs() {
+        List<Map<String, Object>> jobs = new ArrayList<>();
+        jobs.add(job(1, "ScheduledAnalysisService.analyzeConfiguredSymbols()",
+                formatDelay(tradingProperties.analysisDelayMs()),
+                tradingProperties.scheduledAnalysisEnabled(),
+                "Recovery safety-net: scans configured symbols/timeframes for closed candles missing indicator/signal analysis and backfills them chronologically."));
+        jobs.add(job(2, "OrderBookLiquidityService.collectConfiguredOrderBooks()",
+                formatDelay(orderBookProperties.snapshotIntervalMs()),
+                orderBookProperties.enabled() && binanceProperties.isEnabled(),
+                "Calls Binance Order Book for enabled symbols, builds live liquidity snapshots and asynchronously persists Replay evidence."));
+        jobs.add(job(3, "SentimentCollectionService.collectScheduled()",
+                formatDelay(sentimentProperties.scheduler().fixedDelayMs()),
+                sentimentProperties.enabled() && sentimentProperties.scheduler().enabled(),
+                "Checks configured sentiment providers and collects only providers that are due. Individual providers keep their own DB collection interval."));
+        jobs.add(job(4, "FundamentalCollectionService.collectConfiguredSymbols()",
+                "Every " + formatDuration(fundamentalProperties.fixedDelay().toMillis()),
+                fundamentalProperties.enabled(),
+                "Retrieves configured market fundamentals from CoinGecko and persists them."));
+        jobs.add(job(5, "WhaleCollectionScheduler.collect()",
+                formatDelay(whaleProperties.collection().fixedDelayMs()),
+                whaleProperties.enabled(),
+                "Pulls recent Whale Alert transactions and persists them. Collection also requires the WHALE_ALERT provider to be enabled."));
+        jobs.add(job(6, "WhaleEvaluationScheduler.evaluate()",
+                formatDelay(whaleProperties.evaluation().fixedDelayMs()),
+                whaleProperties.enabled(),
+                "Evaluates due whale activities against subsequent market movement."));
+        jobs.add(job(7, "WhaleAggregationScheduler.aggregate()",
+                formatDelay(whaleProperties.aggregation().fixedDelayMs()),
+                whaleProperties.enabled(),
+                "Recalculates whale aggregation/context for enabled symbols."));
+        jobs.add(job(8, "BinanceWebSocketManager health/reconnect loop",
+                "Every " + formatSeconds(binanceProperties.getWebsocket().getHealthCheckSeconds()),
+                binanceProperties.isEnabled() && binanceProperties.getWebsocket().isEnabled(),
+                "Checks whether the Binance WebSocket is connected and reconnects when required. Uses ScheduledExecutorService, not Spring @Scheduled."));
+        return jobs;
+    }
+
+    private Map<String, Object> job(int number, String name, String cadence, boolean enabled, String purpose) {
+        Map<String, Object> job = new LinkedHashMap<>();
+        job.put("number", number);
+        job.put("name", name);
+        job.put("cadence", cadence);
+        job.put("enabled", enabled);
+        job.put("purpose", purpose);
+        return job;
     }
 
     private Map<String, Object> marketDataSchedules() {

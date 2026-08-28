@@ -141,27 +141,23 @@ function renderDailyHealth(data) {
     renderOpportunityOutcomes(data.opportunityOutcomes);
 }
 
-async function loadSystemHealthRuntimeConfiguration() {
-    const target = document.getElementById('admin-schedule-groups');
+async function loadSystemHealthScheduledJobs() {
+    const target = document.getElementById('health-scheduled-jobs');
     if (!target) return;
     try {
-        const schedule = await api('/api/dashboard/runtime-configuration');
-        const groups = schedule?.groups || [];
-        target.innerHTML = groups.length ? groups.map(group => `
-            <article class="schedule-group">
-                <h3>${escapeHtml(group.name || 'Schedule')}</h3>
-                <div class="schedule-entry-list">
-                    ${(group.entries || []).map(item => `
-                        <div class="schedule-entry">
-                            <div class="schedule-entry-heading"><strong>${escapeHtml(item.name || '—')}</strong><span class="badge ${item.enabled ? 'buy' : 'reject'}">${item.enabled ? 'ENABLED' : 'DISABLED'}</span></div>
-                            <span class="schedule-cadence">${escapeHtml(item.cadence || '—')}</span>
-                            <small>${escapeHtml(item.detail || '')}</small>
-                            ${item.delayMs == null ? '' : `<code>${Number(item.delayMs).toLocaleString()} ms</code>`}
-                        </div>`).join('')}
-                </div>
-            </article>`).join('') : '<div class="empty">No runtime schedule configuration was returned.</div>';
+        // FIX-114: Render only the eight requested recurring jobs. Enabled state/cadence come from
+        // backend runtime configuration; Health remains read-only and cannot change scheduler state.
+        const jobs = await api('/api/system-health/scheduled-jobs');
+        target.innerHTML = Array.isArray(jobs) && jobs.length ? jobs.map(job => `
+            <tr>
+                <td><strong>${Number(job.number) || '—'}</strong></td>
+                <td><code>${escapeHtml(job.name || '—')}</code></td>
+                <td><strong>${escapeHtml(job.cadence || '—')}</strong></td>
+                <td><span class="health-status-pill ${job.enabled ? 'ok' : 'warning'}">${job.enabled ? 'ENABLED' : 'DISABLED'}</span></td>
+                <td>${escapeHtml(job.purpose || '—')}</td>
+            </tr>`).join('') : '<tr><td colspan="5" class="empty">No scheduled jobs were returned.</td></tr>';
     } catch (error) {
-        target.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+        target.innerHTML = `<tr><td colspan="5" class="empty">${escapeHtml(error.message)}</td></tr>`;
     }
 }
 
@@ -199,7 +195,7 @@ async function refreshSystemHealth() {
     try {
         // FIX-071 loads daily production diagnostics and runtime cadence independently so a schedule error
         // cannot hide the candle/signal/execution health data that operators need first.
-        const [health] = await Promise.all([api('/api/system-health/daily'), loadSystemHealthRuntimeConfiguration()]);
+        const [health] = await Promise.all([api('/api/system-health/daily'), loadSystemHealthScheduledJobs()]);
         renderDailyHealth(health);
     } catch (error) {
         const target = document.getElementById('health-alerts');

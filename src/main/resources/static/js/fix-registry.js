@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-114",
+            title: "System Health scheduled/background job inventory",
+            status: "IMPLEMENTED · OBSERVABILITY / READ-ONLY",
+            scenario: "Operations needed one Health-page table showing the recurring background jobs that continue running even when no UI action is taking place, including their cadence and whether the corresponding runtime feature is enabled.",
+            symbol: "ALL", entry: "DISPLAY ONLY", exit: "N/A",
+            entryTime: "N/A", exitTime: "N/A",
+            replayWindow: "N/A · observability only. Replay = Production trading behavior is unchanged.",
+            location: "System Health -> Scheduled / background jobs",
+            classes: ["ScheduleConfigurationService", "SystemHealthController", "system-health.html", "system-health.js", "fix-registry.js"],
+            cause: "System Health exposed broader grouped runtime configuration but did not provide the requested compact inventory of the eight recurring jobs in one operational table.",
+            solution: "Add a read-only /api/system-health/scheduled-jobs endpoint backed by the same runtime configuration objects used by the jobs. Render exactly the recurring analysis fallback, Order Book, sentiment, fundamentals, three whale jobs and Binance WebSocket health/reconnect loop with job name, cadence, live enabled state and purpose.",
+            behavior: "Health now displays the requested eight-job inventory. There are deliberately no start/stop/edit controls. No scheduler frequency, signal generation, FinalDecision, ExecutionIntelligence, wallet execution, Production or Replay behavior is changed. Replay = Production golden rule remains untouched.",
+            regression: "Open System Health and verify exactly eight rows are shown, configured cadence/enabled states reflect runtime settings, Refresh reloads the table, and no scheduler/trading state can be mutated from Health."
+        },
+        {
             id: "FIX-113A",
             title: "Dashboard Signal View Chart isolation",
             status: "IMPLEMENTED · UI / READ-ONLY PERFORMANCE",

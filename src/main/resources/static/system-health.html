@@ -135,10 +135,17 @@
 
         <section class="panel system-health-panel">
             <div class="section-heading system-health-runtime-heading">
-                <div><p class="eyebrow">RUNTIME CONFIGURATION</p><h2>Collection and analysis schedules</h2></div>
-                <span class="health-section-meta">Operational cadence</span>
+                <div><p class="eyebrow">BACKGROUND RUNTIME</p><h2>Scheduled / background jobs</h2></div>
+                <span class="health-section-meta">Read-only · actual runtime configuration</span>
             </div>
-            <div id="admin-schedule-groups" class="schedule-groups"><div class="empty">Loading runtime configuration…</div></div>
+            <!-- FIX-114: Operations asked for one compact inventory of only the eight recurring jobs.
+                 This is display-only observability and has no scheduler controls or trading side effects. -->
+            <div class="health-table-wrap">
+                <table class="health-table">
+                    <thead><tr><th>#</th><th>Job</th><th>Schedule</th><th>Enabled</th><th>Purpose</th></tr></thead>
+                    <tbody id="health-scheduled-jobs"><tr><td colspan="5" class="empty">Loading scheduled jobs…</td></tr></tbody>
+                </table>
+            </div>
         </section>
     </main>
 </div>
