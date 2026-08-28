@@ -3,6 +3,8 @@ package com.crypto.service;
 import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
 import com.crypto.repository.TradeSignalRepository;
+import com.crypto.execution.service.EntryConsumptionPolicy;
+import com.crypto.execution.domain.EntryConsumptionState;
 import com.crypto.wallet.domain.WalletSettings;
 import com.crypto.wallet.repository.WalletSettingsRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,20 +24,27 @@ class TradeExecutionValidationServiceTest {
 
     @Mock private TradeSignalRepository signalRepository;
     @Mock private WalletSettingsRepository settingsRepository;
+    @Mock private EntryConsumptionPolicy entryConsumptionPolicy;
 
     private TradeExecutionValidationService service;
     private Instant now;
 
     @BeforeEach
     void setUp() {
-        service = new TradeExecutionValidationService(signalRepository, settingsRepository);
+        service = new TradeExecutionValidationService(signalRepository, settingsRepository, entryConsumptionPolicy);
         now = Instant.parse("2026-08-08T05:00:00Z");
     }
 
     @Test
     void buyMustComeFromOneMinuteExecutionFrame() {
-        settings("BALANCED", true);
-        var result = service.validateBuy(signal("BTCUSDT", "5m", SignalDecision.BUY, now, 80, 23, 18, 13));
+
+        // FIX-112A test alignment:
+        // A non-1m BUY is rejected before wallet execution settings are consulted,
+        // so this test must not stub settingsRepository.
+        var result = service.validateBuy(
+                signal("BTCUSDT", "5m", SignalDecision.BUY, now, 80, 23, 18, 13)
+        );
+
         assertThat(result.allowed()).isFalse();
         assertThat(result.code()).isEqualTo("NON_EXECUTION_TIMEFRAME");
     }
@@ -108,15 +117,31 @@ class TradeExecutionValidationServiceTest {
     }
 
     @Test
-    void repeatedOneMinuteBuyIsNotANewOpportunity() {
+    void repeatedOneMinuteBuyRemainsProtectedAfterRealEntryConsumption() {
         settings("BALANCED", true);
         TradeSignal oneMinute = signal("ETHUSDT", "1m", SignalDecision.BUY, now, 80, 23, 18, 13);
         when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanOrderByGeneratedAtDesc(
                 "ETHUSDT", "1m", now)).thenReturn(Optional.of(
                 signal("ETHUSDT", "1m", SignalDecision.BUY, now.minusSeconds(60), 79, 22, 17, 13)));
+        when(entryConsumptionPolicy.resolve(org.mockito.ArgumentMatchers.anyLong())).thenReturn(EntryConsumptionState.CONSUMED);
         var result = service.validateBuy(oneMinute);
         assertThat(result.allowed()).isFalse();
         assertThat(result.code()).isEqualTo("BUY_CONTINUATION");
+    }
+
+    @Test
+    void blockedPreviousBullishLabelDoesNotManufactureBuyContinuation() {
+        settings("BALANCED", true);
+        TradeSignal oneMinute = signal("SHIBUSDT", "1m", SignalDecision.BUY, now, 80, 23, 18, 13);
+        when(signalRepository.findTopBySymbolAndIntervalAndGeneratedAtLessThanOrderByGeneratedAtDesc(
+                "SHIBUSDT", "1m", now)).thenReturn(Optional.of(
+                signal("SHIBUSDT", "1m", SignalDecision.STRONG_BUY, now.minusSeconds(60), 79, 22, 17, 13)));
+        when(entryConsumptionPolicy.resolve(org.mockito.ArgumentMatchers.anyLong())).thenReturn(EntryConsumptionState.NOT_CONSUMED);
+        latest("SHIBUSDT", "5m", signal("SHIBUSDT", "5m", SignalDecision.BUY, now.minusSeconds(120), 80, 23, 18, 13));
+        latest("SHIBUSDT", "1h", signal("SHIBUSDT", "1h", SignalDecision.BUY, now.minusSeconds(1800), 80, 23, 18, 13));
+        var result = service.validateBuy(oneMinute);
+        assertThat(result.allowed()).isTrue();
+        assertThat(result.code()).isEqualTo("BALANCED_FULL");
     }
 
     @Test
@@ -150,11 +175,45 @@ class TradeExecutionValidationServiceTest {
 
     @Test
     void sellKeepsExistingStrictConfirmationRules() {
-        settings("AGGRESSIVE", false);
-        TradeSignal oneMinute = signal("ETHUSDT", "1m", SignalDecision.SELL, now, 30, 15, 5, 4);
-        latest("ETHUSDT", "5m", signal("ETHUSDT", "5m", SignalDecision.SELL, now.minusSeconds(120), 35, 10, 7, 5));
-        latest("ETHUSDT", "1h", signal("ETHUSDT", "1h", SignalDecision.WATCH, now.minusSeconds(1800), 65, 18, 12, 10));
+
+        // FIX-112A test alignment:
+        // SELL validation follows the existing SELL confirmation path and does not
+        // consume BUY execution-profile settings in this scenario.
+        TradeSignal oneMinute =
+                signal("ETHUSDT", "1m", SignalDecision.SELL, now, 30, 15, 5, 4);
+
+        latest(
+                "ETHUSDT",
+                "5m",
+                signal(
+                        "ETHUSDT",
+                        "5m",
+                        SignalDecision.SELL,
+                        now.minusSeconds(120),
+                        35,
+                        10,
+                        7,
+                        5
+                )
+        );
+
+        latest(
+                "ETHUSDT",
+                "1h",
+                signal(
+                        "ETHUSDT",
+                        "1h",
+                        SignalDecision.WATCH,
+                        now.minusSeconds(1800),
+                        65,
+                        18,
+                        12,
+                        10
+                )
+        );
+
         var result = service.validateSell(oneMinute);
+
         assertThat(result.allowed()).isTrue();
         assertThat(result.positionPercent()).isEqualTo(100);
     }

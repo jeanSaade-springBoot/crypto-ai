@@ -9,6 +9,8 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -61,6 +63,16 @@ public class ExecutionReplayScope {
     public Optional<ReplayPrice> latestPrice() {
         State s = required();
         return Optional.ofNullable(s.latestPrice);
+    }
+
+    /** FIX-112A: Replay-local execution ledger keyed to the exact triggering signal. */
+    public boolean entryConsumed(Long signalId) {
+        return active() && signalId != null && required().consumedSignalIds.contains(signalId);
+    }
+
+    /** FIX-112A: record only after that exact shadow BUY (initial or add) executes. */
+    public void markEntryConsumed(Long signalId) {
+        if (signalId != null) required().consumedSignalIds.add(signalId);
     }
 
     /**
@@ -139,6 +151,7 @@ public class ExecutionReplayScope {
         Instant reference;
         ExecutionOpportunity opportunity;
         ReplayPrice latestPrice;
+        final Set<Long> consumedSignalIds = new HashSet<>();
         State(long runId, List<TradeSignal> signals, Consumer<ExecutionOpportunity> opportunitySink, ReplayLogicMode logicMode) {
             this.runId = runId;
             this.signals = new ArrayList<>(signals);

@@ -1,6 +1,36 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-112C",
+            title: "Persisted Production Order Book evidence for historical Replay parity",
+            status: "IMPLEMENTED · PARITY INFRASTRUCTURE",
+            scenario: "Production Order Book decisions used transient in-memory Binance depth snapshots, so historical Replay could not reproduce the same liquidity evidence and intentionally fell back to UNAVAILABLE.",
+            symbol: "ALL", entry: "ORDER BOOK AUTHORITY", exit: "N/A",
+            entryTime: "Production observed_at UTC", exitTime: "N/A",
+            replayWindow: "Windows after V74 deployment and snapshot collection; older windows remain ORDER_BOOK history unavailable.",
+            location: "OrderBookLiquidityService + OrderBookSnapshotService + V74",
+            classes: ["OrderBookLiquidityService", "OrderBookSnapshotService", "OrderBookPersistenceAsyncConfig", "V74__order_book_snapshot_persistence.sql"],
+            cause: "Order Book snapshots existed only in the Production JVM deque. Replay could not safely substitute a current live book for a historical timestamp and therefore lacked exact liquidity input parity.",
+            solution: "Persist every Production Order Book observation, including an invalid latest bid/ask observation, using the existing signed imbalance formula and nullable per-snapshot metrics. Persistence is dispatched to a dedicated bounded executor so DB latency/failure cannot block the live collector; queue saturation sacrifices historical Replay evidence rather than Production sampling. Historical Replay queries only rows inside its as-of window and sends them through the same normalized status, persistence, wall and veto evaluator as Production. The shared evaluator explicitly preserves the pre-FIX-112 Production rule: if the latest snapshot midpoint is invalid, bail to UNAVAILABLE before any other processing. Partial persisted sampling reproduces Production INSUFFICIENT_DATA_HOLD; a completely absent historical window remains UNAVAILABLE and never uses live Binance data.",
+            behavior: "From V74 deployment forward, Replay can reproduce the exact normalized Order Book evidence Production observed at each historical decision timestamp. Existing Production latest-snapshot validity semantics, thresholds and entry-veto policy are preserved. Historical persistence is operationally isolated from the live collector, so a slow/unavailable DB cannot alter live sampling cadence. Filtering an individually bad latest snapshot is deliberately NOT part of this parity fix.",
+            regression: "Verify V74 schema/index; collect fresh snapshots; compare live vs historical evaluation at the same timestamp including observation count, signed imbalance, persistent walls, status, entryAllowed and veto result; specifically verify several valid observations followed by one invalid latest snapshot returns UNAVAILABLE in both Production and Replay; verify observed_at > replay time is excluded and pre-V74 windows remain UNAVAILABLE without live substitution."
+        },
+        {
+            id: "FIX-112A",
+            title: "BUY_CONTINUATION requires a consumed entry",
+            status: "IMPLEMENTED · ENTRY CORRECTNESS",
+            scenario: "A previous 1m BUY/STRONG_BUY label could trigger BUY_CONTINUATION even when that signal was blocked and never opened a position, causing the next valid BUY to be rejected for a duplicate entry that never happened.",
+            symbol: "ALL", entry: "1m BUY/STRONG_BUY", exit: "N/A",
+            entryTime: "Current signal time", exitTime: "N/A",
+            replayWindow: "Regression focus: SHIB 15:13→15:14 UTC scenario plus Production-Parity Replay.",
+            location: "TradeExecutionValidationService + EntryConsumptionPolicy + ExecutionReplayScope + ShadowProductionReplayService",
+            classes: ["TradeExecutionValidationService", "EntryConsumptionPolicy", "EntryConsumptionState", "ExecutionReplayScope", "ShadowProductionReplayService"],
+            cause: "Continuation protection inspected the previous bullish signal label but did not establish that that exact prior signal had actually executed. Symbol-level OPEN-position state is too broad because progressive adds share the same validation path.",
+            solution: "Require consumption of the exact previous signal ID. Production resolves wallet_trade for previousSignalId + BUY + EXECUTED; each initial BUY and progressive add is already persisted against its own triggering TradeSignal. Replay mirrors this with an isolated set of consumed signal IDs and records a signal only after its shadow initial BUY or progressive add actually executes.",
+            behavior: "Blocked first entry -> NOT_CONSUMED; executed first entry -> CONSUMED; blocked progressive add -> NOT_CONSUMED even while another position is open; executed progressive add -> CONSUMED. All remaining progressive-entry, sizing and risk gates remain unchanged.",
+            regression: "Verify all four consumption cases by exact previous signal ID. BUY_CONTINUATION may fire only when that exact prior bullish signal has an EXECUTED BUY; unrelated OPEN-position state must not prove consumption. Replay must use signal-specific shadow execution state and never query Production wallet state."
+        },
+        {
             id: "FIX-111",
             title: "Dashboard persistent chart hover and Signal View filter state",
             status: "IMPLEMENTED · UI STABILITY",

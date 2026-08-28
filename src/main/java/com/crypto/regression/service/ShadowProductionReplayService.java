@@ -125,7 +125,7 @@ public class ShadowProductionReplayService {
                         persistSellAtPrice(runId, symbol, live, latest1m, open, liveExit, pnl, pnlPct);
                         closePositionAtPrice(runId, open.positionId(), live, liveExit, pnl, pnlPct);
                         executionIntelligenceService.completePositionOpportunity(symbol, latest1m, liveExit.reason());
-                        open = null;
+                                                open = null;
                     }
                 }
             }
@@ -152,7 +152,7 @@ public class ShadowProductionReplayService {
                     // FIX-020 replay parity: a terminal replay exit consumes the same
                     // opportunity evidence boundary as production before any new BUY can form.
                     executionIntelligenceService.completePositionOpportunity(symbol, signal, exit.reason());
-                    open = null;
+                                        open = null;
                     // Production PaperTradingService returns immediately after a signal-driven
                     // terminal close; it cannot reopen from that same signal invocation.
                     continue;
@@ -180,7 +180,7 @@ public class ShadowProductionReplayService {
                     persistSell(runId, symbol, signal, open, exit, pnl, pnlPct);
                     closePosition(runId, open.positionId(), signal, exit, pnl, pnlPct);
                     executionIntelligenceService.completePositionOpportunity(symbol, signal, exit.reason());
-                    open = null;
+                                        open = null;
                     // Same production invocation cannot both SELL and immediately BUY again.
                     continue;
                 }
@@ -266,6 +266,8 @@ public class ShadowProductionReplayService {
                             effectivePercent, executionSignal.getStopLoss(), executionSignal.getTakeProfit(), fresh.price(), false, null,
                             executionSignal.getTotalScore(), executionSignal.getConfidenceScore(), executionSignal.getTrendScore(), executionSignal.getTrendStructureScore(),
                             executionSignal.getMomentumScore(), executionSignal.getVolumeScore());
+                    // FIX-112A: only an actually opened shadow position consumes the bullish entry.
+                    replayScope.markEntryConsumed(executionSignal.getId());
                 }
             } else if (open != null && decision.allowed()) {
                 // FIX-056: progressive Replay adds use the same fresh execution price and
@@ -286,6 +288,8 @@ public class ShadowProductionReplayService {
                     BigDecimal addedQty = sizing.quantity();
                     persistBuy(runId, symbol, signal, fresh, addedQty, budget, addPercent, decision);
                     executionIntelligenceService.markExecuted(signal, decision);
+                    // FIX-112A: a progressive add consumes only its own triggering signal.
+                    replayScope.markEntryConsumed(signal.getId());
                     cash = cash.subtract(budget, MC);
                     open = addToPosition(runId, open, signal, addedQty, budget, addPercent);
                 }

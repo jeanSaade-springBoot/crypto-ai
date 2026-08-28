@@ -29,6 +29,7 @@ import com.crypto.domain.SignalDecision;
 import com.crypto.dto.OrderBookLevel;
 import com.crypto.dto.OrderBookLiquidityResult;
 import com.crypto.dto.OrderBookSnapshot;
+import com.crypto.market.service.OrderBookSnapshotService;
 
 @Service
 public class OrderBookLiquidityService {
@@ -41,18 +42,21 @@ public class OrderBookLiquidityService {
     private final BinanceMarketDataProperties marketDataProperties;
     private final OrderBookProperties properties;
     private final CoinConfigurationService coinConfigurationService;
+    private final OrderBookSnapshotService orderBookSnapshotService;
     private final Map<String, Deque<OrderBookSnapshot>> historyBySymbol = new ConcurrentHashMap<>();
 
     public OrderBookLiquidityService(
             BinanceMarketDataClient marketDataClient,
             BinanceMarketDataProperties marketDataProperties,
             OrderBookProperties properties,
-            CoinConfigurationService coinConfigurationService
+            CoinConfigurationService coinConfigurationService,
+            OrderBookSnapshotService orderBookSnapshotService
     ) {
         this.marketDataClient = marketDataClient;
         this.marketDataProperties = marketDataProperties;
         this.properties = properties;
         this.coinConfigurationService = coinConfigurationService;
+        this.orderBookSnapshotService = orderBookSnapshotService;
     }
 
     @Scheduled(fixedDelayString = "${analysis.order-book.snapshot-interval-ms:5000}")
@@ -82,10 +86,10 @@ public class OrderBookLiquidityService {
     }
 
     /**
-     * Historical replay path. Order-book snapshots currently live only in memory,
-     * so replay must not collect a fresh live book and pretend it existed at the
-     * historical timestamp. If an already-captured snapshot genuinely exists in
-     * the historical window it may be used; otherwise the context is UNAVAILABLE.
+     * FIX-112C historical replay path. Replay reads persisted Production Order Book
+     * observations strictly as-of the historical evaluation timestamp and routes them
+     * through the same normalized evaluator used by live Production. Pre-V74 windows
+     * with no persisted evidence remain explicitly UNAVAILABLE.
      */
     public OrderBookLiquidityResult evaluateHistorical(
             String symbol,
@@ -106,33 +110,36 @@ public class OrderBookLiquidityService {
                     policy, 0L);
         }
 
-        String normalizedSymbol = normalize(symbol);
-        Deque<OrderBookSnapshot> deque = historyBySymbol.get(normalizedSymbol);
-        if (deque == null || deque.isEmpty()) {
+        // FIX-112C: historical Replay reads only persisted Production observations
+        // whose observed_at is inside the exact as-of window. No live Binance book
+        // and no future observation can enter a historical decision.
+        Instant windowStart = snapshotTime.minusSeconds(policy.windowSeconds());
+        List<NormalizedObservation> observations = orderBookSnapshotService
+                .find(symbol, windowStart, snapshotTime).stream()
+                .map(row -> new NormalizedObservation(row.observedAt(),
+                        // FIX-112C parity preservation: an invalid persisted snapshot must remain
+                        // in the observation sequence. Pre-FIX-112 Production counted every snapshot
+                        // in the active window and, critically, returned UNAVAILABLE when the latest
+                        // snapshot itself had no valid midpoint. Dropping invalid rows here would
+                        // silently change that established Production behavior during Replay.
+                        row.bestBid() == null || row.bestAsk() == null
+                                || row.bestBid().add(row.bestAsk()).signum() <= 0
+                                ? null
+                                : new SnapshotMetrics(
+                                        row.bidDepth(), row.askDepth(), row.depthImbalance(),
+                                        row.spreadBps() == null ? null : row.spreadBps().divide(ONE_HUNDRED, MC),
+                                        row.bidWallPrice(), row.bidWallQuantity(),
+                                        row.askWallPrice(), row.askWallQuantity())))
+                .toList();
+        if (observations.isEmpty()) {
             return result(LiquidityContextStatus.UNAVAILABLE, currentDecision, currentDecision,
                     entryAllowed, null, null, null, null, null, null, null, null,
                     false, false, 0,
-                    "Historical order-book snapshots were not persisted; live order-book data is intentionally not used during replay.",
+                    "No persisted Production order-book observation exists for this historical replay window; live data was not substituted.",
                     snapshotTime, policy, 0L);
         }
-
-        List<OrderBookSnapshot> snapshots;
-        synchronized (deque) {
-            Instant windowStart = snapshotTime.minusSeconds(policy.windowSeconds());
-            snapshots = deque.stream()
-                    .filter(snapshot -> !snapshot.capturedAt().isAfter(snapshotTime))
-                    .filter(snapshot -> !snapshot.capturedAt().isBefore(windowStart))
-                    .toList();
-        }
-        if (snapshots.isEmpty()) {
-            return result(LiquidityContextStatus.UNAVAILABLE, currentDecision, currentDecision,
-                    entryAllowed, null, null, null, null, null, null, null, null,
-                    false, false, 0,
-                    "No persisted/in-memory order-book observation exists for the historical replay window; live data was not substituted.",
-                    snapshotTime, policy, 0L);
-        }
-
-        return evaluate(symbol, interval, currentDecision, entryAllowed, currentPrice, stopLoss, takeProfit, evaluatedAt);
+        return evaluateNormalized(symbol, interval, currentDecision, entryAllowed,
+                currentPrice, stopLoss, takeProfit, snapshotTime, policy, observations);
     }
 
     public OrderBookLiquidityResult evaluate(
@@ -191,43 +198,74 @@ public class OrderBookLiquidityService {
                     snapshotTime, policy, 0L);
         }
 
-        OrderBookSnapshot latest = snapshots.get(snapshots.size() - 1);
-        BigDecimal mid = midpoint(latest);
-        if (mid == null || mid.signum() <= 0) {
+        // FIX-112C parity preservation: keep every live snapshot in sequence and let the
+        // shared evaluator enforce the exact pre-refactor latest-snapshot validity gate.
+        // Do not filter individual invalid snapshots here; doing so changed live Production
+        // semantics by allowing an older valid snapshot to replace an invalid latest reading.
+        List<NormalizedObservation> observations = snapshots.stream()
+                .map(snapshot -> {
+                    BigDecimal mid = midpoint(snapshot);
+                    return new NormalizedObservation(snapshot.capturedAt(),
+                            mid == null || mid.signum() <= 0 ? null : metrics(snapshot, mid));
+                })
+                .toList();
+        return evaluateNormalized(symbol, interval, currentDecision, entryAllowed,
+                currentPrice, stopLoss, takeProfit, snapshotTime, policy, observations);
+    }
+
+    /**
+     * FIX-112C shared decision path. Production normalizes live snapshots into this
+     * representation; Replay loads the same normalized observations from MySQL.
+     * All status/veto/wall-persistence logic below is therefore identical.
+     */
+    private OrderBookLiquidityResult evaluateNormalized(
+            String symbol, String interval, SignalDecision currentDecision, boolean entryAllowed,
+            BigDecimal currentPrice, BigDecimal stopLoss, BigDecimal takeProfit,
+            Instant snapshotTime, IntervalPolicy policy,
+            List<NormalizedObservation> observations) {
+        int observationCount = observations.size();
+        long observedSeconds = observedDurationSecondsNormalized(observations);
+
+        // FIX-112C PRODUCTION-BEHAVIOR PRESERVATION:
+        // Before the shared-evaluator refactor, live Production inspected ONLY the latest
+        // snapshot's midpoint first. If that latest reading was invalid, the entire Order Book
+        // evaluation returned UNAVAILABLE even when older snapshots in the window were valid.
+        // Keep that exact gate explicitly in the shared path so Replay conforms to Production;
+        // tolerating/filtering an invalid latest snapshot is a separate trading-behavior change
+        // and must never ride along inside this parity/infrastructure fix.
+        SnapshotMetrics latestMetrics = observations.get(observationCount - 1).metrics();
+        if (latestMetrics == null) {
             return result(LiquidityContextStatus.UNAVAILABLE, currentDecision, currentDecision,
                     entryAllowed, null, null, null, null, null, null, null, null,
-                    false, false, snapshots.size(), "Order-book best bid/ask is unavailable.", snapshotTime,
-                    policy, observedDurationSeconds(snapshots));
+                    false, false, observationCount, "Order-book best bid/ask is unavailable.",
+                    snapshotTime, policy, observedSeconds);
         }
 
-        SnapshotMetrics latestMetrics = metrics(latest, mid);
-        int observations = snapshots.size();
-        long observedSeconds = observedDurationSeconds(snapshots);
-        if (observations < policy.minimumObservations()) {
-            // FIX-091 / Fix 2: live partial sampling is now authoritative as a temporary HOLD.
-            // This is intentionally different from historical Replay UNAVAILABLE, where snapshots
-            // were never persisted and live Binance data must never be substituted retroactively.
-            return result(LiquidityContextStatus.INSUFFICIENT_DATA_HOLD, currentDecision, currentDecision,
-                    false, latestMetrics.imbalance(), latestMetrics.bidDepth(), latestMetrics.askDepth(),
+        if (observationCount < policy.minimumObservations()) {
+            // FIX-112C exact parity: once historical observations exist, partial sampling
+            // must reproduce Production's INSUFFICIENT_DATA_HOLD rather than becoming a
+            // Replay-only UNAVAILABLE pass. Only a completely absent historical window is
+            // reported UNAVAILABLE by evaluateHistorical().
+            return result(LiquidityContextStatus.INSUFFICIENT_DATA_HOLD,
+                    currentDecision, currentDecision, false,
+                    latestMetrics.imbalance(), latestMetrics.bidDepth(), latestMetrics.askDepth(),
                     latestMetrics.spreadPercent(), latestMetrics.bidWallPrice(), latestMetrics.bidWallSize(),
-                    latestMetrics.askWallPrice(), latestMetrics.askWallSize(), false, false, observations,
-                    "Collecting " + interval + " liquidity observations (" + observations + "/"
+                    latestMetrics.askWallPrice(), latestMetrics.askWallSize(), false, false,
+                    observationCount,
+                    "Collecting " + interval + " liquidity observations (" + observationCount + "/"
                             + policy.minimumObservations() + ") inside a " + policy.windowSeconds()
-                            + " second window. Fresh entry is held until the minimum sample is ready.", snapshotTime,
-                    policy, observedSeconds);
+                            + " second window. Fresh entry is held until the minimum sample is ready.",
+                    snapshotTime, policy, observedSeconds);
         }
 
-        PersistentWall bidWall = persistentWall(snapshots, true, policy);
-        PersistentWall askWall = persistentWall(snapshots, false, policy);
+        PersistentWall bidWall = persistentWallNormalized(observations, true, policy);
+        PersistentWall askWall = persistentWallNormalized(observations, false, policy);
         boolean targetBlocked = isBuy(currentDecision)
-                && currentPrice != null
-                && takeProfit != null
-                && askWall != null
+                && currentPrice != null && takeProfit != null && askWall != null
                 && askWall.price().compareTo(currentPrice) > 0
                 && askWall.price().compareTo(takeProfit) <= 0;
         boolean stopExposed = isBuy(currentDecision)
-                && stopLoss != null
-                && (bidWall == null || bidWall.price().compareTo(stopLoss) < 0);
+                && stopLoss != null && (bidWall == null || bidWall.price().compareTo(stopLoss) < 0);
 
         WallLifecycle askWallLifecycle = wallLifecycle(askWall, currentPrice, latestMetrics.imbalance(), policy);
         LiquidityContextStatus status = classify(latestMetrics.imbalance(), targetBlocked, stopExposed, askWallLifecycle);
@@ -238,13 +276,6 @@ public class OrderBookLiquidityService {
 
         boolean strongBearishImbalance = latestMetrics.imbalance() != null
                 && latestMetrics.imbalance().compareTo(properties.strongImbalance().negate()) <= 0;
-        // FIX-022 / ETHUSDT 2026-08-20 18:11 KSA:
-        // A wall that is extremely close to price and already shrinking materially must not be
-        // treated like static resistance. In the proven ETH case the ask wall was only 0.097%
-        // away and had already reduced by 16.6%; price consumed it minutes later. Keep the wall
-        // as negative liquidity evidence, but do not hard-veto the setup solely because its
-        // historical persistence/strength score is high. A stable/growing wall that is not
-        // materially shrinking remains a full hard veto exactly as before.
         boolean ultraCloseWallBeingConsumed = targetBlocked
                 && askWallLifecycle != null
                 && askWallLifecycle.distancePercent().compareTo(new BigDecimal("0.10")) <= 0
@@ -263,16 +294,12 @@ public class OrderBookLiquidityService {
             finalEntryAllowed = false;
             finalDecision = SignalDecision.WATCH;
             explanation += " The " + interval
-                    + " policy permits a hard veto because liquidity pressure is strong enough to matter now; "
-                    + "the long entry was downgraded to WATCH.";
+                    + " policy permits a hard veto because liquidity pressure is strong enough to matter now; the long entry was downgraded to WATCH.";
         } else if (targetBlocked && !hardTargetBlock) {
             if (ultraCloseWallBeingConsumed) {
-                explanation += " The target-side wall is ultra-close but is already shrinking materially, so it is treated "
-                        + "as potentially consumable breakout liquidity rather than an automatic hard veto. It remains "
-                        + "negative execution evidence and fresh confirmation is still required.";
+                explanation += " The target-side wall is ultra-close but is already shrinking materially, so it is treated as potentially consumable breakout liquidity rather than an automatic hard veto. It remains negative execution evidence and fresh confirmation is still required.";
             } else {
-                explanation += " The wall is relevant to the target but is not strong/stable enough for a hard veto. "
-                        + "It remains execution evidence and may reduce confidence while fresh signals continue to be evaluated.";
+                explanation += " The wall is relevant to the target but is not strong/stable enough for a hard veto. It remains execution evidence and may reduce confidence while fresh signals continue to be evaluated.";
             }
         } else if (strongConflict && !policy.allowVeto()) {
             explanation += " This interval is informational only for liquidity; no entry veto was applied.";
@@ -283,12 +310,52 @@ public class OrderBookLiquidityService {
                 latestMetrics.spreadPercent(), bidWall == null ? null : bidWall.price(),
                 bidWall == null ? null : bidWall.size(), askWall == null ? null : askWall.price(),
                 askWall == null ? null : askWall.size(), targetBlocked, stopExposed,
-                observations, explanation, snapshotTime, policy,
+                observationCount, explanation, snapshotTime, policy,
                 Math.max(bidWall == null ? 0L : bidWall.persistenceSeconds(),
                         askWall == null ? 0L : askWall.persistenceSeconds()));
     }
 
+    private PersistentWall persistentWallNormalized(List<NormalizedObservation> observations, boolean bid, IntervalPolicy policy) {
+        List<WallObservation> candidates = observations.stream()
+                .map(observation -> {
+                    SnapshotMetrics metrics = observation.metrics();
+                    // Pre-FIX-112 persistentWall(...) skipped an individual older snapshot when
+                    // its midpoint was invalid. Preserve that behavior while the latest-snapshot
+                    // validity gate above remains authoritative for the overall evaluation.
+                    if (metrics == null) return null;
+                    BigDecimal price = bid ? metrics.bidWallPrice() : metrics.askWallPrice();
+                    BigDecimal size = bid ? metrics.bidWallSize() : metrics.askWallSize();
+                    return price == null ? null : new WallObservation(observation.capturedAt(), price, size);
+                })
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        if (candidates.size() < policy.minimumObservations()) return null;
+        WallObservation latest = candidates.get(candidates.size() - 1);
+        List<WallObservation> matching = candidates.stream()
+                .filter(observation -> percentDistance(observation.price(), latest.price())
+                        .compareTo(properties.wallPriceTolerancePercent()) <= 0)
+                .toList();
+        if (matching.size() < policy.minimumObservations()) return null;
+        long persistenceSeconds = Duration.between(matching.get(0).capturedAt(), matching.get(matching.size() - 1).capturedAt()).toSeconds();
+        if (persistenceSeconds < policy.minimumWallPersistenceSeconds()) return null;
+        BigDecimal avgSize = matching.stream().map(WallObservation::size).reduce(BigDecimal.ZERO, BigDecimal::add)
+                .divide(BigDecimal.valueOf(matching.size()), MC);
+        BigDecimal firstSize = matching.get(0).size();
+        BigDecimal latestSize = matching.get(matching.size() - 1).size();
+        BigDecimal sizeChangePercent = firstSize == null || firstSize.signum() == 0 ? BigDecimal.ZERO
+                : latestSize.subtract(firstSize).divide(firstSize, 8, RoundingMode.HALF_UP).multiply(ONE_HUNDRED);
+        return new PersistentWall(latest.price(), avgSize, latestSize, firstSize, sizeChangePercent,
+                matching.size(), persistenceSeconds);
+    }
+
+    private long observedDurationSecondsNormalized(List<NormalizedObservation> observations) {
+        if (observations == null || observations.size() < 2) return 0L;
+        return Math.max(0L, Duration.between(observations.get(0).capturedAt(),
+                observations.get(observations.size() - 1).capturedAt()).toSeconds());
+    }
+
     private void collectSafely(String symbol) {
+        long collectionStartedNanos = System.nanoTime();
         try {
             BinanceOrderBook raw = marketDataClient.getOrderBook(symbol, properties.depthLimit());
             OrderBookSnapshot snapshot = new OrderBookSnapshot(
@@ -308,6 +375,27 @@ public class OrderBookLiquidityService {
                     deque.removeFirst();
                 }
             }
+
+            // FIX-112C: persist EVERY collected snapshot, including a snapshot whose latest
+            // bid/ask is invalid. That invalid observation is trading-relevant evidence because
+            // established Production behavior returns UNAVAILABLE when the latest midpoint cannot
+            // be formed. Replay cannot reproduce that behavior if invalid snapshots disappear
+            // during persistence.
+            BigDecimal mid = midpoint(snapshot);
+            SnapshotMetrics m = mid == null || mid.signum() <= 0 ? null : metrics(snapshot, mid);
+            int latencyMs = (int) Math.min(Integer.MAX_VALUE,
+                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - collectionStartedNanos));
+            orderBookSnapshotService.recordAsync(symbol, snapshot.capturedAt(),
+                    snapshot.bids().isEmpty() ? null : snapshot.bids().get(0).price(),
+                    snapshot.asks().isEmpty() ? null : snapshot.asks().get(0).price(),
+                    m == null ? null : m.spreadPercent(),
+                    m == null ? null : m.bidDepth(),
+                    m == null ? null : m.askDepth(),
+                    m == null ? null : m.imbalance(),
+                    m == null ? null : m.bidWallPrice(),
+                    m == null ? null : m.bidWallSize(),
+                    m == null ? null : m.askWallPrice(),
+                    m == null ? null : m.askWallSize(), latencyMs);
         } catch (Exception exception) {
             log.warn("Unable to collect order book for {}: {}", symbol, exception.getMessage());
         }
@@ -555,6 +643,8 @@ public class OrderBookLiquidityService {
                 explanation, evaluatedAt, policy.windowSeconds(), wallPersistenceSeconds,
                 policy.influence(), policy.allowVeto());
     }
+
+    private record NormalizedObservation(Instant capturedAt, SnapshotMetrics metrics) {}
 
     private record SnapshotMetrics(
             BigDecimal bidDepth,

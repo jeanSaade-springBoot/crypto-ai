@@ -11,12 +11,19 @@ class PositionContinuationPolicyTest {
 
     @Test
     void extendsWhenStructureRemainsHealthyWithoutRequiringScoresToImprove() {
+
         TradeSignal one = signal(SignalDecision.WATCH, 17, 11, 6);
         TradeSignal five = signal(SignalDecision.WATCH, 15, 9, 10);
         TradeSignal hour = signal(SignalDecision.WATCH, 18, 15, 16);
+
         var result = policy.evaluate(one, five, hour, 19, 14, 17);
+
         assertTrue(result.extendTarget());
-        assertTrue(result.explanation().contains("STANDARD"));
+
+        // Current volume has cooled below the STANDARD soft-volume floor.
+        // Because 1m/5m/1h remain non-bearish and trend/momentum are healthy,
+        // the existing position is correctly carried by the healthy-consolidation path.
+        assertTrue(result.explanation().contains("HEALTHY_CONSOLIDATION"));
     }
 
     @Test

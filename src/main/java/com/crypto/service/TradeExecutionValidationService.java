@@ -4,6 +4,8 @@ import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
 import com.crypto.repository.TradeSignalRepository;
 import com.crypto.execution.service.ExecutionReplayScope;
+import com.crypto.execution.service.EntryConsumptionPolicy;
+import com.crypto.execution.domain.EntryConsumptionState;
 import com.crypto.wallet.domain.ExecutionProfile;
 import com.crypto.wallet.domain.WalletSettings;
 import com.crypto.wallet.repository.WalletSettingsRepository;
@@ -39,6 +41,7 @@ public class TradeExecutionValidationService {
 
     private final TradeSignalRepository signalRepository;
     private final WalletSettingsRepository settingsRepository;
+    private final EntryConsumptionPolicy entryConsumptionPolicy;
     @Autowired(required = false)
     private ExecutionReplayScope replayScope;
 
@@ -49,10 +52,14 @@ public class TradeExecutionValidationService {
         WalletSettings settings = settings();
         if (settings.isRequireNewBuyTransition()) {
             TradeSignal previous = previousSignal(executionSignal.getSymbol(), EXECUTION_INTERVAL, executionSignal.getGeneratedAt()).orElse(null);
+            // FIX-112A: a bullish label alone is not a consumed entry. Only keep
+            // BUY_CONTINUATION protection when that exact previous signal has an
+            // executed BUY (Production) or executed shadow BUY (Replay).
             if (isFresh(previous, executionSignal.getGeneratedAt(), ONE_MINUTE_TRANSITION_MAX_AGE)
-                    && isBullish(previous.getDecision())) {
+                    && isBullish(previous.getDecision())
+                    && entryConsumptionPolicy.resolve(previous.getId()) != EntryConsumptionState.NOT_CONSUMED) {
                 return ValidationResult.reject("BUY_CONTINUATION",
-                        "BUY was not executed because the recent previous 1m signal was already BUY/STRONG_BUY. "
+                        "BUY was not executed because a recent bullish opportunity for this symbol was already consumed. "
                                 + "A new WATCH/NEUTRAL/SELL -> BUY transition is required.");
             }
         }
