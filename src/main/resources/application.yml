@@ -218,6 +218,11 @@ analysis:
     depth-limit: ${ORDER_BOOK_DEPTH_LIMIT:100}
     range-percent: ${ORDER_BOOK_RANGE_PERCENT:2.0}
     snapshot-interval-ms: ${ORDER_BOOK_SNAPSHOT_INTERVAL_MS:5000}
+    # FIX-11E: bounded Binance collection concurrency; separate from FIX-112C persistence.
+    collection:
+      core-pool-size: ${ORDER_BOOK_COLLECTION_CORE_POOL_SIZE:6}
+      max-pool-size: ${ORDER_BOOK_COLLECTION_MAX_POOL_SIZE:8}
+      queue-capacity: ${ORDER_BOOK_COLLECTION_QUEUE_CAPACITY:40}
     # Retain enough observations for the longest configured interval window.
     history-size: ${ORDER_BOOK_HISTORY_SIZE:5000}
     minimum-observations: ${ORDER_BOOK_MINIMUM_OBSERVATIONS:5}

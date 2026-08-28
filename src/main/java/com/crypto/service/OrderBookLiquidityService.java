@@ -11,10 +11,14 @@ import java.util.Comparator;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -43,20 +47,28 @@ public class OrderBookLiquidityService {
     private final OrderBookProperties properties;
     private final CoinConfigurationService coinConfigurationService;
     private final OrderBookSnapshotService orderBookSnapshotService;
+    private final Executor collectionExecutor;
     private final Map<String, Deque<OrderBookSnapshot>> historyBySymbol = new ConcurrentHashMap<>();
+
+    // FIX-11E: shared single-flight guard protects scheduled and live fallback collection.
+    // Golden rule: Replay = Production. Acquisition concurrency changes here; the shared
+    // normalized Order Book evaluation consumed by Production and Replay does not.
+    private final Set<String> inFlight = ConcurrentHashMap.newKeySet();
 
     public OrderBookLiquidityService(
             BinanceMarketDataClient marketDataClient,
             BinanceMarketDataProperties marketDataProperties,
             OrderBookProperties properties,
             CoinConfigurationService coinConfigurationService,
-            OrderBookSnapshotService orderBookSnapshotService
+            OrderBookSnapshotService orderBookSnapshotService,
+            @Qualifier("orderBookCollectionExecutor") Executor collectionExecutor
     ) {
         this.marketDataClient = marketDataClient;
         this.marketDataProperties = marketDataProperties;
         this.properties = properties;
         this.coinConfigurationService = coinConfigurationService;
         this.orderBookSnapshotService = orderBookSnapshotService;
+        this.collectionExecutor = collectionExecutor;
     }
 
     @Scheduled(fixedDelayString = "${analysis.order-book.snapshot-interval-ms:5000}")
@@ -68,7 +80,15 @@ public class OrderBookLiquidityService {
                 .filter(symbol -> symbol != null && !symbol.isBlank())
                 .map(String::toUpperCase)
                 .distinct()
-                .forEach(this::collectSafely);
+                // FIX-11E: dispatch symbols independently; one slow Binance request must not serialize the sweep.
+                .forEach(symbol -> {
+                    try {
+                        collectionExecutor.execute(() -> collectSafely(symbol));
+                    } catch (RejectedExecutionException exception) {
+                        // Do not run Binance network work on the scheduler thread under saturation.
+                        log.warn("FIX-11E Order Book collection rejected because executor is saturated: symbol={}", symbol);
+                    }
+                });
     }
 
     /** Backward-compatible entry point used while building pre-strategy market context. */
@@ -355,6 +375,11 @@ public class OrderBookLiquidityService {
     }
 
     private void collectSafely(String symbol) {
+        // FIX-11E: guard the actual collection boundary because evaluate() also calls this method directly.
+        if (!inFlight.add(symbol)) {
+            log.debug("FIX-11E Order Book collection already in-flight: symbol={}", symbol);
+            return;
+        }
         long collectionStartedNanos = System.nanoTime();
         try {
             BinanceOrderBook raw = marketDataClient.getOrderBook(symbol, properties.depthLimit());
@@ -398,6 +423,9 @@ public class OrderBookLiquidityService {
                     m == null ? null : m.askWallSize(), latencyMs);
         } catch (Exception exception) {
             log.warn("Unable to collect order book for {}: {}", symbol, exception.getMessage());
+        } finally {
+            // Always release on success/failure so a symbol cannot become permanently stuck in-flight.
+            inFlight.remove(symbol);
         }
     }
 

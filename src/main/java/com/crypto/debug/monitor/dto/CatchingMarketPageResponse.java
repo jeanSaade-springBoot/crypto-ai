@@ -4,7 +4,7 @@ import java.util.List;
 
 /** FIX-113: server-paged Catching Market aggregation response. */
 public record CatchingMarketPageResponse(
-        List<CatchingMarketSummaryRow> rows,
+        List<CatchingMarketSummaryView> rows,
         int page,
         int pageSize,
         long totalElements,

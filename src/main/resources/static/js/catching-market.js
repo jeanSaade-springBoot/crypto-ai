@@ -5,8 +5,6 @@ async function api(url,opt={}){const r=await fetch(url,{cache:'no-store',...opt}
 function msg(t,e=false){messageBox.textContent=t;messageBox.classList.remove('hidden');messageBox.classList.toggle('error-banner',e);setTimeout(()=>messageBox.classList.add('hidden'),4000)}
 function parseUtc(v){return window.CryptoTime?.parseUtc(v)||new Date(v)}
 function ksa(v){const d=parseUtc(v);return !d||Number.isNaN(d.getTime())?'—':new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(d).replace(',','');}
-// FIX-115: compact Start / End presentation keeps the grid narrow without changing timestamps.
-function ksaRange(start,end){const a=parseUtc(start),b=parseUtc(end);if(!a||!b||Number.isNaN(a.getTime())||Number.isNaN(b.getTime()))return'—';const tz='Asia/Riyadh',day=d=>new Intl.DateTimeFormat('en-CA',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit'}).format(d),hm=d=>new Intl.DateTimeFormat('en-GB',{timeZone:tz,hour:'2-digit',minute:'2-digit',hour12:false}).format(d);if(day(a)===day(b))return `${hm(a)} - ${hm(b)}`;const short=d=>new Intl.DateTimeFormat('en-GB',{timeZone:tz,day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:false}).format(d).replace(',','');return `${short(a)} - ${short(b)}`;}
 function chartTime(v){const d=new Date(Number(v));return Number.isNaN(d.getTime())?'—':new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(d).replace(',','');}
 function price(v){const n=Number(v);if(!Number.isFinite(n))return'—';const a=Math.abs(n),digits=a>=1000?2:a>=1?4:a>=.01?6:10;return n.toLocaleString(undefined,{maximumFractionDigits:digits});}
 function num(v,d=4){const n=Number(v);return Number.isFinite(n)?n.toLocaleString(undefined,{maximumFractionDigits:d}):'—'}
@@ -28,11 +26,9 @@ function renderMoves(){
   <td><strong>${esc(x.symbol)}</strong></td><td><span class="catch-direction ${up?'up':'down'}">${up?'↑':'↓'} ${esc(x.direction)}</span></td>
   <td>${esc(x.detectionWindow||'—')}</td><td><strong>${Number(x.directionCount||0).toLocaleString()}</strong></td>
   <td><strong class="${avg>=0?'positive':'negative'}">${avg>=0?'+':''}${Number.isFinite(avg)?avg.toFixed(3):'—'}%</strong></td>
-  <td>${ksaRange(x.startTime,x.endTime)}</td>
-  <td><strong>${Number(x.blockedBuyCount||0).toLocaleString()}</strong></td>
-  <td class="catch-blocked-why">${esc(x.blockedBuyReasons||'—')}</td>
+  <td>${ksa(x.startTime)}</td><td>${ksa(x.endTime)}</td>
   <td><button type="button" class="secondary-button catch-view-chart-button" data-view="${esc(x.startEventId)}" data-interval="${esc(chartInterval(x.detectionWindow))}">View chart</button></td>
- </tr>`}).join('')||'<tr><td colspan="9">No caught movements match this history window.</td></tr>';
+ </tr>`}).join('')||'<tr><td colspan="8">No caught movements match this history window.</td></tr>';
  body.querySelectorAll('.catch-view-chart-button').forEach(b=>b.addEventListener('click',()=>viewGraph(b.dataset.view,b.dataset.interval)));
  const total=Number(catchPageData?.totalElements||0),pages=Number(catchPageData?.totalPages||0);
  document.getElementById('catch-page-info').textContent=pages?`Page ${catchPage+1} of ${pages} · ${total} groups`:`Page 0 of 0 · ${total} groups`;
@@ -48,7 +44,7 @@ async function moves(){
   catchPageData=await api(`/api/administration/debug/price-moves/summary?${q}`);
   if(Number(catchPageData.totalPages||0)>0&&catchPage>=Number(catchPageData.totalPages)){catchPage=Math.max(0,Number(catchPageData.totalPages)-1);return moves();}
   catchPage=Number(catchPageData.page||0);renderMoves();
- }catch(e){body.innerHTML=`<tr><td colspan="9">${esc(e.message)}</td></tr>`;msg(e.message,true)}
+ }catch(e){body.innerHTML=`<tr><td colspan="8">${esc(e.message)}</td></tr>`;msg(e.message,true)}
 }
 function resetCatchPage(){catchPage=0;return moves();}
 
