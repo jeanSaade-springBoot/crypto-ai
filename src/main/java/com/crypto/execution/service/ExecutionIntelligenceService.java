@@ -513,8 +513,19 @@ public class ExecutionIntelligenceService {
         Evidence evidence = evidence(signal);
         EntryQuality entryQuality = assessEntryQuality(signal);
 
-        ExecutionDecision progressive = progressivePositionDecision(
-                signal, evidence, entryQuality, currentAllocationPercent, currentStage);
+        // Regression safety: a fresh signal that already qualifies for the normal direct-BUY
+        // path must not be intercepted by the zero-allocation SCOUT_ENTRY branch. The scout is
+        // exploratory authority for supportive signals that are not yet ordinary executable BUYs.
+        // Progressive ADD stages remain unchanged because an existing allocation (> 0) still
+        // reaches progressivePositionDecision exactly as before.
+        //
+        // This preserves the documented execution priority:
+        // normal executable BUY -> IMMEDIATE_VALIDATION; otherwise consider an initial scout.
+        boolean normalDirectBuyCandidate = currentAllocationPercent <= 0 && isDirectBuyCandidate(signal);
+        ExecutionDecision progressive = normalDirectBuyCandidate
+                ? null
+                : progressivePositionDecision(
+                        signal, evidence, entryQuality, currentAllocationPercent, currentStage);
         if (progressive != null) {
             saveOpportunity(signal, evidence,
                     progressive.allowed() ? "CONFIRMED" : progressive.state(),
