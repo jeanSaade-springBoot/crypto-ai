@@ -4,6 +4,7 @@ import com.crypto.debug.monitor.domain.PriceMoveEvent;
 import com.crypto.debug.monitor.domain.PriceMoveMonitorSettings;
 import com.crypto.debug.monitor.dto.PriceMoveMonitorSettingsRequest;
 import com.crypto.debug.monitor.dto.CatchingMarketPageResponse;
+import com.crypto.debug.monitor.dto.CatchingMarketSummaryRow;
 import com.crypto.debug.monitor.repository.PriceMoveEventRepository;
 import com.crypto.debug.monitor.repository.PriceMoveMonitorSettingsRepository;
 import com.crypto.domain.BtcContextStatus;
@@ -24,6 +25,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -62,6 +64,7 @@ public class PriceMoveMonitorService {
     private final WalletTradeRepository walletTradeRepository;
     // FIX-098: read-only retrospective diagnosis only. This repository is never written from PriceMoveMonitorService.
     private final ExecutionOpportunityRepository executionOpportunityRepository;
+    private final JdbcTemplate jdbcTemplate;
 
     private final Map<String, BlockTracker> trackers = new ConcurrentHashMap<>();
     private volatile PriceMoveMonitorSettings cachedSettings;
@@ -406,8 +409,42 @@ public class PriceMoveMonitorService {
 
         Page<com.crypto.debug.monitor.dto.CatchingMarketSummaryView> result = eventRepository.findSummaryPage(
                 Instant.now().minus(Duration.ofHours(hours)), symbols, level, PageRequest.of(page, 20));
-        return new CatchingMarketPageResponse(result.getContent(), result.getNumber(), result.getSize(),
+
+        // FIX-115: enrich each already-aggregated catch row instead of joining execution_opportunity
+        // into the catch query. A direct join would multiply Catching Market rows when several BUYs
+        // were blocked in the same window. This read-only lookup preserves exactly one UI row per
+        // symbol/direction/window and uses the same persisted BLOCKED/CANCELLED BUY authority shown
+        // by Trade Activity. Production and Replay execution paths are not called or modified.
+        List<CatchingMarketSummaryRow> rows = result.getContent().stream()
+                .map(this::withBlockedBuyAttribution)
+                .toList();
+        return new CatchingMarketPageResponse(rows, result.getNumber(), result.getSize(),
                 result.getTotalElements(), result.getTotalPages());
+    }
+
+    /** FIX-115: exact-window blocked BUY summary; exact persisted reasons only, no inferred labels. */
+    private CatchingMarketSummaryRow withBlockedBuyAttribution(
+            com.crypto.debug.monitor.dto.CatchingMarketSummaryView row) {
+        Map<String, Object> blocked = jdbcTemplate.queryForMap("""
+                SELECT COALESCE(SUM(reason_count), 0) AS blocked_count,
+                       COALESCE(GROUP_CONCAT(CONCAT(reason_count, ' × ', reason)
+                           ORDER BY reason_count DESC, reason ASC SEPARATOR ' · '), '') AS blocked_reasons
+                  FROM (
+                        SELECT COALESCE(NULLIF(decision_code, ''), 'BLOCKED') AS reason, COUNT(*) AS reason_count
+                          FROM execution_opportunity
+                         WHERE symbol = ?
+                           AND direction = 'BUY'
+                           AND status IN ('BLOCKED', 'CANCELLED')
+                           AND last_evidence_at >= ?
+                           AND last_evidence_at <= ?
+                         GROUP BY COALESCE(NULLIF(decision_code, ''), 'BLOCKED')
+                       ) blocked_by_reason
+                """, row.getSymbol(), row.getStartTime(), row.getEndTime());
+        Number count = (Number) blocked.get("blocked_count");
+        String reasons = Objects.toString(blocked.get("blocked_reasons"), "");
+        return new CatchingMarketSummaryRow(row.getSymbol(), row.getDirection(), row.getDetectionWindow(),
+                row.getDirectionCount(), row.getAverageProgress(), row.getStartTime(), row.getEndTime(),
+                row.getStartEventId(), count == null ? 0L : count.longValue(), reasons);
     }
 
     private String normalizeCsvSymbols(String rawSymbols) {

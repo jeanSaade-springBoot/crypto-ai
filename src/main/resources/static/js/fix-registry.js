@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-115",
+            title: "Catching Market blocked-BUY attribution",
+            status: "IMPLEMENTED · UI / READ-ONLY DIAGNOSTICS",
+            scenario: "Each Catching Market aggregate needed to show how many BUY opportunities were blocked during that exact caught-move window and the persisted blocker distribution, without multiplying the existing aggregate rows.",
+            symbol: "ALL", entry: "DISPLAY ONLY", exit: "N/A",
+            entryTime: "Catch Start", exitTime: "Catch End",
+            replayWindow: "N/A · diagnostic presentation only. Replay = Production trading behavior is unchanged.",
+            location: "Catching Market aggregated grid",
+            classes: ["PriceMoveMonitorService", "CatchingMarketSummaryRow", "CatchingMarketPageResponse", "catching-market.html", "catching-market.js", "fix-registry.js"],
+            cause: "The FIX-113 aggregate summarized price direction but did not correlate persisted blocked BUY opportunities back to the same symbol and Start/End window. A direct SQL join would duplicate catch rows when multiple blocked opportunities existed.",
+            solution: "Keep the existing catch aggregation and 20-row pagination unchanged, then enrich each returned aggregate read-only from execution_opportunity for the same symbol and exact Start/End window. Count direction=BUY with status BLOCKED/CANCELLED and group the persisted decision_code into text such as 6 × ORDER_BOOK · 3 × BTC_CONTEXT. Combine Start and End into one compact KSA column. Never infer blocker labels and never join in a way that multiplies Catching Market rows.",
+            behavior: "One Catching Market aggregate remains one row. The grid adds Blocked BUYs and Blocked Why and combines Start/End to save width. View Chart still highlights Start only. No catcher thresholds, signals, scheduler behavior, FinalDecision, ExecutionIntelligence, wallet execution, Production or Replay logic is changed.",
+            regression: "Verify a catch with multiple blocked BUY opportunities remains exactly one row, count equals the persisted BLOCKED/CANCELLED BUY opportunities inside its exact Start/End window, reasons sum to that count, zero blockers shows 0/—, pagination remains 20 rows, and View Chart still highlights Start only."
+        },
+        {
             id: "FIX-114",
             title: "System Health scheduled/background job inventory",
             status: "IMPLEMENTED · OBSERVABILITY / READ-ONLY",
