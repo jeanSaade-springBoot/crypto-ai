@@ -11,6 +11,7 @@ import com.crypto.wallet.domain.ExecutionProfile;
 import com.crypto.wallet.domain.WalletSettings;
 import com.crypto.wallet.repository.WalletSettingsRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -29,6 +30,7 @@ import java.time.Instant;
  * Execution profiles affect only entry eligibility and position percentage.
  * They never modify indicators, scores, or FinalDecisionService output.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class TradeExecutionValidationService {
@@ -39,6 +41,12 @@ public class TradeExecutionValidationService {
     private static final Duration ONE_MINUTE_TRANSITION_MAX_AGE = Duration.ofMinutes(10);
     private static final Duration FIVE_MINUTE_MAX_AGE = Duration.ofMinutes(20);
     private static final Duration ONE_HOUR_MAX_AGE = Duration.ofHours(3);
+
+    // FIX-11G: this mirrors the existing global CHASE_ENTRY_CUTOFF in
+    // ExecutionIntelligenceService. We deliberately reuse the proven execution-quality
+    // boundary instead of inventing a new confidence/quality threshold for this one route.
+    // The downstream global Entry Quality guard still remains authoritative and re-checks it.
+    private static final int BALANCED_TRANSITIONAL_MIN_ENTRY_QUALITY = 50;
 
     private final TradeSignalRepository signalRepository;
     private final WalletSettingsRepository settingsRepository;
@@ -192,6 +200,8 @@ public class TradeExecutionValidationService {
      *
      * balancedBuy() intentionally remains unchanged. Existing BALANCED_FULL,
      * BALANCED_STRONG and BALANCED_EARLY authority always wins before this exception.
+     * FIX-11G extends this same direct-BUY-only wrapper after FIX-112B with the distinct
+     * 5m=NEUTRAL + 1h=WATCH transitional authority documented below.
      */
     private ValidationResult balancedBuyWithNeutralFiveException(
             TradeSignal executionSignal, TradeSignal fiveMinute, TradeSignal oneHour, int entryQualityScore) {
@@ -219,6 +229,53 @@ public class TradeExecutionValidationService {
                             + ", entryQuality=" + entryQualityScore
                             + ", btcStatus=" + btcStatus
                             + ", position=25%.");
+        }
+
+        // FIX-11G / controlled Production behavior change:
+        // An already-approved fresh 1m BUY can appear before tactical 5m confirmation
+        // catches up. When 5m is still NEUTRAL and 1h is WATCH, neither timeframe is
+        // bearish, but the original BALANCED matrix has no authority for this transition.
+        // Grant only a 25% exploratory authority and only when FinalDecision already
+        // allowed entry, BTC has no hard conflict, and Entry Quality is at/above the
+        // existing chase cutoff. Do NOT add a second confidence threshold here: the
+        // upstream BUY + finalEntryAllowed decision already owns signal confidence.
+        //
+        // Golden rule: Replay = Production. Replay reaches this exact shared method
+        // through ExecutionReplayScope historical 5m/1h lookups; there is no Replay-only
+        // copy, threshold, or special execution behavior. validateBuyContext() remains
+        // intentionally unchanged so accumulated-evidence/recovery authority is not widened.
+        boolean neutralFiveWatchOne = fiveMinute.getDecision() == SignalDecision.NEUTRAL
+                && oneHour.getDecision() == SignalDecision.WATCH;
+        if (neutralFiveWatchOne) {
+            boolean upstreamApproved = executionSignal.isFinalEntryAllowed();
+            boolean entryQualitySafe = entryQualityScore >= BALANCED_TRANSITIONAL_MIN_ENTRY_QUALITY;
+            boolean btcSafeForTransitionalAuthority = btcStatus != BtcContextStatus.CONFLICT
+                    && btcStatus != BtcContextStatus.STRONG_CONFLICT;
+
+            if (upstreamApproved && entryQualitySafe && btcSafeForTransitionalAuthority) {
+                log.info("FIX-11G transitional BUY authority granted: signalId={}, symbol={}, generatedAt={}, "
+                                + "decision={}, confidence={}, 5m={}, 1h={}, entryQuality={}, btcStatus={}, positionPercent=25",
+                        executionSignal.getId(), executionSignal.getSymbol(), executionSignal.getGeneratedAt(),
+                        executionSignal.getDecision(), executionSignal.getConfidenceScore(),
+                        fiveMinute.getDecision(), oneHour.getDecision(), entryQualityScore, btcStatus);
+                return ValidationResult.allow(25, "BALANCED_NEUTRAL_5M_WATCH_1H",
+                        "BALANCED_NEUTRAL_5M_WATCH_1H: 25% exploratory entry approved for an already-approved "
+                                + "1m BUY while 5m is NEUTRAL and 1h is WATCH. "
+                                + "entryQuality=" + entryQualityScore
+                                + ", btcStatus=" + btcStatus
+                                + ", position=25%.");
+            }
+
+            // INFO is intentional here: this exact transition is the new FIX-11G boundary.
+            // Keeping both grant and denial searchable by FIX-11G makes Production misses
+            // diagnosable from application logs without enabling global DEBUG logging.
+            log.info("FIX-11G transitional BUY authority not granted: signalId={}, symbol={}, generatedAt={}, "
+                            + "decision={}, confidence={}, finalEntryAllowed={}, 5m={}, 1h={}, entryQuality={}, "
+                            + "minEntryQuality={}, btcStatus={}",
+                    executionSignal.getId(), executionSignal.getSymbol(), executionSignal.getGeneratedAt(),
+                    executionSignal.getDecision(), executionSignal.getConfidenceScore(), upstreamApproved,
+                    fiveMinute.getDecision(), oneHour.getDecision(), entryQualityScore,
+                    BALANCED_TRANSITIONAL_MIN_ENTRY_QUALITY, btcStatus);
         }
         return balanced;
     }

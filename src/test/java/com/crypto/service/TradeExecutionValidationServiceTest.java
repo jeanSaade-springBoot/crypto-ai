@@ -5,6 +5,7 @@ import com.crypto.domain.SignalDecision;
 import com.crypto.domain.TradeSignal;
 import com.crypto.repository.TradeSignalRepository;
 import com.crypto.execution.service.EntryConsumptionPolicy;
+import com.crypto.execution.service.ExecutionReplayScope;
 import com.crypto.execution.domain.EntryConsumptionState;
 import com.crypto.wallet.domain.WalletSettings;
 import com.crypto.wallet.repository.WalletSettingsRepository;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
 import java.util.Optional;
@@ -220,6 +222,95 @@ class TradeExecutionValidationServiceTest {
 
         enoughConfidence.setBtcContextStatus(BtcContextStatus.STRONG_CONFLICT);
         assertThat(service.validateBuy(enoughConfidence, 75).code()).isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+    }
+
+    @Test
+    void fix11gAllowsApprovedDirectBuyWithNeutralFiveAndWatchOneAtTwentyFivePercent() {
+        settings("BALANCED", false);
+        TradeSignal oneMinute = signal("EDUUSDT", "1m", SignalDecision.BUY, now, 68, 15, 20, 12);
+        oneMinute.setFinalEntryAllowed(true);
+        latest("EDUUSDT", "5m", signal("EDUUSDT", "5m", SignalDecision.NEUTRAL,
+                now.minusSeconds(120), 72, 14, 10, 8));
+        latest("EDUUSDT", "1h", signal("EDUUSDT", "1h", SignalDecision.WATCH,
+                now.minusSeconds(1800), 73, 24, 14, 10));
+
+        var result = service.validateBuy(oneMinute, 50);
+
+        assertThat(result.allowed()).isTrue();
+        assertThat(result.code()).isEqualTo("BALANCED_NEUTRAL_5M_WATCH_1H");
+        assertThat(result.positionPercent()).isEqualTo(25);
+    }
+
+    @Test
+    void fix11gKeepsExistingEntryQualityFinalDecisionAndBtcSafeguards() {
+        settings("BALANCED", false);
+        TradeSignal five = signal("EDUUSDT", "5m", SignalDecision.NEUTRAL,
+                now.minusSeconds(120), 72, 14, 10, 8);
+        TradeSignal one = signal("EDUUSDT", "1h", SignalDecision.WATCH,
+                now.minusSeconds(1800), 73, 24, 14, 10);
+        latest("EDUUSDT", "5m", five);
+        latest("EDUUSDT", "1h", one);
+
+        TradeSignal belowEntryQuality = signal("EDUUSDT", "1m", SignalDecision.BUY, now, 90, 15, 20, 12);
+        belowEntryQuality.setFinalEntryAllowed(true);
+        assertThat(service.validateBuy(belowEntryQuality, 49).code())
+                .isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+
+        TradeSignal upstreamBlocked = signal("EDUUSDT", "1m", SignalDecision.BUY, now, 90, 15, 20, 12);
+        upstreamBlocked.setFinalEntryAllowed(false);
+        assertThat(service.validateBuy(upstreamBlocked, 80).code())
+                .isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+
+        TradeSignal btcConflict = signal("EDUUSDT", "1m", SignalDecision.BUY, now, 90, 15, 20, 12);
+        btcConflict.setFinalEntryAllowed(true);
+        btcConflict.setBtcContextStatus(BtcContextStatus.CONFLICT);
+        assertThat(service.validateBuy(btcConflict, 80).code())
+                .isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+
+        btcConflict.setBtcContextStatus(BtcContextStatus.STRONG_CONFLICT);
+        assertThat(service.validateBuy(btcConflict, 80).code())
+                .isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+    }
+
+    @Test
+    void fix11gDoesNotBroadenAccumulatedEvidenceContextAuthority() {
+        settings("BALANCED", false);
+        TradeSignal reference = signal("EDUUSDT", "1m", SignalDecision.WATCH, now, 80, 15, 20, 12);
+        latest("EDUUSDT", "1m", reference);
+        latest("EDUUSDT", "5m", signal("EDUUSDT", "5m", SignalDecision.NEUTRAL,
+                now.minusSeconds(120), 72, 14, 10, 8));
+        latest("EDUUSDT", "1h", signal("EDUUSDT", "1h", SignalDecision.WATCH,
+                now.minusSeconds(1800), 73, 24, 14, 10));
+
+        var result = service.validateBuyContext(reference);
+
+        assertThat(result.allowed()).isFalse();
+        assertThat(result.code()).isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+    }
+
+    @Test
+    void fix11gReplayUsesTheSameProductionValidationMethodWithHistoricalContext() {
+        settings("BALANCED", false);
+        ExecutionReplayScope scope = new ExecutionReplayScope();
+        ReflectionTestUtils.setField(service, "replayScope", scope);
+
+        TradeSignal oneMinute = signal("EDUUSDT", "1m", SignalDecision.BUY, now, 68, 15, 20, 12);
+        oneMinute.setFinalEntryAllowed(true);
+        TradeSignal five = signal("EDUUSDT", "5m", SignalDecision.NEUTRAL,
+                now.minusSeconds(120), 72, 14, 10, 8);
+        TradeSignal one = signal("EDUUSDT", "1h", SignalDecision.WATCH,
+                now.minusSeconds(1800), 73, 24, 14, 10);
+
+        // Golden rule: Replay = Production. The replay scope supplies historical signals,
+        // but validateBuy() is the exact same Production business method tested above.
+        try (ExecutionReplayScope.Scope ignored = scope.open(11L, java.util.List.of(one, five, oneMinute), o -> {})) {
+            scope.reference(now);
+            var result = service.validateBuy(oneMinute, 50);
+
+            assertThat(result.allowed()).isTrue();
+            assertThat(result.code()).isEqualTo("BALANCED_NEUTRAL_5M_WATCH_1H");
+            assertThat(result.positionPercent()).isEqualTo(25);
+        }
     }
 
     @Test

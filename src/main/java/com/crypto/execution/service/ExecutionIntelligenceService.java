@@ -668,6 +668,17 @@ public class ExecutionIntelligenceService {
                                 evidence
                         ),
                         entryQuality);
+                // FIX-11G diagnostics: validation can grant the transitional 25% authority,
+                // but the shared downstream Entry Quality/authority guard remains final. Log
+                // the post-guard result so Production and Replay investigations can distinguish
+                // "FIX-11G qualified" from "FIX-11G actually remained executable".
+                if ("BALANCED_NEUTRAL_5M_WATCH_1H".equals(validation.code())) {
+                    log.info("FIX-11G post-guard result: signalId={}, symbol={}, generatedAt={}, allowed={}, "
+                                    + "state={}, source={}, code={}, positionPercent={}, entryQuality={}",
+                            signal.getId(), signal.getSymbol(), signal.getGeneratedAt(), guarded.allowed(),
+                            guarded.state(), guarded.source(), guarded.code(), guarded.positionPercent(),
+                            entryQuality.score());
+                }
                 saveOpportunity(signal, evidence,
                         guarded.allowed() ? "CONFIRMED" : guarded.state(),
                         guarded.source(), guarded.positionPercent(),

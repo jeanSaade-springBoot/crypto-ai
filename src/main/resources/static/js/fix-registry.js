@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-11G",
+            title: "BALANCED 5m-neutral + 1h-WATCH transitional BUY authority",
+            status: "IMPLEMENTED · CONTROLLED PRODUCTION BEHAVIOR CHANGE",
+            scenario: "A fresh 1m BUY/STRONG_BUY could already pass FinalDecision while 5m remained NEUTRAL and 1h remained WATCH, but the BALANCED execution matrix had no direct authority for that non-bearish transition. EDUUSDT signal 320341 exposed the gap; normal BALANCED rejected it, FIX-112B did not apply, and accumulated evidence later reused the same plain BALANCED context authority.",
+            symbol: "ALL (confirmed case EDUUSDT #320341)", entry: "Fresh approved 1m BUY/STRONG_BUY", exit: "UNCHANGED",
+            entryTime: "Current signal time", exitTime: "UNCHANGED",
+            replayWindow: "Production-Parity Replay uses ExecutionReplayScope historical context and the exact shared TradeExecutionValidationService.validateBuy() path.",
+            location: "TradeExecutionValidationService fresh BALANCED direct-BUY exception + ExecutionIntelligenceService diagnostics",
+            classes: ["TradeExecutionValidationService", "ExecutionIntelligenceService", "TradeExecutionValidationServiceTest", "md/FIX-11G.md", "fix-registry.js"],
+            cause: "The established BALANCED matrix and FIX-112B intentionally had no authority for exactly 5m=NEUTRAL + 1h=WATCH. That made an already-approved fresh BUY fall through to secondary routes even when neither higher timeframe was bearish.",
+            solution: "After existing BALANCED and FIX-112B authority reject, allow only the exact 5m=NEUTRAL + 1h=WATCH direct-BUY transition at a maximum 25% when final_entry_allowed is already true, Entry Quality is at least the existing 50 chase cutoff, and BTC is neither CONFLICT nor STRONG_CONFLICT. Do not add a new confidence threshold. Add searchable FIX-11G grant/denial and post-guard logs.",
+            behavior: "Intentional narrow Production behavior change: an already-approved direct BUY can now receive 25% transitional authority in this one HTF state. Existing freshness checks, bearish HTF vetoes, FIX-112B, standard BALANCED combinations, ATR requirements, FinalDecision authority, BTC protection and downstream Entry Quality/authority sizing remain authoritative. validateBuyContext(), accumulated evidence, Conservative, Aggressive, SELL and position management are unchanged. Golden rule: Replay = Production; Replay uses this exact same shared business method with historical inputs.",
+            regression: "Verify the FIX-11G state at the existing Entry Quality boundary, below-boundary rejection, final_entry_allowed=false, BTC conflict states, unchanged validateBuyContext authority, unchanged FIX-112B/standard BALANCED combinations, and an ExecutionReplayScope test that reaches the same Production validateBuy() method from historical 5m/1h inputs."
+        },
+        {
             id: "FIX-116A",
             title: "System Health slow-query recovery and narrow Score Diagnostics read",
             status: "IMPLEMENTED · OBSERVABILITY / DB LATENCY PROTECTION",
