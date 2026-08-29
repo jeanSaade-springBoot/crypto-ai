@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Trade Inspector</title>
     <link rel="stylesheet" href="/css/dashboard.css">
-    <link rel="stylesheet" href="/css/trade-inspector.css?v=113">
+    <link rel="stylesheet" href="/css/trade-inspector.css?v=11i">
     <link rel="stylesheet" href="/css/chart-crosshair.css">
     <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1"></script>
 </head>
@@ -22,7 +22,18 @@
                 <p class="inspector-subtitle">Measure entry quality, exit quality and what happened after every executed trade.</p>
             </div>
             <div class="filters inspector-filters">
-                <!-- FIX-113: Trade Inspector is deliberately filter-free: newest 10 first, then Prev/Next. -->
+                <!-- FIX-11I: default remains CLOSED + ALL symbols, preserving newest 10 completed trades. -->
+                <label>Trade status
+                    <select id="trade-state-filter">
+                        <option value="CLOSED" selected>Closed trades</option>
+                        <option value="OPEN">Open trades</option>
+                    </select>
+                </label>
+                <label>Symbol
+                    <select id="symbol-filter">
+                        <option value="ALL" selected>All symbols</option>
+                    </select>
+                </label>
                 <button id="refresh-inspector" type="button">Refresh latest</button>
             </div>
         </header>
@@ -112,11 +123,11 @@
 
         <section class="panel">
             <div class="section-heading">
-                <div><p class="eyebrow">COMPLETED POSITIONS</p><h2>Latest inspected trades</h2></div>
+                <div><p id="inspector-list-eyebrow" class="eyebrow">COMPLETED POSITIONS</p><h2 id="inspector-list-title">Latest inspected trades</h2></div>
                 <span id="inspector-updated">—</span>
             </div>
             <div id="trade-cards" class="trade-inspector-list">
-                <div class="empty">Loading completed trades…</div>
+                <div class="empty">Loading trades…</div>
             </div>
             <!-- FIX-106: server-side pagination keeps every historical completed trade reachable. -->
             <div id="inspector-pagination" class="inspector-pagination" aria-label="Trade Inspector pagination">
@@ -129,7 +140,7 @@
 </div>
 <script src="/js/time-utils.js"></script>
 <script src="/js/chart-crosshair.js"></script>
-<script src="/js/trade-inspector.js?v=113"></script>
+<script src="/js/trade-inspector.js?v=11i"></script>
 <script src="/js/catching-market-badge.js"></script><script src="/js/global-system-health.js"></script>
 </body>
 </html>

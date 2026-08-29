@@ -197,3 +197,8 @@ body.inspector-modal-open{overflow:hidden}
 .inspector-pagination button:hover:not(:disabled){border-color:var(--accent);background:rgba(57,217,138,.07)}
 .inspector-pagination button:disabled{opacity:.35;cursor:not-allowed}
 @media(max-width:600px){.inspector-pagination{gap:8px}.inspector-pagination span{min-width:120px;font-size:11px}}
+
+/* FIX-11I: OPEN positions have no exit/post-exit columns; keep their three persisted
+   evidence blocks balanced without changing the completed-trade four-column layout. */
+.open-position-body{grid-template-columns:1.1fr 1fr .8fr}
+@media(max-width:900px){.open-position-body{grid-template-columns:1fr}}

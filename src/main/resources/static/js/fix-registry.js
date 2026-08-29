@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-11I",
+            title: "Trade Inspector open/closed + symbol filters",
+            status: "IMPLEMENTED · READ-ONLY INSPECTOR UI",
+            scenario: "Trade Inspector showed only completed positions, so operators could not inspect currently OPEN managed positions or narrow the 10-row history by symbol.",
+            symbol: "ALL", entry: "DISPLAY ONLY", exit: "DISPLAY ONLY",
+            entryTime: "Persisted wallet/managed-position timestamps", exitTime: "UNCHANGED",
+            replayWindow: "NOT APPLICABLE · no Replay/Production behavior change",
+            location: "TradeInspectorController/Service + WalletManagedPositionRepository + Trade Inspector UI",
+            classes: ["TradeInspectorController", "TradeInspectorService", "TradeInspectorTradeView", "WalletManagedPositionRepository", "trade-inspector.html", "trade-inspector.js", "trade-inspector.css", "TradeInspectorOpenFilterTest", "md/FIX-11I.md"],
+            cause: "FIX-113 intentionally simplified Trade Inspector to completed positions only and removed filters. That made active OPEN wallet-managed positions invisible from the inspector.",
+            solution: "Add a Trade status dropdown (Closed/Open) and Symbol dropdown (All symbols + persisted symbols). Keep CLOSED + ALL as the default and fixed newest-first page size 10. OPEN reads only wallet_managed_position status=OPEN, is paged in SQL, and renders entry/protection evidence without fabricating exit or realized-P&L fields.",
+            behavior: "Read-only UI/query change only. Closed-trade retrieval and pairing remain unchanged. Open rows come from persisted managed-position and entry evidence; View Path remains closed-trade only, while View chart supports an OPEN entry view without loading an unbounded lifecycle window.",
+            regression: "Default page must still load the latest 10 CLOSED trades. Switching status or symbol resets to page 1 and filters at the database boundary. OPEN rows must have no synthetic SELL, realized P&L or exit quality. No wallet, position, signal, Replay or Production trading state is mutated."
+        },
+        {
             id: "FIX-11H",
             title: "ReplayDataset preload + OLD/NEW replay compare buttons",
             status: "IMPLEMENTED · REPLAY INFRASTRUCTURE / PARITY VERIFICATION",

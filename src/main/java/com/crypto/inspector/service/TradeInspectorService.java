@@ -69,39 +69,65 @@ public class TradeInspectorService {
     }
 
     @Transactional(readOnly = true)
-    public TradeInspectorResponse inspect(String requestedSymbol, String requestedVenue, int requestedPage, int requestedPageSize) {
-        // FIX-106: database-first pagination. Previously this method fetched only the newest
-        // 100 closed SELLs and filtered symbol in memory, which made older trades unreachable.
+    public TradeInspectorResponse inspect(String requestedSymbol, String requestedVenue, String requestedState,
+                                          int requestedPage, int requestedPageSize) {
+        // FIX-11I: Trade Inspector can browse either completed positions or currently OPEN
+        // managed positions. CLOSED remains the default so page 0 still loads the newest 10
+        // completed trades exactly as before. This is a read-only inspector change only.
         int pageNumber = Math.max(0, requestedPage);
         int pageSize = Math.max(1, Math.min(requestedPageSize, 100));
         String symbol = normalizeSymbol(requestedSymbol);
         String venue = requestedVenue == null ? "ALL" : requestedVenue.trim().toUpperCase(Locale.ROOT);
+        String state = requestedState == null ? "CLOSED" : requestedState.trim().toUpperCase(Locale.ROOT);
+
+        if (!state.equals("CLOSED") && !state.equals("OPEN")) {
+            throw new IllegalArgumentException("Trade Inspector state must be CLOSED or OPEN.");
+        }
 
         // FIX-032 remains unchanged: current persisted inspector rows are WALLET evidence.
         if ("BINANCE".equals(venue)) {
-            return new TradeInspectorResponse(summary(List.of()), List.of(),
-                    walletTradeRepository.findDistinctClosedTradeSymbols(), pageNumber, pageSize, 0, 0);
+            return new TradeInspectorResponse(summary(List.of()), List.of(), inspectorSymbols(),
+                    pageNumber, pageSize, 0, 0);
         }
         if (!venue.equals("ALL") && !venue.equals("WALLET")) {
             throw new IllegalArgumentException("Trade Inspector venue must be ALL, WALLET or BINANCE.");
         }
 
+        if (state.equals("OPEN")) {
+            Page<WalletManagedPosition> openPage = walletManagedPositionRepository.findOpenPositionsForInspector(
+                    symbol, PageRequest.of(pageNumber, pageSize));
+            List<TradeInspectorTradeView> views = openPage.getContent().stream()
+                    .map(this::toOpenView)
+                    .toList();
+            // Realized-P&L summary cards are intentionally not synthesized for OPEN positions.
+            // Their count is supplied by pagination metadata and rendered explicitly by the UI.
+            return new TradeInspectorResponse(summary(List.of()), views, inspectorSymbols(),
+                    openPage.getNumber(), openPage.getSize(), openPage.getTotalElements(), openPage.getTotalPages());
+        }
+
+        // FIX-106: database-first pagination for CLOSED positions remains unchanged.
         Page<WalletTrade> closedPage = walletTradeRepository.findClosedTradesForInspector(
                 symbol, PageRequest.of(pageNumber, pageSize));
 
         List<TradeInspectorTradeView> views = new ArrayList<>();
         for (WalletTrade sell : closedPage.getContent()) {
-            // FIX-106: resolve the BUY from historical candidates for this SELL. This removes
-            // the second latest-100 ceiling that could make a paged SELL silently disappear.
             WalletTrade buy = findEntryTrade(sell);
-            if (buy != null) {
-                views.add(toView(buy, sell));
-            }
+            if (buy != null) views.add(toView(buy, sell));
         }
 
-        List<String> symbols = walletTradeRepository.findDistinctClosedTradeSymbols();
-        return new TradeInspectorResponse(summary(views), views, symbols,
+        return new TradeInspectorResponse(summary(views), views, inspectorSymbols(),
                 closedPage.getNumber(), closedPage.getSize(), closedPage.getTotalElements(), closedPage.getTotalPages());
+    }
+
+    private List<String> inspectorSymbols() {
+        // FIX-11I: symbol filter spans both completed and currently-open positions so an
+        // operator can choose the symbol first and then switch CLOSED/OPEN without losing it.
+        Set<String> symbols = new TreeSet<>();
+        walletTradeRepository.findDistinctClosedTradeSymbols().stream()
+                .filter(Objects::nonNull).map(String::toUpperCase).forEach(symbols::add);
+        walletManagedPositionRepository.findDistinctOpenPositionSymbols().stream()
+                .filter(Objects::nonNull).map(String::toUpperCase).forEach(symbols::add);
+        return new ArrayList<>(symbols);
     }
 
 
@@ -523,7 +549,7 @@ public class TradeInspectorService {
                 .findTopByEntrySignalIdOrderByOpenedAtDesc(entry.getId()).orElse(null);
 
         return new TradeInspectorTradeView(
-                buy.getId(), sell.getId(), tradeHistoryId, "WALLET", sell.getSymbol(), openedAt, closedAt,
+                buy.getId(), sell.getId(), tradeHistoryId, "WALLET", "CLOSED", sell.getSymbol(), openedAt, closedAt,
                 Math.max(0, Duration.between(openedAt, closedAt).toMinutes()),
                 sell.getQuantity(), entryPrice, exitPrice, sell.getRealizedPnlUsdt(), realizedPercent,
                 entry == null ? null : entry.getId(),
@@ -550,6 +576,44 @@ public class TradeInspectorService {
                 bestPrice, percentChange(entryPrice, bestPrice),
                 worstPrice, percentChange(entryPrice, worstPrice),
                 p15, p30, p60, assessment.quality(), assessment.explanation()
+        );
+    }
+
+    /**
+     * FIX-11I: build a read-only Trade Inspector row from the authoritative OPEN managed
+     * position. No exit is fabricated and no unrealized P&L is inferred here. The UI shows
+     * the persisted entry/protection state and keeps exit-only evidence hidden.
+     */
+    private TradeInspectorTradeView toOpenView(WalletManagedPosition managed) {
+        TradeSignal entry = managed.getEntrySignalId() == null ? null
+                : tradeSignalRepository.findById(managed.getEntrySignalId()).orElse(null);
+        WalletTrade buy = managed.getEntrySignalId() == null ? null
+                : walletTradeRepository.findTopBySignalIdAndSideAndStatusOrderByExecutedAtDesc(
+                        managed.getEntrySignalId(), "BUY", "EXECUTED").orElse(null);
+
+        Instant openedAt = managed.getOpenedAt();
+        long holdingMinutes = openedAt == null ? 0 : Math.max(0, Duration.between(openedAt, Instant.now()).toMinutes());
+        BigDecimal entryPrice = managed.getAverageEntryPriceUsdt();
+        BigDecimal bestPrice = managed.getHighestPriceUsdt();
+        BigDecimal bestPercent = entryPrice == null || bestPrice == null ? null : percentChange(entryPrice, bestPrice);
+
+        return new TradeInspectorTradeView(
+                buy == null ? null : buy.getId(), null, null, "WALLET", "OPEN", managed.getSymbol(),
+                openedAt, null, holdingMinutes, managed.getQuantity(), entryPrice, null, null, null,
+                managed.getEntrySignalId(),
+                entry != null && entry.getDecision() != null ? entry.getDecision().name()
+                        : managed.getEntryDecision() == null ? "BUY" : managed.getEntryDecision(),
+                entry != null ? entry.getTotalScore() : Optional.ofNullable(managed.getEntryTotalScore()).orElse(0),
+                entry != null ? entry.getConfidenceScore() : Optional.ofNullable(managed.getEntryConfidence()).orElse(0),
+                entry == null ? null : entry.getInterval(),
+                entry == null || entry.getSelectedStrategy() == null ? null : entry.getSelectedStrategy().name(),
+                entry == null || entry.getMarketRegime() == null ? null : entry.getMarketRegime().name(),
+                managed.getStopLossUsdt(), managed.getTakeProfitUsdt(), managed.isProfitLockActive(),
+                managed.getProfitLockPriceUsdt(), managed.getProfitLockProgressPercent(),
+                managed.getProfitLockActivatedAt(), managed.getHighestPriceUsdt(),
+                null, null, null, null, "OPEN",
+                bestPrice, bestPercent, null, null,
+                null, null, null, "OPEN", "Position is still open; exit-quality evidence is not available yet."
         );
     }
 

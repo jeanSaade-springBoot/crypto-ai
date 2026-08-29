@@ -29,12 +29,12 @@ public class TradeInspectorController {
     public TradeInspectorResponse inspect(
             @RequestParam(required = false, defaultValue = "ALL") String symbol,
             @RequestParam(required = false, defaultValue = "ALL") String venue,
+            @RequestParam(required = false, defaultValue = "CLOSED") String state,
             @RequestParam(required = false, defaultValue = "0") int page,
             @RequestParam(required = false, defaultValue = "10") int pageSize) {
-        // FIX-113: completed trades remain paged at the database boundary. The simplified UI requests
-        // a fixed 10 newest-first records and walks history with Previous/Next; API filters remain
-        // backward-compatible for callers outside the Trade Inspector page.
-        return service.inspect(symbol, venue, page, pageSize);
+        // FIX-11I: Trade Inspector keeps database pagination at 10 rows per UI page while adding
+        // read-only CLOSED/OPEN and symbol filters. CLOSED + ALL remains the default behavior.
+        return service.inspect(symbol, venue, state, page, pageSize);
     }
     // FIX-039: blocked BUY/SELL diagnostics accept an explicit UTC window. When omitted,
     // the service defaults to the last three hours. The UI presents the timestamps in KSA.

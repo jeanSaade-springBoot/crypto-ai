@@ -8,6 +8,7 @@ public record TradeInspectorTradeView(
         Long walletSellTradeId,
         Long tradeHistoryId,
         String executionVenue,
+        String tradeState,
         String symbol,
         Instant openedAt,
         Instant closedAt,

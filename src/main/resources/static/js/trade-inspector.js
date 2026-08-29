@@ -2,7 +2,7 @@ const $ = id => document.getElementById(id);
 let symbolsLoaded = false;
 let inspectedTradeChart = null;
 let inspectedTradeFocus = null;
-// FIX-113: zero-based server page. Trade Inspector is filter-free and always requests 10 newest-first rows per page.
+// FIX-11I: zero-based server page. CLOSED + ALL remains the default and loads the newest 10 completed trades.
 let inspectorPage = 0;
 
 function money(v){if(v===null||v===undefined)return '—';const n=Number(v);return `${n<0?'-':''}$${Math.abs(n).toLocaleString(undefined,{maximumFractionDigits:8})}`}
@@ -17,26 +17,34 @@ function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&l
 
 function tradeChartUrl(t){
  const opened=window.CryptoTime.parseUtc(t.openedAt);
- const closed=window.CryptoTime.parseUtc(t.closedAt);
- if(Number.isNaN(opened.getTime())||Number.isNaN(closed.getTime())||closed<=opened)return '#';
+ const closed=t.closedAt?window.CryptoTime.parseUtc(t.closedAt):null;
+ if(!opened||Number.isNaN(opened.getTime()))return '#';
+ if(closed&&(Number.isNaN(closed.getTime())||closed<=opened))return '#';
  const pnl=Number(t.realizedPnlPercent??t.realizedPnl??0);
  const params=new URLSearchParams({
   symbol:String(t.symbol||'ETHUSDT').toUpperCase(),
   interval:'5m',
   focusStart:opened.toISOString(),
-  focusEnd:closed.toISOString(),
+  focusEnd:(closed||new Date()).toISOString(),
   focusDirection:pnl>=0?'UP':'DOWN',
   debugTrade:'1',
   debugTradeLabel:t.tradeHistoryId==null?'Inspected trade':`Trade #${t.tradeHistoryId}`,
   debugEntryTime:opened.toISOString(),
   debugEntryPrice:String(t.entryPrice??''),
-  debugExitTime:closed.toISOString(),
+  debugExitTime:closed?closed.toISOString():'',
   debugExitPrice:String(t.exitPrice??'')
  });
  return `/dashboard?${params.toString()}#market`;
 }
 
-function renderSummary(s){
+function renderSummary(s,state,totalElements){
+  if(state==='OPEN'){
+    $('summary-net').textContent='—';$('summary-net').className='';
+    $('summary-count').textContent=`${Number(totalElements||0)} open trades`;
+    $('summary-win-rate').textContent='—';$('summary-record').textContent='Open positions have no realized result yet';
+    $('summary-average').textContent='—';$('summary-average').className='';$('summary-averages').textContent='Calculated after positions close';
+    $('summary-profit-factor').textContent='—';return;
+  }
   $('summary-net').textContent=money(s.netPnl);$('summary-net').className=cls(s.netPnl);
   $('summary-count').textContent=`${s.trades} closed trades`;
   $('summary-win-rate').textContent=`${Number(s.winRate).toFixed(1)}%`;
@@ -55,7 +63,40 @@ function renderSymbols(symbols){
   symbolsLoaded=true;
 }
 
+function openTradeCard(t){
+ const mfeClass=cls(t.maximumFavorablePercent);
+ return `<article class="inspector-card open-trade-card">
+  <div class="inspector-card-head">
+   <div class="inspector-symbol"><strong>${esc(t.symbol)}</strong><span class="venue-badge ${String(t.executionVenue||'WALLET').toLowerCase()}">${esc(t.executionVenue||'WALLET')}</span><span class="badge open">OPEN</span><span class="badge buy">BUY ↑</span></div>
+   <div class="inspector-head-actions">
+    <button type="button" class="trade-chart-link" data-inspect-chart="1" data-trade-id="${esc(inspectorTradeKey(t))}" title="Inspect this open BUY on the dedicated chart"><span>↗</span> View chart</button>
+    <div class="inspector-result"><strong class="positive">OPEN POSITION</strong><small>${duration(t.holdingMinutes)} holding time</small></div>
+   </div>
+  </div>
+  <div class="inspector-card-body open-position-body">
+   <section class="inspector-block"><h3>Entry</h3><div class="inspector-kv">
+    <div><span>Opened</span><strong>${date(t.openedAt)}</strong></div><div><span>Average entry</span><strong>${price(t.entryPrice)}</strong></div>
+    <div><span>Trade Signal ID</span><strong>#${esc(t.entrySignalId??'—')}</strong></div><div><span>Wallet Trade ID</span><strong>#${esc(t.walletBuyTradeId??'—')}</strong></div>
+    <div><span>Signal</span><strong>${esc(t.entryDecision||'BUY')} ${t.entryScore}/100</strong></div><div><span>Confidence</span><strong>${t.entryConfidence}/100</strong></div>
+    <div><span>Interval</span><strong>${esc(t.entryInterval||'—')}</strong></div><div><span>Regime</span><strong>${esc(t.entryRegime||'—')}</strong></div><div><span>Strategy</span><strong>${esc(t.entryStrategy||'—')}</strong></div>
+   </div></section>
+   <section class="inspector-block"><h3>Protection</h3><div class="inspector-kv">
+    <div><span>Stop loss</span><strong class="negative">${price(t.stopLoss)}</strong></div><div><span>Take profit</span><strong class="positive">${price(t.takeProfit)}</strong></div>
+    <div><span>Highest managed price</span><strong>${price(t.highestManagedPrice||t.maximumFavorablePrice)}</strong></div><div><span>Max favorable</span><strong class="${mfeClass}">${pct(t.maximumFavorablePercent)}</strong></div>
+    <div><span>Quantity</span><strong>${Number(t.quantity||0).toLocaleString(undefined,{maximumFractionDigits:8})}</strong></div>
+   </div>
+   ${t.profitLockActivated ? `<div class="inspector-profit-lock"><strong>PROFIT LOCK ACTIVATED</strong><span>Protected at ${price(t.profitLockPrice)}</span><small>Activated ${date(t.profitLockActivatedAt)} · best TP progress ${Number(t.profitLockProgressPercent||0).toFixed(1)}%</small></div>` : `<div class="inspector-profit-lock inactive"><strong>Profit Lock not activated</strong><small>Position remains under its current persisted protection plan.</small></div>`}
+   </section>
+   <section class="inspector-block"><h3>Status</h3><div class="inspector-kv">
+    <div><span>State</span><strong class="positive">OPEN</strong></div><div><span>Holding time</span><strong>${duration(t.holdingMinutes)}</strong></div>
+    <div><span>Realized P&amp;L</span><strong>—</strong></div><div><span>Exit evidence</span><strong>Not available until closed</strong></div>
+   </div></section>
+  </div>
+ </article>`;
+}
+
 function tradeCard(t){
+ if(String(t.tradeState||'CLOSED').toUpperCase()==='OPEN')return openTradeCard(t);
  const resultClass=cls(t.realizedPnl);
  const mfeClass=cls(t.maximumFavorablePercent),maeClass=cls(t.maximumAdversePercent);
  return `<article class="inspector-card">
@@ -189,31 +230,40 @@ async function loadProductionExits(){
   }catch(e){$('production-exit-rows').innerHTML=`<tr><td colspan="8" class="empty-cell negative">${esc(e.message)}</td></tr>`;}
 }
 
-// FIX-113: completed positions are database-paged with a fixed size of 10. The UI intentionally
-// has no Symbol/Venue/Page-size filters: page 0 is always the latest 10 and Next walks history.
+// FIX-11I: CLOSED + ALL remains the default. State and symbol are server-side filters,
+// both retaining the existing fixed page size of 10 and newest-first ordering.
 async function load(){
  $('inspector-error').classList.add('hidden');
+ const state=String($('trade-state-filter')?.value||'CLOSED').toUpperCase();
+ const symbol=String($('symbol-filter')?.value||'ALL').toUpperCase();
  try{
-  const r=await fetch(`/api/trade-inspector?symbol=ALL&venue=ALL&page=${inspectorPage}&pageSize=10`,{cache:'no-store'});
+  const params=new URLSearchParams({symbol,venue:'ALL',state,page:String(inspectorPage),pageSize:'10'});
+  const r=await fetch(`/api/trade-inspector?${params.toString()}`,{cache:'no-store'});
   if(!r.ok)throw new Error(`HTTP ${r.status}`);
   const d=await r.json();
   if(Number(d.totalPages||0)>0 && inspectorPage>=Number(d.totalPages)){inspectorPage=Math.max(0,Number(d.totalPages)-1);return load();}
   inspectorPage=Number(d.page||0);
-  window.__inspectorTrades=d.trades||[];renderSummary(d.summary);
-  $('trade-cards').innerHTML=d.trades?.length?d.trades.map(tradeCard).join(''):'<div class="empty">No completed trades are available.</div>';
+  window.__inspectorTrades=d.trades||[];
+  renderSymbols(d.symbols||[]);
+  renderSummary(d.summary||{},state,d.totalElements);
+  $('inspector-list-eyebrow').textContent=state==='OPEN'?'OPEN POSITIONS':'COMPLETED POSITIONS';
+  $('inspector-list-title').textContent=state==='OPEN'?'Currently open trades':'Latest inspected trades';
+  $('trade-cards').innerHTML=d.trades?.length?d.trades.map(tradeCard).join(''):`<div class="empty">No ${state==='OPEN'?'open':'closed'} trades match this filter.</div>`;
   const totalPages=Number(d.totalPages||0),total=Number(d.totalElements||0);
-  $('inspector-page-info').textContent=totalPages?`Page ${inspectorPage+1} of ${totalPages} · ${total} trades`:`Page 0 of 0 · ${total} trades`;
+  $('inspector-page-info').textContent=totalPages?`Page ${inspectorPage+1} of ${totalPages} · ${total} ${state.toLowerCase()} trades`:`Page 0 of 0 · ${total} ${state.toLowerCase()} trades`;
   $('inspector-prev').disabled=inspectorPage<=0;
   $('inspector-next').disabled=totalPages===0||inspectorPage>=totalPages-1;
   $('inspector-updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
  }catch(e){$('inspector-error').textContent=`Trade Inspector could not load: ${e.message}`;$('inspector-error').classList.remove('hidden')}
 }
 $('refresh-inspector').addEventListener('click',()=>{inspectorPage=0;load();});
+$('trade-state-filter')?.addEventListener('change',()=>{inspectorPage=0;load();});
+$('symbol-filter')?.addEventListener('change',()=>{inspectorPage=0;load();});
 $('inspector-prev').addEventListener('click',()=>{if(inspectorPage>0){inspectorPage--;load();}});
 $('inspector-next').addEventListener('click',()=>{inspectorPage++;load();});
 load();
 
-function inspectorTradeKey(t){return String(t.tradeHistoryId??t.walletSellTradeId??'')}
+function inspectorTradeKey(t){return String(t.tradeHistoryId??t.walletSellTradeId??t.walletBuyTradeId??t.entrySignalId??'')}
 function findTradeByKey(key){return (window.__inspectorTrades||[]).find(t=>inspectorTradeKey(t)===String(key))}
 
 function inspectorPoint(time, value, side){
@@ -260,7 +310,10 @@ function inspectedFocusRange(t, interval, mode='trade'){
   const step=inspectedIntervalMs(interval);
   if(!opened||Number.isNaN(opened.getTime()))return null;
   if(mode==='entry')return {min:opened.getTime()-60*step,max:opened.getTime()+90*step};
-  const closeMs=closed&&!Number.isNaN(closed.getTime())?closed.getTime():opened.getTime();
+  // FIX-11I: an OPEN position can be days old. Do not fetch its entire lifecycle into one
+  // initial chart request; focus around entry and let the existing Latest control jump to now.
+  if(!closed||Number.isNaN(closed.getTime()))return {min:opened.getTime()-60*step,max:opened.getTime()+180*step};
+  const closeMs=closed.getTime();
   // Keep enough context on both sides while still showing individual candles clearly.
   const lifecycle=Math.max(step*30,closeMs-opened.getTime());
   const pad=Math.max(step*45,Math.min(lifecycle*.65,step*240));
@@ -268,10 +321,8 @@ function inspectedFocusRange(t, interval, mode='trade'){
 }
 
 function inspectedChartAnnotations(t){
-  const annotations={
-    points:[inspectorPoint(t.openedAt,t.entryPrice,'BUY'),inspectorPoint(t.closedAt,t.exitPrice,'SELL')],
-    yaxis:[]
-  };
+  const annotations={points:[inspectorPoint(t.openedAt,t.entryPrice,'BUY')],yaxis:[]};
+  if(t.closedAt!=null&&t.exitPrice!=null)annotations.points.push(inspectorPoint(t.closedAt,t.exitPrice,'SELL'));
   const addLine=(value,text,borderColor)=>{
     const n=Number(value);if(!Number.isFinite(n))return;
     annotations.yaxis.push({y:n,borderColor,strokeDashArray:4,label:{borderColor,style:{background:'#0d1820',color:'#dbe8ef',fontSize:'9px'},text:`${text} ${chartPriceLabel(n)}`}});
@@ -369,11 +420,12 @@ function scheduleInspectedWindow(min,max){
 async function loadInspectedTradeChart(){
   const t=inspectedTradeFocus;
   if(!t)return;
-  const opened=window.CryptoTime.parseUtc(t.openedAt),closed=window.CryptoTime.parseUtc(t.closedAt);
-  if(!opened||!closed||Number.isNaN(opened.getTime())||Number.isNaN(closed.getTime()))return;
+  const opened=window.CryptoTime.parseUtc(t.openedAt),closed=t.closedAt?window.CryptoTime.parseUtc(t.closedAt):null;
+  if(!opened||Number.isNaN(opened.getTime())||(closed&&Number.isNaN(closed.getTime())))return;
+  const endTime=closed||new Date();
   const interval=$('inspected-trade-interval')?.value||'1m';
   const step=inspectedIntervalMs(interval);
-  const focus=inspectedFocusRange(t,interval,'trade')||{min:opened.getTime()-step*120,max:closed.getTime()+step*120};
+  const focus=inspectedFocusRange(t,interval,'trade')||{min:opened.getTime()-step*120,max:endTime.getTime()+step*120};
   const initialBounds=inspectedWindowBounds(focus.min,focus.max,step);
   const data=await fetchInspectedWindow(t,interval,initialBounds.from,initialBounds.to);
   const parsed=inspectedRows(data);
@@ -391,8 +443,9 @@ async function loadInspectedTradeChart(){
   const fullEnd=window.CryptoTime.parseUtc(data.lastOpenTime)?.getTime()??candles[candles.length-1].x;
   const initialMin=Math.max(fullStart,focus.min),initialMax=Math.min(fullEnd,focus.max);
   const pnl=Number(t.realizedPnlPercent??0);
-  const path=[{x:opened.getTime(),y:Number(t.entryPrice)},{x:closed.getTime(),y:Number(t.exitPrice)}];
-  const pathName=`Trade Path · ${pnl>=0?'+':''}${pnl.toFixed(3)}%`;
+  const isOpen=String(t.tradeState||'CLOSED').toUpperCase()==='OPEN';
+  const path=isOpen?[{x:opened.getTime(),y:Number(t.entryPrice)}]:[{x:opened.getTime(),y:Number(t.entryPrice)},{x:closed.getTime(),y:Number(t.exitPrice)}];
+  const pathName=isOpen?'Open position entry':`Trade Path · ${pnl>=0?'+':''}${pnl.toFixed(3)}%`; 
 
   window.__inspectedChartState={
     fullStart,fullEnd,interval,step,candleMeta,candles,trade:t,path,pathName,
@@ -442,7 +495,7 @@ async function loadInspectedTradeChart(){
         beforeResetZoom:()=>{scheduleInspectorYAxisHoverRefresh();}
       }
     },
-    title:{text:`${String(t.symbol||'').toUpperCase()} · ${interval} · Trade ${t.tradeHistoryId==null?'':`#${t.tradeHistoryId}`} · ${pnl>=0?'+':''}${pnl.toFixed(3)}%`,align:'left',style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'}},
+    title:{text:isOpen?`${String(t.symbol||'').toUpperCase()} · ${interval} · OPEN position`:`${String(t.symbol||'').toUpperCase()} · ${interval} · Trade ${t.tradeHistoryId==null?'':`#${t.tradeHistoryId}`} · ${pnl>=0?'+':''}${pnl.toFixed(3)}%`,align:'left',style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'}},
     series:[{name:'Candles',type:'candlestick',data:candles},{name:pathName,type:'line',data:path}],
     stroke:{width:[1,2],curve:'straight',dashArray:[0,0]},markers:{size:[0,4]},dataLabels:{enabled:false},
     xaxis:{
@@ -539,7 +592,7 @@ async function showInspectedTradeChart(t){
   modal?.classList.remove('hidden');
   modal?.setAttribute('aria-hidden','false');
   document.body.classList.add('inspector-modal-open');
-  $('inspected-trade-chart-title').textContent=`${String(t.symbol||'').toUpperCase()} · inspected BUY → SELL`;
+  $('inspected-trade-chart-title').textContent=String(t.tradeState||'CLOSED').toUpperCase()==='OPEN'?`${String(t.symbol||'').toUpperCase()} · open BUY position`:`${String(t.symbol||'').toUpperCase()} · inspected BUY → SELL`;
   await loadInspectedTradeChart();
 }
 
