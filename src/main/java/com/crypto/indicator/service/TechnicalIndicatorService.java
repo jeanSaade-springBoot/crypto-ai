@@ -1,5 +1,6 @@
 package com.crypto.indicator.service;
 
+import com.crypto.regression.service.ReplayDataset;
 import com.crypto.domain.Candle;
 import com.crypto.domain.TechnicalIndicator;
 import com.crypto.dto.IndicatorSnapshot;
@@ -125,6 +126,27 @@ public class TechnicalIndicatorService {
         }
         return calculateSnapshotFromDatabase(symbol, intervalCode, candleOpenTime);
     }
+
+    /**
+     * FIX-11H REPLAY/PARITY INFRASTRUCTURE ONLY. Production calculateAndPersist() never calls
+     * this overload. The only difference is where the already-closed candle list comes from;
+     * calculateSnapshot() below remains the exact shared indicator math.
+     */
+    @Transactional(readOnly = true)
+    public Optional<IndicatorSnapshot> calculateSnapshotForRegression(
+            String symbol, String intervalCode, Instant candleOpenTime, ReplayDataset dataset) {
+        if (candleOpenTime == null) throw new IllegalArgumentException("Regression candle open time is required");
+        String normalisedSymbol = normaliseSymbol(symbol);
+        String normalisedInterval = normaliseInterval(intervalCode);
+        List<Candle> candles = new ArrayList<>(
+                dataset.closedCandlesAtOrBefore(normalisedSymbol, normalisedInterval, candleOpenTime, HISTORY_LIMIT));
+        if (candles.size() < MINIMUM_CANDLES) return Optional.empty();
+        Collections.reverse(candles);
+        return Optional.of(calculateSnapshot(normalisedSymbol, normalisedInterval, candles));
+    }
+
+    /** ReplayDataset loader uses the same history limit as the indicator service; no duplicated magic number. */
+    public int regressionHistoryLimit() { return HISTORY_LIMIT; }
 
     @Transactional(readOnly = true)
     public Optional<TechnicalIndicator> getLatest(

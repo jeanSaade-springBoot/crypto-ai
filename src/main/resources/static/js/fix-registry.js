@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-11H",
+            title: "ReplayDataset preload + OLD/NEW replay compare buttons",
+            status: "IMPLEMENTED · REPLAY INFRASTRUCTURE / PARITY VERIFICATION",
+            scenario: "Replay repeatedly queried the same 300-candle indicator history and exact source-signal lineage for every event, making historical investigations database-chatty even though adjacent windows overlap almost completely.",
+            symbol: "ALL", entry: "REPLAY ONLY", exit: "UNCHANGED",
+            entryTime: "Historical replay", exitTime: "UNCHANGED",
+            replayWindow: "UI exposes OLD DATABASE and NEW DATASET runs against the exact same requested window.",
+            location: "ReplayDataset + RegressionTestWorker + Replay Lab OLD/NEW controls",
+            classes: ["ReplayDataset", "ReplayDataSource", "RegressionTestWorker", "TechnicalIndicatorService", "CandleRepository", "RegressionTestService", "RegressionTestController", "proven-analyzed-trades.html", "proven-analyzed-trades.js", "md/FIX-11H.md"],
+            cause: "Per-candle replay indicator calculations re-read up to 300 mostly-identical closed candles from MySQL, and FIX-112D lineage also performed a per-signal lookup.",
+            solution: "Preload exact closed historical prefixes plus the replay window once into an immutable dataset, use upper-bound binary search for as-of slices, cache exact FIX-112D lineage selected by candle_open_time (never generated_at), and expose explicit replay-only OLD/NEW modes for repeatable parity verification.",
+            behavior: "Production behavior/path changes: zero. Existing Production callers and existing Production indicator method remain unchanged. OLD Replay preserves database-backed behavior; NEW Replay changes only historical input retrieval and calls the same calculateSnapshot() business math. verifyEventResolution() remains unchanged until parity is proven.",
+            regression: "Run the same stable historical window once with OLD and once with NEW as separate test_run_ids. Compare execution-relevant signal fields, structural decision_path, source_signal_id, and the complete shadow BUY/SELL lifecycle before retiring the OLD worker call site."
+        },
+        {
             id: "FIX-11G",
             title: "BALANCED 5m-neutral + 1h-WATCH transitional BUY authority",
             status: "IMPLEMENTED · CONTROLLED PRODUCTION BEHAVIOR CHANGE",

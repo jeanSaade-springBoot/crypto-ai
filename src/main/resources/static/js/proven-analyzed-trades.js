@@ -69,12 +69,13 @@ async function loadRegressionSymbols() {
 }
 
 function setRegressionRunButtonRunning(running, run = null) {
-    const button = document.getElementById('regression-run');
-    if (!button) return;
-    button.disabled = running;
-    button.textContent = running
-        ? `Test ${run?.id ? `#${run.id} ` : ''}Running…`
-        : 'Run Regression Test';
+    // FIX-11H: OLD and NEW are fixed replay-only controls. Disable both while the
+    // single-worker replay lock is occupied so parity runs cannot overlap.
+    const oldButton = document.getElementById('regression-run-old');
+    const newButton = document.getElementById('regression-run-new');
+    [oldButton, newButton].filter(Boolean).forEach(button => { button.disabled = running; });
+    if (oldButton) oldButton.textContent = running ? 'Replay Running…' : 'Run OLD · Database Replay';
+    if (newButton) newButton.textContent = running ? 'Replay Running…' : 'Run NEW · ReplayDataset';
 }
 
 function regressionStatusClass(status) {
@@ -809,39 +810,39 @@ function regressionGeneratedTestName(symbol, startLocal, endLocal) {
 }
 
 const regressionForm = document.getElementById('regression-test-form');
-if (regressionForm) {
-    regressionForm.addEventListener('submit', async event => {
-        event.preventDefault();
-        const button = document.getElementById('regression-run');
-        setRegressionRunButtonRunning(true);
-        document.getElementById('regression-detail')?.classList.add('hidden');
-        document.getElementById('regression-result').classList.add('hidden');
-        document.getElementById('regression-pipeline')?.classList.add('hidden');
-        document.getElementById('regression-pipeline-section')?.classList.add('hidden');
-        try {
-            const created = await api('/api/administration/regression-tests/runs', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    testName: regressionGeneratedTestName(
-                        document.getElementById('regression-symbol').value,
-                        document.getElementById('regression-start').value,
-                        document.getElementById('regression-end').value),
-                    symbol: document.getElementById('regression-symbol').value,
-                    startTime: regressionUtcInstant(document.getElementById('regression-start').value),
-                    endTime: regressionUtcInstant(document.getElementById('regression-end').value)
-                })
-            });
-            showAdminMessage(`Regression test #${created.id} started safely in the background.`);
-            await loadRegressionDetail(created.id, false);
-            await loadRegressionRuns();
-            pollRegressionRun(created.id);
-        } catch (error) {
-            setRegressionRunButtonRunning(false);
-            showAdminMessage(error.message, true);
-        }
-    });
+async function startRegressionWithDataSource(replayDataSource) {
+    if (!regressionForm || !regressionForm.reportValidity()) return;
+    setRegressionRunButtonRunning(true);
+    document.getElementById('regression-detail')?.classList.add('hidden');
+    document.getElementById('regression-result').classList.add('hidden');
+    document.getElementById('regression-pipeline')?.classList.add('hidden');
+    document.getElementById('regression-pipeline-section')?.classList.add('hidden');
+    try {
+        const created = await api(`/api/administration/regression-tests/runs?replayDataSource=${encodeURIComponent(replayDataSource)}`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                testName: regressionGeneratedTestName(
+                    document.getElementById('regression-symbol').value,
+                    document.getElementById('regression-start').value,
+                    document.getElementById('regression-end').value),
+                symbol: document.getElementById('regression-symbol').value,
+                startTime: regressionUtcInstant(document.getElementById('regression-start').value),
+                endTime: regressionUtcInstant(document.getElementById('regression-end').value)
+            })
+        });
+        showAdminMessage(`FIX-11H ${replayDataSource} replay #${created.id} started safely in the background.`);
+        await loadRegressionDetail(created.id, false);
+        await loadRegressionRuns();
+        pollRegressionRun(created.id);
+    } catch (error) {
+        setRegressionRunButtonRunning(false);
+        showAdminMessage(error.message, true);
+    }
 }
+if (regressionForm) regressionForm.addEventListener('submit', event => event.preventDefault());
+document.getElementById('regression-run-old')?.addEventListener('click', () => startRegressionWithDataSource('DATABASE'));
+document.getElementById('regression-run-new')?.addEventListener('click', () => startRegressionWithDataSource('DATASET'));
 
 const regressionRunsBody = document.getElementById('regression-runs-body');
 if (regressionRunsBody) {

@@ -158,6 +158,11 @@ public interface CandleRepository extends JpaRepository<Candle, Long> {
             @Param("maxOpenTime") Instant maxOpenTime,
             Pageable pageable
     );
+    // FIX-11H: replay-only bulk load. Explicit closed=true preserves the exact historical
+    // eligibility semantics of findClosedCandlesAtOrBefore while loading a whole window once.
+    List<Candle> findBySymbolAndIntervalCodeAndClosedTrueAndOpenTimeBetweenOrderByOpenTimeAsc(
+            String symbol, String intervalCode, Instant from, Instant to);
+
     @Query("""
             SELECT c
             FROM Candle c

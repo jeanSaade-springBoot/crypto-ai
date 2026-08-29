@@ -79,7 +79,7 @@ public class RegressionTestService {
         Map<String, Object> row = rows.get(0);
         long runId = start(new RegressionTestRunRequest(
                 String.valueOf(row.get("case_name")), String.valueOf(row.get("symbol")),
-                ((Timestamp) row.get("start_time")).toInstant(), ((Timestamp) row.get("end_time")).toInstant()));
+                ((Timestamp) row.get("start_time")).toInstant(), ((Timestamp) row.get("end_time")).toInstant()), ReplayDataSource.DATABASE);
         jdbcTemplate.update("UPDATE regression_investigation_case SET last_run_id=? WHERE id=?", runId, caseId);
         return runId;
     }
@@ -163,6 +163,11 @@ public class RegressionTestService {
     }
 
     public synchronized long start(RegressionTestRunRequest request) {
+        return start(request, ReplayDataSource.DATABASE);
+    }
+
+    /** FIX-11H explicit replay-only OLD/NEW selector. Production is not configurable through this mode. */
+    public synchronized long start(RegressionTestRunRequest request, ReplayDataSource dataSource) {
         if (request == null || request.symbol() == null || request.symbol().isBlank()
                 || request.startTime() == null || request.endTime() == null
                 || !request.endTime().isAfter(request.startTime())) {
@@ -188,9 +193,11 @@ public class RegressionTestService {
         }
 
         String symbol = request.symbol().trim().toUpperCase(Locale.ROOT);
-        String testName = request.testName() == null || request.testName().isBlank()
-                ? symbol + " regression"
-                : request.testName().trim();
+        ReplayDataSource effectiveSource = dataSource == null ? ReplayDataSource.DATABASE : dataSource;
+        String baseTestName = request.testName() == null || request.testName().isBlank()
+                ? symbol + " regression" : request.testName().trim();
+        String testName = (baseTestName + " [" + effectiveSource.name() + "]").substring(
+                0, Math.min(180, baseTestName.length() + effectiveSource.name().length() + 3));
 
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update(connection -> {
@@ -211,7 +218,7 @@ public class RegressionTestService {
             throw new IllegalStateException("Could not create regression test run.");
         }
         long id = key.longValue();
-        worker.runAsync(id);
+        worker.runAsync(id, effectiveSource);
         return id;
     }
 

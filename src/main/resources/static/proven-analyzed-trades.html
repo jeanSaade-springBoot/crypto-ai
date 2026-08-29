@@ -62,9 +62,12 @@
 </label>
 <label>From (browser local time)<input id="regression-start" required="" type="datetime-local"/></label>
 <label>To (browser local time)<input id="regression-end" required="" type="datetime-local"/></label>
-<button id="regression-run" type="submit">Run Full Production Replay</button>
+<div class="regression-mode-actions">
+<button class="secondary-button" id="regression-run-old" type="button">Run OLD · Database Replay</button>
+<button id="regression-run-new" type="button">Run NEW · ReplayDataset</button>
+</div>
 </form>
-<p class="form-note" id="regression-window-note">Select the exact historical From/To window. The replay simulates production decisions and trades without touching the real wallet.</p><div class="regression-active hidden" id="regression-active">
+<p class="form-note" id="regression-window-note">Select the exact historical From/To window. FIX-11H: OLD uses the current per-candle database reads; NEW uses the in-memory ReplayDataset. Both execute the same replay business logic and never touch the real wallet.</p><div class="regression-active hidden" id="regression-active">
 <div class="regression-progress-heading">
 <strong id="regression-active-title">Regression run</strong>
 <span class="status-pill" id="regression-active-status">PENDING</span>

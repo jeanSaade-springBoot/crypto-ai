@@ -3,6 +3,7 @@ package com.crypto.regression.controller;
 import com.crypto.regression.dto.RegressionTestRunRequest;
 import com.crypto.regression.dto.RegressionInvestigationCaseRequest;
 import com.crypto.regression.service.RegressionTestService;
+import com.crypto.regression.service.ReplayDataSource;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -42,9 +43,11 @@ public class RegressionTestController {
 
     @PostMapping("/runs")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    public Map<String, Object> start(@RequestBody RegressionTestRunRequest request) {
-        long id = service.start(request);
-        return Map.of("id", id, "status", "PENDING");
+    public Map<String, Object> start(
+            @RequestBody RegressionTestRunRequest request,
+            @RequestParam(defaultValue = "DATABASE") ReplayDataSource replayDataSource) {
+        long id = service.start(request, replayDataSource);
+        return Map.of("id", id, "status", "PENDING", "replayDataSource", replayDataSource.name());
     }
 
     // FIX-088: manual Resume was removed. A failed/interrupted test run must be deleted

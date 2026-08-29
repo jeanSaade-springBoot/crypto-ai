@@ -31,6 +31,8 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.LinkedHashSet;
+import java.util.HashMap;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
@@ -89,7 +91,7 @@ public class RegressionTestWorker {
     }
 
     @Async
-    public void runAsync(long runId) {
+    public void runAsync(long runId, ReplayDataSource dataSource) {
         // FIX-087: close the race at worker entry as well. Even if two callers schedule the same
         // run almost simultaneously, only one may execute the deterministic replay pipeline.
         if (!activeRunIds.add(runId)) {
@@ -134,10 +136,17 @@ public class RegressionTestWorker {
 
             updateRun(runId, "RUNNING", 43, "Generating fresh signals from historical candles", null);
             checkStopRequested(runId);
+            // FIX-11H: OLD=DATABASE and NEW=DATASET are explicit replay-only modes. Production
+            // has no dependency on this selector. verifyEventResolution() intentionally remains unchanged.
+            ReplayDataset replayDataset = dataSource == ReplayDataSource.DATASET
+                    ? loadDataset(symbol, btcSymbol, contextStart, end) : null;
+            log.info("FIX-11H replay data source: run={}, mode={}, symbol={}, start={}, end={}",
+                    runId, dataSource, symbol, start, end);
             FreshReplayStats fresh = generateFreshSignals(
                     runId, symbol, start, end,
                     oneMinuteCandles, fiveMinuteCandles, oneHourCandles,
-                    btcSymbol, btcOneMinuteCandles, btcFiveMinuteCandles, btcOneHourCandles);
+                    btcSymbol, btcOneMinuteCandles, btcFiveMinuteCandles, btcOneHourCandles,
+                    dataSource, replayDataset);
             jdbcTemplate.update("""
                     UPDATE analysis_test_run
                     SET generated_signal_count=?, generated_buy_count=?, generated_watch_count=?,
@@ -374,6 +383,51 @@ public class RegressionTestWorker {
         }
     }
 
+    /**
+     * FIX-11H: loads one immutable replay dataset. The prefix comes from the exact existing
+     * closed/as-of query, so missing candle gaps cannot shorten history. The forward segment
+     * explicitly requires closed=true. No Production caller reaches this method.
+     */
+    private ReplayDataset loadDataset(String symbol, String btcSymbol, Instant start, Instant end) {
+        Map<ReplayDataset.CandleKey, List<Candle>> candleMap = new HashMap<>();
+        Set<String> symbols = new LinkedHashSet<>(List.of(symbol, btcSymbol));
+        int historyLimit = technicalIndicatorService.regressionHistoryLimit();
+        for (String sym : symbols) {
+            for (String interval : List.of("1m", "5m", "1h")) {
+                List<Candle> prefix = new java.util.ArrayList<>(candleRepository.findClosedCandlesAtOrBefore(
+                        sym, interval, start, PageRequest.of(0, historyLimit)));
+                java.util.Collections.reverse(prefix);
+                List<Candle> forward = candleRepository
+                        .findBySymbolAndIntervalCodeAndClosedTrueAndOpenTimeBetweenOrderByOpenTimeAsc(
+                                sym, interval, start, end);
+                List<Candle> merged = new java.util.ArrayList<>(prefix.size() + forward.size());
+                merged.addAll(prefix);
+                Instant prefixEnd = prefix.isEmpty() ? Instant.EPOCH : prefix.get(prefix.size() - 1).getOpenTime();
+                forward.stream().filter(c -> c.getOpenTime().isAfter(prefixEnd)).forEach(merged::add);
+                candleMap.put(new ReplayDataset.CandleKey(sym, interval), merged);
+                log.info("FIX-11H dataset candles: symbol={}, interval={}, prefix={}, forward={}, merged={}",
+                        sym, interval, prefix.size(), forward.size(), merged.size());
+            }
+        }
+
+        Map<ReplayDataset.SignalKey, Long> lineage = new HashMap<>();
+        // FIX-11H / FIX-112D: lineage is candle identity, not signal persistence timing.
+        // Recovery/backfilled Production signals can be generated hours after their candle, so
+        // generatedAt MUST NOT define this preload window. Select and match lineage by the same
+        // exact candleOpenTime identity used by ReplayDataset.sourceSignalId().
+        for (TradeSignal signal : signalRepository.findBySymbolAndCandleOpenTimeBetweenOrderByCandleOpenTimeAsc(symbol, start, end)) {
+            ReplayDataset.SignalKey key = new ReplayDataset.SignalKey(
+                    signal.getSymbol(), signal.getInterval(), signal.getCandleOpenTime());
+            Long previous = lineage.putIfAbsent(key, signal.getId());
+            if (previous != null && !previous.equals(signal.getId())) {
+                throw new IllegalStateException("Replay lineage invariant violated for " + key
+                        + ": signalIds=" + previous + "," + signal.getId());
+            }
+        }
+        log.info("FIX-11H dataset lineage: symbol={}, entries={}", symbol, lineage.size());
+        return new ReplayDataset(candleMap, lineage);
+    }
+
     private List<Candle> candles(String symbol, String interval, Instant start, Instant end) {
         return candleRepository.findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(
                 symbol, interval, start, end);
@@ -411,7 +465,9 @@ public class RegressionTestWorker {
             String btcSymbol,
             List<Candle> btcOneMinuteCandles,
             List<Candle> btcFiveMinuteCandles,
-            List<Candle> btcOneHourCandles
+            List<Candle> btcOneHourCandles,
+            ReplayDataSource dataSource,
+            ReplayDataset replayDataset
     ) {
         List<ReplayCandle> timeline = new java.util.ArrayList<>();
         oneMinuteCandles.forEach(c -> timeline.add(new ReplayCandle(symbol, "1m", c, true)));
@@ -443,8 +499,11 @@ public class RegressionTestWorker {
             Instant evaluationTime = candle.getOpenTime().plusSeconds(intervalSeconds(replay.interval()));
             boolean inRequestedWindow = !evaluationTime.isBefore(executionStart) && !evaluationTime.isAfter(executionEnd);
             try {
-                java.util.Optional<IndicatorSnapshot> snapshot = technicalIndicatorService
-                        .calculateSnapshotForRegression(replay.symbol(), replay.interval(), candle.getOpenTime());
+                java.util.Optional<IndicatorSnapshot> snapshot = dataSource == ReplayDataSource.DATASET
+                        ? technicalIndicatorService.calculateSnapshotForRegression(
+                                replay.symbol(), replay.interval(), candle.getOpenTime(), replayDataset)
+                        : technicalIndicatorService.calculateSnapshotForRegression(
+                                replay.symbol(), replay.interval(), candle.getOpenTime());
                 if (snapshot.isEmpty()) {
                     if (inRequestedWindow) {
                         errors++;
@@ -505,11 +564,12 @@ public class RegressionTestWorker {
                     // FIX-112D: Replay lineage uses exact market-candle identity, never
                     // generated_at or nearest-time matching. A legitimate Replay-only
                     // signal remains NULL. This metadata lookup cannot alter Production.
-                    Long sourceSignalId = signalRepository
-                            .findBySymbolAndIntervalAndCandleOpenTime(
+                    Long sourceSignalId = dataSource == ReplayDataSource.DATASET
+                            ? replayDataset.sourceSignalId(
                                     generated.getSymbol(), generated.getInterval(), generated.getCandleOpenTime())
-                            .map(TradeSignal::getId)
-                            .orElse(null);
+                            : signalRepository.findBySymbolAndIntervalAndCandleOpenTime(
+                                    generated.getSymbol(), generated.getInterval(), generated.getCandleOpenTime())
+                                    .map(TradeSignal::getId).orElse(null);
                     persistTradeSignalTest(runId, generated, sourceSignalId, null);
                 }
             } catch (ReplayCancellationException stop) {
