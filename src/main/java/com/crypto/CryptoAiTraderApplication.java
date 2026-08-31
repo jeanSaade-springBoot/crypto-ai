@@ -24,5 +24,6 @@ public class CryptoAiTraderApplication {
 
     public static void main(String[] args) {
         SpringApplication.run(CryptoAiTraderApplication.class, args);
+        
     }
 }
