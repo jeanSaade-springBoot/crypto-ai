@@ -47,6 +47,7 @@ public class ShadowProductionReplayService {
     private final WalletSettingsRepository walletSettingsRepository;
     private final WalletExecutionSizingPolicy executionSizingPolicy;
     private final PositionPriceAuthorityPolicy priceAuthorityPolicy;
+    private final DefensiveRiskReductionReplayObserver defensiveRiskReductionObserver;
 
     public ReplayStats replay(long runId, String symbol, Instant executionStart, Instant executionEnd,
                               List<TradeSignal> generatedSignals,
@@ -65,6 +66,7 @@ public class ShadowProductionReplayService {
         BigDecimal cash = INITIAL_CAPITAL;
         BigDecimal realized = BigDecimal.ZERO;
         int trades = 0, wins = 0, losses = 0;
+        int consecutiveFinalOneMinuteStrongSells = 0;
         WalletSettings replayWalletSettings = walletSettings();
         BigDecimal replayDailyBudget = executionSizingPolicy.initialDailyBudget(
                 cash, replayWalletSettings.getMinimumUsdtReserve(),
@@ -86,6 +88,7 @@ public class ShadowProductionReplayService {
         // FIX-109: normal Regression/Replay runs are Production-Parity by default.
         // Experimental rules require an explicitly opened EXPERIMENTAL scope.
         String replayLogicMode = ExecutionReplayScope.ReplayLogicMode.PRODUCTION_PARITY.name();
+        defensiveRiskReductionObserver.logRunStart(runId, symbol);
 
         try (ExecutionReplayScope.Scope ignored = replayScope.open(runId, timeline,
                 opportunity -> {
@@ -131,9 +134,23 @@ public class ShadowProductionReplayService {
             }
 
             replayScope.reference(signal.getGeneratedAt());
-            if ("1m".equals(signal.getInterval())) latest1m = signal;
+            if ("1m".equals(signal.getInterval())) {
+                latest1m = signal;
+                consecutiveFinalOneMinuteStrongSells = signal.getDecision() == SignalDecision.STRONG_SELL
+                        ? consecutiveFinalOneMinuteStrongSells + 1 : 0;
+            }
             if ("5m".equals(signal.getInterval())) latest5m = signal;
             if ("1h".equals(signal.getInterval())) latest1h = signal;
+
+            // FIX-11K Phase A: observe only. This runs beside the existing exit path and cannot
+            // mutate quantity, cash, wallet_position_test, SELL authority, or Production state.
+            // It records enough replay-native evidence to evaluate the 2/3/4 streak and
+            // peak/giveback experiment matrix after the run instead of pre-selecting thresholds.
+            if (open != null && "1m".equals(signal.getInterval())) {
+                defensiveRiskReductionObserver.observe(
+                        runId, open.positionId(), signal, latest5m, latest1h,
+                        consecutiveFinalOneMinuteStrongSells, open.entryPrice(), open.highest());
+            }
 
             if (open != null && !exactPriceReplay) {
                 // Pre-V64 fallback only. Exact-parity runs receive mechanical protection from
@@ -309,6 +326,7 @@ public class ShadowProductionReplayService {
                     simulated_realized_pnl=?, simulated_final_wallet=?
                 WHERE id=?
                 """, trades, wins, losses, realized, finalWallet, runId);
+        defensiveRiskReductionObserver.logRunSummary(runId, symbol);
         // FIX-109: expose whether this run had the persisted live-price stream required
         // for tick-exact production ordering. Older windows remain explicitly labelled
         // as fallback instead of being mistaken for exact parity.

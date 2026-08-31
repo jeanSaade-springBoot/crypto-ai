@@ -73,6 +73,8 @@ public class RegressionTestController {
     public List<Map<String,Object>> archiveTrades(@PathVariable long id) { return service.archivedTrades(id); }
     @GetMapping("/archives/{id}/position-management")
     public List<Map<String,Object>> archiveManagement(@PathVariable long id) { return service.archivedPositionManagement(id); }
+    @GetMapping("/archives/{id}/defensive-risk-observations")
+    public List<Map<String,Object>> archiveDefensiveRiskObservations(@PathVariable long id) { return service.archivedDefensiveRiskReductionObservations(id); }
     @GetMapping("/archives/{id}/opportunities")
     public List<Map<String,Object>> archiveOpportunities(@PathVariable long id) { return service.archivedOpportunities(id); }
 
@@ -104,6 +106,12 @@ public class RegressionTestController {
     @GetMapping("/runs/{id}/position-management")
     public List<Map<String, Object>> positionManagement(@PathVariable long id) {
         return service.positionManagement(id);
+    }
+
+    // FIX-11K Phase A: exposes replay-only counterfactual observations for analysis.
+    @GetMapping("/runs/{id}/defensive-risk-observations")
+    public List<Map<String, Object>> defensiveRiskReductionObservations(@PathVariable long id) {
+        return service.defensiveRiskReductionObservations(id);
     }
 
     @GetMapping("/runs/{id}/opportunities")
