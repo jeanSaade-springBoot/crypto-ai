@@ -1,6 +1,36 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-11K",
+            title: "Defensive risk reduction Replay observation harness",
+            status: "IMPLEMENTED · PHASE A REPLAY RESEARCH ONLY",
+            scenario: "PEPEUSDT position #810 gave back material unrealized profit while sustained final 1m STRONG_SELL and raw 5m bearish evidence existed, but 5m final bearish authority was neutralized by MTF conflict.",
+            symbol: "ALL (evidence case PEPEUSDT #810)", entry: "UNCHANGED", exit: "OBSERVE ONLY · NO SELL",
+            entryTime: "Replay position lifecycle", exitTime: "UNCHANGED",
+            replayWindow: "Run historical windows containing profitable open positions; PEPE #810 is the primary evidence case.",
+            location: "Replay-only parallel observer beside ShadowProductionReplayService",
+            classes: ["DefensiveRiskReductionReplayObserver", "ShadowProductionReplayService", "RegressionTestService", "RegressionTestController", "V78__fix_11k_replay_defensive_risk_observations.sql", "md/FIX-11K.md"],
+            cause: "Normal SELL requires final bearish 5m confirmation. PEPE proved repeated raw 5m bearish deterioration can be neutralized by strategy-aware MTF while an already-profitable position gives back gains.",
+            solution: "Phase A records counterfactual defensive-risk candidates when final 1m STRONG_SELL persists, fresh raw 5m is bearish but final 5m is NEUTRAL with CONFLICT/STRONG_CONFLICT, fresh 1h is non-bullish, and replay-native profit has positive peak giveback. Persist raw streak/profit/giveback metrics so the agreed matrix is evaluated after the run rather than hard-coding a Production threshold.",
+            behavior: "Production changes: zero. Existing Replay cash, quantity, position state, validateSell(), SELL_CONFIRMED, MTF, BUY authority and execution remain unchanged. Phase A only writes isolated replay observation rows and searchable FIX11K_DEFENSIVE_OBSERVER_* logs.",
+            regression: "First validate observation-only behavior on PEPE #810, then broader profitable historical positions. Compare candidate time/price, peak/current profit, giveback and subsequent +5m/+15m/+30m/+60m path. Phase B partial reduction remains explicitly deferred until Phase A evidence is reviewed."
+        },
+        {
+            id: "FIX-11J",
+            title: "Persisted Replay stage performance diagnostics",
+            status: "IMPLEMENTED · REPLAY OBSERVABILITY ONLY",
+            scenario: "A 2-hour PEPEUSDT NEW ReplayDataset run passed but took about 8m20s, while the remaining bottleneck was not yet proven. Measure the existing Replay pipeline before approving any further optimization.",
+            symbol: "ALL", entry: "REPLAY ONLY", exit: "UNCHANGED",
+            entryTime: "Historical replay", exitTime: "UNCHANGED",
+            replayWindow: "Any OLD Database or NEW ReplayDataset run; timings are persisted per test_run_id.",
+            location: "RegressionTestWorker timing observation + analysis_test_run persistence + Proven / Analyze Trades display",
+            classes: ["RegressionTestWorker", "RegressionTestService", "V77__persist_replay_stage_timings.sql", "proven-analyzed-trades.html", "proven-analyzed-trades.js", "md/FIX-11J.md"],
+            cause: "FIX-11H optimized indicator history access, but Replay still contained multiple database-backed stages. verifyEventResolution() and historical reads inside fresh analysis were suspects only; no measured stage breakdown existed to identify the actual bottleneck.",
+            solution: "Wrap the existing Replay stages with monotonic System.nanoTime() observation without reordering or duplicating work. Persist nullable nanosecond durations for Load historical data, Verify event resolution, Build ReplayDataset, Generate fresh signals, Shadow execution, Parity comparison and TOTAL. Persist once from finally through a best-effort diagnostics-only update so timing persistence cannot change the Replay outcome. Expose the full breakdown on the selected run and TOTAL in Recent Test Runs; pre-FIX-11J runs remain timing-unavailable.",
+            behavior: "Production behavior changes: zero. Replay decisions, ordering, thresholds, data boundaries, lineage, analysis, shadow execution and parity logic are unchanged. DATABASE mode does not build ReplayDataset and stores that stage as NULL/N/A rather than a fabricated zero. No Replay optimization is included in this fix.",
+            regression: "Run OLD and NEW with identical symbol/from/to inputs. Inspect the persisted actual timings after each run, verify refresh/restart/View retains them, verify older runs show unavailable, and compare business outputs separately for parity. Do not optimize another stage until these measurements identify the bottleneck."
+        },
+        {
             id: "FIX-11I",
             title: "Trade Inspector open/closed + symbol filters",
             status: "IMPLEMENTED · READ-ONLY INSPECTOR UI",

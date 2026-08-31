@@ -260,11 +260,13 @@ public class RegressionTestService {
         int executions = jdbcTemplate.update("INSERT INTO wallet_execution_test_archive SELECT ?, r.* FROM wallet_execution_test r WHERE r.test_run_id=?", batchId, runId);
         int positions = jdbcTemplate.update("INSERT INTO wallet_position_test_archive SELECT ?, r.* FROM wallet_position_test r WHERE r.test_run_id=?", batchId, runId);
         int management = jdbcTemplate.update("INSERT INTO position_management_test_archive SELECT ?, r.* FROM position_management_test r WHERE r.test_run_id=?", batchId, runId);
+        int defensiveObservations = jdbcTemplate.update("INSERT INTO defensive_risk_reduction_observation_test_archive SELECT ?, r.* FROM defensive_risk_reduction_observation_test r WHERE r.test_run_id=?", batchId, runId);
         return Map.ofEntries(
                 Map.entry("archiveBatchId", batchId), Map.entry("sourceTestRunId", runId), Map.entry("alreadyArchived", false),
                 Map.entry("runs", runs), Map.entry("signals", signals), Map.entry("tradeSignals", fullTradeSignals),
                 Map.entry("opportunities", opportunities), Map.entry("results", results), Map.entry("executions", executions),
-                Map.entry("positions", positions), Map.entry("management", management));
+                Map.entry("positions", positions), Map.entry("management", management),
+                Map.entry("defensiveRiskObservations", defensiveObservations));
     }
 
     @Transactional(readOnly = true)
@@ -281,6 +283,9 @@ public class RegressionTestService {
     @Transactional(readOnly = true) public List<Map<String,Object>> archivedSignals(long batchId) { return jdbcTemplate.queryForList("SELECT generated_at,interval_code,latest_price,original_decision,final_decision,execution_effective_decision,total_score,confidence_score,trend_score,volume_score,momentum_score,decision_authority_corrected,replay_generated,generation_error FROM analysis_test_signal_archive WHERE archive_batch_id=? ORDER BY generated_at ASC, FIELD(interval_code,'1h','5m','1m') LIMIT 1500", batchId); }
     @Transactional(readOnly = true) public List<Map<String,Object>> archivedTrades(long batchId) { return jdbcTemplate.queryForList("SELECT id,entry_time,entry_price,exit_time,exit_price,exit_reason,realized_pnl_usdt,realized_pnl_percent,position_percent,status, EXISTS(SELECT 1 FROM proven_analyzed_trade p WHERE p.source_test_run_id=wallet_position_test_archive.test_run_id AND p.source_trade_id=wallet_position_test_archive.id) AS proven_success FROM wallet_position_test_archive WHERE archive_batch_id=? ORDER BY entry_time ASC LIMIT 500", batchId); }
     @Transactional(readOnly = true) public List<Map<String,Object>> archivedPositionManagement(long batchId) { return jdbcTemplate.queryForList("SELECT generated_at,action_code,current_price,old_take_profit,new_take_profit,highest_price,profit_lock_active,profit_lock_price,explanation FROM position_management_test_archive WHERE archive_batch_id=? ORDER BY generated_at ASC LIMIT 3000", batchId); }
+    @Transactional(readOnly = true) public List<Map<String,Object>> archivedDefensiveRiskReductionObservations(long batchId) {
+        return jdbcTemplate.queryForList("SELECT id,position_test_id,symbol,observed_at,source_signal_id,current_price,entry_price,highest_price_since_entry,current_profit_percent,peak_profit_percent,giveback_from_peak_percent,consecutive_final_1m_strong_sell,five_minute_signal_id,five_minute_original_decision,five_minute_final_decision,five_minute_confluence_status,one_hour_signal_id,one_hour_final_decision,observation_code FROM defensive_risk_reduction_observation_test_archive WHERE archive_batch_id=? ORDER BY observed_at ASC,id ASC LIMIT 5000", batchId);
+    }
     @Transactional(readOnly = true) public List<Map<String,Object>> archivedOpportunities(long batchId) { return jdbcTemplate.queryForList("SELECT generated_at,replay_stage,current_original_decision,current_final_decision,five_minute_decision,one_hour_decision,evidence_count,buy_count,watch_count,neutral_count,bearish_count,evidence_score,opportunity_health,recommended_position_percent,decision_code,decision_explanation FROM execution_opportunity_test_archive WHERE archive_batch_id=? AND replay_stage IS NOT NULL ORDER BY generated_at ASC LIMIT 3000", batchId); }
 
     @Transactional
@@ -321,6 +326,7 @@ public class RegressionTestService {
 
         Map<String, Integer> deleted = new java.util.LinkedHashMap<>();
         // Delete children before parents so the purge remains safe if foreign keys are added later.
+        deleted.put("defensive_risk_reduction_observation_test", jdbcTemplate.update("DELETE FROM defensive_risk_reduction_observation_test"));
         deleted.put("position_management_test", jdbcTemplate.update("DELETE FROM position_management_test"));
         deleted.put("wallet_execution_test", jdbcTemplate.update("DELETE FROM wallet_execution_test"));
         deleted.put("wallet_position_test", jdbcTemplate.update("DELETE FROM wallet_position_test"));
@@ -330,6 +336,7 @@ public class RegressionTestService {
         deleted.put("analysis_test_result", jdbcTemplate.update("DELETE FROM analysis_test_result"));
         deleted.put("analysis_test_run", jdbcTemplate.update("DELETE FROM analysis_test_run"));
 
+        deleted.put("defensive_risk_reduction_observation_test_archive", jdbcTemplate.update("DELETE FROM defensive_risk_reduction_observation_test_archive"));
         deleted.put("position_management_test_archive", jdbcTemplate.update("DELETE FROM position_management_test_archive"));
         deleted.put("wallet_execution_test_archive", jdbcTemplate.update("DELETE FROM wallet_execution_test_archive"));
         deleted.put("wallet_position_test_archive", jdbcTemplate.update("DELETE FROM wallet_position_test_archive"));
@@ -343,10 +350,10 @@ public class RegressionTestService {
         // Validate the database state inside this same transaction. If any replay table still
         // contains rows, throw and rollback instead of reporting a false successful purge.
         java.util.List<String> replayTables = java.util.List.of(
-                "position_management_test", "wallet_execution_test", "wallet_position_test",
+                "defensive_risk_reduction_observation_test", "position_management_test", "wallet_execution_test", "wallet_position_test",
                 "execution_opportunity_test", "trade_signal_test", "analysis_test_signal",
                 "analysis_test_result", "analysis_test_run",
-                "position_management_test_archive", "wallet_execution_test_archive",
+                "defensive_risk_reduction_observation_test_archive", "position_management_test_archive", "wallet_execution_test_archive",
                 "wallet_position_test_archive", "execution_opportunity_test_archive",
                 "trade_signal_test_archive", "analysis_test_signal_archive",
                 "analysis_test_result_archive", "analysis_test_run_archive",
@@ -368,7 +375,7 @@ public class RegressionTestService {
         // Reset only tables that own an AUTO_INCREMENT id. This is cosmetic and happens only
         // after successful delete + validation; Proven ids are never reset.
         java.util.List<String> autoIncrementTables = java.util.List.of(
-                "wallet_execution_test", "wallet_position_test", "position_management_test",
+                "defensive_risk_reduction_observation_test", "wallet_execution_test", "wallet_position_test", "position_management_test",
                 "execution_opportunity_test", "trade_signal_test", "analysis_test_signal",
                 "analysis_test_result", "analysis_test_run", "regression_test_archive_batch");
         for (String table : autoIncrementTables) jdbcTemplate.execute("ALTER TABLE " + table + " AUTO_INCREMENT = 1");
@@ -396,7 +403,11 @@ public class RegressionTestService {
                        generated_buy_count, generated_watch_count, generated_sell_count, generated_strong_sell_count,
                        neutralized_original_bearish_count, corrected_hard_reversal_count,
                        historical_hard_reversal_count, error_message, failure_step, failure_exception,
-                       failure_root_cause, failure_stack_trace, started_at, completed_at, created_at
+                       failure_root_cause, failure_stack_trace, started_at, completed_at, created_at,
+                       replay_price_mode, replay_logic_mode,
+                       timing_load_historical_ns, timing_verify_event_resolution_ns,
+                       timing_build_replay_dataset_ns, timing_generate_fresh_signals_ns,
+                       timing_shadow_execution_ns, timing_parity_comparison_ns, timing_total_ns
                 FROM analysis_test_run
                 WHERE id = ?
                 """, id);
@@ -422,6 +433,7 @@ public class RegressionTestService {
         List<Map<String, Object>> runs = jdbcTemplate.queryForList("""
                 SELECT r.id, r.test_name, r.symbol, r.start_time, r.end_time, r.status, r.progress_percent,
                        r.current_step, r.heartbeat_at, r.started_at, r.completed_at, r.created_at,
+                       r.timing_total_ns,
                        (SELECT COUNT(*) FROM wallet_position_test w WHERE w.test_run_id=r.id AND w.exit_time IS NOT NULL) AS closed_trade_count,
                        (SELECT COUNT(*) FROM proven_analyzed_trade p WHERE p.source_test_run_id=r.id) AS proven_trade_count
                 FROM analysis_test_run r
@@ -458,6 +470,24 @@ public class RegressionTestService {
                 WHERE test_run_id = ?
                 ORDER BY entry_time ASC
                 LIMIT 500
+                """, runId);
+    }
+
+    /** FIX-11K Phase A: read-only replay observations; never Production execution. */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> defensiveRiskReductionObservations(long runId) {
+        return jdbcTemplate.queryForList("""
+                SELECT id, position_test_id, symbol, observed_at, source_signal_id,
+                       current_price, entry_price, highest_price_since_entry,
+                       current_profit_percent, peak_profit_percent, giveback_from_peak_percent,
+                       consecutive_final_1m_strong_sell, five_minute_signal_id,
+                       five_minute_original_decision, five_minute_final_decision,
+                       five_minute_confluence_status, one_hour_signal_id, one_hour_final_decision,
+                       observation_code
+                FROM defensive_risk_reduction_observation_test
+                WHERE test_run_id = ?
+                ORDER BY observed_at ASC, id ASC
+                LIMIT 5000
                 """, runId);
     }
 

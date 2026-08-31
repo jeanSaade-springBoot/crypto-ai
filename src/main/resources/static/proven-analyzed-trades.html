@@ -88,6 +88,18 @@
 <article><span>Corrected hard reversals</span><strong id="regression-new-reversals">—</strong><small>Final decision authority</small></article>
 </div>
 <p class="form-note" id="regression-notes"></p>
+</div><div class="regression-performance hidden" id="regression-performance">
+<h3>Replay Performance</h3>
+<p class="form-note">FIX-11J · actual persisted elapsed time measured by the Replay worker. Older runs created before FIX-11J show timing as unavailable.</p>
+<div class="regression-result-grid">
+<article><span>Load historical data</span><strong id="regression-timing-load">Unavailable</strong></article>
+<article><span>Verify event resolution</span><strong id="regression-timing-verify">Unavailable</strong></article>
+<article><span>Build ReplayDataset</span><strong id="regression-timing-build">Unavailable</strong></article>
+<article><span>Generate fresh signals</span><strong id="regression-timing-generate">Unavailable</strong></article>
+<article><span>Shadow execution</span><strong id="regression-timing-shadow">Unavailable</strong></article>
+<article><span>Parity comparison</span><strong id="regression-timing-parity">Unavailable</strong></article>
+<article><span>TOTAL</span><strong id="regression-timing-total">Unavailable</strong></article>
+</div>
 </div><div class="regression-failure hidden" id="regression-failure">
 <div class="section-heading">
 <div><p class="eyebrow">TEST EXCEPTION</p><h3>Failure details</h3></div>
@@ -119,8 +131,8 @@
 <button class="danger-button" id="regression-reset" type="button">Delete Data</button>
 </div><div class="table-wrap">
 <table>
-<thead><tr><th>ID</th><th>Test</th><th>Symbol</th><th>Window</th><th>Status</th><th>Progress</th><th>Proven</th><th>Action</th></tr></thead>
-<tbody id="regression-runs-body"><tr><td colspan="8">Loading test runs…</td></tr></tbody>
+<thead><tr><th>ID</th><th>Test</th><th>Symbol</th><th>Window</th><th>Status</th><th>Progress</th><th>Replay time</th><th>Proven</th><th>Action</th></tr></thead>
+<tbody id="regression-runs-body"><tr><td colspan="9">Loading test runs…</td></tr></tbody>
 </table>
 </div>
 <section aria-labelledby="investigation-queue-title" class="regression-batch-panel">

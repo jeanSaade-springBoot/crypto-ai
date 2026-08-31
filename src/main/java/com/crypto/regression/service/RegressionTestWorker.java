@@ -98,7 +98,18 @@ public class RegressionTestWorker {
             log.warn("FIX-087: replay run {} already has an active worker; duplicate execution skipped", runId);
             return;
         }
+        // FIX-11J: Replay-only observational timers. The worker pipeline below is intentionally
+        // left in its existing order; these locals only capture elapsed monotonic time and are
+        // persisted once in finally so diagnostics cannot steer or fail Replay business logic.
+        final long replayTotalStartedNs = System.nanoTime();
+        Long loadHistoricalDataNs = null;
+        Long verifyEventResolutionNs = null;
+        Long buildReplayDatasetNs = null;
+        Long generateFreshSignalsNs = null;
+        Long shadowExecutionNs = null;
+        Long parityComparisonNs = null;
         try {
+            long stageStartedNs = System.nanoTime();
             Map<String, Object> run = jdbcTemplate.queryForMap(
                     "SELECT symbol, start_time, end_time FROM analysis_test_run WHERE id = ?", runId);
             String symbol = String.valueOf(run.get("symbol"));
@@ -127,21 +138,33 @@ public class RegressionTestWorker {
 
             jdbcTemplate.update("UPDATE analysis_test_run SET source_signal_count=? WHERE id=?",
                     sourceSignals.size(), runId);
+            loadHistoricalDataNs = System.nanoTime() - stageStartedNs;
 
+            stageStartedNs = System.nanoTime();
             updateRun(runId, "RUNNING", 10, "Replaying event-candle resolution (no production writes)", null);
             checkStopRequested(runId);
             int replay1m = verifyEventResolution(runId, symbol, "1m", requestedOneMinuteCandles, 10, 28);
             int replay5m = verifyEventResolution(runId, symbol, "5m", requestedFiveMinuteCandles, 28, 38);
             int replay1h = verifyEventResolution(runId, symbol, "1h", requestedOneHourCandles, 38, 42);
+            verifyEventResolutionNs = System.nanoTime() - stageStartedNs;
 
             updateRun(runId, "RUNNING", 43, "Generating fresh signals from historical candles", null);
             checkStopRequested(runId);
             // FIX-11H: OLD=DATABASE and NEW=DATASET are explicit replay-only modes. Production
             // has no dependency on this selector. verifyEventResolution() intentionally remains unchanged.
-            ReplayDataset replayDataset = dataSource == ReplayDataSource.DATASET
-                    ? loadDataset(symbol, btcSymbol, contextStart, end) : null;
+            ReplayDataset replayDataset;
+            if (dataSource == ReplayDataSource.DATASET) {
+                stageStartedNs = System.nanoTime();
+                replayDataset = loadDataset(symbol, btcSymbol, contextStart, end);
+                buildReplayDatasetNs = System.nanoTime() - stageStartedNs;
+            } else {
+                // DATABASE mode has no ReplayDataset build stage. Persist NULL so the UI can
+                // distinguish "not applicable" from a fabricated zero-duration measurement.
+                replayDataset = null;
+            }
             log.info("FIX-11H replay data source: run={}, mode={}, symbol={}, start={}, end={}",
                     runId, dataSource, symbol, start, end);
+            stageStartedNs = System.nanoTime();
             FreshReplayStats fresh = generateFreshSignals(
                     runId, symbol, start, end,
                     oneMinuteCandles, fiveMinuteCandles, oneHourCandles,
@@ -153,7 +176,9 @@ public class RegressionTestWorker {
                         generated_sell_count=?, generated_strong_sell_count=?
                     WHERE id=?
                     """, fresh.total(), fresh.buys(), fresh.watches(), fresh.sells(), fresh.strongSells(), runId);
+            generateFreshSignalsNs = System.nanoTime() - stageStartedNs;
 
+            stageStartedNs = System.nanoTime();
             updateRun(runId, "RUNNING", 74, "Running full shadow-production execution flow", null);
             checkStopRequested(runId);
             // FIX-052: Replay position protection consumes the same canonical live 1m
@@ -171,7 +196,9 @@ public class RegressionTestWorker {
             jdbcTemplate.update("UPDATE analysis_test_run SET replay_price_mode=?, replay_logic_mode=? WHERE id=?",
                     shadow.priceReplayMode(), shadow.logicMode(), runId);
             checkStopRequested(runId);
+            shadowExecutionNs = System.nanoTime() - stageStartedNs;
 
+            stageStartedNs = System.nanoTime();
             updateRun(runId, "RUNNING", 82, "Comparing historical decision authority", null);
             checkStopRequested(runId);
             int authorityCorrections = 0;
@@ -341,6 +368,7 @@ public class RegressionTestWorker {
                     authorityCorrections, oldHardReversals, correctedHardReversals,
                     cadencePass, authorityPass, passed, notes
             );
+            parityComparisonNs = System.nanoTime() - stageStartedNs;
 
             jdbcTemplate.update("""
                     UPDATE analysis_test_run
@@ -376,10 +404,37 @@ public class RegressionTestWorker {
                     summary, failedStep, exception.getClass().getName(),
                     rootCauseDetail(root, 1000), stackTrace(exception), runId);
         } finally {
+            // FIX-11J: persist one timing snapshot after the existing Replay path has completed or
+            // unwound. Diagnostics persistence is deliberately best-effort: it must never replace
+            // the Replay's real PASSED/FAILED/ERROR outcome or swallow the original exception.
+            long replayTotalNs = System.nanoTime() - replayTotalStartedNs;
+            persistReplayTimingsSafely(runId, loadHistoricalDataNs, verifyEventResolutionNs,
+                    buildReplayDatasetNs, generateFreshSignalsNs, shadowExecutionNs,
+                    parityComparisonNs, replayTotalNs);
+
             // FIX-087: always release ownership, including ERROR paths, so a genuinely stopped
             // replay remains recoverable later using the same run id and original replay window.
             activeRunIds.remove(runId);
             stopRequestedRunIds.remove(runId);
+        }
+    }
+
+    private void persistReplayTimingsSafely(long runId, Long loadHistoricalDataNs,
+                                            Long verifyEventResolutionNs, Long buildReplayDatasetNs,
+                                            Long generateFreshSignalsNs, Long shadowExecutionNs,
+                                            Long parityComparisonNs, long replayTotalNs) {
+        try {
+            jdbcTemplate.update("""
+                    UPDATE analysis_test_run
+                    SET timing_load_historical_ns=?, timing_verify_event_resolution_ns=?,
+                        timing_build_replay_dataset_ns=?, timing_generate_fresh_signals_ns=?,
+                        timing_shadow_execution_ns=?, timing_parity_comparison_ns=?, timing_total_ns=?
+                    WHERE id=?
+                    """, loadHistoricalDataNs, verifyEventResolutionNs, buildReplayDatasetNs,
+                    generateFreshSignalsNs, shadowExecutionNs, parityComparisonNs, replayTotalNs, runId);
+        } catch (Exception timingPersistenceFailure) {
+            log.error("FIX-11J: unable to persist Replay timing diagnostics for run {}",
+                    runId, timingPersistenceFailure);
         }
     }
 

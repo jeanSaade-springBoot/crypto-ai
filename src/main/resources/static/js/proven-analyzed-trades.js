@@ -24,6 +24,17 @@ function formatMovePrice(value) {
     return n.toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:10});
 }
 function formatMoveTime(value) { if(!value) return '—'; const d=window.CryptoTime.parseUtc(value); return d?d.toLocaleString():escapeHtml(value); }
+function formatReplayDurationNs(value) {
+    if (value == null || value === '') return 'Unavailable';
+    const ns = Number(value);
+    if (!Number.isFinite(ns) || ns < 0) return 'Unavailable';
+    const seconds = ns / 1_000_000_000;
+    if (seconds < 1) return `${(ns / 1_000_000).toFixed(1)} ms`;
+    if (seconds < 60) return `${seconds.toFixed(3)} s`;
+    const minutes = Math.floor(seconds / 60);
+    const remaining = seconds - minutes * 60;
+    return `${minutes}m ${remaining.toFixed(3)}s`;
+}
 function initializeProvenTradesSidebar(){
  const sidebar=document.getElementById('proven-trades-sidebar'),toggle=document.getElementById('sidebar-toggle'); if(!sidebar||!toggle)return;
  const key='crypto-sidebar-collapsed', stored=localStorage.getItem(key)==='1'; sidebar.classList.toggle('collapsed',stored); document.body.classList.toggle('sidebar-collapsed',stored);
@@ -99,6 +110,7 @@ async function loadRegressionRuns() {
                 <td>${formatMoveTime(run.start_time)} → ${formatMoveTime(run.end_time)}</td>
                 <td><span class="status-pill ${regressionStatusClass(run.status)}">${escapeHtml(run.status)}</span></td>
                 <td>${Number(run.progress_percent || 0)}%</td>
+                <td>${formatReplayDurationNs(run.timing_total_ns)}</td>
                 <td><label class="proven-success-check" title="Save every closed trade from this run in Proven trades"><input type="checkbox" data-proven-run-toggle="${run.id}" ${Number(run.closed_trade_count || 0) > 0 && Number(run.proven_trade_count || 0) === Number(run.closed_trade_count || 0) ? 'checked' : ''} ${Number(run.closed_trade_count || 0) === 0 ? 'disabled' : ''}></label></td>
                 <td>
                     <button type="button" class="secondary-button" data-regression-run-id="${run.id}">View</button>
@@ -524,6 +536,29 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
     document.getElementById('regression-progress-bar').style.width = `${progress}%`;
     document.getElementById('regression-progress-percent').textContent = `${progress}%`;
     document.getElementById('regression-current-step').textContent = run.error_message || run.current_step || '—';
+
+    // FIX-11J: Replay Performance is persisted run metadata only. Rendering these values
+    // never invokes analysis/execution code and older runs naturally remain unavailable.
+    const performancePanel = document.getElementById('regression-performance');
+    performancePanel?.classList.remove('hidden');
+    const timingFields = {
+        'regression-timing-load': run.timing_load_historical_ns,
+        'regression-timing-verify': run.timing_verify_event_resolution_ns,
+        'regression-timing-build': run.timing_build_replay_dataset_ns,
+        'regression-timing-generate': run.timing_generate_fresh_signals_ns,
+        'regression-timing-shadow': run.timing_shadow_execution_ns,
+        'regression-timing-parity': run.timing_parity_comparison_ns,
+        'regression-timing-total': run.timing_total_ns
+    };
+    Object.entries(timingFields).forEach(([id, value]) => {
+        const node = document.getElementById(id);
+        if (!node) return;
+        if (id === 'regression-timing-build' && value == null && String(run.test_name || '').includes('[DATABASE]')) {
+            node.textContent = 'N/A · OLD Database Replay';
+        } else {
+            node.textContent = formatReplayDurationNs(value);
+        }
+    });
 
     const failurePanel = document.getElementById('regression-failure');
     const hasFailure = ['FAILED', 'ERROR'].includes(String(run.status)) &&
