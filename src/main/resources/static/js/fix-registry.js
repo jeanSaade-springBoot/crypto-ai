@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-11L",
+            title: "Replay fresh-signal deep performance profiler",
+            status: "IMPLEMENTED · REPLAY OBSERVABILITY ONLY",
+            scenario: "PEPEUSDT ReplayDataset run #1 passed 100% parity but Generate fresh signals consumed 654.813s of 717.652s total (~91.2%), requiring a deeper measurement before any optimization is approved.",
+            symbol: "ALL", entry: "REPLAY ONLY", exit: "UNCHANGED",
+            entryTime: "Historical replay", exitTime: "UNCHANGED",
+            replayWindow: "Repeat the same PEPEUSDT 2026-08-30 17:00→20:30 UTC dataset replay, or any replay window where Generate fresh signals dominates.",
+            location: "RegressionTestWorker.generateFreshSignals() Replay-only timing wrapper",
+            classes: ["RegressionTestWorker", "md/FIX-11L.md"],
+            cause: "FIX-11J proved the top-level bottleneck is Generate fresh signals but did not distinguish technical snapshot calculation, shared Production analysis, replay-output persistence, source lineage lookup, heartbeat/progress writes, or residual loop overhead.",
+            solution: "Add in-memory System.nanoTime() aggregation around the existing Replay calls only. Emit one FIX11L_REPLAY_SIGNAL_PROFILE summary containing total/call/average/max timing for snapshot and analysis plus persistence, lineage, progress and residual overhead. No per-signal logging or extra database writes are introduced.",
+            behavior: "Production behavior changes: zero. Shared AnalysisService, signal decisions, thresholds, event order, ReplayDataset inputs, persistence semantics, BUY/SELL logic and shadow execution are unchanged. FIX-11L only observes elapsed time in RegressionTestWorker.",
+            regression: "Repeat the identical PEPE dataset replay and verify business parity remains PASSED. Compare FIX11L_REPLAY_SIGNAL_PROFILE totals to FIX-11J Generate fresh signals time, then optimize only the measured dominant Replay sub-stage in a separately reviewed fix."
+        },
+        {
             id: "FIX-11K",
             title: "Defensive risk reduction Replay observation harness",
             status: "IMPLEMENTED · PHASE A REPLAY RESEARCH ONLY",

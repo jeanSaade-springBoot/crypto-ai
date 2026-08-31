@@ -541,6 +541,10 @@ public class RegressionTestWorker {
         int buys = 0, watches = 0, sells = 0, strongSells = 0, errors = 0;
         java.util.List<TradeSignal> generatedSignals = new java.util.ArrayList<>();
 
+        // FIX-11L: Replay-only deep profiling for the Generate fresh signals stage.
+        // These monotonic timers observe existing calls only; they do not alter inputs,
+        // call ordering, persistence, thresholds, or any Production trading behavior.
+        ReplayFreshSignalProfiler profiler = new ReplayFreshSignalProfiler(runId, dataSource);
         try (ExecutionReplayScope.Scope ignored = replayScope.open(runId, List.of(), o -> {})) {
         // FIX-043 Replay parity: fresh Replay has always generated technical snapshots/signals
         // chronologically for EVERY closed candle in the timeline. Production now restores the
@@ -554,11 +558,17 @@ public class RegressionTestWorker {
             Instant evaluationTime = candle.getOpenTime().plusSeconds(intervalSeconds(replay.interval()));
             boolean inRequestedWindow = !evaluationTime.isBefore(executionStart) && !evaluationTime.isAfter(executionEnd);
             try {
-                java.util.Optional<IndicatorSnapshot> snapshot = dataSource == ReplayDataSource.DATASET
-                        ? technicalIndicatorService.calculateSnapshotForRegression(
-                                replay.symbol(), replay.interval(), candle.getOpenTime(), replayDataset)
-                        : technicalIndicatorService.calculateSnapshotForRegression(
-                                replay.symbol(), replay.interval(), candle.getOpenTime());
+                long operationStartedNs = System.nanoTime();
+                java.util.Optional<IndicatorSnapshot> snapshot;
+                try {
+                    snapshot = dataSource == ReplayDataSource.DATASET
+                            ? technicalIndicatorService.calculateSnapshotForRegression(
+                                    replay.symbol(), replay.interval(), candle.getOpenTime(), replayDataset)
+                            : technicalIndicatorService.calculateSnapshotForRegression(
+                                    replay.symbol(), replay.interval(), candle.getOpenTime());
+                } finally {
+                    profiler.recordSnapshot(System.nanoTime() - operationStartedNs);
+                }
                 if (snapshot.isEmpty()) {
                     if (inRequestedWindow) {
                         errors++;
@@ -574,7 +584,13 @@ public class RegressionTestWorker {
                 if (evaluationTime.isAfter(executionEnd)) continue;
 
                 replayScope.reference(evaluationTime);
-                TradeSignal generated = analysisService.analyzeForRegression(snapshot.get(), evaluationTime);
+                operationStartedNs = System.nanoTime();
+                TradeSignal generated;
+                try {
+                    generated = analysisService.analyzeForRegression(snapshot.get(), evaluationTime);
+                } finally {
+                    profiler.recordAnalysis(System.nanoTime() - operationStartedNs);
+                }
                 replayScope.appendSignal(generated);
                 SignalDecision decision = generated.getDecision();
                 if (replay.primary()) generatedSignals.add(generated);
@@ -589,7 +605,9 @@ public class RegressionTestWorker {
                     else if (decision == SignalDecision.SELL) sells++;
                     else if (decision == SignalDecision.STRONG_SELL) strongSells++;
 
-                    jdbcTemplate.update("""
+                    operationStartedNs = System.nanoTime();
+                    try {
+                        jdbcTemplate.update("""
                             INSERT INTO analysis_test_signal
                                 (test_run_id, source_signal_id, replay_generated, symbol, interval_code, candle_open_time,
                                  generated_at, latest_price, original_decision, final_decision,
@@ -612,6 +630,9 @@ public class RegressionTestWorker {
                             generated.getRegimeCandidateCount(), generated.getEntryAuthority(),
                             generated.getEntryAuthorityMaxPositionPercent(), generated.getTrendScore(),
                             generated.getVolumeScore(), generated.getMomentumScore());
+                    } finally {
+                        profiler.recordAnalysisTestSignalPersistence(System.nanoTime() - operationStartedNs);
+                    }
 
                     // FIX-069: Persist the exact production TradeSignal shape as replay output.
                     // analysis_test_signal remains for backward-compatible diagnostics, while
@@ -619,13 +640,24 @@ public class RegressionTestWorker {
                     // FIX-112D: Replay lineage uses exact market-candle identity, never
                     // generated_at or nearest-time matching. A legitimate Replay-only
                     // signal remains NULL. This metadata lookup cannot alter Production.
-                    Long sourceSignalId = dataSource == ReplayDataSource.DATASET
-                            ? replayDataset.sourceSignalId(
-                                    generated.getSymbol(), generated.getInterval(), generated.getCandleOpenTime())
-                            : signalRepository.findBySymbolAndIntervalAndCandleOpenTime(
-                                    generated.getSymbol(), generated.getInterval(), generated.getCandleOpenTime())
-                                    .map(TradeSignal::getId).orElse(null);
-                    persistTradeSignalTest(runId, generated, sourceSignalId, null);
+                    operationStartedNs = System.nanoTime();
+                    Long sourceSignalId;
+                    try {
+                        sourceSignalId = dataSource == ReplayDataSource.DATASET
+                                ? replayDataset.sourceSignalId(
+                                        generated.getSymbol(), generated.getInterval(), generated.getCandleOpenTime())
+                                : signalRepository.findBySymbolAndIntervalAndCandleOpenTime(
+                                        generated.getSymbol(), generated.getInterval(), generated.getCandleOpenTime())
+                                        .map(TradeSignal::getId).orElse(null);
+                    } finally {
+                        profiler.recordLineageLookup(System.nanoTime() - operationStartedNs);
+                    }
+                    operationStartedNs = System.nanoTime();
+                    try {
+                        persistTradeSignalTest(runId, generated, sourceSignalId, null);
+                    } finally {
+                        profiler.recordTradeSignalTestPersistence(System.nanoTime() - operationStartedNs);
+                    }
                 }
             } catch (ReplayCancellationException stop) {
                 throw stop;
@@ -640,11 +672,18 @@ public class RegressionTestWorker {
 
             if (index % 10 == 0 && !timeline.isEmpty()) {
                 int progress = 43 + (int) Math.round(30d * index / timeline.size());
-                updateRun(runId, "RUNNING", Math.min(73, progress),
-                        "Generating fresh signal " + (index + 1) + "/" + timeline.size(), null);
+                long progressStartedNs = System.nanoTime();
+                try {
+                    updateRun(runId, "RUNNING", Math.min(73, progress),
+                            "Generating fresh signal " + (index + 1) + "/" + timeline.size(), null);
+                } finally {
+                    profiler.recordProgressUpdate(System.nanoTime() - progressStartedNs);
+                }
             }
         }
 
+        } finally {
+            profiler.logSummary(log, timeline.size());
         }
         return new FreshReplayStats(oneMinuteSignals, oneMinuteBuys, fiveMinuteSignals, fiveMinuteBuys,
                 oneHourSignals, oneHourBuys, buys, watches, sells, strongSells, errors, generatedSignals);
@@ -722,6 +761,97 @@ public class RegressionTestWorker {
 
     private boolean isBuy(SignalDecision decision) {
         return decision == SignalDecision.BUY || decision == SignalDecision.STRONG_BUY;
+    }
+
+    /**
+     * FIX-11L Replay-only profiler for the fresh-signal generation loop. It deliberately
+     * aggregates timings in memory and emits one summary log after the stage; there are no
+     * per-signal log writes and no Production/shared-analysis branches.
+     */
+    private static final class ReplayFreshSignalProfiler {
+        private final long runId;
+        private final ReplayDataSource dataSource;
+        private final long startedNs = System.nanoTime();
+        private long snapshotNs;
+        private long analysisNs;
+        private long analysisTestSignalPersistenceNs;
+        private long lineageLookupNs;
+        private long tradeSignalTestPersistenceNs;
+        private long progressUpdateNs;
+        private long snapshotCalls;
+        private long analysisCalls;
+        private long analysisTestSignalPersistenceCalls;
+        private long lineageLookupCalls;
+        private long tradeSignalTestPersistenceCalls;
+        private long progressUpdateCalls;
+        private long maxSnapshotNs;
+        private long maxAnalysisNs;
+
+        private ReplayFreshSignalProfiler(long runId, ReplayDataSource dataSource) {
+            this.runId = runId;
+            this.dataSource = dataSource;
+        }
+
+        private void recordSnapshot(long elapsedNs) {
+            snapshotNs += elapsedNs;
+            snapshotCalls++;
+            maxSnapshotNs = Math.max(maxSnapshotNs, elapsedNs);
+        }
+
+        private void recordAnalysis(long elapsedNs) {
+            analysisNs += elapsedNs;
+            analysisCalls++;
+            maxAnalysisNs = Math.max(maxAnalysisNs, elapsedNs);
+        }
+
+        private void recordAnalysisTestSignalPersistence(long elapsedNs) {
+            analysisTestSignalPersistenceNs += elapsedNs;
+            analysisTestSignalPersistenceCalls++;
+        }
+
+        private void recordLineageLookup(long elapsedNs) {
+            lineageLookupNs += elapsedNs;
+            lineageLookupCalls++;
+        }
+
+        private void recordTradeSignalTestPersistence(long elapsedNs) {
+            tradeSignalTestPersistenceNs += elapsedNs;
+            tradeSignalTestPersistenceCalls++;
+        }
+
+        private void recordProgressUpdate(long elapsedNs) {
+            progressUpdateNs += elapsedNs;
+            progressUpdateCalls++;
+        }
+
+        private void logSummary(org.slf4j.Logger logger, int timelineSize) {
+            long totalNs = System.nanoTime() - startedNs;
+            long measuredNs = snapshotNs + analysisNs + analysisTestSignalPersistenceNs
+                    + lineageLookupNs + tradeSignalTestPersistenceNs + progressUpdateNs;
+            long otherNs = Math.max(0L, totalNs - measuredNs);
+            logger.info(
+                    "FIX11L_REPLAY_SIGNAL_PROFILE run={} dataSource={} timeline={} totalMs={} "
+                            + "snapshotMs={} snapshotCalls={} snapshotAvgMs={} snapshotMaxMs={} "
+                            + "analysisMs={} analysisCalls={} analysisAvgMs={} analysisMaxMs={} "
+                            + "analysisTestSignalPersistMs={} analysisTestSignalPersistCalls={} "
+                            + "lineageMs={} lineageCalls={} tradeSignalTestPersistMs={} tradeSignalTestPersistCalls={} "
+                            + "progressMs={} progressCalls={} otherMs={} productionMutation=false replayDecisionMutation=false",
+                    runId, dataSource, timelineSize, millis(totalNs),
+                    millis(snapshotNs), snapshotCalls, averageMillis(snapshotNs, snapshotCalls), millis(maxSnapshotNs),
+                    millis(analysisNs), analysisCalls, averageMillis(analysisNs, analysisCalls), millis(maxAnalysisNs),
+                    millis(analysisTestSignalPersistenceNs), analysisTestSignalPersistenceCalls,
+                    millis(lineageLookupNs), lineageLookupCalls, millis(tradeSignalTestPersistenceNs),
+                    tradeSignalTestPersistenceCalls, millis(progressUpdateNs), progressUpdateCalls, millis(otherNs));
+        }
+
+        private static String millis(long ns) {
+            return String.format(java.util.Locale.ROOT, "%.3f", ns / 1_000_000.0d);
+        }
+
+        private static String averageMillis(long ns, long calls) {
+            return calls == 0L ? "0.000"
+                    : String.format(java.util.Locale.ROOT, "%.3f", (ns / 1_000_000.0d) / calls);
+        }
     }
 
     private record ReplayCandle(String symbol, String interval, Candle candle, boolean primary) {}
