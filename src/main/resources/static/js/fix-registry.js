@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-11M",
+            title: "Replay analysis-service deep performance profiler",
+            status: "IMPLEMENTED · REPLAY OBSERVABILITY ONLY",
+            scenario: "FIX-11L proved AnalysisService.analyzeForRegression() consumed 559.235s across 938 calls (~596ms/call), about 86% of Generate fresh signals, while persistence/lineage/progress were negligible.",
+            symbol: "ALL", entry: "REPLAY ONLY", exit: "UNCHANGED",
+            entryTime: "Historical replay", exitTime: "UNCHANGED",
+            replayWindow: "Repeat the same PEPEUSDT 2026-08-30 17:00→20:30 UTC DATASET replay used for FIX-11L.",
+            location: "AnalysisService buildSignal() Replay-only timing instrumentation + RegressionTestWorker lifecycle",
+            classes: ["AnalysisService", "RegressionTestWorker", "md/FIX-11M.md"],
+            cause: "The top-level Replay profiler isolated the dominant cost to shared signal analysis but could not identify which internal context/scoring service consumes the 559 seconds.",
+            solution: "Activate a ThreadLocal profiler only for RegressionTestWorker fresh-signal generation and aggregate total/call/average/max timing for sentiment, fundamentals, previous snapshot, trend structure, base scoring, ATR, regime, market context, strategy, MTF, BTC context, derivatives, historical order book, entry authority, range-entry location, final decision and signal assembly. Emit one FIX11M_REPLAY_ANALYSIS_PROFILE summary at stage exit.",
+            behavior: "Trading behavior changes: zero. No cache, query rewrite, decision change, threshold change, call reordering, persistence change, BUY/SELL authority change or Production execution change. Production calls never activate the ThreadLocal profiler. FIX-11K Phase A observation remains unchanged.",
+            regression: "Run the identical PEPE DATASET window, confirm parity/business output remains unchanged, compare FIX11M totalMs to FIX11L analysisMs, then optimize only the proven dominant Replay component in a separately reviewed fix."
+        },
+        {
             id: "FIX-11L",
             title: "Replay fresh-signal deep performance profiler",
             status: "IMPLEMENTED · REPLAY OBSERVABILITY ONLY",

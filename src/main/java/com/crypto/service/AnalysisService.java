@@ -30,6 +30,7 @@ import com.crypto.indicator.service.TechnicalIndicatorService;
 import com.crypto.repository.TradeSignalRepository;
 import com.crypto.repository.TechnicalIndicatorRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,15 +39,24 @@ import java.math.MathContext;
 import java.math.RoundingMode;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.EnumMap;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class AnalysisService {
 
     private static final MathContext MC = MathContext.DECIMAL64;
+
+    /**
+     * FIX-11M: Replay-only deep profiler state. ThreadLocal keeps profiling scoped to
+     * the regression worker thread so Production analyze()/analyzeRecovered() calls
+     * cannot accidentally contribute timing data or change their behavior.
+     */
+    private final ThreadLocal<ReplayAnalysisProfiler> replayAnalysisProfiler = new ThreadLocal<>();
 
     private static final int MAX_TREND_SCORE = 25;
     private static final int MAX_VOLUME_SCORE = 20;
@@ -142,21 +152,65 @@ public class AnalysisService {
         if (snapshot == null) {
             throw new IllegalArgumentException("Regression indicator snapshot is required");
         }
-        return buildSignal(snapshot, evaluationTime == null ? snapshot.candleOpenTime() : evaluationTime, true);
+        ReplayAnalysisProfiler profiler = replayAnalysisProfiler.get();
+        long startedNs = profiler == null ? 0L : System.nanoTime();
+        try {
+            return buildSignal(snapshot, evaluationTime == null ? snapshot.candleOpenTime() : evaluationTime, true);
+        } finally {
+            if (profiler != null) {
+                profiler.recordCall(System.nanoTime() - startedNs);
+            }
+        }
+    }
+
+    /**
+     * FIX-11M: Called only by RegressionTestWorker around the fresh-signal stage.
+     * This activates timing observation; it does not alter buildSignal inputs, outputs,
+     * ordering, thresholds, persistence, or any Production execution path.
+     */
+    public void beginReplayAnalysisProfiling(long runId) {
+        replayAnalysisProfiler.set(new ReplayAnalysisProfiler(runId));
+    }
+
+    /**
+     * FIX-11M: Emit one aggregate Replay-only summary and always clear thread-local state.
+     */
+    public void finishReplayAnalysisProfiling(long runId) {
+        ReplayAnalysisProfiler profiler = replayAnalysisProfiler.get();
+        replayAnalysisProfiler.remove();
+        if (profiler == null) {
+            log.warn("FIX11M_REPLAY_ANALYSIS_PROFILE_MISSING run={} productionMutation=false replayDecisionMutation=false", runId);
+            return;
+        }
+        profiler.logSummary(log, runId);
     }
 
     private TradeSignal buildSignal(IndicatorSnapshot i, Instant signalGeneratedAt, boolean historicalReplay) {
         String symbol = i.symbol();
+        ReplayAnalysisProfiler profiler = historicalReplay ? replayAnalysisProfiler.get() : null;
+        long profileStartedNs;
 
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         boolean sentimentEnabled = sentimentService.isEnabled();
         SentimentOverview sentimentOverview = sentimentService.overviewAsOf(symbol, signalGeneratedAt);
         BigDecimal sentiment = sentimentOverview.weightedScore();
-        MarketFundamental fundamental = fundamentalService.latestAsOf(symbol, signalGeneratedAt).orElse(null);
         boolean sentimentAvailable = hasUsableSentimentCoverage(sentimentEnabled, sentimentOverview);
-        boolean fundamentalAvailable = fundamentalService.isAvailable(fundamental, signalGeneratedAt);
+        recordReplayStage(profiler, ReplayAnalysisStage.SENTIMENT, profileStartedNs);
 
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
+        MarketFundamental fundamental = fundamentalService.latestAsOf(symbol, signalGeneratedAt).orElse(null);
+        boolean fundamentalAvailable = fundamentalService.isAvailable(fundamental, signalGeneratedAt);
+        recordReplayStage(profiler, ReplayAnalysisStage.FUNDAMENTALS, profileStartedNs);
+
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         IndicatorSnapshot previous = previousSnapshot(i);
+        recordReplayStage(profiler, ReplayAnalysisStage.PREVIOUS_SNAPSHOT, profileStartedNs);
+
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         TrendStructureResult trendStructure = trendStructureService.evaluate(i);
+        recordReplayStage(profiler, ReplayAnalysisStage.TREND_STRUCTURE, profileStartedNs);
+
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         MovingAverageBreakdown movingAverages = movingAverageScore(i, previous, trendStructure);
         MomentumBreakdown momentumBreakdown = momentumScore(i);
         BandsVolumeBreakdown bandsVolume = bandsVolumeScore(i, previous);
@@ -166,6 +220,7 @@ public class AnalysisService {
         int sentimentPoints = sentimentAvailable ? sentimentScore(sentiment) : 0;
         FundamentalScoreResult fundamentalBreakdown = fundamentalScoringService.score(fundamentalAvailable ? fundamental : null);
         int fundamentals = fundamentalAvailable ? fundamentalBreakdown.total() : 0;
+        recordReplayStage(profiler, ReplayAnalysisStage.BASE_SCORING, profileStartedNs);
 
         int baseRawTotal = trend + volume + momentum + sentimentPoints + fundamentals;
         int baseMaximumAvailableScore = MAX_TREND_SCORE
@@ -174,14 +229,24 @@ public class AnalysisService {
                 + (fundamentalAvailable ? MAX_FUNDAMENTAL_SCORE : 0)
                 + (sentimentAvailable ? MAX_SENTIMENT_SCORE : 0);
 
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         AtrRiskAssessment atrRisk = atrRiskService.assess(i);
+        recordReplayStage(profiler, ReplayAnalysisStage.ATR_RISK, profileStartedNs);
+
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         MarketRegimeAssessment detectedRegimeAssessment = marketRegimeService.assess(i, trendStructure);
         RegimeStateService.Decision regimeState = regimeStateService.apply(
                 symbol, i.intervalCode(), i.candleOpenTime(), detectedRegimeAssessment);
         MarketRegimeAssessment regimeAssessment = regimeState.effectiveAssessment();
         MarketRegime marketRegime = regimeAssessment.regime();
+        recordReplayStage(profiler, ReplayAnalysisStage.REGIME, profileStartedNs);
+
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         MarketContextSnapshot marketContext = marketContextService.build(
                 i, atrRisk, sentimentOverview, sentimentEnabled, signalGeneratedAt, historicalReplay);
+        recordReplayStage(profiler, ReplayAnalysisStage.MARKET_CONTEXT, profileStartedNs);
+
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         StrategyProfile strategyProfile = marketStrategyService.select(regimeAssessment, marketContext);
         atrRisk = atrRiskService.applyStrategyEntryPlan(atrRisk, i, strategyProfile.strategy());
         StrategyScoreResult strategyScore = marketStrategyService.score(
@@ -197,6 +262,7 @@ public class AnalysisService {
         strategyScore = marketStrategyService.constrainBreakoutCandidate(regimeAssessment, strategyScore);
         strategyScore = marketStrategyService.promoteEarlyBreakout(
                 strategyProfile, strategyScore, marketContext, atrRisk, regimeAssessment, trendStructure);
+        recordReplayStage(profiler, ReplayAnalysisStage.STRATEGY, profileStartedNs);
 
         int rawTotal = strategyScore.rawScore();
         int maximumAvailableScore = strategyScore.maximumScore();
@@ -211,15 +277,25 @@ public class AnalysisService {
             atrAdjustedDecision = SignalDecision.WATCH;
         }
 
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         MultiTimeframeConfluenceResult confluence = multiTimeframeConfluenceService.evaluate(
                 symbol, i.intervalCode(), atrAdjustedDecision, signalGeneratedAt, strategyProfile.strategy()
         );
+        recordReplayStage(profiler, ReplayAnalysisStage.MULTI_TIMEFRAME, profileStartedNs);
+
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         BtcMarketContextResult btcContext = btcMarketContextService.evaluate(
                 symbol, i.intervalCode(), confluence.finalDecision(), confluence.entryAllowed(), signalGeneratedAt
         );
+        recordReplayStage(profiler, ReplayAnalysisStage.BTC_CONTEXT, profileStartedNs);
+
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         DerivativesPositioningResult derivatives = derivativesPositioningService.evaluate(
                 symbol, i.intervalCode(), btcContext.finalDecision(), btcContext.entryAllowed(), signalGeneratedAt
         );
+        recordReplayStage(profiler, ReplayAnalysisStage.DERIVATIVES, profileStartedNs);
+
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         OrderBookLiquidityResult liquidity = historicalReplay
                 ? orderBookLiquidityService.evaluateHistorical(
                     symbol, i.intervalCode(), derivatives.finalDecision(), derivatives.entryAllowed(),
@@ -227,18 +303,24 @@ public class AnalysisService {
                 : orderBookLiquidityService.evaluate(
                     symbol, i.intervalCode(), derivatives.finalDecision(), derivatives.entryAllowed(),
                     i.latestPrice(), atrRisk.stopLoss(), atrRisk.takeProfit(), signalGeneratedAt);
+        recordReplayStage(profiler, ReplayAnalysisStage.ORDER_BOOK, profileStartedNs);
 
         // FIX-091 / Fix 5: transition authority is evaluated only after all structural/context
         // evidence exists. In Replay it can identify a candidate early, but a RANGE-location
         // exception is only granted when the full BTC/liquidity/HTF/ATR safety set is complete.
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         EntryAuthorityDecision entryAuthority = entryAuthorityService.evaluate(
                 i, regimeState, strategyProfile, strategyScore, trendStructure, atrRisk, confluence, btcContext, liquidity);
+        recordReplayStage(profiler, ReplayAnalysisStage.ENTRY_AUTHORITY, profileStartedNs);
 
         // FIX-042 / FIX-036 + FIX-091: ordinary RANGE behavior remains unchanged. Only a verified,
         // safety-complete TRANSITION_PROBE may use the explicit transition overload.
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         RangeEntryLocationAssessment rangeEntryLocation = rangeEntryLocationService.evaluate(
                 i, strategyProfile, strategyScore, trendStructure, entryAuthority);
+        recordReplayStage(profiler, ReplayAnalysisStage.RANGE_ENTRY_LOCATION, profileStartedNs);
 
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         FinalDecisionResult finalDecision = finalDecisionService.decide(
                 baseDecision,
                 atrAdjustedDecision,
@@ -253,7 +335,9 @@ public class AnalysisService {
                 liquidity
         );
         SignalDecision decision = finalDecision.finalDecision();
+        recordReplayStage(profiler, ReplayAnalysisStage.FINAL_DECISION, profileStartedNs);
 
+        profileStartedNs = profiler == null ? 0L : System.nanoTime();
         String explanation = explanation(
                 i,
                 sentiment,
@@ -279,7 +363,7 @@ public class AnalysisService {
                 + " | Order-book liquidity: " + liquidity.explanation()
                 + " | " + finalDecision.explanation();
 
-        return TradeSignal.builder()
+        TradeSignal builtSignal = TradeSignal.builder()
                 .symbol(symbol)
                 .interval(i.intervalCode())
                 .candleOpenTime(i.candleOpenTime())
@@ -420,6 +504,116 @@ public class AnalysisService {
                 .explanation(explanation)
                 .generatedAt(signalGeneratedAt)
                 .build();
+        recordReplayStage(profiler, ReplayAnalysisStage.SIGNAL_ASSEMBLY, profileStartedNs);
+        return builtSignal;
+    }
+
+    private void recordReplayStage(ReplayAnalysisProfiler profiler, ReplayAnalysisStage stage, long startedNs) {
+        if (profiler != null) {
+            profiler.record(stage, System.nanoTime() - startedNs);
+        }
+    }
+
+    /**
+     * FIX-11M categories intentionally follow the existing buildSignal call order.
+     * They are measurement labels only and are never consulted by trading logic.
+     */
+    private enum ReplayAnalysisStage {
+        SENTIMENT("sentiment"),
+        FUNDAMENTALS("fundamentals"),
+        PREVIOUS_SNAPSHOT("previousSnapshot"),
+        TREND_STRUCTURE("trendStructure"),
+        BASE_SCORING("baseScoring"),
+        ATR_RISK("atrRisk"),
+        REGIME("regime"),
+        MARKET_CONTEXT("marketContext"),
+        STRATEGY("strategy"),
+        MULTI_TIMEFRAME("multiTimeframe"),
+        BTC_CONTEXT("btcContext"),
+        DERIVATIVES("derivatives"),
+        ORDER_BOOK("orderBook"),
+        ENTRY_AUTHORITY("entryAuthority"),
+        RANGE_ENTRY_LOCATION("rangeEntryLocation"),
+        FINAL_DECISION("finalDecision"),
+        SIGNAL_ASSEMBLY("signalAssembly");
+
+        private final String label;
+
+        ReplayAnalysisStage(String label) {
+            this.label = label;
+        }
+    }
+
+    private static final class ReplayAnalysisProfiler {
+        private final long runId;
+        private final EnumMap<ReplayAnalysisStage, ReplayStageTiming> stages = new EnumMap<>(ReplayAnalysisStage.class);
+        private long callNs;
+        private long calls;
+        private long maxCallNs;
+
+        private ReplayAnalysisProfiler(long runId) {
+            this.runId = runId;
+            for (ReplayAnalysisStage stage : ReplayAnalysisStage.values()) {
+                stages.put(stage, new ReplayStageTiming());
+            }
+        }
+
+        private void recordCall(long elapsedNs) {
+            callNs += elapsedNs;
+            calls++;
+            maxCallNs = Math.max(maxCallNs, elapsedNs);
+        }
+
+        private void record(ReplayAnalysisStage stage, long elapsedNs) {
+            ReplayStageTiming timing = stages.get(stage);
+            timing.totalNs += elapsedNs;
+            timing.calls++;
+            timing.maxNs = Math.max(timing.maxNs, elapsedNs);
+        }
+
+        private void logSummary(org.slf4j.Logger logger, long requestedRunId) {
+            long measuredNs = stages.values().stream().mapToLong(t -> t.totalNs).sum();
+            long otherNs = Math.max(0L, callNs - measuredNs);
+            StringBuilder message = new StringBuilder(
+                    "FIX11M_REPLAY_ANALYSIS_PROFILE run={} profileRun={} totalMs={} calls={} avgMs={} maxMs={}");
+            java.util.List<Object> args = new java.util.ArrayList<>();
+            args.add(requestedRunId);
+            args.add(runId);
+            args.add(millis(callNs));
+            args.add(calls);
+            args.add(averageMillis(callNs, calls));
+            args.add(millis(maxCallNs));
+
+            for (ReplayAnalysisStage stage : ReplayAnalysisStage.values()) {
+                ReplayStageTiming timing = stages.get(stage);
+                message.append(' ').append(stage.label).append("Ms={}")
+                        .append(' ').append(stage.label).append("Calls={}")
+                        .append(' ').append(stage.label).append("AvgMs={}")
+                        .append(' ').append(stage.label).append("MaxMs={}");
+                args.add(millis(timing.totalNs));
+                args.add(timing.calls);
+                args.add(averageMillis(timing.totalNs, timing.calls));
+                args.add(millis(timing.maxNs));
+            }
+            message.append(" otherMs={} productionMutation=false replayDecisionMutation=false");
+            args.add(millis(otherNs));
+            logger.info(message.toString(), args.toArray());
+        }
+
+        private static String millis(long ns) {
+            return String.format(java.util.Locale.ROOT, "%.3f", ns / 1_000_000.0d);
+        }
+
+        private static String averageMillis(long ns, long calls) {
+            return calls == 0L ? "0.000"
+                    : String.format(java.util.Locale.ROOT, "%.3f", (ns / 1_000_000.0d) / calls);
+        }
+    }
+
+    private static final class ReplayStageTiming {
+        private long totalNs;
+        private long calls;
+        private long maxNs;
     }
 
     private String serializeDecisionPath(FinalDecisionResult finalDecision) {

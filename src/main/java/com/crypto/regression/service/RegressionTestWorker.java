@@ -545,6 +545,9 @@ public class RegressionTestWorker {
         // These monotonic timers observe existing calls only; they do not alter inputs,
         // call ordering, persistence, thresholds, or any Production trading behavior.
         ReplayFreshSignalProfiler profiler = new ReplayFreshSignalProfiler(runId, dataSource);
+        // FIX-11M: Enable aggregate timing only for this Replay worker thread.
+        // The shared AnalysisService decision path is unchanged; this is observation-only.
+        analysisService.beginReplayAnalysisProfiling(runId);
         try (ExecutionReplayScope.Scope ignored = replayScope.open(runId, List.of(), o -> {})) {
         // FIX-043 Replay parity: fresh Replay has always generated technical snapshots/signals
         // chronologically for EVERY closed candle in the timeline. Production now restores the
@@ -683,6 +686,13 @@ public class RegressionTestWorker {
         }
 
         } finally {
+            // FIX-11M must never turn a valid Replay into ERROR if diagnostic summary logging fails.
+            try {
+                analysisService.finishReplayAnalysisProfiling(runId);
+            } catch (Exception profilingException) {
+                log.warn("FIX11M_REPLAY_ANALYSIS_PROFILE_ERROR run={} message={} productionMutation=false replayDecisionMutation=false",
+                        runId, profilingException.getMessage());
+            }
             profiler.logSummary(log, timeline.size());
         }
         return new FreshReplayStats(oneMinuteSignals, oneMinuteBuys, fiveMinuteSignals, fiveMinuteBuys,

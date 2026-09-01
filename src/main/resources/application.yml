@@ -2,9 +2,9 @@ spring:
   application:
     name: crypto-ai-trader
   datasource:
-    url: ${DB_URL:jdbc:mysql://169.58.108.119:3307/crypto_ai?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
-    username: jean
-    password: 123456
+    url: ${DB_URL:jdbc:mysql://localhost:3307/crypto_ai?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: root
+    password: root
     hikari:
       maximum-pool-size: 15
       minimum-idle: 3
