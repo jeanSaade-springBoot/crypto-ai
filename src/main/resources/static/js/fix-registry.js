@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-11N",
+            title: "Replay-only historical derivatives isolation",
+            status: "IMPLEMENTED · REPLAY PERFORMANCE/CORRECTNESS ONLY",
+            scenario: "FIX-11M measured 497.128s of 626.496s AnalysisService time in derivatives across 938 Replay calls (~529.987ms/call), proving the direct derivatives stage was the dominant Replay bottleneck.",
+            symbol: "ALL", entry: "REPLAY ONLY", exit: "UNCHANGED",
+            entryTime: "Historical replay", exitTime: "UNCHANGED",
+            replayWindow: "Repeat the PEPEUSDT 2026-08-30 17:00→20:30 UTC DATASET replay used for FIX-11L/FIX-11M.",
+            location: "AnalysisService buildSignal() derivatives routing for analyzeForRegression() only",
+            classes: ["AnalysisService", "md/FIX-11N.md"],
+            cause: "analyzeForRegression() shared historicalReplay=true with Production recovery, but the downstream derivatives stage ignored historical mode and always called DerivativesPositioningService.evaluate(), causing live Binance futures funding/open-interest HTTP requests during historical Replay.",
+            solution: "Add an explicit regressionReplay flag to the private buildSignal() call boundary. Normal Production and FIX-043 Production recovery keep the exact existing live evaluate(...) path. Regression Replay alone uses the already-existing evaluateHistorical(...), which intentionally returns historical derivatives as unavailable because derivatives history is not persisted and therefore performs no live Binance futures requests.",
+            behavior: "Normal Production behavior changes: zero. FIX-043 Production recovery behavior changes: zero. BUY/SELL thresholds, scoring rules, execution ordering, wallet behavior, position management, MTF, BTC context and order-book behavior are unchanged. Replay derivatives context changes from live-current Binance futures data to the service's existing historical UNAVAILABLE result, so replay business/parity outputs must be revalidated before further work.",
+            regression: "Run the identical PEPE DATASET window. Compare FIX11M derivativesMs/calls and total Replay timing, verify no live futures requests occur from the direct Replay derivatives stage, and inspect Replay parity/business output. If parity changes, stop and review before Phase A validation."
+        },
+        {
             id: "FIX-11M",
             title: "Replay analysis-service deep performance profiler",
             status: "IMPLEMENTED · REPLAY OBSERVABILITY ONLY",

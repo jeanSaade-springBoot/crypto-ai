@@ -118,7 +118,7 @@ public class AnalysisService {
     @Transactional
     public TradeSignal analyze(TechnicalIndicator indicator) {
         IndicatorSnapshot snapshot = toSnapshot(indicator);
-        TradeSignal signal = buildSignal(snapshot, Instant.now(), false);
+        TradeSignal signal = buildSignal(snapshot, Instant.now(), false, false);
         return signalRepository.save(signal);
     }
 
@@ -139,7 +139,7 @@ public class AnalysisService {
         }
         IndicatorSnapshot snapshot = toSnapshot(indicator);
         Instant asOf = evaluationTime == null ? snapshot.candleOpenTime() : evaluationTime;
-        TradeSignal signal = buildSignal(snapshot, asOf, true);
+        TradeSignal signal = buildSignal(snapshot, asOf, true, false);
         return signalRepository.save(signal);
     }
 
@@ -155,7 +155,7 @@ public class AnalysisService {
         ReplayAnalysisProfiler profiler = replayAnalysisProfiler.get();
         long startedNs = profiler == null ? 0L : System.nanoTime();
         try {
-            return buildSignal(snapshot, evaluationTime == null ? snapshot.candleOpenTime() : evaluationTime, true);
+            return buildSignal(snapshot, evaluationTime == null ? snapshot.candleOpenTime() : evaluationTime, true, true);
         } finally {
             if (profiler != null) {
                 profiler.recordCall(System.nanoTime() - startedNs);
@@ -185,9 +185,10 @@ public class AnalysisService {
         profiler.logSummary(log, runId);
     }
 
-    private TradeSignal buildSignal(IndicatorSnapshot i, Instant signalGeneratedAt, boolean historicalReplay) {
+    private TradeSignal buildSignal(IndicatorSnapshot i, Instant signalGeneratedAt, boolean historicalReplay,
+                                    boolean regressionReplay) {
         String symbol = i.symbol();
-        ReplayAnalysisProfiler profiler = historicalReplay ? replayAnalysisProfiler.get() : null;
+        ReplayAnalysisProfiler profiler = regressionReplay ? replayAnalysisProfiler.get() : null;
         long profileStartedNs;
 
         profileStartedNs = profiler == null ? 0L : System.nanoTime();
@@ -290,9 +291,16 @@ public class AnalysisService {
         recordReplayStage(profiler, ReplayAnalysisStage.BTC_CONTEXT, profileStartedNs);
 
         profileStartedNs = profiler == null ? 0L : System.nanoTime();
-        DerivativesPositioningResult derivatives = derivativesPositioningService.evaluate(
-                symbol, i.intervalCode(), btcContext.finalDecision(), btcContext.entryAllowed(), signalGeneratedAt
-        );
+        // FIX-11N: Regression Replay must never issue live Binance futures requests for a
+        // historical candle. Keep normal Production and FIX-043 Production recovery exactly
+        // on the pre-existing live evaluate(...) path; only analyzeForRegression() selects
+        // evaluateHistorical(...). This removes Replay-only network I/O without changing any
+        // Production derivatives behavior, thresholds, ordering, wallet logic or execution.
+        DerivativesPositioningResult derivatives = regressionReplay
+                ? derivativesPositioningService.evaluateHistorical(
+                    symbol, i.intervalCode(), btcContext.finalDecision(), btcContext.entryAllowed(), signalGeneratedAt)
+                : derivativesPositioningService.evaluate(
+                    symbol, i.intervalCode(), btcContext.finalDecision(), btcContext.entryAllowed(), signalGeneratedAt);
         recordReplayStage(profiler, ReplayAnalysisStage.DERIVATIVES, profileStartedNs);
 
         profileStartedNs = profiler == null ? 0L : System.nanoTime();
