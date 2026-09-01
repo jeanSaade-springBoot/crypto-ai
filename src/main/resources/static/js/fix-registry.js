@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-11O",
+            title: "Replay historical-gap tolerance and directional signal visibility",
+            status: "IMPLEMENTED · REPLAY/TEST ONLY",
+            scenario: "PEPEUSDT Replay generated the full fresh 1m/5m/1h cadence with zero generation errors, but a known old Production source/event gap left historical 1m event coverage at 445/446 and marked the whole Replay FAILED.",
+            symbol: "ALL", entry: "REPLAY ONLY", exit: "UNCHANGED",
+            entryTime: "Historical replay", exitTime: "UNCHANGED",
+            replayWindow: "Primary validation: PEPEUSDT 2026-08-30 13:00→20:30 UTC (16:00→23:30 KSA).",
+            location: "RegressionTestWorker result classification + Proven/Analyze Trades Replay UI",
+            classes: ["RegressionTestWorker", "proven-analyzed-trades.html", "proven-analyzed-trades.js", "md/FIX-11O.md"],
+            cause: "The Replay status treated historical source-event resolution coverage as the Replay cadence PASS condition. A pre-existing Production persistence/closed-marker gap could therefore mark an otherwise complete zero-error fresh Replay FAILED and make directional output difficult to review.",
+            solution: "Keep replayable event counts as transparent historical-source diagnostics, but evaluate cadence_path_passed from fresh generated 1m/5m/1h output counts. Incomplete source coverage is retained in result notes. Add a Replay-only table for fresh final BUY/STRONG_BUY/SELL/STRONG_SELL rows.",
+            behavior: "Production behavior changes: zero. No Production analysis/execution/wallet/threshold/scoring/MTF/position logic changes. No historical gap is hidden: source event coverage remains displayed separately. A Replay still fails for incomplete fresh generation, generation errors, decision-authority failure, or existing live-price parity requirements.",
+            regression: "Repeat the PEPE window. Fresh Replay cadence should be complete while the known 445/446 historical event-coverage warning remains visible. Confirm generation errors=0, decision authority passes, and fresh BUY/SELL rows are visible."
+        },
+        {
             id: "FIX-11N",
             title: "Replay-only historical derivatives isolation",
             status: "IMPLEMENTED · REPLAY PERFORMANCE/CORRECTNESS ONLY",

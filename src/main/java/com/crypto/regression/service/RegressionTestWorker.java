@@ -291,9 +291,17 @@ public class RegressionTestWorker {
             int requestedCandles1m = requestedOneMinuteCandles.size();
             int requestedCandles5m = requestedFiveMinuteCandles.size();
             int requestedCandles1h = requestedOneHourCandles.size();
-            boolean cadencePass = replay1m == requestedCandles1m
+            // FIX-11O: distinguish Replay generation cadence from historical source/event metadata coverage.
+            // A stale/missing Production candle-close marker must remain visible as a diagnostic warning,
+            // but it must not make a fully generated Replay fail when every requested timeframe candle
+            // produced a fresh signal with zero generation errors. This is Replay/test status only and
+            // cannot alter Production analysis, execution, persistence, wallet state, or trading decisions.
+            boolean historicalEventCoveragePass = replay1m == requestedCandles1m
                     && replay5m == requestedCandles5m
                     && replay1h == requestedCandles1h;
+            boolean cadencePass = fresh.oneMinuteSignals() == requestedCandles1m
+                    && fresh.fiveMinuteSignals() == requestedCandles5m
+                    && fresh.oneHourSignals() == requestedCandles1h;
             boolean authorityPass = sourceSignals.stream().allMatch(s -> {
                 SignalDecision effective = s.getDecision() != null ? s.getDecision() : s.getOriginalDecision();
                 return s.getDecision() == null || effective == s.getDecision();
@@ -309,7 +317,12 @@ public class RegressionTestWorker {
                     + "and the production AnalysisService scoring/final-decision path without trade_signal persistence. "
                     + "A three-hour context-only warm-up seeds 1m/5m/1h state before the requested execution window, and BTC reference signals are freshly replayed as-of each timestamp when BTC context is enabled. "
                     + "Historical signal counts are retained only as the pre-fix reference. "
-                    + "Replayable event counts validate that each historical candle can now be resolved as-of its own close. "
+                    + (historicalEventCoveragePass
+                        ? "Historical event-resolution coverage is complete for the requested 1m/5m/1h candles. "
+                        : "FIX-11O source-data warning: historical event-resolution coverage is incomplete (1m "
+                            + replay1m + "/" + requestedCandles1m + ", 5m " + replay5m + "/" + requestedCandles5m
+                            + ", 1h " + replay1h + "/" + requestedCandles1h + "). Fresh Replay cadence is evaluated "
+                            + "from generated signals instead, so an old Production persistence/closed-marker gap remains visible without hiding valid Replay BUY/SELL output. ")
                     + (livePriceParityPass
                         ? "FIX-052/FIX-056 exact price parity is active: Replay consumed " + productionPriceEvents.size() + " persisted Production 1m live-price observations in UTC order, exposes the latest event through the shared ExecutionPriceAuthorityService, and revalidates/sizes BUYs from that execution-time price. "
                         : "FIX-052/FIX-056 exact price parity is NOT available for this historical window because no persisted Production live-price observations exist; the run is intentionally not marked fully passed. ")

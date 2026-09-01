@@ -523,6 +523,7 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
     pipelineSection?.classList.add('hidden');
     if (pipelineToggle) { pipelineToggle.textContent = 'Expand pipeline'; pipelineToggle.setAttribute('aria-expanded', 'false'); }
     document.getElementById('regression-trades')?.classList.add('hidden');
+    document.getElementById('regression-directional-signals')?.classList.add('hidden');
     const base = `/api/administration/regression-tests/runs/${runId}`;
     const run = await api(base);
     if (!archived) activeRegressionRunId = runId;
@@ -581,12 +582,14 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
     if (run.result) {
         const r = run.result;
         resultPanel.classList.remove('hidden');
-        document.getElementById('regression-1m').textContent = `${r.replayable_1m_events}/${r.candles_1m}`;
-        document.getElementById('regression-1m-historical').textContent = `Historical signals: ${r.signals_1m_historical}`;
-        document.getElementById('regression-5m').textContent = `${r.replayable_5m_events}/${r.candles_5m}`;
-        document.getElementById('regression-5m-historical').textContent = `Historical signals: ${r.signals_5m_historical}`;
-        document.getElementById('regression-1h').textContent = `${r.replayable_1h_events}/${r.candles_1h}`;
-        document.getElementById('regression-1h-historical').textContent = `Historical signals: ${r.signals_1h_historical}`;
+        // FIX-11O: the headline is the fresh Replay cadence. Historical event-resolution
+        // coverage remains visible as a warning/reference and no longer hides a valid replay.
+        document.getElementById('regression-1m').textContent = `Replay ${r.generated_signals_1m}/${r.candles_1m}`;
+        document.getElementById('regression-1m-historical').textContent = `Historical event coverage: ${r.replayable_1m_events}/${r.candles_1m} · Historical signals: ${r.signals_1m_historical}`;
+        document.getElementById('regression-5m').textContent = `Replay ${r.generated_signals_5m}/${r.candles_5m}`;
+        document.getElementById('regression-5m-historical').textContent = `Historical event coverage: ${r.replayable_5m_events}/${r.candles_5m} · Historical signals: ${r.signals_5m_historical}`;
+        document.getElementById('regression-1h').textContent = `Replay ${r.generated_signals_1h}/${r.candles_1h}`;
+        document.getElementById('regression-1h-historical').textContent = `Historical event coverage: ${r.replayable_1h_events}/${r.candles_1h} · Historical signals: ${r.signals_1h_historical}`;
         const generatedBuys = Number(r.generated_buys_1m || 0) + Number(r.generated_buys_5m || 0) + Number(r.generated_buys_1h || 0);
         const generatedTotal = Number(r.generated_signals_1m || 0) + Number(r.generated_signals_5m || 0) + Number(r.generated_signals_1h || 0);
         document.getElementById('regression-generated-buys').textContent = generatedBuys;
@@ -617,6 +620,28 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
         const opportunities = detailResults[1].status === 'fulfilled' ? detailResults[1].value : [];
         const trades = detailResults[2].status === 'fulfilled' ? detailResults[2].value : [];
         const management = detailResults[3].status === 'fulfilled' ? detailResults[3].value : [];
+
+        // FIX-11O: always expose fresh directional Replay signals independently of the BUY-centric
+        // execution pipeline. This makes generated BUY/STRONG_BUY and SELL/STRONG_SELL rows visible
+        // even when historical source-event coverage contains an old gap.
+        const directionalPanel = document.getElementById('regression-directional-signals');
+        const directionalBody = document.getElementById('regression-directional-signals-body');
+        if (directionalPanel && directionalBody) {
+            const directionalSignals = signals.filter(signal => regressionBool(signal.replay_generated)
+                && ['BUY','STRONG_BUY','SELL','STRONG_SELL'].includes(String(signal.final_decision || '')));
+            directionalBody.innerHTML = directionalSignals.map((signal, index) => `
+                <tr>
+                    <td>${index + 1}</td>
+                    <td>${escapeHtml(signal.interval_code || '—')}</td>
+                    <td>${formatMoveTime(signal.generated_at)}</td>
+                    <td>${escapeHtml(signal.original_decision || '—')}</td>
+                    <td><strong>${escapeHtml(signal.final_decision || '—')}</strong></td>
+                    <td>${formatMovePrice(signal.latest_price)}</td>
+                    <td>${escapeHtml(signal.total_score ?? '—')}</td>
+                    <td>${escapeHtml(signal.confidence_score ?? '—')}</td>
+                </tr>`).join('') || '<tr><td colspan="8">No fresh BUY/STRONG_BUY/SELL/STRONG_SELL signals were generated.</td></tr>';
+            directionalPanel.classList.remove('hidden');
+        }
 
         // Active test pipeline is always available for a completed run. A missing auxiliary
         // endpoint must not make the entire pipeline section disappear; render the available
