@@ -1,6 +1,21 @@
 (() => {
     const FIXES = [
         {
+            id: "FIX-11Q",
+            title: "Replay-only one-candle continuation grace counterfactual",
+            status: "IMPLEMENTED · REPLAY EXPERIMENT ONLY",
+            scenario: "A profitable PEPE position reached TP while 1m briefly became NEUTRAL, 5m remained NEUTRAL, 1h remained STRONG_BUY and momentum was still healthy. Baseline continuation failed and exited, then the system re-entered near the same price roughly 90 seconds later.",
+            symbol: "ALL (evidence case PEPEUSDT)", entry: "UNCHANGED", exit: "BASELINE UNCHANGED · COUNTERFACTUAL OBSERVATION",
+            entryTime: "Replay position lifecycle", exitTime: "UNCHANGED",
+            replayWindow: "PEPEUSDT 2026-08-30 13:00→20:30 UTC (16:00→23:30 KSA) is the primary evidence window; validate additional profitable historical positions before any Production proposal.",
+            location: "Replay-only counterfactual observer beside ShadowProductionReplayService",
+            classes: ["OneCandleContinuationGraceReplayObserver", "ShadowProductionReplayService", "RegressionTestService", "V79__fix_11q_replay_one_candle_continuation_grace.sql", "md/FIX-11Q.md"],
+            cause: "At a reached TP checkpoint, every existing continuation path can fail simultaneously on one transient 1m NEUTRAL plus a cooled trend score even while 1h remains bullish and momentum remains healthy. The old single extendTarget result also cannot represent hold-without-raising-target.",
+            solution: "Leave the existing continuation policy and baseline Shadow execution untouched. Only after baseline continuation FAIL, start an isolated counterfactual when 1m=NEUTRAL, 1h is BUY/STRONG_BUY, 5m is non-bearish and momentum meets the existing floor. Hold through that exact 1m candle without moving TP; hard SL/profit-lock remain active. On the next 1m candle, normal shared continuation/exit rules resume and the grace cannot be reused for that position.",
+            behavior: "Production behavior changes: zero. Existing continuation PASS and TP-extension behavior changes: zero. Baseline Replay cash, position, trades and P/L are unchanged. FIX-11Q writes only isolated counterfactual evidence including baseline vs variant P/L, MFE/MAE and next-timeframe decisions.",
+            regression: "Repeat the PEPE evidence window. Confirm baseline Shadow trades/P&L remain identical; FIX-11Q activates only after baseline TAKE_PROFIT continuation FAIL; take_profit_before_grace equals take_profit_after_grace; the grace survives all ticks of the same 1m candle; then inspect next 1m/5m/1h, eventual counterfactual exit and P/L delta. Validate more than one historical position before any Production design."
+        },
+        {
             id: "FIX-11O",
             title: "Replay historical-gap tolerance and directional signal visibility",
             status: "IMPLEMENTED · REPLAY/TEST ONLY",

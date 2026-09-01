@@ -48,6 +48,7 @@ public class ShadowProductionReplayService {
     private final WalletExecutionSizingPolicy executionSizingPolicy;
     private final PositionPriceAuthorityPolicy priceAuthorityPolicy;
     private final DefensiveRiskReductionReplayObserver defensiveRiskReductionObserver;
+    private final OneCandleContinuationGraceReplayObserver oneCandleContinuationGraceReplayObserver;
 
     public ReplayStats replay(long runId, String symbol, Instant executionStart, Instant executionEnd,
                               List<TradeSignal> generatedSignals,
@@ -89,6 +90,7 @@ public class ShadowProductionReplayService {
         // Experimental rules require an explicitly opened EXPERIMENTAL scope.
         String replayLogicMode = ExecutionReplayScope.ReplayLogicMode.PRODUCTION_PARITY.name();
         defensiveRiskReductionObserver.logRunStart(runId, symbol);
+        oneCandleContinuationGraceReplayObserver.startRun(runId, symbol);
 
         try (ExecutionReplayScope.Scope ignored = replayScope.open(runId, timeline,
                 opportunity -> {
@@ -113,6 +115,9 @@ public class ShadowProductionReplayService {
                     && !livePrices.get(livePriceIndex).observedAt().isAfter(signal.getGeneratedAt())) {
                 MarketPriceEventService.PriceEvent live = livePrices.get(livePriceIndex++);
                 replayScope.referencePrice(symbol, live.observedAt(), live.price());
+                // FIX-11Q: advance only the isolated counterfactual grace position. This never mutates
+                // the baseline Shadow position/cash/trades and therefore cannot change Replay parity.
+                oneCandleContinuationGraceReplayObserver.onPrice(runId, symbol, live, latest1m, latest5m, latest1h);
                 if (open != null && !live.observedAt().isBefore(executionStart) && !live.observedAt().isAfter(executionEnd)) {
                     LivePriceEvaluation protection = evaluateLivePrice(runId, symbol, open, live, latest1m, latest5m, latest1h);
                     open = protection.position();
@@ -141,6 +146,7 @@ public class ShadowProductionReplayService {
             }
             if ("5m".equals(signal.getInterval())) latest5m = signal;
             if ("1h".equals(signal.getInterval())) latest1h = signal;
+            oneCandleContinuationGraceReplayObserver.onSignal(runId, signal, latest1m, latest5m, latest1h);
 
             // FIX-11K Phase A: observe only. This runs beside the existing exit path and cannot
             // mutate quantity, cash, wallet_position_test, SELL authority, or Production state.
@@ -327,6 +333,7 @@ public class ShadowProductionReplayService {
                 WHERE id=?
                 """, trades, wins, losses, realized, finalWallet, runId);
         defensiveRiskReductionObserver.logRunSummary(runId, symbol);
+        oneCandleContinuationGraceReplayObserver.finishRun(runId, symbol, executionEnd);
         // FIX-109: expose whether this run had the persisted live-price stream required
         // for tick-exact production ordering. Older windows remain explicitly labelled
         // as fallback instead of being mistaken for exact parity.
@@ -362,6 +369,16 @@ public class ShadowProductionReplayService {
                 persistManagementAtPrice(runId, symbol, event, "TAKE_PROFIT_EXTENDED", oldTarget, newTarget, current, continuation.explanation());
                 return new LivePriceEvaluation(ExitDecision.hold(), current);
             }
+            // FIX-11Q: baseline continuation has already failed. Only now may the replay-only
+            // counterfactual evaluate the one-candle grace. Existing PASS/TP-extension behavior above
+            // always wins first and is never intercepted by this experiment.
+            oneCandleContinuationGraceReplayObserver.observeBaselineTakeProfitFailure(
+                    runId, symbol, current.positionId(), event.observedAt(), event.price(),
+                    current.entryTime(), current.entryPrice(), current.quantity(), current.cost(),
+                    current.stopLoss(), current.takeProfit(), current.highest(),
+                    current.profitLockActive(), current.profitLockPrice(),
+                    current.entryScore(), current.entryConfidence(), current.entryTrend(), current.entryStructure(),
+                    current.entryMomentum(), current.entryVolume(), oneMinute, five, one, continuation.explanation());
             persistManagementAtPrice(runId, symbol, event, "TAKE_PROFIT_EXIT", current.takeProfit(), current.takeProfit(), current, continuation.explanation());
             return new LivePriceEvaluation(new ExitDecision(true, "TAKE_PROFIT", continuation.explanation()), current);
         }
@@ -430,6 +447,12 @@ public class ShadowProductionReplayService {
                 jdbcTemplate.update("UPDATE wallet_position_test SET take_profit_usdt=? WHERE id=?", newTarget, p.positionId());
                 return new ExitDecision(false, "EXTEND_TAKE_PROFIT", continuation.explanation(), newTarget);
             }
+            oneCandleContinuationGraceReplayObserver.observeBaselineTakeProfitFailure(
+                    runId, s.getSymbol(), p.positionId(), s.getGeneratedAt(), price,
+                    p.entryTime(), p.entryPrice(), p.quantity(), p.cost(), p.stopLoss(), p.takeProfit(), p.highest(),
+                    p.profitLockActive(), p.profitLockPrice(), p.entryScore(), p.entryConfidence(), p.entryTrend(),
+                    p.entryStructure(), p.entryMomentum(), p.entryVolume(), oneMinute != null ? oneMinute : s, five, one,
+                    continuation.explanation());
             persistManagement(runId, s, "TAKE_PROFIT_EXIT", p.takeProfit(), p.takeProfit(), p, continuation.explanation());
             return new ExitDecision(true, "TAKE_PROFIT", continuation.explanation());
         }

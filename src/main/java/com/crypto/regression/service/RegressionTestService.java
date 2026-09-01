@@ -261,12 +261,14 @@ public class RegressionTestService {
         int positions = jdbcTemplate.update("INSERT INTO wallet_position_test_archive SELECT ?, r.* FROM wallet_position_test r WHERE r.test_run_id=?", batchId, runId);
         int management = jdbcTemplate.update("INSERT INTO position_management_test_archive SELECT ?, r.* FROM position_management_test r WHERE r.test_run_id=?", batchId, runId);
         int defensiveObservations = jdbcTemplate.update("INSERT INTO defensive_risk_reduction_observation_test_archive SELECT ?, r.* FROM defensive_risk_reduction_observation_test r WHERE r.test_run_id=?", batchId, runId);
+        int continuationGraceObservations = jdbcTemplate.update("INSERT INTO one_candle_continuation_grace_test_archive SELECT ?, r.* FROM one_candle_continuation_grace_test r WHERE r.test_run_id=?", batchId, runId);
         return Map.ofEntries(
                 Map.entry("archiveBatchId", batchId), Map.entry("sourceTestRunId", runId), Map.entry("alreadyArchived", false),
                 Map.entry("runs", runs), Map.entry("signals", signals), Map.entry("tradeSignals", fullTradeSignals),
                 Map.entry("opportunities", opportunities), Map.entry("results", results), Map.entry("executions", executions),
                 Map.entry("positions", positions), Map.entry("management", management),
-                Map.entry("defensiveRiskObservations", defensiveObservations));
+                Map.entry("defensiveRiskObservations", defensiveObservations),
+                Map.entry("oneCandleContinuationGraceObservations", continuationGraceObservations));
     }
 
     @Transactional(readOnly = true)
@@ -285,6 +287,9 @@ public class RegressionTestService {
     @Transactional(readOnly = true) public List<Map<String,Object>> archivedPositionManagement(long batchId) { return jdbcTemplate.queryForList("SELECT generated_at,action_code,current_price,old_take_profit,new_take_profit,highest_price,profit_lock_active,profit_lock_price,explanation FROM position_management_test_archive WHERE archive_batch_id=? ORDER BY generated_at ASC LIMIT 3000", batchId); }
     @Transactional(readOnly = true) public List<Map<String,Object>> archivedDefensiveRiskReductionObservations(long batchId) {
         return jdbcTemplate.queryForList("SELECT id,position_test_id,symbol,observed_at,source_signal_id,current_price,entry_price,highest_price_since_entry,current_profit_percent,peak_profit_percent,giveback_from_peak_percent,consecutive_final_1m_strong_sell,five_minute_signal_id,five_minute_original_decision,five_minute_final_decision,five_minute_confluence_status,one_hour_signal_id,one_hour_final_decision,observation_code FROM defensive_risk_reduction_observation_test_archive WHERE archive_batch_id=? ORDER BY observed_at ASC,id ASC LIMIT 5000", batchId);
+    }
+    @Transactional(readOnly = true) public List<Map<String,Object>> archivedOneCandleContinuationGraceObservations(long batchId) {
+        return jdbcTemplate.queryForList("SELECT * FROM one_candle_continuation_grace_test_archive WHERE archive_batch_id=? ORDER BY grace_at ASC,id ASC LIMIT 5000", batchId);
     }
     @Transactional(readOnly = true) public List<Map<String,Object>> archivedOpportunities(long batchId) { return jdbcTemplate.queryForList("SELECT generated_at,replay_stage,current_original_decision,current_final_decision,five_minute_decision,one_hour_decision,evidence_count,buy_count,watch_count,neutral_count,bearish_count,evidence_score,opportunity_health,recommended_position_percent,decision_code,decision_explanation FROM execution_opportunity_test_archive WHERE archive_batch_id=? AND replay_stage IS NOT NULL ORDER BY generated_at ASC LIMIT 3000", batchId); }
 
@@ -326,6 +331,7 @@ public class RegressionTestService {
 
         Map<String, Integer> deleted = new java.util.LinkedHashMap<>();
         // Delete children before parents so the purge remains safe if foreign keys are added later.
+        deleted.put("one_candle_continuation_grace_test", jdbcTemplate.update("DELETE FROM one_candle_continuation_grace_test"));
         deleted.put("defensive_risk_reduction_observation_test", jdbcTemplate.update("DELETE FROM defensive_risk_reduction_observation_test"));
         deleted.put("position_management_test", jdbcTemplate.update("DELETE FROM position_management_test"));
         deleted.put("wallet_execution_test", jdbcTemplate.update("DELETE FROM wallet_execution_test"));
@@ -336,6 +342,7 @@ public class RegressionTestService {
         deleted.put("analysis_test_result", jdbcTemplate.update("DELETE FROM analysis_test_result"));
         deleted.put("analysis_test_run", jdbcTemplate.update("DELETE FROM analysis_test_run"));
 
+        deleted.put("one_candle_continuation_grace_test_archive", jdbcTemplate.update("DELETE FROM one_candle_continuation_grace_test_archive"));
         deleted.put("defensive_risk_reduction_observation_test_archive", jdbcTemplate.update("DELETE FROM defensive_risk_reduction_observation_test_archive"));
         deleted.put("position_management_test_archive", jdbcTemplate.update("DELETE FROM position_management_test_archive"));
         deleted.put("wallet_execution_test_archive", jdbcTemplate.update("DELETE FROM wallet_execution_test_archive"));
@@ -350,10 +357,10 @@ public class RegressionTestService {
         // Validate the database state inside this same transaction. If any replay table still
         // contains rows, throw and rollback instead of reporting a false successful purge.
         java.util.List<String> replayTables = java.util.List.of(
-                "defensive_risk_reduction_observation_test", "position_management_test", "wallet_execution_test", "wallet_position_test",
+                "one_candle_continuation_grace_test", "defensive_risk_reduction_observation_test", "position_management_test", "wallet_execution_test", "wallet_position_test",
                 "execution_opportunity_test", "trade_signal_test", "analysis_test_signal",
                 "analysis_test_result", "analysis_test_run",
-                "defensive_risk_reduction_observation_test_archive", "position_management_test_archive", "wallet_execution_test_archive",
+                "one_candle_continuation_grace_test_archive", "defensive_risk_reduction_observation_test_archive", "position_management_test_archive", "wallet_execution_test_archive",
                 "wallet_position_test_archive", "execution_opportunity_test_archive",
                 "trade_signal_test_archive", "analysis_test_signal_archive",
                 "analysis_test_result_archive", "analysis_test_run_archive",
@@ -375,7 +382,7 @@ public class RegressionTestService {
         // Reset only tables that own an AUTO_INCREMENT id. This is cosmetic and happens only
         // after successful delete + validation; Proven ids are never reset.
         java.util.List<String> autoIncrementTables = java.util.List.of(
-                "defensive_risk_reduction_observation_test", "wallet_execution_test", "wallet_position_test", "position_management_test",
+                "one_candle_continuation_grace_test", "defensive_risk_reduction_observation_test", "wallet_execution_test", "wallet_position_test", "position_management_test",
                 "execution_opportunity_test", "trade_signal_test", "analysis_test_signal",
                 "analysis_test_result", "analysis_test_run", "regression_test_archive_batch");
         for (String table : autoIncrementTables) jdbcTemplate.execute("ALTER TABLE " + table + " AUTO_INCREMENT = 1");
