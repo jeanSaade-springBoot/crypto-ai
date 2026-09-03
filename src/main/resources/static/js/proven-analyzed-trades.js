@@ -1228,55 +1228,42 @@ async function renderProvenTradePopup() {
     bindProvenDotTitles([trade]);
 }
 
-function replayRunExecutionPoint(execution, source, index) {
-    const side = String(execution.side || '').toUpperCase();
-    const isReplay = source === 'REPLAY';
-    const isBuy = side === 'BUY';
-    const fillColor = isReplay ? (isBuy ? '#2da8ff' : '#0057d9') : (isBuy ? '#ffb020' : '#ff5c35');
-    const sourceShort = isReplay ? 'R' : 'P';
-    const time = window.CryptoTime.parseUtc(execution.execution_time);
-    const price = Number(execution.execution_price);
-    if (!time || Number.isNaN(time.getTime()) || !Number.isFinite(price)) return null;
-    return {
-        x: time.getTime(), y: price,
-        marker: {size:isReplay?7:8,fillColor,strokeColor:'#071018',strokeWidth:2,radius:7},
-        label: {
-            text:`${sourceShort} ${side}`,
-            borderColor:fillColor,
-            offsetY:isBuy?18:-18,
-            style:{background:fillColor,color:'#071018',fontSize:'9px',fontWeight:700},
-            cssClass:`run-trade-point run-${source.toLowerCase()}-${side.toLowerCase()}-${index}`
+function buildRunExecutionPath(executions) {
+    const rows = Array.isArray(executions) ? executions : [];
+    const data = [];
+    let openQuantity = 0;
+
+    rows.forEach(execution => {
+        const side = String(execution.side || '').toUpperCase();
+        const time = window.CryptoTime.parseUtc(execution.execution_time);
+        const price = Number(execution.execution_price);
+        if (!time || Number.isNaN(time.getTime()) || !Number.isFinite(price)) return;
+
+        const quantityValue = Number(execution.quantity);
+        const quantity = Number.isFinite(quantityValue) ? Math.abs(quantityValue) : 0;
+        if (side === 'BUY') {
+            openQuantity += quantity;
+        } else if (side === 'SELL') {
+            openQuantity = Math.max(0, openQuantity - quantity);
+        } else {
+            return;
         }
-    };
-}
 
-function executionPointTitle(execution, source) {
-    const side = String(execution.side || '').toUpperCase();
-    const time = window.CryptoTime.parseUtc(execution.execution_time);
-    const parts = [
-        `${source} ${side}`,
-        time ? formatMoveTime(time.toISOString()) : String(execution.execution_time || ''),
-        `Price ${formatMovePrice(execution.execution_price)}`
-    ];
-    if (execution.position_percent != null) parts.push(`Allocation ${Number(execution.position_percent).toFixed(0)}%`);
-    if (execution.execution_code) parts.push(String(execution.execution_code));
-    if (execution.execution_reason) parts.push(String(execution.execution_reason));
-    if (execution.realized_pnl_usdt != null && side === 'SELL') parts.push(`P/L ${Number(execution.realized_pnl_usdt).toFixed(4)} USDT`);
-    return parts.join(' · ');
-}
+        data.push({
+            x: time.getTime(),
+            y: price,
+            meta: execution
+        });
 
-function bindRunExecutionTitles(replayExecutions, productionExecutions, showProduction) {
-    (replayExecutions || []).forEach((execution, index) => {
-        const label = document.querySelector(`.run-replay-${String(execution.side || '').toLowerCase()}-${index}`);
-        const marker = label?.parentElement?.querySelector('circle') || label;
-        if (marker) marker.setAttribute('title', executionPointTitle(execution, 'REPLAY'));
+        // FIX-11S: keep separate position lifecycles visually separate.  A null point
+        // breaks the line after a full SELL while still keeping every split execution
+        // that belongs to the same open position linked on one path.
+        if (side === 'SELL' && openQuantity <= 1e-12) {
+            data.push({x: time.getTime() + 1, y: null});
+        }
     });
-    if (!showProduction) return;
-    (productionExecutions || []).forEach((execution, index) => {
-        const label = document.querySelector(`.run-production-${String(execution.side || '').toLowerCase()}-${index}`);
-        const marker = label?.parentElement?.querySelector('circle') || label;
-        if (marker) marker.setAttribute('title', executionPointTitle(execution, 'PRODUCTION'));
-    });
+
+    return data;
 }
 
 async function renderReplayRunTradesPopup() {
@@ -1290,8 +1277,9 @@ async function renderReplayRunTradesPopup() {
     const replayExecutions = Array.isArray(data.replayExecutions) ? data.replayExecutions : [];
     const productionExecutions = Array.isArray(data.productionExecutions) ? data.productionExecutions : [];
     const showProduction = Boolean(provenPopupRun.showProduction) && productionExecutions.length > 0;
-    const points = replayExecutions.map((x,i)=>replayRunExecutionPoint(x,'REPLAY',i)).filter(Boolean);
-    if (showProduction) points.push(...productionExecutions.map((x,i)=>replayRunExecutionPoint(x,'PRODUCTION',i)).filter(Boolean));
+
+    const replayPath = buildRunExecutionPath(replayExecutions);
+    const productionPath = showProduction ? buildRunExecutionPath(productionExecutions) : [];
 
     const checkbox = document.getElementById('proven-popup-show-production');
     if (checkbox) {
@@ -1306,15 +1294,30 @@ async function renderReplayRunTradesPopup() {
     const empty = document.getElementById('proven-popup-chart-empty');
     empty?.classList.toggle('hidden', candles.length > 0);
     if (empty && !candles.length) empty.textContent = 'No candles are available for this Replay window.';
+
+    const series = [
+        {name:'Price', type:'candlestick', data:candles},
+        {name:'Replay trade path', type:'line', data:replayPath}
+    ];
+    if (showProduction) {
+        series.push({name:'Production trade path', type:'line', data:productionPath});
+    }
+
     const options={
         chart:{type:'line',height:520,background:'transparent',foreColor:'#8da2b1',toolbar:{show:true},animations:{enabled:false},zoom:{enabled:true,autoScaleYaxis:true}},
         title:{text:`${data.symbol} · ${interval} · Replay window`,align:'left',style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'}},
-        series:[{name:'Price',type:'candlestick',data:candles}],
-        stroke:{width:[1],curve:'straight'}, markers:{size:[0]}, dataLabels:{enabled:false},
+        series,
+        // FIX-11S: no R_BUY/R_SELL/P_BUY/P_SELL annotation labels. Replay and
+        // Production are distinguished by their trade-path line colors instead.
+        colors: showProduction ? ['#8da2b1','#2da8ff','#ff9f43'] : ['#8da2b1','#2da8ff'],
+        stroke:{width:showProduction?[1,3,3]:[1,3],curve:'straight',connectNulls:false},
+        markers:{size:showProduction?[0,3,3]:[0,3],strokeWidth:0},
+        dataLabels:{enabled:false},
+        legend:{show:true},
         xaxis:{type:'datetime',crosshairs:{show:true,stroke:{width:1,dashArray:0}},labels:{datetimeUTC:false},tooltip:{enabled:false}},
         yaxis:{tooltip:{enabled:false},decimalsInFloat:4},
         grid:{borderColor:'#203342'},theme:{mode:'dark'},plotOptions:{candlestick:{colors:{upward:'#39d98a',downward:'#ff6b72'}}},
-        annotations:{points},tooltip:{shared:false}
+        tooltip:{shared:false}
     };
     const host=document.getElementById('proven-popup-chart');
     provenPopupCrosshairCleanup?.();
@@ -1323,7 +1326,6 @@ async function renderReplayRunTradesPopup() {
     provenPopupChart=new ApexCharts(host,options);
     await provenPopupChart.render();
     provenPopupCrosshairCleanup = window.CryptoChartCrosshair?.bind(host, provenPopupChart, { valueFormatter: adaptivePopupPrice }) || null;
-    bindRunExecutionTitles(replayExecutions, productionExecutions, showProduction);
 }
 
 async function showRegressionTradeChart(button) {
