@@ -18,6 +18,7 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -548,7 +549,7 @@ public class RegressionTestService {
         return jdbcTemplate.queryForList("""
                 SELECT p.id, p.source_test_run_id, p.source_trade_id, p.symbol, p.entry_time, p.entry_price,
                        p.exit_time, p.exit_price, p.exit_reason, p.realized_pnl_usdt, p.realized_pnl_percent,
-                       p.position_percent, p.marked_at,
+                       p.position_percent, p.marked_at, p.source_wallet_buy_trade_id, p.source_wallet_sell_trade_id, p.analysis_start_time, p.analysis_end_time, p.analysis_status,
                        EXISTS (SELECT 1 FROM proven_trade_leg_archive a WHERE a.proven_trade_id=p.id AND a.side='BUY') AS buy_archived,
                        EXISTS (SELECT 1 FROM proven_trade_leg_archive a WHERE a.proven_trade_id=p.id AND a.side='SELL') AS sell_archived
                 FROM proven_analyzed_trade p
@@ -596,6 +597,8 @@ public class RegressionTestService {
                 side.equals("SELL") ? trade.get("realized_pnl_percent") : null);
         return Map.of("archived", true, "provenTradeId", provenTradeId, "side", side);
     }
+
+    @Transactional(readOnly = true) public Map<String,Object> provenTradeDetail(long id){List<Map<String,Object>> rows=jdbcTemplate.queryForList("SELECT * FROM proven_analyzed_trade WHERE id=?",id);if(rows.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Proven trade not found.");Map<String,Object> m=new LinkedHashMap<>(rows.get(0));m.put("execution_points",jdbcTemplate.queryForList("SELECT wallet_trade_id,side,execution_time,execution_price,quantity,execution_reason,sequence_no FROM proven_trade_execution_point WHERE proven_trade_id=? ORDER BY sequence_no,execution_time",id));return m;}
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> archivedProvenTradeLegs() {

@@ -52,6 +52,16 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
             """)
     Page<WalletTrade> findClosedTradesForInspector(@Param("symbol") String symbol, Pageable pageable);
 
+    // FIX-11R: persisted operator review filter only.
+    @Query(value = """
+            SELECT wt.* FROM wallet_trade wt JOIN trade_inspector_review r ON r.wallet_sell_trade_id=wt.id AND r.marked_for_review=1
+            WHERE wt.status='EXECUTED' AND wt.side='SELL' AND wt.realized_pnl_usdt IS NOT NULL AND (:symbol IS NULL OR UPPER(wt.symbol)=UPPER(:symbol)) ORDER BY wt.executed_at DESC
+            """, countQuery = """
+            SELECT COUNT(*) FROM wallet_trade wt JOIN trade_inspector_review r ON r.wallet_sell_trade_id=wt.id AND r.marked_for_review=1
+            WHERE wt.status='EXECUTED' AND wt.side='SELL' AND wt.realized_pnl_usdt IS NOT NULL AND (:symbol IS NULL OR UPPER(wt.symbol)=UPPER(:symbol))
+            """, nativeQuery=true)
+    Page<WalletTrade> findMarkedClosedTradesForInspector(@Param("symbol") String symbol, Pageable pageable);
+
     // FIX-106: populate the symbol dropdown from the complete persisted closed-trade set,
     // not from whichever page happens to be loaded.
     @Query("""

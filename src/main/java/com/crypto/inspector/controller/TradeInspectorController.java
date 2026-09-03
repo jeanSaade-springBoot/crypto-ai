@@ -6,6 +6,9 @@ import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 
 import java.time.Instant;
 import java.util.Map;
@@ -31,11 +34,16 @@ public class TradeInspectorController {
             @RequestParam(required = false, defaultValue = "ALL") String venue,
             @RequestParam(required = false, defaultValue = "CLOSED") String state,
             @RequestParam(required = false, defaultValue = "0") int page,
-            @RequestParam(required = false, defaultValue = "10") int pageSize) {
+            @RequestParam(required = false, defaultValue = "10") int pageSize, @RequestParam(required=false,defaultValue="false") boolean markedForReviewOnly) {
         // FIX-11I: Trade Inspector keeps database pagination at 10 rows per UI page while adding
         // read-only CLOSED/OPEN and symbol filters. CLOSED + ALL remains the default behavior.
-        return service.inspect(symbol, venue, state, page, pageSize);
+        return service.inspect(symbol, venue, state, page, pageSize, markedForReviewOnly);
     }
+    @PostMapping("/api/trade-inspector/{sellTradeId}/review") @ResponseBody
+    public Map<String,Object> review(@PathVariable long sellTradeId,@RequestBody Map<String,Object> body){return service.setMarkedForReview(sellTradeId,Boolean.TRUE.equals(body.get("markedForReview")));}
+    @PostMapping("/api/trade-inspector/{sellTradeId}/copy-to-proven") @ResponseBody
+    public Map<String,Object> copy(@PathVariable long sellTradeId){return service.copyToProvenAnalysis(sellTradeId);}
+
     // FIX-039: blocked BUY/SELL diagnostics accept an explicit UTC window. When omitted,
     // the service defaults to the last three hours. The UI presents the timestamps in KSA.
     @GetMapping("/api/trade-inspector/blocked-buys")

@@ -69,6 +69,8 @@ function openTradeCard(t){
   <div class="inspector-card-head">
    <div class="inspector-symbol"><strong>${esc(t.symbol)}</strong><span class="venue-badge ${String(t.executionVenue||'WALLET').toLowerCase()}">${esc(t.executionVenue||'WALLET')}</span><span class="badge open">OPEN</span><span class="badge buy">BUY ↑</span></div>
    <div class="inspector-head-actions">
+    <label class="trade-review-check"><input type="checkbox" data-review-trade="1" data-sell-trade-id="${esc(t.walletSellTradeId??'')}" ${t.markedForReview?'checked':''}> Marked for Review</label>
+    <button type="button" class="trade-chart-link" data-copy-proven="1" data-sell-trade-id="${esc(t.walletSellTradeId??'')}"><span>✓</span> ${t.copiedToProven?'Open Proven Analysis':'Copy to Proven Analysis'}</button>
     <button type="button" class="trade-chart-link" data-inspect-chart="1" data-trade-id="${esc(inspectorTradeKey(t))}" title="Inspect this open BUY on the dedicated chart"><span>↗</span> View chart</button>
     <div class="inspector-result"><strong class="positive">OPEN POSITION</strong><small>${duration(t.holdingMinutes)} holding time</small></div>
    </div>
@@ -103,6 +105,8 @@ function tradeCard(t){
   <div class="inspector-card-head">
    <div class="inspector-symbol"><strong>${esc(t.symbol)}</strong>${t.tradeHistoryId==null?'':`<span class="trade-reference">Trade #${esc(t.tradeHistoryId)}</span>`}<span class="venue-badge ${String(t.executionVenue||'WALLET').toLowerCase()}">${esc(t.executionVenue||'WALLET')}</span><span class="badge buy">BUY ↑</span><span class="trade-action-arrow">→</span><span class="badge sell">SELL ↓</span><span class="quality ${qualityClass(t.exitQuality)}">${qualityLabel(t.exitQuality)}</span></div>
    <div class="inspector-head-actions">
+    <label class="trade-review-check"><input type="checkbox" data-review-trade="1" data-sell-trade-id="${esc(t.walletSellTradeId??'')}" ${t.markedForReview?'checked':''}> Marked for Review</label>
+    <button type="button" class="trade-chart-link" data-copy-proven="1" data-sell-trade-id="${esc(t.walletSellTradeId??'')}"><span>✓</span> ${t.copiedToProven?'Open Proven Analysis':'Copy to Proven Analysis'}</button>
     <button type="button" class="trade-chart-link" data-inspect-chart="1" data-trade-id="${esc(t.tradeHistoryId??t.walletSellTradeId??'')}" title="Inspect only this BUY/SELL on the dedicated chart"><span>↗</span> View chart</button>
     <button type="button" class="trade-chart-link trade-path-link" data-inspect-path="1" data-trade-id="${esc(t.tradeHistoryId??t.walletSellTradeId??'')}" title="View the persisted decision and state path for this trade"><span>⌁</span> View path</button>
     <div class="inspector-result"><strong class="${resultClass}">${money(t.realizedPnl)} · ${pct(t.realizedPnlPercent)}</strong><small>${duration(t.holdingMinutes)} holding time · ${esc(t.closeReason||t.status)}</small></div>
@@ -237,7 +241,7 @@ async function load(){
  const state=String($('trade-state-filter')?.value||'CLOSED').toUpperCase();
  const symbol=String($('symbol-filter')?.value||'ALL').toUpperCase();
  try{
-  const params=new URLSearchParams({symbol,venue:'ALL',state,page:String(inspectorPage),pageSize:'10'});
+  const markedForReviewOnly=String($('review-filter')?.value||'ALL')==='MARKED'; const params=new URLSearchParams({symbol,venue:'ALL',state,page:String(inspectorPage),pageSize:'10',markedForReviewOnly:String(markedForReviewOnly)});
   const r=await fetch(`/api/trade-inspector?${params.toString()}`,{cache:'no-store'});
   if(!r.ok)throw new Error(`HTTP ${r.status}`);
   const d=await r.json();
@@ -258,6 +262,7 @@ async function load(){
 }
 $('refresh-inspector').addEventListener('click',()=>{inspectorPage=0;load();});
 $('trade-state-filter')?.addEventListener('change',()=>{inspectorPage=0;load();});
+$('review-filter')?.addEventListener('change',()=>{inspectorPage=0;load();});
 $('symbol-filter')?.addEventListener('change',()=>{inspectorPage=0;load();});
 $('inspector-prev').addEventListener('click',()=>{if(inspectorPage>0){inspectorPage--;load();}});
 $('inspector-next').addEventListener('click',()=>{inspectorPage++;load();});
@@ -964,3 +969,7 @@ document.addEventListener('click',event=>{
 $('inspected-trade-path-close')?.addEventListener('click',closeInspectedTradePath);
 document.addEventListener('click',event=>{if(event.target.closest('[data-inspector-path-close]'))closeInspectedTradePath();});
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!$('inspected-trade-path-panel')?.classList.contains('hidden'))closeInspectedTradePath();});
+
+// FIX-11R operator review/copy actions only.
+document.addEventListener('change',async e=>{const b=e.target.closest('input[data-review-trade]');if(!b)return;const id=b.dataset.sellTradeId;b.disabled=true;try{const r=await fetch(`/api/trade-inspector/${id}/review`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({markedForReview:b.checked})});if(!r.ok)throw new Error(`HTTP ${r.status}`);if(String($('review-filter')?.value)==='MARKED'&&!b.checked)await load();}catch(x){b.checked=!b.checked;$('inspector-error').textContent=x.message;$('inspector-error').classList.remove('hidden')}finally{b.disabled=false}});
+document.addEventListener('click',async e=>{const b=e.target.closest('button[data-copy-proven]');if(!b)return;b.disabled=true;try{const r=await fetch(`/api/trade-inspector/${b.dataset.sellTradeId}/copy-to-proven`,{method:'POST'});if(!r.ok)throw new Error(`HTTP ${r.status}`);const d=await r.json();const q=new URLSearchParams({provenTradeId:d.provenTradeId,symbol:d.symbol,start:d.analysisStart,end:d.analysisEnd});location.href=`/proven-analyzed-trades?${q}`;}catch(x){b.disabled=false;$('inspector-error').textContent=x.message;$('inspector-error').classList.remove('hidden')}});

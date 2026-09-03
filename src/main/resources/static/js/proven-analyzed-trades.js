@@ -141,7 +141,7 @@ async function loadRegressionArchives() {
         body.innerHTML = rows.map(a => `<tr>
             <td>#${a.archive_batch_id}</td><td>#${a.source_test_run_id}</td><td><strong>${escapeHtml(a.test_name)}</strong></td>
             <td>${escapeHtml(a.symbol)}</td><td>${formatMoveTime(a.start_time)} → ${formatMoveTime(a.end_time)}</td>
-            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}">View</button></td>
+            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button></td>
         </tr>`).join('') || '<tr><td colspan="7">No archived test runs yet.</td></tr>';
         return rows;
     } catch (error) { body.innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`; return []; }
@@ -1160,9 +1160,7 @@ async function renderProvenTradePopup() {
     const interval = document.getElementById('proven-popup-interval')?.value || '5m';
     const entry = window.CryptoTime.parseUtc(trade.entry_time);
     const exit = trade.exit_time ? window.CryptoTime.parseUtc(trade.exit_time) : null;
-    const from = new Date(entry.getTime() - 7 * 60 * 60 * 1000);
-    const tradeEnd = exit && !Number.isNaN(exit.getTime()) ? exit : entry;
-    const to = new Date(tradeEnd.getTime() + 7 * 60 * 60 * 1000);
+    const configuredStart=trade.analysis_start_time?window.CryptoTime.parseUtc(trade.analysis_start_time):null, configuredEnd=trade.analysis_end_time?window.CryptoTime.parseUtc(trade.analysis_end_time):null; const from=configuredStart||new Date(entry.getTime()-7*60*60*1000); const tradeEnd=exit&&!Number.isNaN(exit.getTime())?exit:entry; const to=configuredEnd||new Date(tradeEnd.getTime()+7*60*60*1000);
     const data = await api(`/api/administration/regression-tests/trade-chart?symbol=${encodeURIComponent(trade.symbol)}&interval=${encodeURIComponent(interval)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`);
     const candles = (data.candles || []).map(c => ({
         x: window.CryptoTime.parseUtc(c.open_time),
@@ -1170,9 +1168,7 @@ async function renderProvenTradePopup() {
     }));
     const empty = document.getElementById('proven-popup-chart-empty');
     empty?.classList.toggle('hidden', candles.length > 0);
-    const points=[];
-    if (trade.entry_time && trade.entry_price != null) points.push(provenPoint(trade.entry_time, trade.entry_price, 'BUY', 0));
-    if (trade.exit_time && trade.exit_price != null) points.push(provenPoint(trade.exit_time, trade.exit_price, 'SELL', 0));
+    const points=[]; const executions=Array.isArray(trade.execution_points)?trade.execution_points:[]; if(executions.length) executions.forEach((x,i)=>points.push(provenPoint(x.execution_time,x.execution_price,String(x.side).toUpperCase(),i))); else {if(trade.entry_time&&trade.entry_price!=null)points.push(provenPoint(trade.entry_time,trade.entry_price,'BUY',0));if(trade.exit_time&&trade.exit_price!=null)points.push(provenPoint(trade.exit_time,trade.exit_price,'SELL',0));}
     const path=[];
     if (trade.exit_time && trade.exit_price != null) {
         path.push({
@@ -1233,7 +1229,7 @@ function renderProvenTradesGrid(all) {
             <td>${trade.exit_price == null ? '—' : formatMovePrice(trade.exit_price)}</td>
             <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>
             <td>${formatMoveTime(trade.marked_at)}</td>
-            <td><button type="button" class="secondary-button regression-chart-link" data-proven-view-index="${index}">View</button></td>
+            <td><button type="button" class="secondary-button regression-chart-link" data-proven-view-index="${index}" data-proven-id="${trade.id}">View All BUY / SELL Points</button></td>
         </tr>`).join('') : '<tr><td colspan="9">No proven trades yet.</td></tr>';
 }
 
@@ -1386,8 +1382,7 @@ document.getElementById('proven-saved-trades-body')?.addEventListener('click', a
     const button = event.target.closest('button[data-proven-view-index]');
     if (!button) return;
     try {
-        const all = await api('/api/administration/regression-tests/proven-trades');
-        const trade = all?.[Number(button.dataset.provenViewIndex)];
+        const trade = button.dataset.provenId ? await api(`/api/administration/regression-tests/proven-trades/${button.dataset.provenId}`) : null;
         if (!trade) throw new Error('Proven trade not found.');
         // FIX-018: Proven trade review uses the same focused modal as Current Test/Archive.
         // The persistent combined graph is not mutated just to inspect one row.
@@ -1403,7 +1398,7 @@ document.getElementById('proven-chart-symbol')?.addEventListener('change',()=>{
 document.getElementById('proven-chart-interval')?.addEventListener('change',()=>loadProvenTradesGraph().catch(e=>showAdminMessage(e.message,true)));
 
 (async function initializeRegressionUi() {
-    await loadRegressionSymbols();
+    await loadRegressionSymbols(); const q=new URLSearchParams(location.search); if(q.get('symbol'))document.getElementById('regression-symbol').value=q.get('symbol'); if(q.get('start'))document.getElementById('regression-start').value=regressionUtcLocalValue(q.get('start')); if(q.get('end'))document.getElementById('regression-end').value=regressionUtcLocalValue(q.get('end')); if(q.get('provenTradeId'))showAdminMessage('Copied trade is READY. Proven Analysis input is prefilled.');
     await loadProvenTradesGraph();
     await loadInvestigationCases();
     const runs = await loadRegressionRuns();

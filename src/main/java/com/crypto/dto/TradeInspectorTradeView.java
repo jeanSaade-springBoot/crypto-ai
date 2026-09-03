@@ -45,5 +45,7 @@ public record TradeInspectorTradeView(
         BigDecimal priceAfter30m,
         BigDecimal priceAfter60m,
         String exitQuality,
-        String exitQualityExplanation
+        String exitQualityExplanation,
+        boolean markedForReview,
+        boolean copiedToProven
 ) {}

@@ -25,6 +25,9 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpStatus;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -47,6 +50,7 @@ public class TradeInspectorService {
     private final ProductionExitAuditRepository productionExitAuditRepository;
     private final PositionAnalysisRepository positionAnalysisRepository;
     private final PositionManagementEventRepository positionManagementEventRepository;
+    private final JdbcTemplate jdbcTemplate;
 
     public TradeInspectorService(WalletTradeRepository walletTradeRepository,
                                  CandleRepository candleRepository,
@@ -56,7 +60,7 @@ public class TradeInspectorService {
                                  ExecutionOpportunityRepository executionOpportunityRepository,
                                  ProductionExitAuditRepository productionExitAuditRepository,
                                  PositionAnalysisRepository positionAnalysisRepository,
-                                 PositionManagementEventRepository positionManagementEventRepository) {
+                                 PositionManagementEventRepository positionManagementEventRepository, JdbcTemplate jdbcTemplate) {
         this.walletTradeRepository = walletTradeRepository;
         this.candleRepository = candleRepository;
         this.paperPositionRepository = paperPositionRepository;
@@ -66,11 +70,17 @@ public class TradeInspectorService {
         this.productionExitAuditRepository = productionExitAuditRepository;
         this.positionAnalysisRepository = positionAnalysisRepository;
         this.positionManagementEventRepository = positionManagementEventRepository;
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    @Transactional(readOnly = true)
+    public TradeInspectorResponse inspect(String requestedSymbol, String requestedVenue, String requestedState, int requestedPage, int requestedPageSize) {
+        return inspect(requestedSymbol, requestedVenue, requestedState, requestedPage, requestedPageSize, false);
     }
 
     @Transactional(readOnly = true)
     public TradeInspectorResponse inspect(String requestedSymbol, String requestedVenue, String requestedState,
-                                          int requestedPage, int requestedPageSize) {
+                                          int requestedPage, int requestedPageSize, boolean markedForReviewOnly) {
         // FIX-11I: Trade Inspector can browse either completed positions or currently OPEN
         // managed positions. CLOSED remains the default so page 0 still loads the newest 10
         // completed trades exactly as before. This is a read-only inspector change only.
@@ -106,8 +116,7 @@ public class TradeInspectorService {
         }
 
         // FIX-106: database-first pagination for CLOSED positions remains unchanged.
-        Page<WalletTrade> closedPage = walletTradeRepository.findClosedTradesForInspector(
-                symbol, PageRequest.of(pageNumber, pageSize));
+        Page<WalletTrade> closedPage = markedForReviewOnly ? walletTradeRepository.findMarkedClosedTradesForInspector(symbol, PageRequest.of(pageNumber,pageSize)) : walletTradeRepository.findClosedTradesForInspector(symbol, PageRequest.of(pageNumber, pageSize));
 
         List<TradeInspectorTradeView> views = new ArrayList<>();
         for (WalletTrade sell : closedPage.getContent()) {
@@ -575,7 +584,7 @@ public class TradeInspectorService {
                         : humanCloseReason(sell),
                 bestPrice, percentChange(entryPrice, bestPrice),
                 worstPrice, percentChange(entryPrice, worstPrice),
-                p15, p30, p60, assessment.quality(), assessment.explanation()
+                p15, p30, p60, assessment.quality(), assessment.explanation(), isMarkedForReview(sell.getId()), isCopiedToProven(sell.getId())
         );
     }
 
@@ -613,8 +622,33 @@ public class TradeInspectorService {
                 managed.getProfitLockActivatedAt(), managed.getHighestPriceUsdt(),
                 null, null, null, null, "OPEN",
                 bestPrice, bestPercent, null, null,
-                null, null, null, "OPEN", "Position is still open; exit-quality evidence is not available yet."
+                null, null, null, "OPEN", "Position is still open; exit-quality evidence is not available yet.", false, false
         );
+    }
+
+    private boolean isMarkedForReview(Long id) { Integer n=jdbcTemplate.queryForObject("SELECT COUNT(*) FROM trade_inspector_review WHERE wallet_sell_trade_id=? AND marked_for_review=1",Integer.class,id); return n!=null&&n>0; }
+    private boolean isCopiedToProven(Long id) { Integer n=jdbcTemplate.queryForObject("SELECT COUNT(*) FROM proven_analyzed_trade WHERE source_wallet_sell_trade_id=?",Integer.class,id); return n!=null&&n>0; }
+
+    @Transactional
+    public Map<String,Object> setMarkedForReview(long sellId, boolean marked) {
+        WalletTrade sell=walletTradeRepository.findById(sellId).orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"Wallet SELL trade not found."));
+        if(!"SELL".equalsIgnoreCase(sell.getSide())||!"EXECUTED".equalsIgnoreCase(sell.getStatus())) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Only executed SELL trades can be marked.");
+        if(marked) jdbcTemplate.update("INSERT INTO trade_inspector_review(wallet_sell_trade_id,marked_for_review) VALUES (?,1) ON DUPLICATE KEY UPDATE marked_for_review=1,marked_at=CURRENT_TIMESTAMP(6)",sellId); else jdbcTemplate.update("DELETE FROM trade_inspector_review WHERE wallet_sell_trade_id=?",sellId);
+        return Map.of("sellTradeId",sellId,"markedForReview",marked);
+    }
+
+    @Transactional
+    public Map<String,Object> copyToProvenAnalysis(long sellId) {
+        WalletTrade sell=walletTradeRepository.findById(sellId).orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"Wallet SELL trade not found."));
+        WalletTrade paired=findEntryTrade(sell); if(paired==null) throw new ResponseStatusException(HttpStatus.CONFLICT,"Trade entry not found.");
+        PaperPosition paper=findPaperPosition(paired,sell); Instant lifeStart=paper!=null&&paper.getOpenedAt()!=null?paper.getOpenedAt():paired.getExecutedAt(); Instant lifeEnd=paper!=null&&paper.getClosedAt()!=null?paper.getClosedAt():sell.getExecutedAt();
+        List<WalletTrade> legs=walletTradeRepository.findBySymbolAndStatusAndExecutedAtBetweenOrderByExecutedAtAsc(sell.getSymbol(),"EXECUTED",lifeStart.minusSeconds(1),lifeEnd.plusSeconds(1));
+        WalletTrade first=legs.stream().filter(x->"BUY".equalsIgnoreCase(x.getSide())).findFirst().orElse(paired); WalletTrade last=legs.stream().filter(x->"SELL".equalsIgnoreCase(x.getSide())).reduce((a,b)->b).orElse(sell);
+        Instant start=first.getExecutedAt().minus(Duration.ofHours(1)), end=last.getExecutedAt().plus(Duration.ofHours(1));
+        List<Map<String,Object>> ex=jdbcTemplate.queryForList("SELECT id FROM proven_analyzed_trade WHERE source_wallet_sell_trade_id=?",sellId); long pid;
+        if(ex.isEmpty()){ jdbcTemplate.update("INSERT INTO proven_analyzed_trade(source_wallet_buy_trade_id,source_wallet_sell_trade_id,symbol,entry_time,entry_price,exit_time,exit_price,exit_reason,realized_pnl_usdt,realized_pnl_percent,position_percent,analysis_start_time,analysis_end_time,analysis_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'READY')",first.getId(),sellId,sell.getSymbol(),first.getExecutedAt(),first.getPriceUsdt(),last.getExecutedAt(),last.getPriceUsdt(),humanCloseReason(sell),sell.getRealizedPnlUsdt(),sell.getRealizedPnlPercent(),0,start,end); pid=jdbcTemplate.queryForObject("SELECT id FROM proven_analyzed_trade WHERE source_wallet_sell_trade_id=?",Long.class,sellId); } else pid=((Number)ex.get(0).get("id")).longValue();
+        jdbcTemplate.update("DELETE FROM proven_trade_execution_point WHERE proven_trade_id=?",pid); int seq=0; for(WalletTrade leg:legs){if(!"BUY".equalsIgnoreCase(leg.getSide())&&!"SELL".equalsIgnoreCase(leg.getSide()))continue; jdbcTemplate.update("INSERT INTO proven_trade_execution_point(proven_trade_id,wallet_trade_id,side,execution_time,execution_price,quantity,execution_reason,sequence_no) VALUES (?,?,?,?,?,?,?,?)",pid,leg.getId(),leg.getSide().toUpperCase(Locale.ROOT),leg.getExecutedAt(),leg.getPriceUsdt(),leg.getQuantity(),safeText(leg.getExecutionReason(),leg.getExecutionMessage()),++seq);}
+        return Map.of("provenTradeId",pid,"symbol",sell.getSymbol(),"analysisStart",start,"analysisEnd",end,"status","READY","executionPoints",seq);
     }
 
     /**

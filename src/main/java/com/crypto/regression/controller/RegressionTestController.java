@@ -137,6 +137,8 @@ public class RegressionTestController {
         return service.archiveProvenTradeLeg(provenTradeId, side);
     }
 
+    @GetMapping("/proven-trades/{provenTradeId}") public Map<String,Object> provenTradeDetail(@PathVariable long provenTradeId){return service.provenTradeDetail(provenTradeId);}
+
     @GetMapping("/proven-trades/archived-legs")
     public List<Map<String, Object>> archivedProvenTradeLegs() { return service.archivedProvenTradeLegs(); }
 

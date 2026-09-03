@@ -1,5 +1,6 @@
 (() => {
     const FIXES = [
+        {id:"FIX-11R",title:"Trade Inspector review to Proven Analysis",status:"IMPLEMENTED · OPERATOR TOOLING ONLY",scenario:"Persistent review queue and direct Proven Analysis copy with all split executions.",symbol:"ALL",entry:"DISPLAY ONLY",exit:"DISPLAY ONLY",entryTime:"Source trade",exitTime:"Source trade",replayWindow:"First BUY -1h through final SELL +1h",location:"Trade Inspector / Proven Analysis",classes:["TradeInspectorService","RegressionTestService","V80__trade_review_to_proven_analysis.sql","trade-inspector.js","proven-analyzed-trades.js","md/FIX-11R.md"],cause:"Manual review/copy lacked persistence and full execution-point charting.",solution:"Persist marks, copy READY ±1h case, store all execution points, redirect/prefill, chart all BUY/SELL points together.",behavior:"No Production trading behavior changes.",regression:"Verify persistence, marked filter, READY prefill/redirect, duplicate-safe copy, and all execution points on one chart."},
         {
             id: "FIX-11Q",
             title: "Replay-only one-candle continuation grace counterfactual",

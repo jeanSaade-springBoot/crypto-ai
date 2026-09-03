@@ -202,3 +202,5 @@ body.inspector-modal-open{overflow:hidden}
    evidence blocks balanced without changing the completed-trade four-column layout. */
 .open-position-body{grid-template-columns:1.1fr 1fr .8fr}
 @media(max-width:900px){.open-position-body{grid-template-columns:1fr}}
+
+.trade-review-check{display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid rgba(141,162,177,.28);border-radius:8px;font-size:12px;white-space:nowrap;cursor:pointer}.trade-review-check input{width:16px;height:16px}

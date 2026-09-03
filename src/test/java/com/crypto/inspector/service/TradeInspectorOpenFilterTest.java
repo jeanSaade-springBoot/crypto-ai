@@ -44,7 +44,7 @@ class TradeInspectorOpenFilterTest {
                 mock(ExecutionOpportunityRepository.class),
                 mock(ProductionExitAuditRepository.class),
                 mock(PositionAnalysisRepository.class),
-                mock(PositionManagementEventRepository.class));
+                mock(PositionManagementEventRepository.class), mock(org.springframework.jdbc.core.JdbcTemplate.class));
 
         WalletManagedPosition open = WalletManagedPosition.builder()
                 .id(91L)
