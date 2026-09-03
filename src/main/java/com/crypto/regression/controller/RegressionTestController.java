@@ -103,6 +103,15 @@ public class RegressionTestController {
         return service.trades(id);
     }
 
+    // FIX-11S: read-only run-level chart payload. It overlays isolated Replay executions
+    // with real Production wallet executions for the same symbol/window without changing
+    // either execution path. Missing Production trades are returned as an empty list.
+    @GetMapping("/runs/{id}/all-trades-chart")
+    public Map<String, Object> allTradesChart(@PathVariable long id,
+                                               @RequestParam(defaultValue = "5m") String interval) {
+        return service.allTradesChart(id, interval);
+    }
+
     @GetMapping("/runs/{id}/position-management")
     public List<Map<String, Object>> positionManagement(@PathVariable long id) {
         return service.positionManagement(id);

@@ -655,6 +655,14 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
         if (pipelineToggle) { pipelineToggle.textContent = 'Expand pipeline'; pipelineToggle.setAttribute('aria-expanded', 'false'); }
 
         const tradePanel = document.getElementById('regression-trades');
+        // FIX-11S: the run-level chart always targets the persisted Replay run window.
+        // It remains usable even when there are zero Production executions in that window.
+        const allTradesButton = document.getElementById('regression-view-all-trades');
+        if (allTradesButton) {
+            allTradesButton.disabled = false;
+            allTradesButton.dataset.runId = String(run.id);
+            allTradesButton.dataset.symbol = String(run.symbol || '').toUpperCase();
+        }
         // FIX-074: Shadow Trades is a first-class run result directly under the replay result area.
         // Clear both CSS and native hidden state so View cannot leave it invisible after prior UI cleanup.
         if (!tradePanel) throw new Error('Shadow Trades panel is missing from the Proven/Test page.');
@@ -1039,6 +1047,7 @@ if (regressionPipelineFilter) regressionPipelineFilter.addEventListener('change'
 // Apex DOM instance for two different review jobs and keeps the parent trade row visible.
 let provenPopupChart = null;
 let provenPopupTrade = null;
+let provenPopupRun = null;
 let provenPopupCrosshairCleanup = null;
 
 function normalizePopupTrade(raw = {}) {
@@ -1070,6 +1079,8 @@ function openProvenTradePopup(trade) {
     const normalized = normalizePopupTrade(trade);
     if (!normalized) throw new Error('Trade chart requires a valid BUY time and price.');
     provenPopupTrade = normalized;
+    provenPopupRun = null;
+    document.getElementById('proven-popup-source-controls')?.classList.add('hidden');
     const modal = document.getElementById('proven-trade-chart-modal');
     modal?.classList.remove('hidden');
     modal?.setAttribute('aria-hidden', 'false');
@@ -1083,6 +1094,24 @@ function openProvenTradePopup(trade) {
     return renderProvenTradePopup();
 }
 
+async function openReplayRunTradesPopup(runId, symbol) {
+    const id = Number(runId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error('A valid Replay run is required.');
+    provenPopupTrade = null;
+    provenPopupRun = { runId: id, symbol: String(symbol || '').toUpperCase(), showProduction: true };
+    const modal = document.getElementById('proven-trade-chart-modal');
+    modal?.classList.remove('hidden');
+    modal?.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('proven-modal-open');
+    document.getElementById('proven-popup-title').textContent = `${provenPopupRun.symbol || 'Replay'} · Full Replay window`;
+    document.getElementById('proven-popup-meta').textContent = 'All Replay BUY / SELL executions with optional Production overlay for the same symbol and window.';
+    const controls = document.getElementById('proven-popup-source-controls');
+    controls?.classList.remove('hidden');
+    const checkbox = document.getElementById('proven-popup-show-production');
+    if (checkbox) { checkbox.checked = true; checkbox.disabled = false; }
+    await renderReplayRunTradesPopup();
+}
+
 function closeProvenTradePopup() {
     const modal = document.getElementById('proven-trade-chart-modal');
     modal?.classList.add('hidden');
@@ -1094,6 +1123,8 @@ function closeProvenTradePopup() {
     const host = document.getElementById('proven-popup-chart');
     if (host) host.innerHTML = '';
     provenPopupTrade = null;
+    provenPopupRun = null;
+    document.getElementById('proven-popup-source-controls')?.classList.add('hidden');
 }
 
 function adaptivePopupPrice(value) {
@@ -1197,6 +1228,104 @@ async function renderProvenTradePopup() {
     bindProvenDotTitles([trade]);
 }
 
+function replayRunExecutionPoint(execution, source, index) {
+    const side = String(execution.side || '').toUpperCase();
+    const isReplay = source === 'REPLAY';
+    const isBuy = side === 'BUY';
+    const fillColor = isReplay ? (isBuy ? '#2da8ff' : '#0057d9') : (isBuy ? '#ffb020' : '#ff5c35');
+    const sourceShort = isReplay ? 'R' : 'P';
+    const time = window.CryptoTime.parseUtc(execution.execution_time);
+    const price = Number(execution.execution_price);
+    if (!time || Number.isNaN(time.getTime()) || !Number.isFinite(price)) return null;
+    return {
+        x: time.getTime(), y: price,
+        marker: {size:isReplay?7:8,fillColor,strokeColor:'#071018',strokeWidth:2,radius:7},
+        label: {
+            text:`${sourceShort} ${side}`,
+            borderColor:fillColor,
+            offsetY:isBuy?18:-18,
+            style:{background:fillColor,color:'#071018',fontSize:'9px',fontWeight:700},
+            cssClass:`run-trade-point run-${source.toLowerCase()}-${side.toLowerCase()}-${index}`
+        }
+    };
+}
+
+function executionPointTitle(execution, source) {
+    const side = String(execution.side || '').toUpperCase();
+    const time = window.CryptoTime.parseUtc(execution.execution_time);
+    const parts = [
+        `${source} ${side}`,
+        time ? formatMoveTime(time.toISOString()) : String(execution.execution_time || ''),
+        `Price ${formatMovePrice(execution.execution_price)}`
+    ];
+    if (execution.position_percent != null) parts.push(`Allocation ${Number(execution.position_percent).toFixed(0)}%`);
+    if (execution.execution_code) parts.push(String(execution.execution_code));
+    if (execution.execution_reason) parts.push(String(execution.execution_reason));
+    if (execution.realized_pnl_usdt != null && side === 'SELL') parts.push(`P/L ${Number(execution.realized_pnl_usdt).toFixed(4)} USDT`);
+    return parts.join(' · ');
+}
+
+function bindRunExecutionTitles(replayExecutions, productionExecutions, showProduction) {
+    (replayExecutions || []).forEach((execution, index) => {
+        const label = document.querySelector(`.run-replay-${String(execution.side || '').toLowerCase()}-${index}`);
+        const marker = label?.parentElement?.querySelector('circle') || label;
+        if (marker) marker.setAttribute('title', executionPointTitle(execution, 'REPLAY'));
+    });
+    if (!showProduction) return;
+    (productionExecutions || []).forEach((execution, index) => {
+        const label = document.querySelector(`.run-production-${String(execution.side || '').toLowerCase()}-${index}`);
+        const marker = label?.parentElement?.querySelector('circle') || label;
+        if (marker) marker.setAttribute('title', executionPointTitle(execution, 'PRODUCTION'));
+    });
+}
+
+async function renderReplayRunTradesPopup() {
+    if (!provenPopupRun) return;
+    const interval = document.getElementById('proven-popup-interval')?.value || '5m';
+    const data = await api(`/api/administration/regression-tests/runs/${encodeURIComponent(provenPopupRun.runId)}/all-trades-chart?interval=${encodeURIComponent(interval)}`);
+    const candles = (data.candles || []).map(c => ({
+        x: window.CryptoTime.parseUtc(c.open_time),
+        y: [Number(c.open_price), Number(c.high_price), Number(c.low_price), Number(c.close_price)]
+    }));
+    const replayExecutions = Array.isArray(data.replayExecutions) ? data.replayExecutions : [];
+    const productionExecutions = Array.isArray(data.productionExecutions) ? data.productionExecutions : [];
+    const showProduction = Boolean(provenPopupRun.showProduction) && productionExecutions.length > 0;
+    const points = replayExecutions.map((x,i)=>replayRunExecutionPoint(x,'REPLAY',i)).filter(Boolean);
+    if (showProduction) points.push(...productionExecutions.map((x,i)=>replayRunExecutionPoint(x,'PRODUCTION',i)).filter(Boolean));
+
+    const checkbox = document.getElementById('proven-popup-show-production');
+    if (checkbox) {
+        checkbox.disabled = productionExecutions.length === 0;
+        checkbox.checked = productionExecutions.length > 0 && Boolean(provenPopupRun.showProduction);
+    }
+    const count = document.getElementById('proven-popup-production-count');
+    if (count) count.textContent = `Production trades in window: ${productionExecutions.length}`;
+    document.getElementById('proven-popup-title').textContent = `${data.symbol || provenPopupRun.symbol} · Full Replay window`;
+    document.getElementById('proven-popup-meta').textContent = `${formatMoveTime(data.from)} → ${formatMoveTime(data.to)} · Replay executions: ${replayExecutions.length} · Production executions: ${productionExecutions.length}`;
+
+    const empty = document.getElementById('proven-popup-chart-empty');
+    empty?.classList.toggle('hidden', candles.length > 0);
+    if (empty && !candles.length) empty.textContent = 'No candles are available for this Replay window.';
+    const options={
+        chart:{type:'line',height:520,background:'transparent',foreColor:'#8da2b1',toolbar:{show:true},animations:{enabled:false},zoom:{enabled:true,autoScaleYaxis:true}},
+        title:{text:`${data.symbol} · ${interval} · Replay window`,align:'left',style:{fontSize:'13px',fontWeight:600,color:'#dbe8ef'}},
+        series:[{name:'Price',type:'candlestick',data:candles}],
+        stroke:{width:[1],curve:'straight'}, markers:{size:[0]}, dataLabels:{enabled:false},
+        xaxis:{type:'datetime',crosshairs:{show:true,stroke:{width:1,dashArray:0}},labels:{datetimeUTC:false},tooltip:{enabled:false}},
+        yaxis:{tooltip:{enabled:false},decimalsInFloat:4},
+        grid:{borderColor:'#203342'},theme:{mode:'dark'},plotOptions:{candlestick:{colors:{upward:'#39d98a',downward:'#ff6b72'}}},
+        annotations:{points},tooltip:{shared:false}
+    };
+    const host=document.getElementById('proven-popup-chart');
+    provenPopupCrosshairCleanup?.();
+    if (provenPopupChart) provenPopupChart.destroy();
+    host.innerHTML='';
+    provenPopupChart=new ApexCharts(host,options);
+    await provenPopupChart.render();
+    provenPopupCrosshairCleanup = window.CryptoChartCrosshair?.bind(host, provenPopupChart, { valueFormatter: adaptivePopupPrice }) || null;
+    bindRunExecutionTitles(replayExecutions, productionExecutions, showProduction);
+}
+
 async function showRegressionTradeChart(button) {
     const trade = popupTradeFromButton(button);
     if (!trade) return;
@@ -1208,8 +1337,22 @@ document.addEventListener('click', event => {
     if (button) showRegressionTradeChart(button).catch(error => showAdminMessage(error.message,true));
     if (event.target.closest('[data-proven-popup-close]') || event.target.closest('#proven-popup-close')) closeProvenTradePopup();
 });
-document.addEventListener('keydown', event => { if (event.key === 'Escape' && provenPopupTrade) closeProvenTradePopup(); });
-document.getElementById('proven-popup-interval')?.addEventListener('change', () => renderProvenTradePopup().catch(error => showAdminMessage(error.message,true)));
+document.addEventListener('keydown', event => { if (event.key === 'Escape' && (provenPopupTrade || provenPopupRun)) closeProvenTradePopup(); });
+document.getElementById('proven-popup-interval')?.addEventListener('change', () => {
+    const render = provenPopupRun ? renderReplayRunTradesPopup() : renderProvenTradePopup();
+    render.catch(error => showAdminMessage(error.message,true));
+});
+
+document.getElementById('regression-view-all-trades')?.addEventListener('click', event => {
+    const button = event.currentTarget;
+    openReplayRunTradesPopup(button.dataset.runId, button.dataset.symbol).catch(error => showAdminMessage(error.message,true));
+});
+
+document.getElementById('proven-popup-show-production')?.addEventListener('change', event => {
+    if (!provenPopupRun) return;
+    provenPopupRun.showProduction = Boolean(event.target.checked);
+    renderReplayRunTradesPopup().catch(error => showAdminMessage(error.message,true));
+});
 
 let provenTradesChart = null;
 let provenTradeFocus = null;

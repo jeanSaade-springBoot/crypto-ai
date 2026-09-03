@@ -123,7 +123,10 @@
 <tbody id="regression-directional-signals-body"><tr><td colspan="8">Run or view a Replay to see fresh directional signals.</td></tr></tbody>
 </table></div>
 </div><div class="regression-detail hidden" id="regression-trades">
+<div class="regression-trades-head">
 <h3>Shadow trades · exact BUY / SELL points</h3>
+<button class="secondary-button" disabled id="regression-view-all-trades" type="button">View All Trades on Chart</button>
+</div>
 <p class="form-note">Check a closed trade after your manual review. Check a closed trade after your manual review. Checked trades are copied to the persistent Proven trades table; unchecking removes them.</p>
 <div class="table-wrap"><table>
 <thead><tr><th title="Add/remove from Proven trades">✓</th><th>#</th><th>Symbol</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr></thead>
@@ -224,6 +227,12 @@
 <p class="form-note" id="proven-popup-meta">Historical candles around the selected BUY → SELL lifecycle.</p>
 </div>
 <div class="proven-trade-chart-actions">
+<div class="proven-popup-source-controls hidden" id="proven-popup-source-controls">
+<label><input checked id="proven-popup-show-production" type="checkbox"/> Show Production</label>
+<span class="proven-source-key replay">Replay BUY / SELL</span>
+<span class="proven-source-key production">Production BUY / SELL</span>
+<span class="proven-production-count" id="proven-popup-production-count"></span>
+</div>
 <label class="proven-symbol-picker">Interval
                     <select id="proven-popup-interval">
 <option value="1m">1 min</option>

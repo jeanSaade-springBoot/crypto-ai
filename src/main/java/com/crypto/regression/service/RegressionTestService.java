@@ -481,6 +481,73 @@ public class RegressionTestService {
                 """, runId);
     }
 
+    /**
+     * FIX-11S: one read-only chart payload for an entire Replay run. Replay executions are
+     * taken from the isolated wallet_execution_test rows; Production executions are only
+     * queried for the same symbol and requested Replay window. An empty Production result
+     * is a normal case and is deliberately returned as [] rather than null.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> allTradesChart(long runId, String interval) {
+        List<Map<String, Object>> runs = jdbcTemplate.queryForList("""
+                SELECT id, symbol, start_time, end_time
+                FROM analysis_test_run
+                WHERE id = ?
+                """, runId);
+        if (runs.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Replay run not found.");
+        }
+
+        Map<String, Object> run = runs.get(0);
+        String symbol = String.valueOf(run.get("symbol")).trim().toUpperCase(Locale.ROOT);
+        Timestamp start = (Timestamp) run.get("start_time");
+        Timestamp end = (Timestamp) run.get("end_time");
+        String normalizedInterval = switch (interval == null ? "5m" : interval.trim().toLowerCase(Locale.ROOT)) {
+            case "1m", "5m", "1h", "4h" -> interval.trim().toLowerCase(Locale.ROOT);
+            default -> "5m";
+        };
+
+        List<Map<String, Object>> candles = jdbcTemplate.queryForList("""
+                SELECT open_time, open_price, high_price, low_price, close_price, volume
+                FROM candle
+                WHERE symbol=? AND interval_code=? AND closed=1 AND open_time BETWEEN ? AND ?
+                ORDER BY open_time ASC
+                """, symbol, normalizedInterval, start, end);
+
+        List<Map<String, Object>> replayExecutions = jdbcTemplate.queryForList("""
+                SELECT id, side, execution_time, execution_price, quantity, notional_usdt,
+                       position_percent, signal_interval, signal_decision, execution_source,
+                       execution_code, execution_reason, realized_pnl_usdt, realized_pnl_percent
+                FROM wallet_execution_test
+                WHERE test_run_id=? AND symbol=?
+                  AND execution_time BETWEEN ? AND ?
+                  AND UPPER(side) IN ('BUY','SELL')
+                ORDER BY execution_time ASC, id ASC
+                """, runId, symbol, start, end);
+
+        List<Map<String, Object>> productionExecutions = jdbcTemplate.queryForList("""
+                SELECT id, signal_id, side, executed_at AS execution_time, price_usdt AS execution_price,
+                       quantity, gross_amount_usdt, realized_pnl_usdt, realized_pnl_percent,
+                       execution_type, execution_reason, execution_message
+                FROM wallet_trade
+                WHERE symbol=? AND status='EXECUTED'
+                  AND executed_at BETWEEN ? AND ?
+                  AND UPPER(side) IN ('BUY','SELL')
+                ORDER BY executed_at ASC, id ASC
+                """, symbol, start, end);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("runId", runId);
+        result.put("symbol", symbol);
+        result.put("interval", normalizedInterval);
+        result.put("from", start);
+        result.put("to", end);
+        result.put("candles", candles);
+        result.put("replayExecutions", replayExecutions);
+        result.put("productionExecutions", productionExecutions);
+        return result;
+    }
+
     /** FIX-11K Phase A: read-only replay observations; never Production execution. */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> defensiveRiskReductionObservations(long runId) {
