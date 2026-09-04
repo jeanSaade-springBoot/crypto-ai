@@ -8,6 +8,7 @@ import com.crypto.wallet.repository.*;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,7 +21,10 @@ import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class WalletAutoExecutionService {
+    // FIX-11T: shared decimal context for Near-TP partial-harvest arithmetic.
+    private static final MathContext MC = MathContext.DECIMAL64;
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final int SCALE = 12;
 
@@ -29,6 +33,7 @@ public class WalletAutoExecutionService {
     private final WalletManagedPositionRepository managedPositionRepository;
     private final WalletSettingsRepository settingsRepository;
     private final WalletExecutionSizingPolicy executionSizingPolicy;
+    private final BinanceMinimumExecutionPolicy binanceMinimumExecutionPolicy;
     private final WalletDailyStatisticsRepository dailyStatisticsRepository;
     private final WalletService walletService;
     private final ObjectMapper objectMapper;
@@ -114,6 +119,15 @@ public class WalletAutoExecutionService {
         position.setEntryQualityScore(Math.max(0, entryQualityScore));
         if (!newPosition) {
             position.setLastScaleInAt(Instant.now());
+            // FIX-11T: a progressive add changes average entry / risk geometry. Restart the
+            // Near-TP observation window only if this position has not harvested already.
+            // After a harvest, keep the terminal Near-TP state and one-harvest lifetime cap.
+            if (!position.isNearTpHarvestUsed()) {
+                position.setNearTpState(com.crypto.position.service.NearTpState.INACTIVE);
+                position.setNearTpBestPrice(null);
+                position.setNearTpBearishStreak(0);
+                position.setNearTpLastOneMinuteSignalId(null);
+            }
             if (signal.getStopLoss() != null && signal.getStopLoss().signum() > 0
                     && (position.getStopLossUsdt() == null || signal.getStopLoss().compareTo(position.getStopLossUsdt()) > 0)) {
                 position.setStopLossUsdt(signal.getStopLoss());
@@ -503,6 +517,125 @@ public class WalletAutoExecutionService {
                 });
         walletService.captureSnapshot();
         return true;
+    }
+
+    /**
+     * FIX-11T: execute one idempotent 50% Near-TP partial harvest against the currently
+     * held managed-position quantity. This uses the same transactional paper-wallet balance
+     * mutations as the existing mechanical exits, but deliberately keeps the position OPEN.
+     *
+     * allocatedPositionPercent is intentionally NOT reduced. Progressive Position Building
+     * sizes future adds from this cumulative allocation percentage, so leaving it unchanged
+     * permanently reserves the harvested allocation gap instead of buying it straight back.
+     */
+    @Transactional
+    public synchronized PartialHarvestResult executeNearTpPartialHarvest(
+            String symbol, BigDecimal executionPrice, String executionMessage) {
+        String pair = normalizePair(symbol);
+        WalletManagedPosition position = managedPositionRepository
+                .findFirstBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
+                .orElse(null);
+        if (position == null || position.getId() == null || position.getQuantity() == null
+                || position.getQuantity().signum() <= 0) {
+            return PartialHarvestResult.notExecuted("NO_OPEN_POSITION");
+        }
+
+        String key = "POSITION:" + position.getId() + ":NEAR_TP_PARTIAL_HARVEST";
+        if (tradeRepository.existsByExecutionKey(key)) {
+            return PartialHarvestResult.notExecuted("ALREADY_EXECUTED");
+        }
+        if (position.isNearTpHarvestUsed()) {
+            return PartialHarvestResult.notExecuted("HARVEST_ALREADY_USED");
+        }
+
+        String assetSymbol = pair.substring(0, pair.length() - 4);
+        WalletAsset coin = getOrCreate(assetSymbol);
+        BigDecimal requested = position.getQuantity().multiply(BigDecimal.valueOf(0.50), MC);
+        BigDecimal quantity = requested.min(position.getQuantity()).min(coin.getQuantity());
+        if (quantity.signum() <= 0) return PartialHarvestResult.notExecuted("NO_SELLABLE_QUANTITY");
+
+        BigDecimal price = positive(executionPrice);
+        // FIX-11T: Paper must respect the same Binance minimum executable order boundary
+        // as a future real connector. If this 50% reduction is below the symbol minimum,
+        // do nothing; never promote it to a larger/full exit.
+        BinanceMinimumExecutionPolicy.Evaluation minimumCheck =
+                binanceMinimumExecutionPolicy.evaluate(pair, quantity, price);
+        if (!minimumCheck.executable()) {
+            log.info("FIX-11T NEAR_TP_HARVEST_SKIPPED: positionId={}, symbol={}, reason={}, requestedQty={}, requestedNotional={}, binanceMinimum={}; existing position management continues",
+                    position.getId(), pair, minimumCheck.code(), quantity, minimumCheck.requestedNotional(), minimumCheck.minimumNotional());
+            return PartialHarvestResult.notExecuted(minimumCheck.code());
+        }
+
+        BigDecimal gross = quantity.multiply(price, MC);
+        BigDecimal costBasis = position.getAverageEntryPriceUsdt().multiply(quantity, MC);
+        BigDecimal realized = gross.subtract(costBasis, MC);
+        BigDecimal realizedPercent = costBasis.signum() == 0 ? ZERO : realized
+                .divide(costBasis, 8, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+
+        coin.setQuantity(coin.getQuantity().subtract(quantity, MC));
+        if (coin.getQuantity().signum() == 0) coin.setAverageBuyPriceUsdt(null);
+        assetRepository.save(coin);
+        if (assetRepository.creditQuantity("USDT", gross) != 1) {
+            throw new IllegalStateException("Unable to credit USDT wallet balance for Near-TP partial harvest");
+        }
+        final BigDecimal endingUsdt = getOrCreate("USDT").getQuantity();
+
+        BigDecimal remainingQuantity = position.getQuantity().subtract(quantity, MC);
+        BigDecimal remainingCost = position.getTotalCostUsdt().subtract(costBasis, MC);
+        if (remainingQuantity.signum() <= 0) {
+            throw new IllegalStateException("Near-TP partial harvest must not close the entire managed position");
+        }
+        position.setQuantity(remainingQuantity);
+        position.setTotalCostUsdt(remainingCost.max(ZERO));
+        // Average entry remains unchanged because exactly the sold quantity's cost basis
+        // is removed. Do not lower allocatedPositionPercent; see method contract above.
+        position.setNearTpHarvestUsed(true);
+        position.setNearTpHarvestedQuantity(quantity);
+        position.setNearTpState(com.crypto.position.service.NearTpState.NEAR_TP_PARTIAL_HARVESTED);
+        position.setUpdatedAt(Instant.now());
+        managedPositionRepository.save(position);
+
+        tradeRepository.save(WalletTrade.builder()
+                .executionKey(key)
+                .symbol(pair)
+                .side("SELL")
+                .quantity(quantity)
+                .priceUsdt(price)
+                .grossAmountUsdt(gross)
+                .feeUsdt(ZERO)
+                .netAmountUsdt(gross)
+                .costBasisUsdt(costBasis)
+                .realizedPnlUsdt(realized)
+                .realizedPnlPercent(realizedPercent)
+                .executionType("PAPER_AUTO")
+                .executionReason("NEAR_TP_PARTIAL_HARVEST")
+                .status("EXECUTED")
+                .executedAt(Instant.now())
+                .notes("FIX-11T Near-TP Failure Protection partial reduction")
+                .executionMessage(executionMessage == null || executionMessage.isBlank()
+                        ? "Near-TP Failure Protection sold 50% of current held quantity at " + price
+                        : executionMessage)
+                .build());
+
+        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneOffset.UTC))
+                .ifPresent(daily -> {
+                    daily.setEndingUsdt(endingUsdt);
+                    daily.setEndingPortfolioUsdt(walletService.currentPortfolioValue());
+                    daily.setUpdatedAt(Instant.now());
+                    dailyStatisticsRepository.save(daily);
+                });
+        walletService.captureSnapshot();
+        log.info("FIX-11T wallet partial harvest committed: positionId={}, symbol={}, executionKey={}, soldQty={}, remainingQty={}, price={}, realizedPnl={}, allocatedPercentKept={}",
+                position.getId(), pair, key, quantity, remainingQuantity, price, realized, position.getAllocatedPositionPercent());
+        return new PartialHarvestResult(true, "EXECUTED", quantity, remainingQuantity, realized, realizedPercent);
+    }
+
+    public record PartialHarvestResult(boolean executed, String status, BigDecimal soldQuantity,
+                                       BigDecimal remainingQuantity, BigDecimal realizedPnlUsdt,
+                                       BigDecimal realizedPnlPercent) {
+        static PartialHarvestResult notExecuted(String status) {
+            return new PartialHarvestResult(false, status, ZERO, ZERO, ZERO, ZERO);
+        }
     }
 
     private WalletDailyStatistics dailyStatistics(WalletSettings settings, WalletAsset usdt) {

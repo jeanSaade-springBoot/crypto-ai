@@ -41,6 +41,7 @@ public class LivePositionProtectionService {
     private final WalletAutoExecutionService walletAutoExecutionService;
     private final ProductionExitAuditService productionExitAuditService;
     private final PositionManagementEventRepository positionManagementEventRepository;
+    private final NearTpFailureProtectionPolicy nearTpFailureProtectionPolicy;
 
     @Transactional
     public void onPrice(String symbolValue, BigDecimal price) {
@@ -70,6 +71,9 @@ public class LivePositionProtectionService {
                 BigDecimal newTarget = oldTarget.add(distance.multiply(BigDecimal.valueOf(0.50), MC), MC);
                 Instant changedAt = Instant.now();
                 managed.setTakeProfitUsdt(newTarget);
+                // FIX-11T: TP extension changes the planned entry->TP distance. Any old Near-TP
+                // arm/rejection was relative to the superseded target and must be restarted.
+                resetNearTpTrackingForNewRiskGeometry(managed);
                 managed.setUpdatedAt(changedAt);
                 managedPositionRepository.save(managed);
 
@@ -156,14 +160,131 @@ public class LivePositionProtectionService {
                 closePaper(symbol, price, PositionStatus.CLOSED, normalExit.code(), normalExit.explanation(), one);
                 log.info("Live signal-driven exit: symbol={}, price={}, reason={}", symbol, price, normalExit.code());
             }
+            // FIX-11T: any higher-priority position action owns this evaluation cycle.
+            // Near-TP must never race another SELL or quantity-changing decision on the same tick.
+            return;
         }
+
+        // FIX-11T: Near-TP Failure Protection is deliberately LAST. TP/SL/profit-lock and
+        // existing signal exits above retain their exact authority and always win the cycle.
+        evaluateNearTpProtection(managed, price, one, five);
+    }
+
+    private void evaluateNearTpProtection(WalletManagedPosition managed, BigDecimal price,
+                                          TradeSignal oneMinute, TradeSignal fiveMinute) {
+        // FIX-11T evidence is explicitly time-safe. Normal Production logic above keeps its
+        // existing signal lookup unchanged; Near-TP alone falls back to an at-or-before query
+        // if the repository's newest row is future-dated relative to this live evaluation.
+        Instant evaluatedAt = Instant.now();
+        oneMinute = latestEligibleSignal(managed.getSymbol(), "1m", oneMinute, evaluatedAt);
+        fiveMinute = latestEligibleSignal(managed.getSymbol(), "5m", fiveMinute, evaluatedAt);
+
+        NearTpFailureProtectionPolicy.State state = new NearTpFailureProtectionPolicy.State(
+                managed.getNearTpState() == null ? NearTpState.INACTIVE : managed.getNearTpState(),
+                managed.getNearTpBestPrice(), managed.getNearTpBearishStreak(),
+                managed.getNearTpLastOneMinuteSignalId(), managed.isNearTpHarvestUsed());
+
+        NearTpFailureProtectionPolicy.Evaluation evaluation = nearTpFailureProtectionPolicy.evaluate(
+                state, managed.getAverageEntryPriceUsdt(), managed.getTakeProfitUsdt(),
+                price, evaluatedAt, oneMinute, fiveMinute);
+
+        NearTpFailureProtectionPolicy.State next = evaluation.state();
+        boolean stateChanged = managed.getNearTpState() != next.nearTpState()
+                || !sameDecimal(managed.getNearTpBestPrice(), next.bestPrice())
+                || managed.getNearTpBearishStreak() != next.consecutiveBearishOneMinute()
+                || !java.util.Objects.equals(managed.getNearTpLastOneMinuteSignalId(), next.lastEvaluatedOneMinuteSignalId());
+        if (stateChanged) {
+            managed.setNearTpState(next.nearTpState());
+            managed.setNearTpBestPrice(next.bestPrice());
+            managed.setNearTpBearishStreak(next.consecutiveBearishOneMinute());
+            managed.setNearTpLastOneMinuteSignalId(next.lastEvaluatedOneMinuteSignalId());
+            managed.setUpdatedAt(Instant.now());
+            managedPositionRepository.save(managed);
+        }
+
+        if (evaluation.transition() || stateChanged) {
+            log.info("FIX-11T Near-TP evaluation: positionId={}, symbol={}, state={}, code={}, price={}, bestPrice={}, " +
+                            "tpProgressPct={}, givebackPct={}, bearish1mStreak={}, oneMinuteId={}, oneMinuteOriginal={}, " +
+                            "fiveMinuteId={}, fiveMinuteOriginal={}, detail={}",
+                    managed.getId(), managed.getSymbol(), next.nearTpState(), evaluation.code(), price, next.bestPrice(),
+                    evaluation.tpProgressPercent(), evaluation.givebackPercent(), next.consecutiveBearishOneMinute(),
+                    oneMinute == null ? null : oneMinute.getId(),
+                    oneMinute == null ? null : oneMinute.getOriginalDecision(),
+                    fiveMinute == null ? null : fiveMinute.getId(),
+                    fiveMinute == null ? null : fiveMinute.getOriginalDecision(),
+                    evaluation.explanation());
+        } else if (log.isDebugEnabled() && evaluation.code().startsWith("HOLD_")) {
+            log.debug("FIX-11T Near-TP hold: positionId={}, symbol={}, code={}, price={}, detail={}",
+                    managed.getId(), managed.getSymbol(), evaluation.code(), price, evaluation.explanation());
+        }
+
+        if (!evaluation.harvestEligible()) return;
+
+        WalletAutoExecutionService.PartialHarvestResult harvest = walletAutoExecutionService
+                .executeNearTpPartialHarvest(managed.getSymbol(), price, evaluation.explanation());
+        if (!harvest.executed()) {
+            log.warn("FIX-11T Near-TP harvest not executed: positionId={}, symbol={}, status={}, price={}",
+                    managed.getId(), managed.getSymbol(), harvest.status(), price);
+            // If execution did not happen, return to rejection monitoring rather than leaving
+            // the state stranded in FAILURE_CONFIRMED. Idempotency still lives in wallet_trade.
+            managed.setNearTpState(NearTpState.NEAR_TP_REJECTION_DETECTED);
+            if ("BELOW_BINANCE_MINIMUM".equals(harvest.status())
+                    || "BINANCE_MINIMUM_UNAVAILABLE".equals(harvest.status())) {
+                // The skipped order consumed the current confirmation pair. Requiring fresh
+                // bearish evidence prevents a retry on every subsequent market-price tick.
+                managed.setNearTpBearishStreak(0);
+            }
+            managed.setUpdatedAt(Instant.now());
+            managedPositionRepository.save(managed);
+            return;
+        }
+
+        // Keep paper_position quantity/P&L synchronized with the managed wallet lifecycle.
+        // Without this, a later terminal signal close would calculate P&L on pre-harvest quantity.
+        PaperPosition paper = paperPositionRepository.findBySymbolAndStatus(managed.getSymbol(), PositionStatus.OPEN).orElse(null);
+        if (paper != null) {
+            paper.setQuantity(harvest.remainingQuantity());
+            BigDecimal priorRealized = paper.getRealizedPnl() == null ? BigDecimal.ZERO : paper.getRealizedPnl();
+            paper.setRealizedPnl(priorRealized.add(harvest.realizedPnlUsdt(), MC));
+            paperPositionRepository.save(paper);
+        }
+
+        log.info("FIX-11T NEAR_TP_PARTIAL_HARVESTED: positionId={}, symbol={}, soldQty={}, remainingQty={}, " +
+                        "price={}, realizedPnl={}, realizedPnlPct={}",
+                managed.getId(), managed.getSymbol(), harvest.soldQuantity(), harvest.remainingQuantity(),
+                price, harvest.realizedPnlUsdt(), harvest.realizedPnlPercent());
+    }
+
+    private TradeSignal latestEligibleSignal(String symbol, String interval, TradeSignal newest, Instant evaluatedAt) {
+        if (newest != null && newest.getGeneratedAt() != null && !newest.getGeneratedAt().isAfter(evaluatedAt)) {
+            return newest;
+        }
+        return tradeSignalRepository
+                .findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(symbol, interval, evaluatedAt)
+                .orElse(null);
+    }
+
+    private void resetNearTpTrackingForNewRiskGeometry(WalletManagedPosition managed) {
+        if (managed.isNearTpHarvestUsed()) return;
+        managed.setNearTpState(NearTpState.INACTIVE);
+        managed.setNearTpBestPrice(null);
+        managed.setNearTpBearishStreak(0);
+        managed.setNearTpLastOneMinuteSignalId(null);
+    }
+
+    private boolean sameDecimal(BigDecimal a, BigDecimal b) {
+        return a == null ? b == null : b != null && a.compareTo(b) == 0;
     }
 
     private void closePaper(String symbol, BigDecimal exitPrice, PositionStatus status,
                             String closeReason, String explanation, TradeSignal sourceSignal) {
         PaperPosition paper = paperPositionRepository.findBySymbolAndStatus(symbol, PositionStatus.OPEN).orElse(null);
         if (paper == null) return;
-        BigDecimal pnl = exitPrice.subtract(paper.getEntryPrice(), MC).multiply(paper.getQuantity(), MC);
+        BigDecimal remainingPnl = exitPrice.subtract(paper.getEntryPrice(), MC).multiply(paper.getQuantity(), MC);
+        // FIX-11T: paper_position may already contain realized P&L from a Near-TP partial
+        // harvest. Preserve it when the remaining quantity is later closed.
+        BigDecimal pnl = (paper.getRealizedPnl() == null ? BigDecimal.ZERO : paper.getRealizedPnl())
+                .add(remainingPnl, MC);
         paper.setExitPrice(exitPrice);
         paper.setRealizedPnl(pnl);
         paper.setStatus(status);

@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
@@ -81,6 +82,55 @@ public class BinanceMarketDataClient {
             throw new IllegalStateException("Empty Binance order-book response for " + symbol);
         }
         return response;
+    }
+
+
+    /**
+     * FIX-11T: read the symbol's current Binance minimum executable notional directly
+     * from exchangeInfo.  Near-TP uses this only as a minimum-order guard; it does not
+     * introduce a separate quantity-rounding model. NOTIONAL is preferred when present,
+     * with MIN_NOTIONAL retained for symbols that still expose the older filter.
+     */
+    public BigDecimal getMinimumExecutableNotional(String symbol) {
+        if (symbol == null || symbol.isBlank()) {
+            throw new IllegalArgumentException("Symbol is required");
+        }
+
+        Map<String, Object> response = restClient.get()
+            .uri(uriBuilder -> uriBuilder
+                .path("/api/v3/exchangeInfo")
+                .queryParam("symbol", symbol.toUpperCase())
+                .build())
+            .retrieve()
+            .body(new ParameterizedTypeReference<>() {
+            });
+
+        if (response == null) {
+            throw new IllegalStateException("Empty Binance exchangeInfo response for " + symbol);
+        }
+        Object symbolsValue = response.get("symbols");
+        if (!(symbolsValue instanceof List<?> symbols) || symbols.isEmpty() || !(symbols.get(0) instanceof Map<?, ?> symbolInfo)) {
+            throw new IllegalStateException("Binance exchangeInfo did not contain symbol rules for " + symbol);
+        }
+        Object filtersValue = symbolInfo.get("filters");
+        if (!(filtersValue instanceof List<?> filters)) {
+            throw new IllegalStateException("Binance exchangeInfo did not contain filters for " + symbol);
+        }
+
+        BigDecimal minNotional = null;
+        for (Object filterValue : filters) {
+            if (!(filterValue instanceof Map<?, ?> filter)) continue;
+            String filterType = String.valueOf(filter.get("filterType"));
+            if (!"NOTIONAL".equals(filterType) && !"MIN_NOTIONAL".equals(filterType)) continue;
+            Object raw = filter.get("minNotional");
+            if (raw == null) continue;
+            BigDecimal candidate = new BigDecimal(String.valueOf(raw));
+            if (candidate.signum() <= 0) continue;
+            if ("NOTIONAL".equals(filterType)) return candidate;
+            minNotional = candidate;
+        }
+        if (minNotional != null) return minNotional;
+        throw new IllegalStateException("Binance exchangeInfo did not expose a minimum notional for " + symbol);
     }
 
     private BinanceKline mapKline(List<Object> row) {

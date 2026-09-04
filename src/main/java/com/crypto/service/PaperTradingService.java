@@ -402,8 +402,11 @@ public class PaperTradingService {
             DynamicProfitLockService.Evaluation profitLock
     ) {
         BigDecimal exitPrice = signal.getLatestPrice();
-        BigDecimal pnl = exitPrice.subtract(position.getEntryPrice(), MC)
+        BigDecimal remainingPnl = exitPrice.subtract(position.getEntryPrice(), MC)
                 .multiply(position.getQuantity(), MC);
+        // FIX-11T: preserve any P&L already realized by a Near-TP partial harvest.
+        BigDecimal pnl = (position.getRealizedPnl() == null ? BigDecimal.ZERO : position.getRealizedPnl())
+                .add(remainingPnl, MC);
 
         position.setExitPrice(exitPrice);
         position.setRealizedPnl(pnl);
@@ -436,8 +439,11 @@ public class PaperTradingService {
             String explanation,
             TradeSignal exitSignal
     ) {
-        BigDecimal pnl = exitPrice.subtract(position.getEntryPrice(), MC)
+        BigDecimal remainingPnl = exitPrice.subtract(position.getEntryPrice(), MC)
                 .multiply(position.getQuantity(), MC);
+        // FIX-11T: preserve any P&L already realized by a Near-TP partial harvest.
+        BigDecimal pnl = (position.getRealizedPnl() == null ? BigDecimal.ZERO : position.getRealizedPnl())
+                .add(remainingPnl, MC);
 
         position.setExitPrice(exitPrice);
         position.setRealizedPnl(pnl);

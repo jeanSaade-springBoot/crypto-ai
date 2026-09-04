@@ -34,10 +34,12 @@ class LivePositionProtectionServiceTpExtensionSyncTest {
         WalletAutoExecutionService walletExecution = mock(WalletAutoExecutionService.class);
         ProductionExitAuditService exitAudit = mock(ProductionExitAuditService.class);
         PositionManagementEventRepository eventRepository = mock(PositionManagementEventRepository.class);
+        NearTpFailureProtectionPolicy nearTpFailureProtectionPolicy = mock(NearTpFailureProtectionPolicy.class);
 
         LivePositionProtectionService service = new LivePositionProtectionService(
                 managedRepository, paperRepository, profitLockService, continuationPolicy,
-                exitPolicy, signalRepository, walletExecution, exitAudit, eventRepository);
+                exitPolicy, signalRepository, walletExecution, exitAudit, eventRepository,
+                nearTpFailureProtectionPolicy);
 
         WalletManagedPosition managed = WalletManagedPosition.builder()
                 .id(552L)

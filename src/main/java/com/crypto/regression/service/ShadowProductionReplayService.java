@@ -7,6 +7,8 @@ import com.crypto.execution.service.ExecutionIntelligenceService;
 import com.crypto.execution.service.ExecutionReplayScope;
 import com.crypto.execution.service.ExecutionPriceAuthorityService;
 import com.crypto.position.service.PositionContinuationPolicy;
+import com.crypto.position.service.NearTpFailureProtectionPolicy;
+import com.crypto.position.service.NearTpState;
 import com.crypto.position.service.PositionExitPolicy;
 import com.crypto.position.service.ProfitLockPolicy;
 import com.crypto.position.service.PositionPriceAuthorityPolicy;
@@ -15,7 +17,9 @@ import com.crypto.service.TradeExecutionValidationService;
 import com.crypto.wallet.domain.WalletSettings;
 import com.crypto.wallet.repository.WalletSettingsRepository;
 import com.crypto.wallet.service.WalletExecutionSizingPolicy;
+import com.crypto.wallet.service.BinanceMinimumExecutionPolicy;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -32,6 +36,7 @@ import java.util.function.BooleanSupplier;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ShadowProductionReplayService {
     private static final MathContext MC = MathContext.DECIMAL64;
     private static final BigDecimal INITIAL_CAPITAL = BigDecimal.valueOf(10000);
@@ -46,9 +51,11 @@ public class ShadowProductionReplayService {
     private final TradeExecutionValidationService executionValidationService;
     private final WalletSettingsRepository walletSettingsRepository;
     private final WalletExecutionSizingPolicy executionSizingPolicy;
+    private final BinanceMinimumExecutionPolicy binanceMinimumExecutionPolicy;
     private final PositionPriceAuthorityPolicy priceAuthorityPolicy;
     private final DefensiveRiskReductionReplayObserver defensiveRiskReductionObserver;
     private final OneCandleContinuationGraceReplayObserver oneCandleContinuationGraceReplayObserver;
+    private final NearTpFailureProtectionPolicy nearTpFailureProtectionPolicy;
 
     public ReplayStats replay(long runId, String symbol, Instant executionStart, Instant executionEnd,
                               List<TradeSignal> generatedSignals,
@@ -121,17 +128,25 @@ public class ShadowProductionReplayService {
                 if (open != null && !live.observedAt().isBefore(executionStart) && !live.observedAt().isAfter(executionEnd)) {
                     LivePriceEvaluation protection = evaluateLivePrice(runId, symbol, open, live, latest1m, latest5m, latest1h);
                     open = protection.position();
+                    if (protection.partialProceeds().signum() > 0) {
+                        cash = cash.add(protection.partialProceeds(), MC);
+                        realized = realized.add(protection.partialRealizedPnl(), MC);
+                    }
                     ExitDecision liveExit = protection.decision();
                     if (liveExit.exit()) {
                         BigDecimal proceeds = live.price().multiply(open.quantity(), MC);
                         BigDecimal pnl = proceeds.subtract(open.cost(), MC);
                         BigDecimal pnlPct = percentage(open.entryPrice(), live.price());
+                        BigDecimal totalPositionPnl = open.partialRealizedPnl().add(pnl, MC);
+                        BigDecimal totalPositionPnlPct = totalPositionPnlPercent(open, pnl);
                         cash = cash.add(proceeds, MC);
                         realized = realized.add(pnl, MC);
                         trades++;
-                        if (pnl.signum() > 0) wins++; else if (pnl.signum() < 0) losses++;
+                        if (totalPositionPnl.signum() > 0) wins++; else if (totalPositionPnl.signum() < 0) losses++;
+                        // wallet_execution_test stores this terminal leg; wallet_position_test stores
+                        // the whole lifecycle including any earlier FIX-11T partial realization.
                         persistSellAtPrice(runId, symbol, live, latest1m, open, liveExit, pnl, pnlPct);
-                        closePositionAtPrice(runId, open.positionId(), live, liveExit, pnl, pnlPct);
+                        closePositionAtPrice(runId, open.positionId(), live, liveExit, totalPositionPnl, totalPositionPnlPct);
                         executionIntelligenceService.completePositionOpportunity(symbol, latest1m, liveExit.reason());
                                                 open = null;
                     }
@@ -166,12 +181,14 @@ public class ShadowProductionReplayService {
                     BigDecimal proceeds = signal.getLatestPrice().multiply(open.quantity(), MC);
                     BigDecimal pnl = proceeds.subtract(open.cost(), MC);
                     BigDecimal pnlPct = percentage(open.entryPrice(), signal.getLatestPrice());
+                    BigDecimal totalPositionPnl = open.partialRealizedPnl().add(pnl, MC);
+                    BigDecimal totalPositionPnlPct = totalPositionPnlPercent(open, pnl);
                     cash = cash.add(proceeds, MC);
                     realized = realized.add(pnl, MC);
                     trades++;
-                    if (pnl.signum() > 0) wins++; else if (pnl.signum() < 0) losses++;
+                    if (totalPositionPnl.signum() > 0) wins++; else if (totalPositionPnl.signum() < 0) losses++;
                     persistSell(runId, symbol, signal, open, exit, pnl, pnlPct);
-                    closePosition(runId, open.positionId(), signal, exit, pnl, pnlPct);
+                    closePosition(runId, open.positionId(), signal, exit, totalPositionPnl, totalPositionPnlPct);
                     // FIX-020 replay parity: a terminal replay exit consumes the same
                     // opportunity evidence boundary as production before any new BUY can form.
                     executionIntelligenceService.completePositionOpportunity(symbol, signal, exit.reason());
@@ -180,8 +197,23 @@ public class ShadowProductionReplayService {
                     // terminal close; it cannot reopen from that same signal invocation.
                     continue;
                 } else {
-                    if (exit.newTakeProfit() != null) open = open.withTakeProfit(exit.newTakeProfit());
+                    if (exit.newTakeProfit() != null) {
+                        open = open.withTakeProfit(exit.newTakeProfit());
+                        persistNearTpState(open);
+                    }
                     open = updateProfitLock(open, signal);
+                    // FIX-11T: legacy signal-price fallback cannot be tick-exact, but it still
+                    // executes the SAME Near-TP policy from the authoritative historical signal
+                    // price so older Replay windows do not silently omit the Production rule.
+                    if (priceAuthorityPolicy.canUseSignalPrice(signal, open.entryTime())) {
+                        FallbackNearTpEvaluation nearTpFallback = evaluateNearTpAtSignalFallback(
+                                runId, open, signal, latest1m, latest5m);
+                        open = nearTpFallback.position();
+                        if (nearTpFallback.partialProceeds().signum() > 0) {
+                            cash = cash.add(nearTpFallback.partialProceeds(), MC);
+                            realized = realized.add(nearTpFallback.partialRealizedPnl(), MC);
+                        }
+                    }
                     persistManagement(runId, signal, open.profitLockActive() ? "PROFIT_LOCK_ACTIVE" : "POSITION_HOLD",
                             open.takeProfit(), open.takeProfit(), open, exit.explanation());
                 }
@@ -196,12 +228,14 @@ public class ShadowProductionReplayService {
                     BigDecimal proceeds = signal.getLatestPrice().multiply(open.quantity(), MC);
                     BigDecimal pnl = proceeds.subtract(open.cost(), MC);
                     BigDecimal pnlPct = percentage(open.entryPrice(), signal.getLatestPrice());
+                    BigDecimal totalPositionPnl = open.partialRealizedPnl().add(pnl, MC);
+                    BigDecimal totalPositionPnlPct = totalPositionPnlPercent(open, pnl);
                     cash = cash.add(proceeds, MC);
                     realized = realized.add(pnl, MC);
                     trades++;
-                    if (pnl.signum() > 0) wins++; else if (pnl.signum() < 0) losses++;
+                    if (totalPositionPnl.signum() > 0) wins++; else if (totalPositionPnl.signum() < 0) losses++;
                     persistSell(runId, symbol, signal, open, exit, pnl, pnlPct);
-                    closePosition(runId, open.positionId(), signal, exit, pnl, pnlPct);
+                    closePosition(runId, open.positionId(), signal, exit, totalPositionPnl, totalPositionPnlPct);
                     executionIntelligenceService.completePositionOpportunity(symbol, signal, exit.reason());
                                         open = null;
                     // Same production invocation cannot both SELL and immediately BUY again.
@@ -288,7 +322,8 @@ public class ShadowProductionReplayService {
                     open = new ShadowPosition(positionId, executionSignal.getGeneratedAt(), fresh.price(), qty, budget,
                             effectivePercent, executionSignal.getStopLoss(), executionSignal.getTakeProfit(), fresh.price(), false, null,
                             executionSignal.getTotalScore(), executionSignal.getConfidenceScore(), executionSignal.getTrendScore(), executionSignal.getTrendStructureScore(),
-                            executionSignal.getMomentumScore(), executionSignal.getVolumeScore());
+                            executionSignal.getMomentumScore(), executionSignal.getVolumeScore(),
+                            NearTpState.INACTIVE, null, 0, null, false, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
                     // FIX-112A: only an actually opened shadow position consumes the bullish entry.
                     replayScope.markEntryConsumed(executionSignal.getId());
                 }
@@ -366,6 +401,7 @@ public class ShadowProductionReplayService {
                 BigDecimal newTarget = oldTarget.add(distance.multiply(BigDecimal.valueOf(0.50), MC), MC);
                 current = current.withTakeProfit(newTarget);
                 jdbcTemplate.update("UPDATE wallet_position_test SET take_profit_usdt=? WHERE id=?", newTarget, current.positionId());
+                persistNearTpState(current);
                 persistManagementAtPrice(runId, symbol, event, "TAKE_PROFIT_EXTENDED", oldTarget, newTarget, current, continuation.explanation());
                 return new LivePriceEvaluation(ExitDecision.hold(), current);
             }
@@ -421,6 +457,50 @@ public class ShadowProductionReplayService {
         PositionExitPolicy.Evaluation normalExit = exitPolicy.evaluateNormalExit(oneMinute, five, one);
         if (normalExit.exit()) {
             return new LivePriceEvaluation(new ExitDecision(true, normalExit.code(), normalExit.explanation()), current);
+        }
+
+        // FIX-11T: shared Production/Replay rule, evaluated LAST after all existing exits.
+        NearTpFailureProtectionPolicy.State nearTpState = new NearTpFailureProtectionPolicy.State(
+                current.nearTpState(), current.nearTpBestPrice(), current.nearTpBearishStreak(),
+                current.nearTpLastOneMinuteSignalId(), current.nearTpHarvestUsed());
+        NearTpFailureProtectionPolicy.Evaluation nearTp = nearTpFailureProtectionPolicy.evaluate(
+                nearTpState, current.entryPrice(), current.takeProfit(), price, event.observedAt(), oneMinute, five);
+        ShadowPosition nearTpUpdated = current.withNearTp(nearTp.state());
+        if (!nearTpUpdated.sameNearTp(current)) {
+            persistNearTpState(nearTpUpdated);
+        }
+        current = nearTpUpdated;
+        if (nearTp.transition()) {
+            log.info("FIX-11T Replay Near-TP: runId={}, positionId={}, symbol={}, code={}, state={}, price={}, best={}, givebackPct={}, bearish1mStreak={}, detail={}",
+                    runId, current.positionId(), symbol, nearTp.code(), current.nearTpState(), price,
+                    current.nearTpBestPrice(), nearTp.givebackPercent(), current.nearTpBearishStreak(), nearTp.explanation());
+        }
+        if (nearTp.harvestEligible()) {
+            BigDecimal soldQty = current.quantity().multiply(BigDecimal.valueOf(0.50), MC);
+            BinanceMinimumExecutionPolicy.Evaluation minimumCheck =
+                    binanceMinimumExecutionPolicy.evaluate(symbol, soldQty, price);
+            if (!minimumCheck.executable()) {
+                // Same as Production: a below-minimum Binance order is not simulated. Reset
+                // to rejection monitoring and let all existing management continue unchanged.
+                current = current.withNearTp(new NearTpFailureProtectionPolicy.State(
+                        NearTpState.NEAR_TP_REJECTION_DETECTED, current.nearTpBestPrice(),
+                        0, current.nearTpLastOneMinuteSignalId(), false));
+                persistNearTpState(current);
+                log.info("FIX-11T Replay NEAR_TP_HARVEST_SKIPPED: runId={}, positionId={}, symbol={}, reason={}, requestedQty={}, requestedNotional={}, binanceMinimum={}; existing position management continues",
+                        runId, current.positionId(), symbol, minimumCheck.code(), soldQty,
+                        minimumCheck.requestedNotional(), minimumCheck.minimumNotional());
+                return new LivePriceEvaluation(ExitDecision.hold(), current);
+            }
+            BigDecimal proceeds = soldQty.multiply(price, MC);
+            BigDecimal soldCost = current.entryPrice().multiply(soldQty, MC);
+            BigDecimal partialPnl = proceeds.subtract(soldCost, MC);
+            BigDecimal partialPct = soldCost.signum() == 0 ? BigDecimal.ZERO : partialPnl
+                    .divide(soldCost, 8, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+            current = current.withPartialHarvest(soldQty, soldCost, partialPnl);
+            persistNearTpPartialHarvest(runId, symbol, event, oneMinute, current, soldQty, proceeds, partialPnl, partialPct, nearTp.explanation());
+            log.info("FIX-11T Replay NEAR_TP_PARTIAL_HARVESTED: runId={}, positionId={}, symbol={}, soldQty={}, remainingQty={}, price={}, partialPnl={}",
+                    runId, current.positionId(), symbol, soldQty, current.quantity(), price, partialPnl);
+            return new LivePriceEvaluation(ExitDecision.hold(), current, proceeds, partialPnl);
         }
         return new LivePriceEvaluation(ExitDecision.hold(), current);
     }
@@ -501,6 +581,49 @@ public class ShadowProductionReplayService {
         return ExitDecision.hold();
     }
 
+    private FallbackNearTpEvaluation evaluateNearTpAtSignalFallback(long runId, ShadowPosition current,
+                                                                    TradeSignal signal, TradeSignal oneMinute,
+                                                                    TradeSignal fiveMinute) {
+        NearTpFailureProtectionPolicy.State state = new NearTpFailureProtectionPolicy.State(
+                current.nearTpState(), current.nearTpBestPrice(), current.nearTpBearishStreak(),
+                current.nearTpLastOneMinuteSignalId(), current.nearTpHarvestUsed());
+        NearTpFailureProtectionPolicy.Evaluation evaluation = nearTpFailureProtectionPolicy.evaluate(
+                state, current.entryPrice(), current.takeProfit(), signal.getLatestPrice(), signal.getGeneratedAt(),
+                oneMinute, fiveMinute);
+        ShadowPosition updated = current.withNearTp(evaluation.state());
+        if (!updated.sameNearTp(current)) persistNearTpState(updated);
+        if (evaluation.transition()) {
+            log.info("FIX-11T Replay fallback Near-TP: runId={}, positionId={}, symbol={}, code={}, state={}, price={}, givebackPct={}, bearish1mStreak={}, detail={}",
+                    runId, updated.positionId(), signal.getSymbol(), evaluation.code(), updated.nearTpState(),
+                    signal.getLatestPrice(), evaluation.givebackPercent(), updated.nearTpBearishStreak(), evaluation.explanation());
+        }
+        if (!evaluation.harvestEligible()) return new FallbackNearTpEvaluation(updated, BigDecimal.ZERO, BigDecimal.ZERO);
+
+        BigDecimal soldQty = updated.quantity().multiply(BigDecimal.valueOf(0.50), MC);
+        BinanceMinimumExecutionPolicy.Evaluation minimumCheck =
+                binanceMinimumExecutionPolicy.evaluate(signal.getSymbol(), soldQty, signal.getLatestPrice());
+        if (!minimumCheck.executable()) {
+            updated = updated.withNearTp(new NearTpFailureProtectionPolicy.State(
+                    NearTpState.NEAR_TP_REJECTION_DETECTED, updated.nearTpBestPrice(),
+                    0, updated.nearTpLastOneMinuteSignalId(), false));
+            persistNearTpState(updated);
+            log.info("FIX-11T Replay fallback NEAR_TP_HARVEST_SKIPPED: runId={}, positionId={}, symbol={}, reason={}, requestedQty={}, requestedNotional={}, binanceMinimum={}; existing position management continues",
+                    runId, updated.positionId(), signal.getSymbol(), minimumCheck.code(), soldQty,
+                    minimumCheck.requestedNotional(), minimumCheck.minimumNotional());
+            return new FallbackNearTpEvaluation(updated, BigDecimal.ZERO, BigDecimal.ZERO);
+        }
+        BigDecimal proceeds = soldQty.multiply(signal.getLatestPrice(), MC);
+        BigDecimal soldCost = updated.entryPrice().multiply(soldQty, MC);
+        BigDecimal pnl = proceeds.subtract(soldCost, MC);
+        BigDecimal pnlPct = soldCost.signum() == 0 ? BigDecimal.ZERO : pnl.divide(soldCost, 8, RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(100));
+        updated = updated.withPartialHarvest(soldQty, soldCost, pnl);
+        persistNearTpPartialHarvestAtSignal(runId, signal, updated, soldQty, proceeds, pnl, pnlPct, evaluation.explanation());
+        log.info("FIX-11T Replay fallback NEAR_TP_PARTIAL_HARVESTED: runId={}, positionId={}, symbol={}, soldQty={}, remainingQty={}, price={}, partialPnl={}",
+                runId, updated.positionId(), signal.getSymbol(), soldQty, updated.quantity(), signal.getLatestPrice(), pnl);
+        return new FallbackNearTpEvaluation(updated, proceeds, pnl);
+    }
+
     private ShadowPosition updateProfitLock(ShadowPosition p, TradeSignal s) {
         if (s.getLatestPrice() == null || !priceAuthorityPolicy.canUseSignalPrice(s, p.entryTime())) return p;
         ShadowPosition n = profitLockState(p, s.getLatestPrice());
@@ -572,7 +695,9 @@ public class ShadowProductionReplayService {
                 WHERE id=? AND test_run_id=?
                 """, newEntry, newQuantity, newCost, newPercent, newStop, newTakeProfit,
                 open.positionId(), runId);
-        return open.withAdd(newEntry, newQuantity, newCost, newPercent, newStop, newTakeProfit);
+        ShadowPosition updated = open.withAdd(newEntry, newQuantity, newCost, newPercent, newStop, newTakeProfit);
+        persistNearTpState(updated);
+        return updated;
     }
 
     private void persistProductionOpportunity(long runId, ExecutionOpportunity o) {
@@ -651,6 +776,55 @@ public class ShadowProductionReplayService {
             """, Timestamp.from(event.observedAt()), event.price(), e.reason(), e.explanation(), pnl, pnlPct, id, runId);
     }
 
+    private void persistNearTpPartialHarvestAtSignal(long runId, TradeSignal signal, ShadowPosition p,
+                                                     BigDecimal soldQty, BigDecimal proceeds, BigDecimal pnl,
+                                                     BigDecimal pnlPct, String explanation) {
+        jdbcTemplate.update("""
+            INSERT INTO wallet_execution_test
+            (test_run_id,symbol,side,execution_time,execution_price,quantity,notional_usdt,position_percent,signal_interval,signal_decision,execution_source,execution_code,execution_reason,realized_pnl_usdt,realized_pnl_percent)
+            VALUES (?,?,'SELL',?,?,?,?,0,?,?,?,?,?,?,?)
+            """, runId, signal.getSymbol(), Timestamp.from(signal.getGeneratedAt()), signal.getLatestPrice(), soldQty, proceeds,
+                signal.getInterval(), name(signal.getDecision()), "SIGNAL_PRICE_FALLBACK",
+                "NEAR_TP_PARTIAL_HARVEST", explanation, pnl, pnlPct);
+        jdbcTemplate.update("""
+            UPDATE wallet_position_test
+            SET quantity=?, total_cost_usdt=?, near_tp_state=?, near_tp_best_price=?, near_tp_bearish_streak=?,
+                near_tp_last_1m_signal_id=?, near_tp_harvest_used=1, near_tp_harvested_quantity=?, realized_pnl_usdt=?
+            WHERE id=?
+            """, p.quantity(), p.cost(), p.nearTpState().name(), p.nearTpBestPrice(), p.nearTpBearishStreak(),
+                p.nearTpLastOneMinuteSignalId(), p.nearTpHarvestedQuantity(), p.partialRealizedPnl(), p.positionId());
+    }
+
+    private void persistNearTpState(ShadowPosition p) {
+        jdbcTemplate.update("""
+            UPDATE wallet_position_test
+            SET near_tp_state=?, near_tp_best_price=?, near_tp_bearish_streak=?, near_tp_last_1m_signal_id=?,
+                near_tp_harvest_used=?, near_tp_harvested_quantity=?
+            WHERE id=?
+            """, p.nearTpState().name(), p.nearTpBestPrice(), p.nearTpBearishStreak(), p.nearTpLastOneMinuteSignalId(),
+                p.nearTpHarvestUsed(), p.nearTpHarvestedQuantity(), p.positionId());
+    }
+
+    private void persistNearTpPartialHarvest(long runId, String symbol, MarketPriceEventService.PriceEvent event,
+                                             TradeSignal contextSignal, ShadowPosition p, BigDecimal soldQty,
+                                             BigDecimal proceeds, BigDecimal pnl, BigDecimal pnlPct, String explanation) {
+        jdbcTemplate.update("""
+            INSERT INTO wallet_execution_test
+            (test_run_id,symbol,side,execution_time,execution_price,quantity,notional_usdt,position_percent,signal_interval,signal_decision,execution_source,execution_code,execution_reason,realized_pnl_usdt,realized_pnl_percent)
+            VALUES (?,?,'SELL',?,?,?,?,0,?,?,?,?,?,?,?)
+            """, runId, symbol, Timestamp.from(event.observedAt()), event.price(), soldQty, proceeds,
+                contextSignal == null ? null : contextSignal.getInterval(),
+                contextSignal == null ? null : name(contextSignal.getDecision()),
+                "LIVE_PRICE_PROTECTION", "NEAR_TP_PARTIAL_HARVEST", explanation, pnl, pnlPct);
+        jdbcTemplate.update("""
+            UPDATE wallet_position_test
+            SET quantity=?, total_cost_usdt=?, near_tp_state=?, near_tp_best_price=?, near_tp_bearish_streak=?,
+                near_tp_last_1m_signal_id=?, near_tp_harvest_used=1, near_tp_harvested_quantity=?, realized_pnl_usdt=?
+            WHERE id=?
+            """, p.quantity(), p.cost(), p.nearTpState().name(), p.nearTpBestPrice(), p.nearTpBearishStreak(),
+                p.nearTpLastOneMinuteSignalId(), p.nearTpHarvestedQuantity(), p.partialRealizedPnl(), p.positionId());
+    }
+
     private WalletSettings walletSettings() {
         return walletSettingsRepository.findById(1L).orElseGet(() -> WalletSettings.builder()
                 .id(1L)
@@ -670,6 +844,13 @@ public class ShadowProductionReplayService {
                 + "%, trail=" + nvl(s.getProfitLockTrailStepPercent(), BigDecimal.valueOf(10)).stripTrailingZeros().toPlainString() + "%.";
     }
 
+    private BigDecimal totalPositionPnlPercent(ShadowPosition position, BigDecimal remainingLegPnl) {
+        BigDecimal totalPnl = position.partialRealizedPnl().add(remainingLegPnl, MC);
+        BigDecimal totalInvestedCost = position.cost().add(position.partialHarvestCostBasis(), MC);
+        return totalInvestedCost.signum() == 0 ? BigDecimal.ZERO
+                : totalPnl.divide(totalInvestedCost, 8, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+    }
+
     private BigDecimal percentage(BigDecimal entry,BigDecimal exit){return exit.subtract(entry).multiply(BigDecimal.valueOf(100)).divide(entry,8,RoundingMode.HALF_UP);}
     private boolean bullish(SignalDecision d){return d==SignalDecision.BUY||d==SignalDecision.STRONG_BUY;}
     private boolean bearish(SignalDecision d){return d==SignalDecision.SELL||d==SignalDecision.STRONG_SELL;}
@@ -679,14 +860,69 @@ public class ShadowProductionReplayService {
 
     public record ReplayStats(int trades, int wins, int losses, BigDecimal realizedPnl, BigDecimal finalWallet,
                               String priceReplayMode, String logicMode) {}
-    private record LivePriceEvaluation(ExitDecision decision, ShadowPosition position) {}
+    private record FallbackNearTpEvaluation(ShadowPosition position, BigDecimal partialProceeds,
+                                            BigDecimal partialRealizedPnl) {}
+    private record LivePriceEvaluation(ExitDecision decision, ShadowPosition position,
+                                       BigDecimal partialProceeds, BigDecimal partialRealizedPnl) {
+        LivePriceEvaluation(ExitDecision decision, ShadowPosition position) {
+            this(decision, position, BigDecimal.ZERO, BigDecimal.ZERO);
+        }
+    }
     private record ExitDecision(boolean exit,String reason,String explanation,BigDecimal newTakeProfit){
         ExitDecision(boolean exit,String reason,String explanation){this(exit,reason,explanation,null);}
         static ExitDecision hold(){return new ExitDecision(false,"HOLD","Position remains open.",null);}
     }
-    private record ShadowPosition(long positionId,Instant entryTime,BigDecimal entryPrice,BigDecimal quantity,BigDecimal cost,int positionPercent,BigDecimal stopLoss,BigDecimal takeProfit,BigDecimal highest,boolean profitLockActive,BigDecimal profitLockPrice,int entryScore,int entryConfidence,int entryTrend,int entryStructure,int entryMomentum,int entryVolume){
-        ShadowPosition withLock(BigDecimal h,boolean a,BigDecimal l){return new ShadowPosition(positionId,entryTime,entryPrice,quantity,cost,positionPercent,stopLoss,takeProfit,h,a,l,entryScore,entryConfidence,entryTrend,entryStructure,entryMomentum,entryVolume);}
-        ShadowPosition withTakeProfit(BigDecimal tp){return new ShadowPosition(positionId,entryTime,entryPrice,quantity,cost,positionPercent,stopLoss,tp,highest,profitLockActive,profitLockPrice,entryScore,entryConfidence,entryTrend,entryStructure,entryMomentum,entryVolume);}
-        ShadowPosition withAdd(BigDecimal newEntry,BigDecimal newQuantity,BigDecimal newCost,int newPercent,BigDecimal newStop,BigDecimal newTakeProfit){return new ShadowPosition(positionId,entryTime,newEntry,newQuantity,newCost,newPercent,newStop,newTakeProfit,highest,profitLockActive,profitLockPrice,entryScore,entryConfidence,entryTrend,entryStructure,entryMomentum,entryVolume);}
+    private record ShadowPosition(long positionId, Instant entryTime, BigDecimal entryPrice, BigDecimal quantity,
+                                  BigDecimal cost, int positionPercent, BigDecimal stopLoss, BigDecimal takeProfit,
+                                  BigDecimal highest, boolean profitLockActive, BigDecimal profitLockPrice,
+                                  int entryScore, int entryConfidence, int entryTrend, int entryStructure,
+                                  int entryMomentum, int entryVolume, NearTpState nearTpState, BigDecimal nearTpBestPrice,
+                                  int nearTpBearishStreak, Long nearTpLastOneMinuteSignalId, boolean nearTpHarvestUsed,
+                                  BigDecimal nearTpHarvestedQuantity, BigDecimal partialRealizedPnl,
+                                  BigDecimal partialHarvestCostBasis) {
+        ShadowPosition withLock(BigDecimal h, boolean a, BigDecimal l) {
+            return new ShadowPosition(positionId, entryTime, entryPrice, quantity, cost, positionPercent, stopLoss, takeProfit,
+                    h, a, l, entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
+                    nearTpState, nearTpBestPrice, nearTpBearishStreak, nearTpLastOneMinuteSignalId, nearTpHarvestUsed,
+                    nearTpHarvestedQuantity, partialRealizedPnl, partialHarvestCostBasis);
+        }
+        ShadowPosition withTakeProfit(BigDecimal tp) {
+            NearTpState state = nearTpHarvestUsed ? nearTpState : NearTpState.INACTIVE;
+            return new ShadowPosition(positionId, entryTime, entryPrice, quantity, cost, positionPercent, stopLoss, tp,
+                    highest, profitLockActive, profitLockPrice, entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
+                    state, nearTpHarvestUsed ? nearTpBestPrice : null, nearTpHarvestUsed ? nearTpBearishStreak : 0,
+                    nearTpHarvestUsed ? nearTpLastOneMinuteSignalId : null, nearTpHarvestUsed, nearTpHarvestedQuantity, partialRealizedPnl, partialHarvestCostBasis);
+        }
+        ShadowPosition withAdd(BigDecimal newEntry, BigDecimal newQuantity, BigDecimal newCost, int newPercent, BigDecimal newStop, BigDecimal newTakeProfit) {
+            NearTpState state = nearTpHarvestUsed ? nearTpState : NearTpState.INACTIVE;
+            return new ShadowPosition(positionId, entryTime, newEntry, newQuantity, newCost, newPercent, newStop, newTakeProfit,
+                    highest, profitLockActive, profitLockPrice, entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
+                    state, nearTpHarvestUsed ? nearTpBestPrice : null, nearTpHarvestUsed ? nearTpBearishStreak : 0,
+                    nearTpHarvestUsed ? nearTpLastOneMinuteSignalId : null, nearTpHarvestUsed, nearTpHarvestedQuantity, partialRealizedPnl, partialHarvestCostBasis);
+        }
+        ShadowPosition withNearTp(NearTpFailureProtectionPolicy.State state) {
+            return new ShadowPosition(positionId, entryTime, entryPrice, quantity, cost, positionPercent, stopLoss, takeProfit,
+                    highest, profitLockActive, profitLockPrice, entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
+                    state.nearTpState(), state.bestPrice(), state.consecutiveBearishOneMinute(), state.lastEvaluatedOneMinuteSignalId(),
+                    state.harvestUsed(), nearTpHarvestedQuantity, partialRealizedPnl, partialHarvestCostBasis);
+        }
+        ShadowPosition withPartialHarvest(BigDecimal soldQty, BigDecimal soldCost, BigDecimal realizedPnl) {
+            return new ShadowPosition(positionId, entryTime, entryPrice, quantity.subtract(soldQty, MC), cost.subtract(soldCost, MC),
+                    positionPercent, stopLoss, takeProfit, highest, profitLockActive, profitLockPrice,
+                    entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
+                    NearTpState.NEAR_TP_PARTIAL_HARVESTED, nearTpBestPrice, nearTpBearishStreak, nearTpLastOneMinuteSignalId, true,
+                    nearTpHarvestedQuantity.add(soldQty, MC), partialRealizedPnl.add(realizedPnl, MC),
+                    partialHarvestCostBasis.add(soldCost, MC));
+        }
+        boolean sameNearTp(ShadowPosition other) {
+            return nearTpState == other.nearTpState
+                    && equalsDecimal(nearTpBestPrice, other.nearTpBestPrice)
+                    && nearTpBearishStreak == other.nearTpBearishStreak
+                    && java.util.Objects.equals(nearTpLastOneMinuteSignalId, other.nearTpLastOneMinuteSignalId)
+                    && nearTpHarvestUsed == other.nearTpHarvestUsed;
+        }
+        private boolean equalsDecimal(BigDecimal a, BigDecimal b) {
+            return a == null ? b == null : b != null && a.compareTo(b) == 0;
+        }
     }
 }

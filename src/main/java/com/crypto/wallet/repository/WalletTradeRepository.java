@@ -30,11 +30,14 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
     @Query("select coalesce(sum(t.realizedPnlUsdt), 0) from WalletTrade t where t.status='EXECUTED'")
     BigDecimal totalRealizedPnl();
 
+    // FIX-11T: a Near-TP harvest is a partial execution leg, not a terminal closed trade.
+    // Keep it in the wallet ledger/total realized P&L, but exclude it from every CLOSED-position query.
     @Query("""
             select t from WalletTrade t
             where t.status = 'EXECUTED'
               and t.side = 'SELL'
               and t.realizedPnlUsdt is not null
+              and (t.executionReason is null or t.executionReason <> 'NEAR_TP_PARTIAL_HARVEST')
             order by t.executedAt desc
             """)
     List<WalletTrade> findRecentClosedTrades(Pageable pageable);
@@ -47,6 +50,7 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
             where t.status = 'EXECUTED'
               and t.side = 'SELL'
               and t.realizedPnlUsdt is not null
+              and (t.executionReason is null or t.executionReason <> 'NEAR_TP_PARTIAL_HARVEST')
               and (:symbol is null or upper(t.symbol) = upper(:symbol))
             order by t.executedAt desc
             """)
@@ -55,10 +59,10 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
     // FIX-11R: persisted operator review filter only.
     @Query(value = """
             SELECT wt.* FROM wallet_trade wt JOIN trade_inspector_review r ON r.wallet_sell_trade_id=wt.id AND r.marked_for_review=1
-            WHERE wt.status='EXECUTED' AND wt.side='SELL' AND wt.realized_pnl_usdt IS NOT NULL AND (:symbol IS NULL OR UPPER(wt.symbol)=UPPER(:symbol)) ORDER BY wt.executed_at DESC
+            WHERE wt.status='EXECUTED' AND wt.side='SELL' AND wt.realized_pnl_usdt IS NOT NULL AND (wt.execution_reason IS NULL OR wt.execution_reason <> 'NEAR_TP_PARTIAL_HARVEST') AND (:symbol IS NULL OR UPPER(wt.symbol)=UPPER(:symbol)) ORDER BY wt.executed_at DESC
             """, countQuery = """
             SELECT COUNT(*) FROM wallet_trade wt JOIN trade_inspector_review r ON r.wallet_sell_trade_id=wt.id AND r.marked_for_review=1
-            WHERE wt.status='EXECUTED' AND wt.side='SELL' AND wt.realized_pnl_usdt IS NOT NULL AND (:symbol IS NULL OR UPPER(wt.symbol)=UPPER(:symbol))
+            WHERE wt.status='EXECUTED' AND wt.side='SELL' AND wt.realized_pnl_usdt IS NOT NULL AND (wt.execution_reason IS NULL OR wt.execution_reason <> 'NEAR_TP_PARTIAL_HARVEST') AND (:symbol IS NULL OR UPPER(wt.symbol)=UPPER(:symbol))
             """, nativeQuery=true)
     Page<WalletTrade> findMarkedClosedTradesForInspector(@Param("symbol") String symbol, Pageable pageable);
 
@@ -69,6 +73,7 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
             where t.status = 'EXECUTED'
               and t.side = 'SELL'
               and t.realizedPnlUsdt is not null
+              and (t.executionReason is null or t.executionReason <> 'NEAR_TP_PARTIAL_HARVEST')
               and t.symbol is not null
             order by t.symbol
             """)
@@ -94,6 +99,7 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
             where t.status = 'EXECUTED'
               and t.side = 'SELL'
               and t.realizedPnlUsdt is not null
+              and (t.executionReason is null or t.executionReason <> 'NEAR_TP_PARTIAL_HARVEST')
               and t.executedAt >= :from
               and t.executedAt < :to
             order by t.executedAt desc
@@ -112,6 +118,7 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
             where t.status = 'EXECUTED'
               and t.side = 'SELL'
               and t.realizedPnlUsdt is not null
+              and (t.executionReason is null or t.executionReason <> 'NEAR_TP_PARTIAL_HARVEST')
               and t.executedAt >= :from
               and t.executedAt < :to
             """)
@@ -125,6 +132,7 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
             where t.status = 'EXECUTED'
               and t.side = 'SELL'
               and t.realizedPnlUsdt is not null
+              and (t.executionReason is null or t.executionReason <> 'NEAR_TP_PARTIAL_HARVEST')
               and t.executedAt >= :from
               and t.executedAt < :to
             group by t.symbol
@@ -139,6 +147,7 @@ public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> 
             where t.status = 'EXECUTED'
               and t.side = 'SELL'
               and t.realizedPnlUsdt > 0
+              and (t.executionReason is null or t.executionReason <> 'NEAR_TP_PARTIAL_HARVEST')
               and t.executedAt >= :from
             """)
     long countProfitableClosedTradesSince(@Param("from") Instant from);
