@@ -32,23 +32,30 @@ public class CandleClosedAnalysisWorker {
     private final PaperTradingService paperTradingService;
     private final CandleDataQualityService candleDataQualityService;
     private final TradeSignalRepository tradeSignalRepository;
+    private final CandleAnalysisExecutionCoordinator executionCoordinator;
 
     public CandleClosedAnalysisWorker(
             TechnicalIndicatorService technicalIndicatorService,
             AnalysisService analysisService,
             PaperTradingService paperTradingService,
             CandleDataQualityService candleDataQualityService,
-            TradeSignalRepository tradeSignalRepository
+            TradeSignalRepository tradeSignalRepository,
+            CandleAnalysisExecutionCoordinator executionCoordinator
     ) {
         this.technicalIndicatorService = technicalIndicatorService;
         this.analysisService = analysisService;
         this.paperTradingService = paperTradingService;
         this.candleDataQualityService = candleDataQualityService;
         this.tradeSignalRepository = tradeSignalRepository;
+        this.executionCoordinator = executionCoordinator;
     }
 
     public void process(CandleClosedEvent event) {
-        try {
+        // FIX-074: serialize only the exact candle identity against FIX-043 recovery.
+        // This removes the duplicate trade_signal race while preserving parallelism across
+        // independent symbols/timeframes and does not alter scoring or execution semantics.
+        try (CandleAnalysisExecutionCoordinator.LockHandle ignored = executionCoordinator.lock(
+                event.symbol(), event.intervalCode(), event.openTime())) {
             log.info("Processing committed CandleClosedEvent: symbol={}, interval={}, openTime={}",
                     event.symbol(), event.intervalCode(), event.openTime());
 

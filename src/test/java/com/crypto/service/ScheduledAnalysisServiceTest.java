@@ -6,6 +6,7 @@ import com.crypto.domain.Candle;
 import com.crypto.domain.TechnicalIndicator;
 import com.crypto.domain.TradeSignal;
 import com.crypto.indicator.service.TechnicalIndicatorService;
+import com.crypto.indicator.event.CandleAnalysisExecutionCoordinator;
 import com.crypto.repository.CandleRepository;
 import com.crypto.repository.TechnicalIndicatorRepository;
 import com.crypto.repository.TradeSignalRepository;
@@ -68,7 +69,8 @@ class ScheduledAnalysisServiceTest {
 
         ScheduledAnalysisService service = new ScheduledAnalysisService(
                 properties, coinConfigurationService, candleRepository, technicalIndicatorRepository,
-                technicalIndicatorService, analysisService, paperTradingService, tradeSignalRepository);
+                technicalIndicatorService, analysisService, paperTradingService, tradeSignalRepository,
+                new CandleAnalysisExecutionCoordinator());
 
         service.recoverMissingAnalysis("ACEUSDT", "1m", now);
 
@@ -107,11 +109,40 @@ class ScheduledAnalysisServiceTest {
 
         ScheduledAnalysisService service = new ScheduledAnalysisService(
                 properties, coinConfigurationService, candleRepository, technicalIndicatorRepository,
-                technicalIndicatorService, analysisService, paperTradingService, tradeSignalRepository);
+                technicalIndicatorService, analysisService, paperTradingService, tradeSignalRepository,
+                new CandleAnalysisExecutionCoordinator());
 
         service.recoverMissingAnalysis("ACEUSDT", "1m", now);
 
         verify(paperTradingService).processSignal(signal);
+    }
+
+    @Test
+    void fix074SkipsRecoveryWhenSignalAppearsBeforeRecoveryOwnsTheCandle() {
+        Instant now = Instant.parse("2026-09-04T16:17:16Z");
+        Candle candle = candle("2026-09-04T15:59:00Z", "2026-09-04T15:59:59Z");
+        TradeSignal liveSignal = signal(523893L);
+
+        when(candleRepository.findClosedCandlesMissingAnalysisThrough(
+                eq("ACEUSDT"), eq("1m"), any(Instant.class), eq(now), any(Pageable.class)))
+                .thenReturn(List.of(candle));
+        when(candleRepository.findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByCloseTimeDesc("ACEUSDT", "1m"))
+                .thenReturn(Optional.of(candle));
+        when(tradeSignalRepository.findBySymbolAndIntervalAndCandleOpenTime(
+                "ACEUSDT", "1m", candle.getOpenTime()))
+                .thenReturn(Optional.of(liveSignal));
+
+        ScheduledAnalysisService service = new ScheduledAnalysisService(
+                properties, coinConfigurationService, candleRepository, technicalIndicatorRepository,
+                technicalIndicatorService, analysisService, paperTradingService, tradeSignalRepository,
+                new CandleAnalysisExecutionCoordinator());
+
+        service.recoverMissingAnalysis("ACEUSDT", "1m", now);
+
+        verify(technicalIndicatorService, never()).calculateAndPersist(
+                "ACEUSDT", "1m", candle.getOpenTime());
+        verify(analysisService, never()).analyzeRecovered(any(), any());
+        verify(paperTradingService, never()).processSignal(any());
     }
 
     private Candle candle(String open, String close) {

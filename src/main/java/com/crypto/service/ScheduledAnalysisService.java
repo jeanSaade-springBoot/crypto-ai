@@ -5,6 +5,7 @@ import com.crypto.config.TradingProperties;
 import com.crypto.domain.Candle;
 import com.crypto.domain.TechnicalIndicator;
 import com.crypto.domain.TradeSignal;
+import com.crypto.indicator.event.CandleAnalysisExecutionCoordinator;
 import com.crypto.indicator.service.TechnicalIndicatorService;
 import com.crypto.repository.CandleRepository;
 import com.crypto.repository.TechnicalIndicatorRepository;
@@ -34,6 +35,7 @@ public class ScheduledAnalysisService {
     private final AnalysisService analysisService;
     private final PaperTradingService paperTradingService;
     private final TradeSignalRepository tradeSignalRepository;
+    private final CandleAnalysisExecutionCoordinator executionCoordinator;
 
     /**
      * FIX-043 chronological recovery flow for every configured symbol and interval.
@@ -122,7 +124,24 @@ public class ScheduledAnalysisService {
             Candle latestClosed,
             Instant now
     ) {
-        try {
+        // FIX-074: use the same exact-candle lock as the live worker. A recovery scan may
+        // discover a row as missing just before the live worker creates it; after waiting
+        // for the lock we re-check trade_signal so only one producer performs analysis.
+        try (CandleAnalysisExecutionCoordinator.LockHandle ignored = executionCoordinator.lock(
+                symbol, interval, candle.getOpenTime())) {
+            var signalAfterLock = tradeSignalRepository
+                    .findBySymbolAndIntervalAndCandleOpenTime(symbol, interval, candle.getOpenTime());
+            if (signalAfterLock.isPresent()) {
+                log.info(
+                        "FIX-074 recovery skipped after live-analysis coordination: symbol={}, interval={}, candleOpenTime={}, signalId={}",
+                        symbol,
+                        interval,
+                        candle.getOpenTime(),
+                        signalAfterLock.get().getId()
+                );
+                return true;
+            }
+
             TechnicalIndicator indicator = technicalIndicatorRepository
                     .findBySymbolAndIntervalCodeAndCandleOpenTime(symbol, interval, candle.getOpenTime())
                     .orElseGet(() -> technicalIndicatorService

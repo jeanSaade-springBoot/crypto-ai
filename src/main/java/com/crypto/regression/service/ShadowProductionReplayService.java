@@ -887,11 +887,40 @@ public class ShadowProductionReplayService {
                     nearTpHarvestedQuantity, partialRealizedPnl, partialHarvestCostBasis);
         }
         ShadowPosition withTakeProfit(BigDecimal tp) {
-            NearTpState state = nearTpHarvestUsed ? nearTpState : NearTpState.INACTIVE;
+            // FIX-117 Replay parity: TP extension preserves already-earned Near-TP protection
+            // exactly like Production. REJECTION_DETECTED keeps its state/best price but clears
+            // bearish persistence accumulated under the old geometry. INACTIVE and
+            // FAILURE_CONFIRMED keep the pre-FIX-117 reset behavior. Harvested state is terminal.
+            NearTpState state = nearTpState;
+            BigDecimal bestPrice = nearTpBestPrice;
+            int bearishStreak = nearTpBearishStreak;
+            Long lastOneMinuteSignalId = nearTpLastOneMinuteSignalId;
+
+            if (!nearTpHarvestUsed) {
+                switch (nearTpState) {
+                    case INACTIVE, NEAR_TP_FAILURE_CONFIRMED -> {
+                        state = NearTpState.INACTIVE;
+                        bestPrice = null;
+                        bearishStreak = 0;
+                        lastOneMinuteSignalId = null;
+                    }
+                    case NEAR_TP_ARMED -> {
+                        // Preserve earned state and historical best price exactly.
+                    }
+                    case NEAR_TP_REJECTION_DETECTED -> {
+                        bearishStreak = 0;
+                        lastOneMinuteSignalId = null;
+                    }
+                    case NEAR_TP_PARTIAL_HARVESTED -> {
+                        // Existing terminal behavior; nearTpHarvestUsed is normally true here.
+                    }
+                }
+            }
+
             return new ShadowPosition(positionId, entryTime, entryPrice, quantity, cost, positionPercent, stopLoss, tp,
                     highest, profitLockActive, profitLockPrice, entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
-                    state, nearTpHarvestUsed ? nearTpBestPrice : null, nearTpHarvestUsed ? nearTpBearishStreak : 0,
-                    nearTpHarvestUsed ? nearTpLastOneMinuteSignalId : null, nearTpHarvestUsed, nearTpHarvestedQuantity, partialRealizedPnl, partialHarvestCostBasis);
+                    state, bestPrice, bearishStreak, lastOneMinuteSignalId, nearTpHarvestUsed,
+                    nearTpHarvestedQuantity, partialRealizedPnl, partialHarvestCostBasis);
         }
         ShadowPosition withAdd(BigDecimal newEntry, BigDecimal newQuantity, BigDecimal newCost, int newPercent, BigDecimal newStop, BigDecimal newTakeProfit) {
             NearTpState state = nearTpHarvestUsed ? nearTpState : NearTpState.INACTIVE;

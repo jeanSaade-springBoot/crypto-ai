@@ -264,12 +264,46 @@ public class LivePositionProtectionService {
                 .orElse(null);
     }
 
+    /**
+     * FIX-117: TP extension must not erase Near-TP protection that was already earned.
+     *
+     * Only ARMED and REJECTION_DETECTED change from the pre-FIX-117 behavior. INACTIVE
+     * still resets against the new geometry. FAILURE_CONFIRMED also keeps the existing
+     * reset behavior because that persisted/transient lifecycle has a real interruption
+     * window between state save and harvest resolution and is intentionally out of scope.
+     * PARTIAL_HARVESTED remains terminal through the existing harvest-used guard.
+     *
+     * plannedDistance is recalculated from the current TP by NearTpFailureProtectionPolicy
+     * on every evaluation, so the historical best price remains a valid market observation
+     * and does not need synthetic rebasing after an extension.
+     */
     private void resetNearTpTrackingForNewRiskGeometry(WalletManagedPosition managed) {
         if (managed.isNearTpHarvestUsed()) return;
-        managed.setNearTpState(NearTpState.INACTIVE);
-        managed.setNearTpBestPrice(null);
-        managed.setNearTpBearishStreak(0);
-        managed.setNearTpLastOneMinuteSignalId(null);
+
+        NearTpState currentState = managed.getNearTpState() == null
+                ? NearTpState.INACTIVE : managed.getNearTpState();
+        switch (currentState) {
+            case INACTIVE, NEAR_TP_FAILURE_CONFIRMED -> {
+                // Existing behavior: no earned protection is carried into the new geometry.
+                managed.setNearTpState(NearTpState.INACTIVE);
+                managed.setNearTpBestPrice(null);
+                managed.setNearTpBearishStreak(0);
+                managed.setNearTpLastOneMinuteSignalId(null);
+            }
+            case NEAR_TP_ARMED -> {
+                // FIX-117: preserve earned protection and the real historical best price.
+            }
+            case NEAR_TP_REJECTION_DETECTED -> {
+                // Preserve earned protection/best price, but discard bearish persistence
+                // accumulated under the old, tighter geometry. The next evaluation will
+                // recalculate giveback against the new TP and either recover or remain rejected.
+                managed.setNearTpBearishStreak(0);
+                managed.setNearTpLastOneMinuteSignalId(null);
+            }
+            case NEAR_TP_PARTIAL_HARVESTED -> {
+                // Existing terminal behavior; normally returned above by nearTpHarvestUsed.
+            }
+        }
     }
 
     private boolean sameDecimal(BigDecimal a, BigDecimal b) {
