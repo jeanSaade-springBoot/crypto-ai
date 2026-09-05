@@ -4,13 +4,14 @@ import com.crypto.domain.PaperPosition;
 import com.crypto.domain.TechnicalIndicator;
 import com.crypto.domain.TradeSignal;
 import com.crypto.dto.CandleDataQualityResult;
+import com.crypto.indicator.event.CandleAnalysisExecutionCoordinator;
 import com.crypto.indicator.event.CandleClosedAnalysisWorker;
 import com.crypto.indicator.event.CandleClosedEvent;
 import com.crypto.indicator.service.TechnicalIndicatorService;
 import com.crypto.repository.TradeSignalRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -31,7 +32,18 @@ class CandleClosedAnalysisWorkerTest {
     @Mock private CandleDataQualityService candleDataQualityService;
     @Mock private TradeSignalRepository tradeSignalRepository;
 
-    @InjectMocks private CandleClosedAnalysisWorker worker;
+    private CandleClosedAnalysisWorker worker;
+
+    @BeforeEach
+    void setUp() {
+        worker = new CandleClosedAnalysisWorker(
+                technicalIndicatorService,
+                analysisService,
+                paperTradingService,
+                candleDataQualityService,
+                tradeSignalRepository,
+                new CandleAnalysisExecutionCoordinator());
+    }
 
     @Test
     void shouldAnalyzeSavedIndicatorAndPassSignalToPaperTrading() {
