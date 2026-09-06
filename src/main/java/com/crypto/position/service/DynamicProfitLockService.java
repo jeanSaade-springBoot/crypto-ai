@@ -6,6 +6,7 @@ import com.crypto.wallet.domain.WalletSettings;
 import com.crypto.wallet.repository.WalletManagedPositionRepository;
 import com.crypto.wallet.repository.WalletSettingsRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,6 +32,7 @@ import java.util.Locale;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class DynamicProfitLockService {
 
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
@@ -83,6 +85,10 @@ public class DynamicProfitLockService {
         BigDecimal activation = profile.activationPercent();
         BigDecimal initialLock = profile.initialLockPercent();
         BigDecimal trailStep = profile.trailStepPercent();
+        BigDecimal previousHighest = position.getHighestPriceUsdt();
+        boolean previousActive = position.isProfitLockActive();
+        BigDecimal previousLock = position.getProfitLockPriceUsdt();
+        BigDecimal previousProgress = position.getProfitLockProgressPercent();
         ProfitLockPolicy.State policyState = profitLockPolicy.evaluate(
                 entry, target, current, position.getHighestPriceUsdt(),
                 position.isProfitLockActive(), position.getProfitLockPriceUsdt(),
@@ -112,6 +118,19 @@ public class DynamicProfitLockService {
         }
 
         boolean triggered = policyState.triggered();
+
+        // FIX-118 diagnostic instrumentation only. This intentionally does not change
+        // ProfitLockPolicy semantics. It records the exact geometry/state transition used
+        // by both live-price and candle-close callers so Production incidents can be
+        // reconstructed without inferring behavior from only the final persisted row.
+        if (changed || triggered) {
+            log.info("[FIX-118][PRODUCTION][PROFIT_LOCK_EVAL] positionId={}, symbol={}, current={}, entry={}, target={}, " +
+                            "previousHighest={}, highest={}, previousActive={}, active={}, previousLock={}, lock={}, " +
+                            "previousProgressPct={}, progressPct={}, activationPct={}, triggered={}, persisted={}",
+                    position.getId(), symbol, current, entry, target,
+                    previousHighest, highest, previousActive, active,
+                    previousLock, lockPrice, previousProgress, progress, activation, triggered, changed);
+        }
         String explanation;
         String profileText = " Admin profile=" + profile.name() +
                 " (activation=" + activation.stripTrailingZeros().toPlainString() + "%, initial lock=" +

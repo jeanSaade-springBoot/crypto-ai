@@ -70,6 +70,22 @@ public class LivePositionProtectionService {
                 BigDecimal oldTarget = managed.getTakeProfitUsdt();
                 BigDecimal newTarget = oldTarget.add(distance.multiply(BigDecimal.valueOf(0.50), MC), MC);
                 Instant changedAt = Instant.now();
+
+                // FIX-118 diagnostic instrumentation only. The extension tick returns before
+                // DynamicProfitLockService is evaluated, so capture the exact pre-extension
+                // Profit Lock state and the progress implied by the NEW geometry here.
+                BigDecimal fix118NewProgress = managed.getHighestPriceUsdt() == null
+                        ? BigDecimal.ZERO
+                        : managed.getHighestPriceUsdt().subtract(managed.getAverageEntryPriceUsdt(), MC)
+                                .multiply(BigDecimal.valueOf(100), MC)
+                                .divide(newTarget.subtract(managed.getAverageEntryPriceUsdt(), MC), 6, java.math.RoundingMode.HALF_UP);
+                log.info("[FIX-118][PRODUCTION][TP_EXTENSION] positionId={}, symbol={}, marketPrice={}, entry={}, oldTp={}, newTp={}, " +
+                                "highest={}, profitLockActive={}, profitLockPrice={}, storedProgressPct={}, newGeometryProgressPct={}, " +
+                                "note=extension tick returns before Profit Lock evaluation",
+                        managed.getId(), symbol, price, managed.getAverageEntryPriceUsdt(), oldTarget, newTarget,
+                        managed.getHighestPriceUsdt(), managed.isProfitLockActive(), managed.getProfitLockPriceUsdt(),
+                        managed.getProfitLockProgressPercent(), fix118NewProgress);
+
                 managed.setTakeProfitUsdt(newTarget);
                 // FIX-11T: TP extension changes the planned entry->TP distance. Any old Near-TP
                 // arm/rejection was relative to the superseded target and must be restarted.
@@ -128,7 +144,15 @@ public class LivePositionProtectionService {
         }
 
         DynamicProfitLockService.Evaluation lock = dynamicProfitLockService.evaluatePrice(symbol, price);
+        if (lock.active() || lock.triggered()) {
+            log.info("[FIX-118][PRODUCTION][LIVE_PATH] positionId={}, symbol={}, price={}, target={}, highest={}, active={}, " +
+                            "progressPct={}, activationPct={}, lock={}, triggered={}",
+                    lock.walletPositionId(), symbol, price, managed.getTakeProfitUsdt(), lock.highestPrice(), lock.active(),
+                    lock.progressPercent(), lock.activationPercent(), lock.lockPrice(), lock.triggered());
+        }
         if (lock.triggered()) {
+            log.info("[FIX-118][PRODUCTION][LIVE_TRIGGER] positionId={}, symbol={}, price={}, lock={}, progressPct={}, target={}",
+                    lock.walletPositionId(), symbol, price, lock.lockPrice(), lock.progressPercent(), managed.getTakeProfitUsdt());
             BigDecimal hardProfitFloor = managed.getAverageEntryPriceUsdt().multiply(BigDecimal.valueOf(1.0005), MC);
             if (price.compareTo(hardProfitFloor) < 0) {
                 String reason = lock.explanation() + " Hard protected-profit floor " + hardProfitFloor + " was breached.";

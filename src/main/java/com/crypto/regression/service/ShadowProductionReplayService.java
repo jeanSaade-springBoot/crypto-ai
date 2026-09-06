@@ -399,6 +399,16 @@ public class ShadowProductionReplayService {
                 BigDecimal distance = current.takeProfit().subtract(current.entryPrice());
                 BigDecimal oldTarget = current.takeProfit();
                 BigDecimal newTarget = oldTarget.add(distance.multiply(BigDecimal.valueOf(0.50), MC), MC);
+                BigDecimal fix118NewProgress = current.highest() == null
+                        ? BigDecimal.ZERO
+                        : current.highest().subtract(current.entryPrice(), MC)
+                                .multiply(BigDecimal.valueOf(100), MC)
+                                .divide(newTarget.subtract(current.entryPrice(), MC), 6, RoundingMode.HALF_UP);
+                log.info("[FIX-118][REPLAY][TP_EXTENSION] runId={}, positionId={}, symbol={}, observedAt={}, marketPrice={}, " +
+                                "entry={}, oldTp={}, newTp={}, highest={}, profitLockActive={}, profitLockPrice={}, newGeometryProgressPct={}, " +
+                                "note=extension event returns before replay Profit Lock evaluation",
+                        runId, current.positionId(), symbol, event.observedAt(), price, current.entryPrice(), oldTarget, newTarget,
+                        current.highest(), current.profitLockActive(), current.profitLockPrice(), fix118NewProgress);
                 current = current.withTakeProfit(newTarget);
                 jdbcTemplate.update("UPDATE wallet_position_test SET take_profit_usdt=? WHERE id=?", newTarget, current.positionId());
                 persistNearTpState(current);
@@ -432,10 +442,29 @@ public class ShadowProductionReplayService {
             jdbcTemplate.update("UPDATE wallet_position_test SET highest_price_usdt=?, profit_lock_active=?, profit_lock_price_usdt=? WHERE id=?",
                     updated.highest(), updated.profitLockActive(), updated.profitLockPrice(), updated.positionId());
         }
+        if (updated.profitLockActive()
+                || !equalsNullable(current.highest(), updated.highest())
+                || current.profitLockActive() != updated.profitLockActive()
+                || !equalsNullable(current.profitLockPrice(), updated.profitLockPrice())) {
+            BigDecimal fix118Progress = updated.takeProfit() == null || updated.takeProfit().compareTo(updated.entryPrice()) <= 0
+                    ? BigDecimal.ZERO
+                    : updated.highest().subtract(updated.entryPrice(), MC)
+                            .multiply(BigDecimal.valueOf(100), MC)
+                            .divide(updated.takeProfit().subtract(updated.entryPrice(), MC), 6, RoundingMode.HALF_UP);
+            log.info("[FIX-118][REPLAY][LIVE_PATH] runId={}, positionId={}, symbol={}, observedAt={}, price={}, entry={}, target={}, " +
+                            "highest={}, previousActive={}, active={}, previousLock={}, lock={}, progressPct={}, triggered={}",
+                    runId, updated.positionId(), symbol, event.observedAt(), price, updated.entryPrice(), updated.takeProfit(),
+                    updated.highest(), current.profitLockActive(), updated.profitLockActive(), current.profitLockPrice(),
+                    updated.profitLockPrice(), fix118Progress,
+                    updated.profitLockActive() && updated.profitLockPrice() != null
+                            && price.compareTo(updated.profitLockPrice()) <= 0);
+        }
         current = updated;
 
         if (current.profitLockActive() && current.profitLockPrice() != null
                 && price.compareTo(current.profitLockPrice()) <= 0) {
+            log.info("[FIX-118][REPLAY][LIVE_TRIGGER] runId={}, positionId={}, symbol={}, observedAt={}, price={}, lock={}, target={}",
+                    runId, current.positionId(), symbol, event.observedAt(), price, current.profitLockPrice(), current.takeProfit());
             BigDecimal hardProfitFloor = current.entryPrice().multiply(BigDecimal.valueOf(1.0005), MC);
             if (price.compareTo(hardProfitFloor) < 0) {
                 String reason = "Profit-lock hard floor was breached; protected profit can no longer be preserved. "
@@ -543,9 +572,28 @@ public class ShadowProductionReplayService {
             return new ExitDecision(true, "STOP_LOSS", "Price reached the stored stop loss.");
 
         ShadowPosition updated = authoritativePrice ? profitLockState(p, price) : p;
+        if (authoritativePrice && (updated.profitLockActive()
+                || p.profitLockActive() != updated.profitLockActive()
+                || !equalsNullable(p.profitLockPrice(), updated.profitLockPrice()))) {
+            BigDecimal fix118Progress = updated.takeProfit() == null || updated.takeProfit().compareTo(updated.entryPrice()) <= 0
+                    ? BigDecimal.ZERO
+                    : updated.highest().subtract(updated.entryPrice(), MC)
+                            .multiply(BigDecimal.valueOf(100), MC)
+                            .divide(updated.takeProfit().subtract(updated.entryPrice(), MC), 6, RoundingMode.HALF_UP);
+            log.info("[FIX-118][REPLAY][SIGNAL_PATH] runId={}, positionId={}, signalId={}, symbol={}, generatedAt={}, price={}, " +
+                            "entry={}, target={}, highest={}, previousActive={}, active={}, previousLock={}, lock={}, progressPct={}, triggered={}",
+                    runId, updated.positionId(), s.getId(), s.getSymbol(), s.getGeneratedAt(), price,
+                    updated.entryPrice(), updated.takeProfit(), updated.highest(), p.profitLockActive(), updated.profitLockActive(),
+                    p.profitLockPrice(), updated.profitLockPrice(), fix118Progress,
+                    updated.profitLockActive() && updated.profitLockPrice() != null
+                            && price.compareTo(updated.profitLockPrice()) <= 0);
+        }
         BigDecimal minimumProfitableExit = p.entryPrice().multiply(BigDecimal.valueOf(1.0005));
         if (authoritativePrice && updated.profitLockActive() && updated.profitLockPrice() != null
                 && price.compareTo(updated.profitLockPrice()) <= 0) {
+            log.info("[FIX-118][REPLAY][SIGNAL_TRIGGER] runId={}, positionId={}, signalId={}, symbol={}, generatedAt={}, price={}, lock={}, target={}",
+                    runId, updated.positionId(), s.getId(), s.getSymbol(), s.getGeneratedAt(), price,
+                    updated.profitLockPrice(), updated.takeProfit());
             if (price.compareTo(minimumProfitableExit) < 0) {
                 String floorReason = "Profit-lock hard floor was breached; protected profit can no longer be preserved. "
                         + profitLockConfigText();

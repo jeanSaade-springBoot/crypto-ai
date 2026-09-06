@@ -106,6 +106,18 @@ public class PaperTradingService {
                     : DynamicProfitLockService.Evaluation.inactive(
                             "Signal price predates the open position and is context-only for mechanical protection.");
 
+            // FIX-118 diagnostic instrumentation only. PaperTradingService is an independent
+            // Production exit authority: if this evaluation is triggered it can close both the
+            // paper position and wallet through closeFromProfitLock(...). Keep this trace separate
+            // from the live-price path so the server log identifies which authority acted.
+            if (authoritativePrice && (profitLock.active() || profitLock.triggered())) {
+                log.info("[FIX-118][PRODUCTION][SIGNAL_PATH] signalId={}, positionId={}, symbol={}, interval={}, price={}, " +
+                                "active={}, progressPct={}, activationPct={}, lock={}, triggered={}",
+                        signal.getId(), profitLock.walletPositionId(), symbol, signal.getInterval(), price,
+                        profitLock.active(), profitLock.progressPercent(), profitLock.activationPercent(),
+                        profitLock.lockPrice(), profitLock.triggered());
+            }
+
             // FIX-067: The wallet-managed position is the authoritative Production source for
             // a dynamically extended take-profit.  paper_position historically retained the
             // entry-time TP, so a fresh 1m signal could close against that stale threshold even
@@ -133,6 +145,8 @@ public class PaperTradingService {
             }
 
             if (authoritativePrice && profitLock.triggered()) {
+                log.info("[FIX-118][PRODUCTION][SIGNAL_TRIGGER] signalId={}, positionId={}, symbol={}, price={}, lock={}, progressPct={}",
+                        signal.getId(), profitLock.walletPositionId(), symbol, price, profitLock.lockPrice(), profitLock.progressPercent());
                 return Optional.of(closeFromProfitLock(position, signal, profitLock));
             }
 
