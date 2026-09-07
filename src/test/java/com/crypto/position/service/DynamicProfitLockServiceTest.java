@@ -195,7 +195,9 @@ class DynamicProfitLockServiceTest {
         position.setHighestPriceUsdt(new BigDecimal("115"));
         position.setProfitLockActive(true);
         position.setProfitLockState(ProfitLockState.TP_EXTENSION_REBASE);
-        position.setProfitLockPriceUsdt(new BigDecimal("112"));
+        // Deliberately stale/tighter historical lock. Reactivation must rebuild the lock
+        // from the current TP geometry instead of keeping this superseded value.
+        position.setProfitLockPriceUsdt(new BigDecimal("115"));
         position.setProfitLockRebaseStartedAt(Instant.parse("2026-09-06T13:00:55Z"));
 
         var result = service.evaluatePrice("ETHUSDT", new BigDecimal("121"));
@@ -203,6 +205,8 @@ class DynamicProfitLockServiceTest {
         assertThat(result.progressPercent()).isGreaterThanOrEqualTo(new BigDecimal("70"));
         assertThat(result.state()).isEqualTo(ProfitLockState.ACTIVE);
         assertThat(result.active()).isTrue();
+        assertThat(result.lockPrice()).isEqualByComparingTo("112");
+        assertThat(position.getProfitLockPriceUsdt()).isEqualByComparingTo("112");
         assertThat(position.getProfitLockState()).isEqualTo(ProfitLockState.ACTIVE);
         assertThat(position.getProfitLockRebaseStartedAt()).isNull();
     }
@@ -298,6 +302,117 @@ class DynamicProfitLockServiceTest {
         assertThat(result.active()).isFalse();
         assertThat(result.triggered()).isFalse();
         assertThat(result.hardProfitFloorTriggered()).isFalse();
+    }
+
+
+    @Test
+    void fix120HistoricalBico1055ExtensionRecalculatesActiveLockAgainstNewTargetGeometry() {
+        BigDecimal finalTarget = new BigDecimal("0.023446298101");
+        Instant extensionAt = Instant.parse("2026-09-07T13:25:56.572756Z");
+
+        position.setId(1055L);
+        position.setSymbol("BICOUSDT");
+        position.setAverageEntryPriceUsdt(new BigDecimal("0.022990"));
+        position.setTakeProfitUsdt(new BigDecimal("0.023294198734"));
+        position.setHighestPriceUsdt(new BigDecimal("0.023310"));
+        position.setProfitLockActive(true);
+        position.setProfitLockState(ProfitLockState.ACTIVE);
+        position.setProfitLockPriceUsdt(new BigDecimal("0.023218149051"));
+        position.setProfitLockProgressPercent(new BigDecimal("105.193000"));
+        position.setProfitLockActivatedAt(Instant.parse("2026-09-07T13:25:34.084899Z"));
+
+        var transition = service.onTakeProfitExtended(
+                position, finalTarget, new BigDecimal("0.023310"), extensionAt);
+        position.setTakeProfitUsdt(finalTarget);
+
+        when(positionRepository.findFirstBySymbolAndStatusOrderByOpenedAtDesc("BICOUSDT", "OPEN"))
+                .thenReturn(Optional.of(position));
+
+        // FIX-120 historical BICO #1055 final extension left progress at 70.129593%, barely above
+        // activation. The old lock (0.023218149051) was earned against the previous TP and
+        // must be replaced by a fresh current-geometry lock (40% of the new TP distance).
+        assertThat(transition.previousState()).isEqualTo(ProfitLockState.ACTIVE);
+        assertThat(transition.state()).isEqualTo(ProfitLockState.ACTIVE);
+        assertThat(transition.progressPercent()).isEqualByComparingTo("70.129593");
+        assertThat(position.getProfitLockPriceUsdt()).isEqualByComparingTo("0.023172519240");
+        assertThat(position.getProfitLockRebaseStartedAt()).isNull();
+
+        // Production historically exited around 0.023200 because the stale old lock was
+        // 0.023218149051. Under the corrected geometry that same price must not trigger DPL.
+        var result = service.evaluatePrice("BICOUSDT", new BigDecimal("0.023200"));
+
+        assertThat(result.state()).isEqualTo(ProfitLockState.ACTIVE);
+        assertThat(result.active()).isTrue();
+        assertThat(result.lockPrice()).isEqualByComparingTo("0.023172519240");
+        assertThat(result.triggered()).isFalse();
+    }
+
+
+
+    @Test
+    void fix120GeometryBoundaryMayLegitimatelyLowerFreshLock() {
+        position.setAverageEntryPriceUsdt(new BigDecimal("100"));
+        position.setTakeProfitUsdt(new BigDecimal("110"));
+        position.setHighestPriceUsdt(new BigDecimal("111"));
+        position.setProfitLockActive(true);
+        position.setProfitLockState(ProfitLockState.ACTIVE);
+        position.setProfitLockPriceUsdt(new BigDecimal("108")); // valid 80% lock under old 110 target
+        position.setProfitLockProgressPercent(new BigDecimal("110"));
+
+        var transition = service.onTakeProfitExtended(
+                position, new BigDecimal("115"), new BigDecimal("111"), Instant.parse("2026-09-07T18:00:00Z"));
+
+        assertThat(transition.state()).isEqualTo(ProfitLockState.ACTIVE);
+        assertThat(transition.progressPercent()).isEqualByComparingTo("73.333333");
+        assertThat(position.getProfitLockPriceUsdt()).isEqualByComparingTo("106.000000000000");
+        assertThat(position.getProfitLockPriceUsdt()).isLessThan(new BigDecimal("108"));
+    }
+
+    @Test
+    void fix120GeometryBoundaryMayLegitimatelyRaiseFreshLock() {
+        position.setAverageEntryPriceUsdt(new BigDecimal("100"));
+        position.setTakeProfitUsdt(new BigDecimal("110"));
+        position.setHighestPriceUsdt(new BigDecimal("107"));
+        position.setProfitLockActive(true);
+        position.setProfitLockState(ProfitLockState.ACTIVE);
+        position.setProfitLockPriceUsdt(new BigDecimal("104")); // valid initial lock at old 70% activation
+        position.setProfitLockProgressPercent(new BigDecimal("70"));
+
+        var transition = service.onTakeProfitExtended(
+                position, new BigDecimal("112"), new BigDecimal("111"), Instant.parse("2026-09-07T18:01:00Z"));
+
+        assertThat(transition.state()).isEqualTo(ProfitLockState.ACTIVE);
+        assertThat(transition.progressPercent()).isEqualByComparingTo("91.666667");
+        assertThat(position.getProfitLockPriceUsdt()).isEqualByComparingTo("107.200000000000");
+        assertThat(position.getProfitLockPriceUsdt()).isGreaterThan(new BigDecimal("104"));
+    }
+
+    @Test
+    void fix120NormalMonotonicTrailingResumesAfterFreshGeometryBaseline() {
+        position.setSymbol("ETHUSDT");
+        position.setAverageEntryPriceUsdt(new BigDecimal("100"));
+        position.setTakeProfitUsdt(new BigDecimal("110"));
+        position.setHighestPriceUsdt(new BigDecimal("109"));
+        position.setProfitLockActive(true);
+        position.setProfitLockState(ProfitLockState.ACTIVE);
+        position.setProfitLockPriceUsdt(new BigDecimal("106"));
+        position.setProfitLockProgressPercent(new BigDecimal("90"));
+
+        service.onTakeProfitExtended(
+                position, new BigDecimal("112"), new BigDecimal("109"), Instant.parse("2026-09-07T18:02:00Z"));
+        position.setTakeProfitUsdt(new BigDecimal("112"));
+        stubEthOpenPosition();
+
+        BigDecimal freshBaseline = position.getProfitLockPriceUsdt();
+        var retrace = service.evaluatePrice("ETHUSDT", new BigDecimal("108"));
+        assertThat(retrace.lockPrice()).isEqualByComparingTo(freshBaseline);
+
+        var advance = service.evaluatePrice("ETHUSDT", new BigDecimal("110.8"));
+        assertThat(advance.lockPrice()).isGreaterThan(freshBaseline);
+        BigDecimal tightened = advance.lockPrice();
+
+        var secondRetrace = service.evaluatePrice("ETHUSDT", new BigDecimal("107"));
+        assertThat(secondRetrace.lockPrice()).isEqualByComparingTo(tightened);
     }
 
     @Test

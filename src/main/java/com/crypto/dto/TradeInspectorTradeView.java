@@ -47,5 +47,6 @@ public record TradeInspectorTradeView(
         String exitQuality,
         String exitQualityExplanation,
         boolean markedForReview,
-        boolean copiedToProven
+        boolean copiedToProven,
+        com.crypto.inspector.service.TradeInvestmentHistory.Investment investment
 ) {}

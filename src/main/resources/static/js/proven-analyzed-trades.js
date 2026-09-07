@@ -1,3 +1,17 @@
+
+// FIX-121: one presentation for live Replay results, archives and saved Proven trades.
+function replayInvestmentCell(trade){
+ const v=trade.investment||{};
+ const parts=v.entryQuantity==null?null:String(v.entryQuantity).split('.');
+ const quantity=parts?parts[0].replace(/\B(?=(\d{3})+(?!\d))/g,',')+(parts[1]?'.'+parts[1]:''):'—';
+ return `<div title="${escapeHtml(v.explanation||'Historical execution data unavailable.')}">
+ <strong>Unit Entry Price${v.buyCount>1?' (weighted)':''}: ${v.unitEntryPriceUsdt==null?'—':formatMovePrice(v.unitEntryPriceUsdt)}</strong>
+ <div>Quantity acquired: ${escapeHtml(quantity)}</div>
+ <div>Total Invested: ${v.totalInvestedUsdt==null?'—':'$'+Number(v.totalInvestedUsdt).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:8})}</div>
+ <small>${v.status==='AVAILABLE'?`${v.buyCount} BUY execution(s) · before fees`:escapeHtml(v.explanation||'Investment history unavailable')}</small>
+ </div>`;
+}
+
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>'\"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','\"':'&quot;'}[char]));
 }
@@ -671,7 +685,7 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
         const tradeTable = tradePanel.querySelector('table');
         const tradeHead = tradeTable?.querySelector('thead');
         if (tradeHead) {
-            tradeHead.innerHTML = '<tr><th title="Add/remove from Proven trades">✓</th><th>#</th><th>Symbol</th><th>BUY time</th><th>BUY price</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr>';
+            tradeHead.innerHTML = '<tr><th title="Add/remove from Proven trades">✓</th><th>#</th><th>Symbol</th><th>BUY time</th><th>Entry investment</th><th>SELL time</th><th>SELL price</th><th>Exit reason</th><th>P/L USDT</th><th>P/L %</th><th>Chart</th></tr>';
         }
         const tradeNote = tradePanel.querySelector('.form-note');
         if (tradeNote) {
@@ -683,7 +697,7 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
                 <td>${index + 1}</td>
                 <td><strong>${escapeHtml(String(trade.symbol || run.symbol || '—').toUpperCase())}</strong></td>
                 <td>${formatMoveTime(trade.entry_time)}</td>
-                <td>${formatMovePrice(trade.entry_price)}</td>
+                <td>${replayInvestmentCell(trade)}</td>
                 <td>${trade.exit_time ? formatMoveTime(trade.exit_time) : 'OPEN'}</td>
                 <td>${trade.exit_price ? formatMovePrice(trade.exit_price) : '—'}</td>
                 <td>${escapeHtml(trade.exit_reason || 'OPEN')}</td>
@@ -709,7 +723,7 @@ async function loadRegressionArchiveDetail(archiveBatchId) {
             <td>${index + 1}</td>
             <td><strong>${escapeHtml(String(trade.symbol || run.symbol || '—').toUpperCase())}</strong></td>
             <td>${formatMoveTime(trade.entry_time)}</td>
-            <td>${formatMovePrice(trade.entry_price)}</td>
+            <td>${replayInvestmentCell(trade)}</td>
             <td>${trade.exit_time ? formatMoveTime(trade.exit_time) : 'OPEN'}</td>
             <td>${trade.exit_price ? formatMovePrice(trade.exit_price) : '—'}</td>
             <td>${escapeHtml(trade.exit_reason || 'OPEN')}</td>
@@ -1369,7 +1383,7 @@ function renderProvenTradesGrid(all) {
             <td>${index + 1}</td>
             <td>${escapeHtml(String(trade.symbol || '—').toUpperCase())}</td>
             <td>${formatMoveTime(trade.entry_time)}</td>
-            <td>${formatMovePrice(trade.entry_price)}</td>
+            <td>${replayInvestmentCell(trade)}</td>
             <td>${trade.exit_time ? formatMoveTime(trade.exit_time) : 'OPEN'}</td>
             <td>${trade.exit_price == null ? '—' : formatMovePrice(trade.exit_price)}</td>
             <td>${trade.realized_pnl_percent == null ? '—' : Number(trade.realized_pnl_percent).toFixed(3) + '%'}</td>

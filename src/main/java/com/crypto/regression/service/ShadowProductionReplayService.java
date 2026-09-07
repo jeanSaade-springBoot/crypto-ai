@@ -728,9 +728,13 @@ public class ShadowProductionReplayService {
                     p.profitLockRebaseStartedAt());
         }
 
+        // FIX-118 parity: when REBASE earns activation, rebuild the lock from the current
+        // TP geometry instead of retaining the superseded pre-extension lock.
+        boolean freshGeometryActivation = p.profitLockState() == ProfitLockState.TP_EXTENSION_REBASE;
         ProfitLockPolicy.State state = profitLockPolicy.evaluate(
                 p.entryPrice(), p.takeProfit(), price, highest,
-                p.profitLockState() == ProfitLockState.ACTIVE || p.profitLockActive(), p.profitLockPrice(),
+                freshGeometryActivation ? false : (p.profitLockState() == ProfitLockState.ACTIVE || p.profitLockActive()),
+                freshGeometryActivation ? null : p.profitLockPrice(),
                 settings.isDynamicProfitLockEnabled(), activation,
                 nvl(settings.getProfitLockInitialPercent(), BigDecimal.valueOf(40)),
                 nvl(settings.getProfitLockTrailStepPercent(), BigDecimal.valueOf(10)));
@@ -740,15 +744,50 @@ public class ShadowProductionReplayService {
 
     private ShadowPosition rebaseForExtendedTarget(ShadowPosition p, BigDecimal newTarget, BigDecimal extensionPrice, Instant at) {
         if (p == null || newTarget == null) return p;
+        BigDecimal oldTarget = p.takeProfit();
+        BigDecimal oldLock = p.profitLockPrice();
         BigDecimal activation = nvl(walletSettings().getProfitLockActivationPercent(), BigDecimal.valueOf(70));
         BigDecimal extensionHighest = p.highest() == null ? p.entryPrice() : p.highest();
         if (extensionPrice != null && extensionPrice.compareTo(extensionHighest) > 0) extensionHighest = extensionPrice;
         ShadowPosition withExtensionHigh = p.withLock(extensionHighest, p.profitLockActive(), p.profitLockPrice(),
                 p.profitLockState(), p.profitLockRebaseStartedAt());
         BigDecimal progress = progressPercent(p.entryPrice(), newTarget, extensionHighest);
-        if (p.profitLockState() == ProfitLockState.ACTIVE && progress.compareTo(activation) < 0) {
-            return withExtensionHigh.withLock(extensionHighest, true, p.profitLockPrice(), ProfitLockState.TP_EXTENSION_REBASE,
+        if (p.profitLockState() == ProfitLockState.ACTIVE) {
+            if (progress.compareTo(activation) < 0) {
+                ShadowPosition rebasing = withExtensionHigh.withLock(extensionHighest, true, p.profitLockPrice(), ProfitLockState.TP_EXTENSION_REBASE,
+                        at == null ? Instant.now() : at);
+                log.info("[FIX-120][REPLAY][TP_GEOMETRY_REBASE] positionId={}, previousState={}, newState={}, oldTarget={}, newTarget={}, " +
+                                "extensionPrice={}, highest={}, newGeometryProgressPct={}, oldLock={}, freshLock={}, activationPct={}, geometryRebased=true",
+                        p.positionId(), p.profitLockState(), rebasing.profitLockState(), oldTarget, newTarget, extensionPrice,
+                        extensionHighest, progress, oldLock, rebasing.profitLockPrice(), activation);
+                return rebasing;
+            }
+            // FIX-120 Production/Replay parity: the old executable lock belongs to the
+            // superseded TP geometry. If the extended winner still qualifies, establish a
+            // fresh geometry baseline. Raw extensionPrice is current; extensionHighest is the
+            // historical-best seed; previousActive/previousLock are deliberately discarded.
+            WalletSettings settings = walletSettings();
+            BigDecimal currentForPolicy = extensionPrice == null ? extensionHighest : extensionPrice;
+            ProfitLockPolicy.State rebased = profitLockPolicy.evaluate(
+                    p.entryPrice(), newTarget, currentForPolicy, extensionHighest,
+                    false, null, settings.isDynamicProfitLockEnabled(), activation,
+                    nvl(settings.getProfitLockInitialPercent(), BigDecimal.valueOf(40)),
+                    nvl(settings.getProfitLockTrailStepPercent(), BigDecimal.valueOf(10)));
+            if (rebased.active()) {
+                ShadowPosition active = withExtensionHigh.withLock(rebased.highestPrice(), true, rebased.lockPrice(), ProfitLockState.ACTIVE, null);
+                log.info("[FIX-120][REPLAY][TP_GEOMETRY_REBASE] positionId={}, previousState={}, newState={}, oldTarget={}, newTarget={}, " +
+                                "extensionPrice={}, highest={}, newGeometryProgressPct={}, oldLock={}, freshLock={}, activationPct={}, geometryRebased=true",
+                        p.positionId(), p.profitLockState(), active.profitLockState(), oldTarget, newTarget, extensionPrice,
+                        rebased.highestPrice(), rebased.progressPercent(), oldLock, rebased.lockPrice(), activation);
+                return active;
+            }
+            ShadowPosition rebasing = withExtensionHigh.withLock(rebased.highestPrice(), true, p.profitLockPrice(), ProfitLockState.TP_EXTENSION_REBASE,
                     at == null ? Instant.now() : at);
+            log.info("[FIX-120][REPLAY][TP_GEOMETRY_REBASE] positionId={}, previousState={}, newState={}, oldTarget={}, newTarget={}, " +
+                            "extensionPrice={}, highest={}, newGeometryProgressPct={}, oldLock={}, freshLock={}, activationPct={}, geometryRebased=true",
+                    p.positionId(), p.profitLockState(), rebasing.profitLockState(), oldTarget, newTarget, extensionPrice,
+                    rebased.highestPrice(), rebased.progressPercent(), oldLock, rebasing.profitLockPrice(), activation);
+            return rebasing;
         }
         if (p.profitLockState() == ProfitLockState.TP_EXTENSION_REBASE) {
             return withExtensionHigh.withLock(extensionHighest, true, p.profitLockPrice(), ProfitLockState.TP_EXTENSION_REBASE,

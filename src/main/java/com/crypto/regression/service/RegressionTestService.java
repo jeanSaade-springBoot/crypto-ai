@@ -1,6 +1,7 @@
 package com.crypto.regression.service;
 
 import com.crypto.regression.dto.RegressionTestRunRequest;
+import com.crypto.inspector.service.TradeInvestmentHistory;
 import com.crypto.regression.dto.RegressionInvestigationCaseRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -284,7 +285,12 @@ public class RegressionTestService {
         run.put("result", result.isEmpty() ? null : result.get(0)); run.put("archived", true); run.put("archive_batch_id", batchId); return run;
     }
     @Transactional(readOnly = true) public List<Map<String,Object>> archivedSignals(long batchId) { return jdbcTemplate.queryForList("SELECT generated_at,interval_code,latest_price,original_decision,final_decision,execution_effective_decision,total_score,confidence_score,trend_score,volume_score,momentum_score,decision_authority_corrected,replay_generated,generation_error FROM analysis_test_signal_archive WHERE archive_batch_id=? ORDER BY generated_at ASC, FIELD(interval_code,'1h','5m','1m') LIMIT 1500", batchId); }
-    @Transactional(readOnly = true) public List<Map<String,Object>> archivedTrades(long batchId) { return jdbcTemplate.queryForList("SELECT id,entry_time,entry_price,exit_time,exit_price,exit_reason,realized_pnl_usdt,realized_pnl_percent,position_percent,status, EXISTS(SELECT 1 FROM proven_analyzed_trade p WHERE p.source_test_run_id=wallet_position_test_archive.test_run_id AND p.source_trade_id=wallet_position_test_archive.id) AS proven_success FROM wallet_position_test_archive WHERE archive_batch_id=? ORDER BY entry_time ASC LIMIT 500", batchId); }
+    @Transactional(readOnly = true)
+    public List<Map<String,Object>> archivedTrades(long batchId) {
+        List<Map<String,Object>> rows = jdbcTemplate.queryForList("SELECT id,test_run_id,symbol,entry_time,entry_price,exit_time,exit_price,exit_reason,realized_pnl_usdt,realized_pnl_percent,position_percent,status, EXISTS(SELECT 1 FROM proven_analyzed_trade p WHERE p.source_test_run_id=wallet_position_test_archive.test_run_id AND p.source_trade_id=wallet_position_test_archive.id) AS proven_success FROM wallet_position_test_archive WHERE archive_batch_id=? ORDER BY entry_time ASC LIMIT 500", batchId);
+        new TradeInvestmentHistory(jdbcTemplate).enrichReplay(rows, batchId);
+        return rows;
+    }
     @Transactional(readOnly = true) public List<Map<String,Object>> archivedPositionManagement(long batchId) { return jdbcTemplate.queryForList("SELECT generated_at,action_code,current_price,old_take_profit,new_take_profit,highest_price,profit_lock_active,profit_lock_price,explanation FROM position_management_test_archive WHERE archive_batch_id=? ORDER BY generated_at ASC LIMIT 3000", batchId); }
     @Transactional(readOnly = true) public List<Map<String,Object>> archivedDefensiveRiskReductionObservations(long batchId) {
         return jdbcTemplate.queryForList("SELECT id,position_test_id,symbol,observed_at,source_signal_id,current_price,entry_price,highest_price_since_entry,current_profit_percent,peak_profit_percent,giveback_from_peak_percent,consecutive_final_1m_strong_sell,five_minute_signal_id,five_minute_original_decision,five_minute_final_decision,five_minute_confluence_status,one_hour_signal_id,one_hour_final_decision,observation_code FROM defensive_risk_reduction_observation_test_archive WHERE archive_batch_id=? ORDER BY observed_at ASC,id ASC LIMIT 5000", batchId);
@@ -470,8 +476,8 @@ public class RegressionTestService {
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> trades(long runId) {
-        return jdbcTemplate.queryForList("""
-                SELECT id, entry_time, entry_price, exit_time, exit_price, exit_reason,
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
+                SELECT id, test_run_id, symbol, entry_time, entry_price, exit_time, exit_price, exit_reason,
                        realized_pnl_usdt, realized_pnl_percent, position_percent, status,
                        EXISTS (SELECT 1 FROM proven_analyzed_trade p WHERE p.source_test_run_id = wallet_position_test.test_run_id AND p.source_trade_id = wallet_position_test.id) AS proven_success
                 FROM wallet_position_test
@@ -479,6 +485,9 @@ public class RegressionTestService {
                 ORDER BY entry_time ASC
                 LIMIT 500
                 """, runId);
+        // FIX-121: historical display only; execution records remain immutable.
+        new TradeInvestmentHistory(jdbcTemplate).enrichReplay(rows, null);
+        return rows;
     }
 
     /**
@@ -613,7 +622,7 @@ public class RegressionTestService {
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> provenTrades() {
-        return jdbcTemplate.queryForList("""
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
                 SELECT p.id, p.source_test_run_id, p.source_trade_id, p.symbol, p.entry_time, p.entry_price,
                        p.exit_time, p.exit_price, p.exit_reason, p.realized_pnl_usdt, p.realized_pnl_percent,
                        p.position_percent, p.marked_at, p.source_wallet_buy_trade_id, p.source_wallet_sell_trade_id, p.analysis_start_time, p.analysis_end_time, p.analysis_status,
@@ -623,6 +632,8 @@ public class RegressionTestService {
                 ORDER BY p.entry_time ASC
                 LIMIT 1000
                 """);
+        new TradeInvestmentHistory(jdbcTemplate).enrichProven(rows);
+        return rows;
     }
 
     /**
@@ -665,7 +676,7 @@ public class RegressionTestService {
         return Map.of("archived", true, "provenTradeId", provenTradeId, "side", side);
     }
 
-    @Transactional(readOnly = true) public Map<String,Object> provenTradeDetail(long id){List<Map<String,Object>> rows=jdbcTemplate.queryForList("SELECT * FROM proven_analyzed_trade WHERE id=?",id);if(rows.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Proven trade not found.");Map<String,Object> m=new LinkedHashMap<>(rows.get(0));m.put("execution_points",jdbcTemplate.queryForList("SELECT wallet_trade_id,side,execution_time,execution_price,quantity,execution_reason,sequence_no FROM proven_trade_execution_point WHERE proven_trade_id=? ORDER BY sequence_no,execution_time",id));return m;}
+    @Transactional(readOnly = true) public Map<String,Object> provenTradeDetail(long id){List<Map<String,Object>> rows=jdbcTemplate.queryForList("SELECT * FROM proven_analyzed_trade WHERE id=?",id);if(rows.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Proven trade not found.");Map<String,Object> m=new LinkedHashMap<>(rows.get(0));m.put("execution_points",jdbcTemplate.queryForList("SELECT wallet_trade_id,side,execution_time,execution_price,quantity,execution_reason,sequence_no FROM proven_trade_execution_point WHERE proven_trade_id=? ORDER BY sequence_no,execution_time",id));new TradeInvestmentHistory(jdbcTemplate).enrichProven(List.of(m));return m;}
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> archivedProvenTradeLegs() {

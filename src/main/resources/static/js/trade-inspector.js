@@ -15,6 +15,22 @@ function qualityClass(q){return q==='GOOD_EXIT'?'good':q==='EARLY_EXIT'?'early':
 function qualityLabel(q){return (q||'NEUTRAL_EXIT').replaceAll('_',' ')}
 function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 
+
+// FIX-121: values arrive as backend decimal strings; do not multiply floats in the browser.
+function investmentQuantity(v){
+ if(v==null)return '—';
+ const [whole,fraction]=String(v).split('.');
+ return whole.replace(/\B(?=(\d{3})+(?!\d))/g,',')+(fraction?'.'+fraction:'');
+}
+function investmentEntry(t){
+ const v=t.investment||{};
+ const unit=String(t.symbol||'').endsWith('USDT')?String(t.symbol).slice(0,-4):String(t.symbol||'');
+ return `<div><span>Unit Entry Price${v.buyCount>1?' (weighted)':''}</span><strong>${price(v.unitEntryPriceUsdt)}</strong></div>
+ <div><span>Quantity acquired</span><strong>${investmentQuantity(v.entryQuantity)} ${v.entryQuantity==null?'':esc(unit)}</strong></div>
+ <div><span>Total Invested (before fees)</span><strong>${money(v.totalInvestedUsdt)}</strong></div>
+ <div><span>Investment history</span><strong>${v.status==='AVAILABLE'?`${v.buyCount} BUY execution${v.buyCount===1?'':'s'}`:'Unavailable'}</strong><small>${esc(v.explanation||'Historical execution data unavailable.')}</small></div>`;
+}
+
 function tradeChartUrl(t){
  const opened=window.CryptoTime.parseUtc(t.openedAt);
  const closed=t.closedAt?window.CryptoTime.parseUtc(t.closedAt):null;
@@ -77,7 +93,7 @@ function openTradeCard(t){
   </div>
   <div class="inspector-card-body open-position-body">
    <section class="inspector-block"><h3>Entry</h3><div class="inspector-kv">
-    <div><span>Opened</span><strong>${date(t.openedAt)}</strong></div><div><span>Average entry</span><strong>${price(t.entryPrice)}</strong></div>
+    <div><span>Opened</span><strong>${date(t.openedAt)}</strong></div>${investmentEntry(t)}
     <div><span>Trade Signal ID</span><strong>#${esc(t.entrySignalId??'—')}</strong></div><div><span>Wallet Trade ID</span><strong>#${esc(t.walletBuyTradeId??'—')}</strong></div>
     <div><span>Signal</span><strong>${esc(t.entryDecision||'BUY')} ${t.entryScore}/100</strong></div><div><span>Confidence</span><strong>${t.entryConfidence}/100</strong></div>
     <div><span>Interval</span><strong>${esc(t.entryInterval||'—')}</strong></div><div><span>Regime</span><strong>${esc(t.entryRegime||'—')}</strong></div><div><span>Strategy</span><strong>${esc(t.entryStrategy||'—')}</strong></div>
@@ -85,7 +101,7 @@ function openTradeCard(t){
    <section class="inspector-block"><h3>Protection</h3><div class="inspector-kv">
     <div><span>Stop loss</span><strong class="negative">${price(t.stopLoss)}</strong></div><div><span>Take profit</span><strong class="positive">${price(t.takeProfit)}</strong></div>
     <div><span>Highest managed price</span><strong>${price(t.highestManagedPrice||t.maximumFavorablePrice)}</strong></div><div><span>Max favorable</span><strong class="${mfeClass}">${pct(t.maximumFavorablePercent)}</strong></div>
-    <div><span>Quantity</span><strong>${Number(t.quantity||0).toLocaleString(undefined,{maximumFractionDigits:8})}</strong></div>
+    <div><span>Remaining quantity</span><strong>${investmentQuantity(t.quantity)}</strong></div>
    </div>
    ${t.profitLockActivated ? `<div class="inspector-profit-lock"><strong>PROFIT LOCK ACTIVATED</strong><span>Protected at ${price(t.profitLockPrice)}</span><small>Activated ${date(t.profitLockActivatedAt)} · best TP progress ${Number(t.profitLockProgressPercent||0).toFixed(1)}%</small></div>` : `<div class="inspector-profit-lock inactive"><strong>Profit Lock not activated</strong><small>Position remains under its current persisted protection plan.</small></div>`}
    </section>
@@ -114,7 +130,7 @@ function tradeCard(t){
   </div>
   <div class="inspector-card-body">
    <section class="inspector-block"><h3>Entry</h3><div class="inspector-kv">
-    <div><span>Opened</span><strong>${date(t.openedAt)}</strong></div><div><span>Price</span><strong>${price(t.entryPrice)}</strong></div>
+    <div><span>Opened</span><strong>${date(t.openedAt)}</strong></div>${investmentEntry(t)}
     <div><span>Trade Signal ID</span><strong>#${esc(t.entrySignalId??'—')}</strong></div><div><span>Wallet Trade ID</span><strong>#${esc(t.walletBuyTradeId??'—')}</strong></div>
     <div><span>Signal</span><strong>${esc(t.entryDecision||'BUY')} ${t.entryScore}/100</strong></div><div><span>Confidence</span><strong>${t.entryConfidence}/100</strong></div>
     <div><span>Interval</span><strong>${esc(t.entryInterval||'—')}</strong></div><div><span>Regime</span><strong>${esc(t.entryRegime||'—')}</strong></div><div><span>Strategy</span><strong>${esc(t.entryStrategy||'—')}</strong></div>
@@ -123,7 +139,7 @@ function tradeCard(t){
     <div><span>Stop loss</span><strong class="negative">${price(t.stopLoss)}</strong></div><div><span>Take profit</span><strong class="positive">${price(t.takeProfit)}</strong></div>
     <div><span>Best price</span><strong>${price(t.maximumFavorablePrice)}</strong></div><div><span>Max favorable</span><strong class="${mfeClass}">${pct(t.maximumFavorablePercent)}</strong></div>
     <div><span>Worst price</span><strong>${price(t.maximumAdversePrice)}</strong></div><div><span>Max adverse</span><strong class="${maeClass}">${pct(t.maximumAdversePercent)}</strong></div>
-    <div><span>Quantity</span><strong>${Number(t.quantity||0).toLocaleString(undefined,{maximumFractionDigits:8})}</strong></div>
+    <div><span>Final SELL quantity</span><strong>${investmentQuantity(t.quantity)}</strong></div>
    </div>
    ${t.profitLockActivated ? `<div class="inspector-profit-lock"><strong>PROFIT LOCK ACTIVATED</strong><span>Protected at ${price(t.profitLockPrice)}</span><small>Activated ${date(t.profitLockActivatedAt)} · best TP progress ${Number(t.profitLockProgressPercent||0).toFixed(1)}%</small></div>` : `<div class="inspector-profit-lock inactive"><strong>Profit Lock not activated</strong><small>The trade closed before the activation threshold was reached.</small></div>`}
    </section>

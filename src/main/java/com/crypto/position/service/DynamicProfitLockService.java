@@ -110,10 +110,16 @@ public class DynamicProfitLockService {
             executableActive = false;
             triggered = false;
         } else {
+            // FIX-118 refinement: when a TP-extension rebase earns activation against the
+            // CURRENT target, rebuild the executable lock from the current geometry instead
+            // of carrying the historical pre-extension lock through ProfitLockPolicy's
+            // monotonic previous-lock rule.
+            boolean freshGeometryActivation = previousState == ProfitLockState.TP_EXTENSION_REBASE;
             ProfitLockPolicy.State policyState = profitLockPolicy.evaluate(
                     entry, target, current, highest,
-                    previousState == ProfitLockState.ACTIVE || previousPersistedActive,
-                    previousLock, true, activation, initialLock, trailStep);
+                    freshGeometryActivation ? false : (previousState == ProfitLockState.ACTIVE || previousPersistedActive),
+                    freshGeometryActivation ? null : previousLock,
+                    true, activation, initialLock, trailStep);
             highest = policyState.highestPrice();
             progress = policyState.progressPercent();
             lockPrice = policyState.lockPrice();
@@ -201,15 +207,20 @@ public class DynamicProfitLockService {
     }
 
     /**
-     * FIX-118 TP-extension transition. Called in the same transaction that persists the new TP.
-     * ACTIVE protection enters REBASE only when the wider target pushes current best progress
-     * below the configured activation threshold. Otherwise the existing state remains valid.
+     * FIX-120 correction/refinement to FIX-118. Called in the same transaction that persists the new TP.
+     * A TP change invalidates the prior executable lock as a calculation baseline. If current
+     * best progress remains at/above activation, stay ACTIVE but derive a fresh lock from the
+     * new geometry using raw extensionPrice as current and extensionHighest as the historical
+     * best seed. If progress falls below activation, preserve the historical lock for audit but
+     * make it non-executable in TP_EXTENSION_REBASE until the current geometry requalifies.
      */
     public ExtensionTransition onTakeProfitExtended(WalletManagedPosition position, BigDecimal newTarget, BigDecimal extensionPrice, Instant changedAt) {
         if (position == null || newTarget == null || position.getAverageEntryPriceUsdt() == null) {
             return ExtensionTransition.none();
         }
         ProfitLockState previousState = normalizedState(position);
+        BigDecimal oldTarget = position.getTakeProfitUsdt();
+        BigDecimal oldLock = position.getProfitLockPriceUsdt();
         BigDecimal extensionHighest = position.getHighestPriceUsdt() == null
                 ? position.getAverageEntryPriceUsdt()
                 : position.getHighestPriceUsdt();
@@ -224,17 +235,48 @@ public class DynamicProfitLockService {
         // the extension tick returns before the next normal Profit Lock evaluation.
         position.setProfitLockProgressPercent(progress);
 
-        if (previousState == ProfitLockState.ACTIVE && progress.compareTo(activation) < 0) {
-            nextState = ProfitLockState.TP_EXTENSION_REBASE;
-            position.setProfitLockState(nextState);
-            position.setProfitLockRebaseStartedAt(changedAt == null ? Instant.now() : changedAt);
-            // Legacy compatibility flag deliberately stays true; ProfitLockState is the sole
-            // authority for whether the persisted historical lock may execute.
-            position.setProfitLockActive(true);
+        if (previousState == ProfitLockState.ACTIVE) {
+            if (progress.compareTo(activation) < 0) {
+                nextState = ProfitLockState.TP_EXTENSION_REBASE;
+                position.setProfitLockState(nextState);
+                position.setProfitLockRebaseStartedAt(changedAt == null ? Instant.now() : changedAt);
+                // Legacy compatibility flag deliberately stays true; ProfitLockState is the sole
+                // authority for whether the persisted historical lock may execute.
+                position.setProfitLockActive(true);
+            } else {
+                // FIX-120: the extension still leaves the winner beyond activation, but the old
+                // lock belongs to the superseded TP geometry. Establish a fresh geometry baseline.
+                // Deliberately pass raw extensionPrice as current and extensionHighest as previous
+                // highest: ProfitLockPolicy then sees the real boundary tick plus the authoritative
+                // best price, while previousActive/previousLock are intentionally discarded.
+                ProfitLockProfile profile = configuredProfile(settings());
+                BigDecimal currentForPolicy = extensionPrice == null ? extensionHighest : extensionPrice;
+                ProfitLockPolicy.State rebased = profitLockPolicy.evaluate(
+                        position.getAverageEntryPriceUsdt(), newTarget, currentForPolicy, extensionHighest,
+                        false, null, true, profile.activationPercent(), profile.initialLockPercent(), profile.trailStepPercent());
+                nextState = rebased.active() ? ProfitLockState.ACTIVE : ProfitLockState.TP_EXTENSION_REBASE;
+                position.setHighestPriceUsdt(rebased.highestPrice());
+                position.setProfitLockProgressPercent(rebased.progressPercent());
+                position.setProfitLockPriceUsdt(rebased.lockPrice());
+                position.setProfitLockState(nextState);
+                position.setProfitLockActive(true);
+                position.setProfitLockRebaseStartedAt(nextState == ProfitLockState.TP_EXTENSION_REBASE
+                        ? (changedAt == null ? Instant.now() : changedAt)
+                        : null);
+                progress = rebased.progressPercent();
+            }
         } else if (previousState == ProfitLockState.TP_EXTENSION_REBASE) {
             // Repeated TP extensions keep the rebase active and refresh progress against the
             // newest geometry without resetting the original rebase start timestamp.
         }
+
+        log.info("[FIX-120][PRODUCTION][TP_GEOMETRY_REBASE] positionId={}, symbol={}, previousState={}, newState={}, " +
+                        "oldTarget={}, newTarget={}, extensionPrice={}, highest={}, newGeometryProgressPct={}, oldLock={}, freshLock={}, " +
+                        "activationPct={}, geometryRebased={}",
+                position.getId(), position.getSymbol(), previousState, nextState, oldTarget, newTarget,
+                extensionPrice, position.getHighestPriceUsdt(), progress,
+                oldLock, position.getProfitLockPriceUsdt(),
+                activation, previousState == ProfitLockState.ACTIVE);
 
         return new ExtensionTransition(previousState, nextState, progress, activation);
     }

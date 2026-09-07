@@ -103,11 +103,13 @@ public class TradeInspectorService {
             throw new IllegalArgumentException("Trade Inspector venue must be ALL, WALLET or BINANCE.");
         }
 
+        // FIX-121: request-local ledger cache avoids repeating the same symbol read per card.
+        TradeInvestmentHistory investmentHistory = new TradeInvestmentHistory(jdbcTemplate);
         if (state.equals("OPEN")) {
             Page<WalletManagedPosition> openPage = walletManagedPositionRepository.findOpenPositionsForInspector(
                     symbol, PageRequest.of(pageNumber, pageSize));
             List<TradeInspectorTradeView> views = openPage.getContent().stream()
-                    .map(this::toOpenView)
+                    .map(p -> toOpenView(p, investmentHistory))
                     .toList();
             // Realized-P&L summary cards are intentionally not synthesized for OPEN positions.
             // Their count is supplied by pagination metadata and rendered explicitly by the UI.
@@ -121,7 +123,7 @@ public class TradeInspectorService {
         List<TradeInspectorTradeView> views = new ArrayList<>();
         for (WalletTrade sell : closedPage.getContent()) {
             WalletTrade buy = findEntryTrade(sell);
-            if (buy != null) views.add(toView(buy, sell));
+            if (buy != null) views.add(toView(buy, sell, investmentHistory));
         }
 
         return new TradeInspectorResponse(summary(views), views, inspectorSymbols(),
@@ -520,6 +522,10 @@ public class TradeInspectorService {
     }
 
     private TradeInspectorTradeView toView(WalletTrade buy, WalletTrade sell) {
+        return toView(buy, sell, new TradeInvestmentHistory(jdbcTemplate));
+    }
+
+    private TradeInspectorTradeView toView(WalletTrade buy, WalletTrade sell, TradeInvestmentHistory investmentHistory) {
         Instant openedAt = buy.getExecutedAt();
         Instant closedAt = sell.getExecutedAt();
         List<Candle> candles = candleRepository.findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(
@@ -584,7 +590,8 @@ public class TradeInspectorService {
                         : humanCloseReason(sell),
                 bestPrice, percentChange(entryPrice, bestPrice),
                 worstPrice, percentChange(entryPrice, worstPrice),
-                p15, p30, p60, assessment.quality(), assessment.explanation(), isMarkedForReview(sell.getId()), isCopiedToProven(sell.getId())
+                p15, p30, p60, assessment.quality(), assessment.explanation(), isMarkedForReview(sell.getId()), isCopiedToProven(sell.getId()),
+                investmentHistory.closedWallet(sell.getSymbol(), sell.getId())
         );
     }
 
@@ -593,7 +600,7 @@ public class TradeInspectorService {
      * position. No exit is fabricated and no unrealized P&L is inferred here. The UI shows
      * the persisted entry/protection state and keeps exit-only evidence hidden.
      */
-    private TradeInspectorTradeView toOpenView(WalletManagedPosition managed) {
+    private TradeInspectorTradeView toOpenView(WalletManagedPosition managed, TradeInvestmentHistory investmentHistory) {
         TradeSignal entry = managed.getEntrySignalId() == null ? null
                 : tradeSignalRepository.findById(managed.getEntrySignalId()).orElse(null);
         WalletTrade buy = managed.getEntrySignalId() == null ? null
@@ -622,7 +629,8 @@ public class TradeInspectorService {
                 managed.getProfitLockActivatedAt(), managed.getHighestPriceUsdt(),
                 null, null, null, null, "OPEN",
                 bestPrice, bestPercent, null, null,
-                null, null, null, "OPEN", "Position is still open; exit-quality evidence is not available yet.", false, false
+                null, null, null, "OPEN", "Position is still open; exit-quality evidence is not available yet.", false, false,
+                investmentHistory.openWallet(managed.getSymbol(), managed.getEntrySignalId(), managed.getQuantity())
         );
     }
 
@@ -643,6 +651,15 @@ public class TradeInspectorService {
         WalletTrade paired=findEntryTrade(sell); if(paired==null) throw new ResponseStatusException(HttpStatus.CONFLICT,"Trade entry not found.");
         PaperPosition paper=findPaperPosition(paired,sell); Instant lifeStart=paper!=null&&paper.getOpenedAt()!=null?paper.getOpenedAt():paired.getExecutedAt(); Instant lifeEnd=paper!=null&&paper.getClosedAt()!=null?paper.getClosedAt():sell.getExecutedAt();
         List<WalletTrade> legs=walletTradeRepository.findBySymbolAndStatusAndExecutedAtBetweenOrderByExecutedAtAsc(sell.getSymbol(),"EXECUTED",lifeStart.minusSeconds(1),lifeEnd.plusSeconds(1));
+        // FIX-121: preserve the complete quantity-reconciled lifecycle in existing Proven execution points.
+        List<TradeInvestmentHistory.Leg> resolvedLegs = new TradeInvestmentHistory(jdbcTemplate)
+                .closedWalletLegs(sell.getSymbol(), sellId);
+        if (!resolvedLegs.isEmpty()) {
+            List<Long> ids = resolvedLegs.stream().map(TradeInvestmentHistory.Leg::id).toList();
+            Map<Long, WalletTrade> byId = walletTradeRepository.findAllById(ids).stream()
+                    .collect(java.util.stream.Collectors.toMap(WalletTrade::getId, t -> t));
+            if (byId.size() == ids.size()) legs = ids.stream().map(byId::get).toList();
+        }
         WalletTrade first=legs.stream().filter(x->"BUY".equalsIgnoreCase(x.getSide())).findFirst().orElse(paired); WalletTrade last=legs.stream().filter(x->"SELL".equalsIgnoreCase(x.getSide())).reduce((a,b)->b).orElse(sell);
         Instant start=first.getExecutedAt().minus(Duration.ofHours(1)), end=last.getExecutedAt().plus(Duration.ofHours(1));
         List<Map<String,Object>> ex=jdbcTemplate.queryForList("SELECT id FROM proven_analyzed_trade WHERE source_wallet_sell_trade_id=?",sellId); long pid;

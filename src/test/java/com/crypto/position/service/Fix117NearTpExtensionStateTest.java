@@ -196,6 +196,10 @@ class Fix117NearTpExtensionStateTest {
             case "highest" -> new BigDecimal("0.167600");
             case "profitLockActive" -> false;
             case "profitLockPrice" -> null;
+            // FIX-121 validation repair: the FIX-118/120 record carries explicit lock lifecycle
+            // fields. Keep this Near-TP fixture inactive; retain strict handling of unknown fields.
+            case "profitLockState" -> ProfitLockState.INACTIVE;
+            case "profitLockRebaseStartedAt" -> null;
             case "entryScore" -> 75;
             case "entryConfidence" -> 84;
             case "entryTrend", "entryStructure", "entryMomentum", "entryVolume" -> 0;
