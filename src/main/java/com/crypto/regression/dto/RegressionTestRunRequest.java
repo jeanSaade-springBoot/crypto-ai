@@ -6,6 +6,10 @@ public record RegressionTestRunRequest(
         String testName,
         String symbol,
         Instant startTime,
-        Instant endTime
+        Instant endTime,
+        Boolean fix122Enabled
 ) {
+    public RegressionTestRunRequest(String testName, String symbol, Instant startTime, Instant endTime) {
+        this(testName,symbol,startTime,endTime,true);
+    }
 }

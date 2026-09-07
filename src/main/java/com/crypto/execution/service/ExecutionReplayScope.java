@@ -45,6 +45,22 @@ public class ExecutionReplayScope {
         return new Scope();
     }
 
+    /** FIX-122: run-local executed boundaries, independent of Production ledger/history. */
+    public void recordStop(String symbol, long positionId, Instant at, String reason) {
+        if (!"STOP_LOSS".equals(reason)) return;
+        State s=required();
+        StopLossEvidencePolicy.Boundary previous=s.stops.get(symbol);
+        if (previous==null || !at.isBefore(previous.executedAt()))
+            s.stops.put(symbol,new StopLossEvidencePolicy.Boundary(positionId,at));
+    }
+    public StopLossEvidencePolicy.Boundary stopBoundary(String symbol, Instant asOf) {
+        StopLossEvidencePolicy.Boundary b=required().stops.get(symbol);
+        return b!=null && !b.executedAt().isAfter(asOf) ? b : null;
+    }
+    public Instant referenceInstant() { return required().reference; }
+    public boolean fix122Enabled() { return required().fix122Enabled; }
+    public void fix122Enabled(boolean value) { required().fix122Enabled=value; }
+
     public boolean active() { return state.get() != null; }
     public long runId() { return required().runId; }
     public ReplayLogicMode logicMode() { return required().logicMode; }
@@ -148,6 +164,8 @@ public class ExecutionReplayScope {
         final List<TradeSignal> signals;
         final Consumer<ExecutionOpportunity> opportunitySink;
         final ReplayLogicMode logicMode;
+        boolean fix122Enabled = true;
+        final java.util.Map<String,StopLossEvidencePolicy.Boundary> stops = new java.util.HashMap<>();
         Instant reference;
         ExecutionOpportunity opportunity;
         ReplayPrice latestPrice;

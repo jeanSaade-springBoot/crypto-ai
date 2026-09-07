@@ -62,6 +62,8 @@
 </label>
 <label>From (browser local time)<input id="regression-start" required="" type="datetime-local"/></label>
 <label>To (browser local time)<input id="regression-end" required="" type="datetime-local"/></label>
+<!-- FIX-122 is independent of OLD/NEW data access. Production always defaults to enabled. -->
+<label>Post-stop entry evidence<select id="fix122-revision"><option value="true">FIX-122 enabled (Production default)</option><option value="false">Before FIX-122 (Replay comparison only)</option></select></label>
 <div class="regression-mode-actions">
 <button class="secondary-button" id="regression-run-old" type="button">Run OLD · Database Replay</button>
 <button id="regression-run-new" type="button">Run NEW · ReplayDataset</button>
@@ -173,6 +175,13 @@
 
 
 
+<!-- FIX-122 includes evaluations that did not produce a trade. -->
+<section id="fix122-panel" class="regression-detail hidden">
+<h3>FIX-122 · Post-stop entry evidence</h3>
+<p id="fix122-summary">Not recorded.</p>
+<div style="overflow-x:auto"><table><thead><tr><th>Source / time</th><th>Signal / stage</th><th>Stop boundary</th><th>Fresh evidence</th><th>Result</th><th>Details</th></tr></thead>
+<tbody id="fix122-body"></tbody></table></div>
+</section>
 <div class="regression-pipeline-section hidden" id="regression-pipeline-section">
 <div class="section-heading regression-pipeline-toggle-heading">
 <div><p class="eyebrow">WHY DID IT BUY / WHY DID IT STOP?</p><h3>Visual execution pipeline</h3></div>

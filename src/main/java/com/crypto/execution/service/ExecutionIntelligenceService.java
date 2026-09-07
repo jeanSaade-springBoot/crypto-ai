@@ -262,6 +262,10 @@ public class ExecutionIntelligenceService {
     @Autowired(required = false)
     private ExecutionReplayScope replayScope;
 
+    // FIX-122 is mandatory in Spring; the null path preserves legacy manually constructed test fixtures.
+    @Autowired
+    private StopLossEvidenceService stopLossEvidence;
+
     @Transactional
     public ExecutionDecision evaluateBuy(TradeSignal signal) {
         return evaluateBuy(signal, 0, "NONE");
@@ -278,6 +282,13 @@ public class ExecutionIntelligenceService {
      */
     @Transactional
     public SetupWakeupEvaluation evaluateSetupTimeframeWakeup(
+            TradeSignal fiveMinuteTrigger, int currentAllocationPercent) {
+        if (stopLossEvidence == null) return evaluateSetupTimeframeWakeupInternal(fiveMinuteTrigger, currentAllocationPercent);
+        return stopLossEvidence.wakeup(fiveMinuteTrigger, currentAllocationPercent,
+                () -> evaluateSetupTimeframeWakeupInternal(fiveMinuteTrigger, currentAllocationPercent));
+    }
+
+    private SetupWakeupEvaluation evaluateSetupTimeframeWakeupInternal(
             TradeSignal fiveMinuteTrigger, int currentAllocationPercent) {
         if (currentAllocationPercent > 0 || fiveMinuteTrigger == null || fiveMinuteTrigger.getGeneratedAt() == null
                 || !CONFIRMATION_INTERVAL.equals(fiveMinuteTrigger.getInterval())
@@ -337,8 +348,8 @@ public class ExecutionIntelligenceService {
         Evidence evidence = evidence(current1m);
         boolean supportiveCurrent = isSupportiveCurrentSignal(current1m);
         boolean healthyNeutralTiming = current1m.getDecision() == SignalDecision.NEUTRAL
-                && Math.max(evidence.opportunityHealth(), opportunity.getOpportunityHealth()) >= 60
-                && Math.max(evidence.evidenceScore(), opportunity.getEvidenceScore()) >= MIN_EVIDENCE_SCORE;
+                && (stopLossEvidence != null && stopLossEvidence.hasBoundary() ? evidence.opportunityHealth() : Math.max(evidence.opportunityHealth(), opportunity.getOpportunityHealth())) >= 60
+                && (stopLossEvidence != null && stopLossEvidence.hasBoundary() ? evidence.evidenceScore() : Math.max(evidence.evidenceScore(), opportunity.getEvidenceScore())) >= MIN_EVIDENCE_SCORE;
         if (!supportiveCurrent && !healthyNeutralTiming) return SetupWakeupEvaluation.none();
 
         if (isBearish(fiveMinuteTrigger.getOriginalDecision())
@@ -377,6 +388,13 @@ public class ExecutionIntelligenceService {
      */
     @Transactional
     public SetupWakeupEvaluation evaluateConfirmedSetupWakeup(
+            TradeSignal fiveMinuteTrigger, int currentAllocationPercent) {
+        if (stopLossEvidence == null) return evaluateConfirmedSetupWakeupInternal(fiveMinuteTrigger, currentAllocationPercent);
+        return stopLossEvidence.wakeup(fiveMinuteTrigger, currentAllocationPercent,
+                () -> evaluateConfirmedSetupWakeupInternal(fiveMinuteTrigger, currentAllocationPercent));
+    }
+
+    private SetupWakeupEvaluation evaluateConfirmedSetupWakeupInternal(
             TradeSignal fiveMinuteTrigger, int currentAllocationPercent) {
         if (currentAllocationPercent > 0 || fiveMinuteTrigger == null || fiveMinuteTrigger.getGeneratedAt() == null
                 || !CONFIRMATION_INTERVAL.equals(fiveMinuteTrigger.getInterval())
@@ -440,6 +458,12 @@ public class ExecutionIntelligenceService {
 
     @Transactional
     public ExecutionDecision evaluateBuy(TradeSignal signal, int currentAllocationPercent, String currentStage) {
+        if (stopLossEvidence == null) return evaluateBuyInternal(signal, currentAllocationPercent, currentStage);
+        return stopLossEvidence.evaluate(signal, currentAllocationPercent,
+                () -> evaluateBuyInternal(signal, currentAllocationPercent, currentStage));
+    }
+
+    private ExecutionDecision evaluateBuyInternal(TradeSignal signal, int currentAllocationPercent, String currentStage) {
         if (signal == null || signal.getGeneratedAt() == null) {
             return ExecutionDecision.reject("INVALID_SIGNAL", "Signal is missing required execution data.");
         }
@@ -1118,6 +1142,9 @@ public class ExecutionIntelligenceService {
      * sizing/fill. This prevents a valid old signal from becoming a late chase by execution time.
      */
     public ExecutionDecision revalidateAtExecutionPrice(TradeSignal signal, ExecutionDecision approvedDecision, BigDecimal executionPrice) {
+        // FIX-122: recheck only stamped initial approvals; ADD approvals carry no stamp.
+        if (stopLossEvidence != null) approvedDecision = stopLossEvidence.recheck(signal, approvedDecision);
+        if (approvedDecision != null && !approvedDecision.allowed()) return approvedDecision;
         if (signal == null || approvedDecision == null || !approvedDecision.allowed()
                 || executionPrice == null || executionPrice.signum() <= 0) {
             return ExecutionDecision.reject("EXECUTION_PRICE_INVALID",
@@ -1132,7 +1159,7 @@ public class ExecutionIntelligenceService {
                     "Current execution price has already reached/exceeded the signal target; BUY cancelled.", approvedDecision.evidence());
         }
         EntryQuality quality = assessEntryQualityAtPrice(signal, executionPrice);
-        return applyInitialEntryQualityGuard(approvedDecision, quality);
+        return applyInitialEntryQualityGuard(approvedDecision, quality).withStopBoundary(approvedDecision.stopBoundary());
     }
 
     private ExecutionDecision applyInitialEntryQualityGuard(ExecutionDecision decision, EntryQuality q) {
@@ -1568,6 +1595,7 @@ public class ExecutionIntelligenceService {
                         && s.getMomentumScore() >= BREAKOUT_RETRACEMENT_MIN_ORIGIN_MOMENTUM)
                 .filter(s -> s.isStrategyEntryAllowed() && s.isBtcContextEntryAllowed()
                         && s.isDerivativesEntryAllowed() && s.isLiquidityEntryAllowed())
+                .filter(s -> stopLossEvidence == null || stopLossEvidence.eligible(s, "DEFERRED_ORIGIN"))
                 .max(java.util.Comparator.comparing(TradeSignal::getGeneratedAt))
                 .orElse(null);
     }
@@ -1660,6 +1688,7 @@ public class ExecutionIntelligenceService {
                 .filter(s -> !s.isAtrImmediateEntryAllowed() && s.isAtrOverextended())
                 .filter(s -> s.getAtrRetracementEntryPrice() != null && s.getAtrAtSignal() != null)
                 .filter(s -> s.isStrategyEntryAllowed() && s.isDerivativesEntryAllowed() && s.isLiquidityEntryAllowed())
+                .filter(s -> stopLossEvidence == null || stopLossEvidence.eligible(s, "DEFERRED_ORIGIN"))
                 .max(java.util.Comparator.comparing(TradeSignal::getGeneratedAt))
                 .orElse(null);
     }
@@ -1764,6 +1793,7 @@ public class ExecutionIntelligenceService {
                     String type = s.getAtrEntryType();
                     return "PULLBACK_ENTRY".equals(type) || "WAIT_FOR_RETRACEMENT".equals(type);
                 })
+                .filter(s -> stopLossEvidence == null || stopLossEvidence.eligible(s, "DEFERRED_ORIGIN"))
                 .findFirst()
                 .orElse(null);
     }
@@ -2203,6 +2233,8 @@ public class ExecutionIntelligenceService {
     }
 
     private Evidence evidence(TradeSignal current) {
+        // FIX-122: initial-entry scope only; additions keep their original evidence.
+        if (stopLossEvidence != null) stopLossEvidence.requireCurrent(current);
         Instant cutoff = current.getGeneratedAt().minus(EVIDENCE_WINDOW);
         List<TradeSignal> recent = recentSignals(current.getSymbol(), EXECUTION_INTERVAL, current.getGeneratedAt());
 
@@ -2217,6 +2249,7 @@ public class ExecutionIntelligenceService {
         for (TradeSignal signal : recent) {
             if (signal.getGeneratedAt() == null || signal.getGeneratedAt().isAfter(current.getGeneratedAt())) continue;
             if (signal.getGeneratedAt().isBefore(cutoff)) break;
+            if (stopLossEvidence != null && !stopLossEvidence.eligible(signal, "EVIDENCE")) continue;
 
             if (oldestObservedAt == null || signal.getGeneratedAt().isBefore(oldestObservedAt)) {
                 oldestObservedAt = signal.getGeneratedAt();
@@ -2290,6 +2323,8 @@ public class ExecutionIntelligenceService {
         health = Math.max(0, Math.min(100, health));
 
         int previousHealth = currentOpportunity(current.getSymbol(), List.of("BUILDING", "WEAKENING", "BLOCKED", "CONFIRMED"))
+                // FIX-122: do not compare fresh health to a pre-stop opportunity snapshot.
+                .filter(o -> stopLossEvidence == null || stopLossEvidence.eligible(o.getLatestSignal(), "PREVIOUS_HEALTH"))
                 .map(ExecutionOpportunity::getOpportunityHealth)
                 .orElse(OPPORTUNITY_HEALTH_START);
         int healthMomentum = health - previousHealth;
@@ -2610,8 +2645,17 @@ public class ExecutionIntelligenceService {
             String state,
             int positionPercent,
             String explanation,
-            Evidence evidence
+            Evidence evidence,
+            StopLossEvidencePolicy.Stamp stopBoundary
     ) {
+        // FIX-122: retain source compatibility for existing rule constructors and tests.
+        public ExecutionDecision(boolean allowed, String source, String code, String state,
+                                 int positionPercent, String explanation, Evidence evidence) {
+            this(allowed, source, code, state, positionPercent, explanation, evidence, null);
+        }
+        public ExecutionDecision withStopBoundary(StopLossEvidencePolicy.Stamp stamp) {
+            return new ExecutionDecision(allowed,source,code,state,positionPercent,explanation,evidence,stamp);
+        }
         public static ExecutionDecision allow(String source, String code, int positionPercent,
                                               String explanation, Evidence evidence) {
             return new ExecutionDecision(true, source, code, "CONFIRMED",

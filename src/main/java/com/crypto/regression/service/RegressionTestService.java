@@ -220,6 +220,9 @@ public class RegressionTestService {
             throw new IllegalStateException("Could not create regression test run.");
         }
         long id = key.longValue();
+        // FIX-122: persist the business-rule revision separately from data-source/experimental modes.
+        jdbcTemplate.update("INSERT INTO fix122_replay_revision(test_run_id,enabled) VALUES (?,?)",
+                id, !Boolean.FALSE.equals(request.fix122Enabled()));
         worker.runAsync(id, effectiveSource);
         return id;
     }
@@ -347,6 +350,9 @@ public class RegressionTestService {
         deleted.put("trade_signal_test", jdbcTemplate.update("DELETE FROM trade_signal_test"));
         deleted.put("analysis_test_signal", jdbcTemplate.update("DELETE FROM analysis_test_signal"));
         deleted.put("analysis_test_result", jdbcTemplate.update("DELETE FROM analysis_test_result"));
+        // FIX-122: purge run-owned diagnostics before IDs can be reset; Production audit remains.
+        deleted.put("fix122_evaluation", jdbcTemplate.update("DELETE FROM fix122_evaluation WHERE test_run_id IS NOT NULL"));
+        deleted.put("fix122_replay_revision", jdbcTemplate.update("DELETE FROM fix122_replay_revision"));
         deleted.put("analysis_test_run", jdbcTemplate.update("DELETE FROM analysis_test_run"));
 
         deleted.put("one_candle_continuation_grace_test_archive", jdbcTemplate.update("DELETE FROM one_candle_continuation_grace_test_archive"));
@@ -611,6 +617,10 @@ public class RegressionTestService {
                 runId, tradeId, t.get("symbol"), t.get("entry_time"), t.get("entry_price"), t.get("exit_time"),
                 t.get("exit_price"), t.get("exit_reason"), t.get("realized_pnl_usdt"), t.get("realized_pnl_percent"),
                 t.get("position_percent"));
+        // FIX-122: snapshot before a later Replay purge can remove/reuse this run identity.
+        Long provenId=jdbcTemplate.queryForObject("SELECT id FROM proven_analyzed_trade WHERE source_test_run_id=? AND source_trade_id=?",Long.class,runId,tradeId);
+        com.crypto.execution.service.Fix122ProvenSnapshot.capture(jdbcTemplate,provenId,runId,(String)t.get("symbol"),
+                ((Timestamp)t.get("entry_time")).toInstant().minusSeconds(1800),((Timestamp)t.get("exit_time")).toInstant());
         return Map.of("saved", true, "runId", runId, "tradeId", tradeId);
     }
 

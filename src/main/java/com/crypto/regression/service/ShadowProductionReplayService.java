@@ -109,6 +109,11 @@ public class ShadowProductionReplayService {
                         persistProductionOpportunity(runId, opportunity);
                     }
                 })) {
+        // FIX-122: independent OLD comparison revision; ordinary Replay defaults to NEW.
+        java.util.List<Boolean> revisions = jdbcTemplate.query(
+                "SELECT enabled FROM fix122_replay_revision WHERE test_run_id=?",
+                (rs,row) -> rs.getBoolean(1), runId);
+        replayScope.fix122Enabled(revisions == null || revisions.isEmpty() || revisions.get(0));
         for (TradeSignal signal : timeline) {
             // FIX-090: shadow execution is frequently cancellable without affecting Production.
             if (stopRequested != null && stopRequested.getAsBoolean()) {
@@ -148,6 +153,7 @@ public class ShadowProductionReplayService {
                         // the whole lifecycle including any earlier FIX-11T partial realization.
                         persistSellAtPrice(runId, symbol, live, latest1m, open, liveExit, pnl, pnlPct);
                         closePositionAtPrice(runId, open.positionId(), live, liveExit, totalPositionPnl, totalPositionPnlPct);
+                        replayScope.recordStop(symbol, open.positionId(), live.observedAt(), liveExit.reason());
                         executionIntelligenceService.completePositionOpportunity(symbol, latest1m, liveExit.reason());
                                                 open = null;
                     }
@@ -192,6 +198,7 @@ public class ShadowProductionReplayService {
                     closePosition(runId, open.positionId(), signal, exit, totalPositionPnl, totalPositionPnlPct);
                     // FIX-020 replay parity: a terminal replay exit consumes the same
                     // opportunity evidence boundary as production before any new BUY can form.
+                    replayScope.recordStop(symbol, open.positionId(), signal.getGeneratedAt(), exit.reason());
                     executionIntelligenceService.completePositionOpportunity(symbol, signal, exit.reason());
                                         open = null;
                     // Production PaperTradingService returns immediately after a signal-driven
@@ -239,6 +246,7 @@ public class ShadowProductionReplayService {
                     if (totalPositionPnl.signum() > 0) wins++; else if (totalPositionPnl.signum() < 0) losses++;
                     persistSell(runId, symbol, signal, open, exit, pnl, pnlPct);
                     closePosition(runId, open.positionId(), signal, exit, totalPositionPnl, totalPositionPnlPct);
+                    replayScope.recordStop(symbol, open.positionId(), signal.getGeneratedAt(), exit.reason());
                     executionIntelligenceService.completePositionOpportunity(symbol, signal, exit.reason());
                                         open = null;
                     // Same production invocation cannot both SELL and immediately BUY again.

@@ -155,7 +155,7 @@ async function loadRegressionArchives() {
         body.innerHTML = rows.map(a => `<tr>
             <td>#${a.archive_batch_id}</td><td>#${a.source_test_run_id}</td><td><strong>${escapeHtml(a.test_name)}</strong></td>
             <td>${escapeHtml(a.symbol)}</td><td>${formatMoveTime(a.start_time)} → ${formatMoveTime(a.end_time)}</td>
-            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button></td>
+            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button></td>
         </tr>`).join('') || '<tr><td colspan="7">No archived test runs yet.</td></tr>';
         return rows;
     } catch (error) { body.innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`; return []; }
@@ -627,12 +627,15 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
             api(`${base}/signals`),
             api(`${base}/opportunities`),
             api(`${base}/trades`),
-            api(`${base}/position-management`)
+            api(`${base}/position-management`),
+            api(`${base}/fix122`)
         ]);
         if (requestToken !== regressionDetailRequestToken) return finished;
         const signals = detailResults[0].status === 'fulfilled' ? detailResults[0].value : [];
         const opportunities = detailResults[1].status === 'fulfilled' ? detailResults[1].value : [];
         const trades = detailResults[2].status === 'fulfilled' ? detailResults[2].value : [];
+        // FIX-122: failure is visible; it must never render as a successful rule check.
+        renderFix122(detailResults[4]);
         const management = detailResults[3].status === 'fulfilled' ? detailResults[3].value : [];
 
         // FIX-11O: always expose fresh directional Replay signals independently of the BUY-centric
@@ -713,6 +716,8 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
 async function loadRegressionArchiveDetail(archiveBatchId) {
     const base = `/api/administration/regression-tests/archives/${archiveBatchId}`;
     const [run, trades] = await Promise.all([api(base), api(`${base}/trades`)]);
+    const fix122=await Promise.allSettled([api(`${base}/fix122`)]);
+    renderFix122(fix122[0]);
     const panel = document.getElementById('regression-archive-detail');
     const body = document.getElementById('regression-archive-trades-body');
     if (!panel || !body) return;
@@ -910,7 +915,8 @@ async function startRegressionWithDataSource(replayDataSource) {
                     document.getElementById('regression-end').value),
                 symbol: document.getElementById('regression-symbol').value,
                 startTime: regressionUtcInstant(document.getElementById('regression-start').value),
-                endTime: regressionUtcInstant(document.getElementById('regression-end').value)
+                endTime: regressionUtcInstant(document.getElementById('regression-end').value),
+                fix122Enabled: document.getElementById('fix122-revision')?.value !== 'false'
             })
         });
         showAdminMessage(`FIX-11H ${replayDataSource} replay #${created.id} started safely in the background.`);
@@ -1568,3 +1574,38 @@ document.getElementById('proven-chart-interval')?.addEventListener('change',()=>
     }
 })().catch(error => showAdminMessage(error.message, true));
 
+
+// FIX-122: use the saved snapshot, never a potentially reused source run ID.
+document.getElementById('proven-saved-trades-body')?.addEventListener('click',async event=>{
+    const button=event.target.closest('[data-fix122-proven-id]');if(!button)return;
+    button.disabled=true;
+    try {
+        const result=await Promise.allSettled([api(`/api/administration/regression-tests/proven-trades/${encodeURIComponent(button.dataset.fix122ProvenId)}/fix122`)]);
+        renderFix122(result[0]);document.getElementById('fix122-panel')?.scrollIntoView({behavior:'smooth'});
+    } finally { button.disabled=false; }
+});
+
+// FIX-122: persisted per-evaluation evidence, escaped before HTML insertion.
+function renderFix122(result) {
+    const panel=document.getElementById('fix122-panel');
+    const summary=document.getElementById('fix122-summary');
+    const body=document.getElementById('fix122-body');
+    if(!panel || !summary || !body) return;
+    panel.classList.remove('hidden');
+    if(result?.status!=='fulfilled') { summary.textContent='Diagnostics unavailable. No pass result can be inferred.'; body.innerHTML=''; return; }
+    const data=result.value;
+    summary.textContent=data.scope==='PROVEN'
+        ? `Saved Proven evidence · ${data.rows.length} evaluation records. Missing historical diagnostics are not a pass result.`
+        : `Replay revision: ${data.enabled===null?'Not recorded (historical run)':data.enabled?'FIX-122 enabled':'Before FIX-122 comparison'}. Production rows show the actual recorded revision. ${data.rows.length} evaluation records.`;
+    body.innerHTML=data.rows.map(row=> {
+        let p; try { p=typeof row.payload==='string'?JSON.parse(row.payload):row.payload; } catch { p={status:'Invalid diagnostic payload'}; }
+        p=p||{};
+        const exclusions=(p.excluded||[]).map(x=>`${x.purpose}: #${x.signalId??'unknown'} ${x.candleOpenTime??''} ${x.decision??''} ${x.reason}`).join('\n');
+        return `<tr><td>${escapeHtml(p.source||'—')}<br>${formatMoveTime(row.evaluated_at)}</td>
+        <td>#${escapeHtml(row.signal_id??'—')}<br>${escapeHtml(row.stage)}</td>
+        <td>${p.stopAt?formatMoveTime(p.stopAt):'No boundary'}<br>${escapeHtml(p.stopExecutionId??'')}</td>
+        <td>${escapeHtml(p.buyCount??'—')} BUY / ${escapeHtml(p.watchCount??'—')} WATCH<br>Evidence ${escapeHtml(p.evidenceScore??'—')} · Health ${escapeHtml(p.health??'—')}</td>
+        <td>${escapeHtml(p.code||p.status||'Not recorded')}<br>${p.allowed?'Entry qualified':'Entry not qualified'}<br>${escapeHtml(p.route||'')}</td>
+        <td><details><summary>${escapeHtml(p.status||'Details')} · ${(p.excluded||[]).length} exclusions</summary><pre>${escapeHtml(exclusions||'No observations excluded.')}</pre><p>${escapeHtml(p.explanation||'')}</p><small>Evaluation result; wallet execution is recorded separately.</small></details></td></tr>`;
+    }).join('') || '<tr><td colspan="6">No FIX-122 evaluations recorded for this window.</td></tr>';
+}
