@@ -73,12 +73,17 @@ class LivePositionProtectionServiceTpExtensionSyncTest {
                 .thenReturn(Optional.empty());
         when(continuationPolicy.evaluate(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new PositionContinuationPolicy.Evaluation(true, "Continuation PASS (HTF_TREND)"));
+        when(profitLockService.onTakeProfitExtended(eq(managed), any(BigDecimal.class), any(BigDecimal.class), any(Instant.class)))
+                .thenReturn(new DynamicProfitLockService.ExtensionTransition(
+                        ProfitLockState.INACTIVE, ProfitLockState.INACTIVE,
+                        BigDecimal.ZERO, new BigDecimal("70")));
 
         service.onPrice("PEPEUSDT", new BigDecimal("0.000004150000"));
 
         // FIX-067 regression: the approved extension must update BOTH Production state holders.
         assertEquals(0, managed.getTakeProfitUsdt().compareTo(new BigDecimal("0.0000041653455")));
         assertEquals(0, paper.getTakeProfit().compareTo(new BigDecimal("0.0000041653455")));
+        verify(profitLockService).onTakeProfitExtended(eq(managed), eq(new BigDecimal("0.0000041653455")), eq(new BigDecimal("0.000004150000")), any(Instant.class));
         verify(managedRepository).save(managed);
         verify(paperRepository).save(paper);
         verify(eventRepository).save(any(PositionManagementEvent.class));

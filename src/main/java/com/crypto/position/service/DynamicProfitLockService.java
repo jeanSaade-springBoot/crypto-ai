@@ -53,6 +53,12 @@ public class DynamicProfitLockService {
     /**
      * Evaluates Dynamic Profit Lock directly from a live market price.
      * This path is used by live position protection between candle-close signals.
+     *
+     * FIX-118 behavioral phase:
+     * TP_EXTENSION_REBASE preserves the historically earned lock in persistence but makes
+     * it non-executable until progress against the CURRENT TP reaches the configured
+     * activation threshold again. This gives an approved continuation meaningful room
+     * without forgetting that profit protection had already been earned.
      */
     @Transactional
     public Evaluation evaluatePrice(String symbolValue, BigDecimal currentPrice) {
@@ -86,61 +92,102 @@ public class DynamicProfitLockService {
         BigDecimal initialLock = profile.initialLockPercent();
         BigDecimal trailStep = profile.trailStepPercent();
         BigDecimal previousHighest = position.getHighestPriceUsdt();
-        boolean previousActive = position.isProfitLockActive();
+        boolean previousPersistedActive = position.isProfitLockActive();
         BigDecimal previousLock = position.getProfitLockPriceUsdt();
         BigDecimal previousProgress = position.getProfitLockProgressPercent();
-        ProfitLockPolicy.State policyState = profitLockPolicy.evaluate(
-                entry, target, current, position.getHighestPriceUsdt(),
-                position.isProfitLockActive(), position.getProfitLockPriceUsdt(),
-                true, activation, initialLock, trailStep);
-        BigDecimal highest = policyState.highestPrice();
-        BigDecimal progress = policyState.progressPercent();
-        boolean active = policyState.active();
-        BigDecimal lockPrice = policyState.lockPrice();
+        ProfitLockState previousState = normalizedState(position);
+
+        BigDecimal highest = previousHighest == null ? current : previousHighest.max(current);
+        BigDecimal progress = progressPercent(entry, target, highest);
+        BigDecimal lockPrice = previousLock;
+        ProfitLockState state = previousState;
+        boolean executableActive;
+        boolean triggered;
+
+        if (previousState == ProfitLockState.TP_EXTENSION_REBASE && progress.compareTo(activation) < 0) {
+            // Keep the legacy active flag/lock persisted so history is not lost, but do not
+            // allow the superseded geometry to trigger an exit during the rebase window.
+            executableActive = false;
+            triggered = false;
+        } else {
+            ProfitLockPolicy.State policyState = profitLockPolicy.evaluate(
+                    entry, target, current, highest,
+                    previousState == ProfitLockState.ACTIVE || previousPersistedActive,
+                    previousLock, true, activation, initialLock, trailStep);
+            highest = policyState.highestPrice();
+            progress = policyState.progressPercent();
+            lockPrice = policyState.lockPrice();
+            executableActive = policyState.active();
+            triggered = policyState.triggered();
+            state = executableActive ? ProfitLockState.ACTIVE : ProfitLockState.INACTIVE;
+        }
+
+        // During REBASE the legacy flag intentionally remains true: protection was historically
+        // earned. The explicit state is now the sole execution authority.
+        boolean persistedActive = state == ProfitLockState.TP_EXTENSION_REBASE
+                ? true
+                : executableActive;
+
         Instant activatedAt = position.getProfitLockActivatedAt();
-        if (active && activatedAt == null) activatedAt = Instant.now();
+        if (persistedActive && activatedAt == null) activatedAt = Instant.now();
+        Instant rebaseStartedAt = state == ProfitLockState.TP_EXTENSION_REBASE
+                ? position.getProfitLockRebaseStartedAt()
+                : null;
 
         boolean changed = position.getHighestPriceUsdt() == null
                 || highest.compareTo(position.getHighestPriceUsdt()) != 0
-                || position.isProfitLockActive() != active
+                || position.isProfitLockActive() != persistedActive
                 || different(position.getProfitLockPriceUsdt(), lockPrice)
                 || different(position.getProfitLockProgressPercent(), progress)
+                || position.getProfitLockState() != state
+                || !java.util.Objects.equals(position.getProfitLockRebaseStartedAt(), rebaseStartedAt)
                 || (position.getProfitLockActivatedAt() == null && activatedAt != null);
 
         if (changed) {
             position.setHighestPriceUsdt(highest);
-            position.setProfitLockActive(active);
+            position.setProfitLockActive(persistedActive);
             position.setProfitLockPriceUsdt(lockPrice);
             position.setProfitLockProgressPercent(progress);
             position.setProfitLockActivatedAt(activatedAt);
+            position.setProfitLockState(state);
+            position.setProfitLockRebaseStartedAt(rebaseStartedAt);
             position.setUpdatedAt(Instant.now());
             positionRepository.save(position);
         }
 
-        boolean triggered = policyState.triggered();
+        BigDecimal hardProfitFloor = entry.multiply(BigDecimal.valueOf(1.0005));
+        boolean hardFloorTriggered = state == ProfitLockState.TP_EXTENSION_REBASE
+                && current.compareTo(hardProfitFloor) < 0;
 
-        // FIX-118 diagnostic instrumentation only. This intentionally does not change
-        // ProfitLockPolicy semantics. It records the exact geometry/state transition used
-        // by both live-price and candle-close callers so Production incidents can be
-        // reconstructed without inferring behavior from only the final persisted row.
-        if (changed || triggered) {
+        if (changed || triggered || hardFloorTriggered || previousState != state) {
             log.info("[FIX-118][PRODUCTION][PROFIT_LOCK_EVAL] positionId={}, symbol={}, current={}, entry={}, target={}, " +
-                            "previousHighest={}, highest={}, previousActive={}, active={}, previousLock={}, lock={}, " +
-                            "previousProgressPct={}, progressPct={}, activationPct={}, triggered={}, persisted={}",
+                            "previousHighest={}, highest={}, previousState={}, state={}, previousPersistedActive={}, persistedActive={}, " +
+                            "previousLock={}, lock={}, previousProgressPct={}, progressPct={}, activationPct={}, triggered={}, " +
+                            "hardFloor={}, hardFloorTriggered={}, persisted={}",
                     position.getId(), symbol, current, entry, target,
-                    previousHighest, highest, previousActive, active,
-                    previousLock, lockPrice, previousProgress, progress, activation, triggered, changed);
+                    previousHighest, highest, previousState, state, previousPersistedActive, persistedActive,
+                    previousLock, lockPrice, previousProgress, progress, activation, triggered,
+                    hardProfitFloor, hardFloorTriggered, changed);
         }
-        String explanation;
+
         String profileText = " Admin profile=" + profile.name() +
                 " (activation=" + activation.stripTrailingZeros().toPlainString() + "%, initial lock=" +
                 initialLock.stripTrailingZeros().toPlainString() + "%, trail=" +
                 trailStep.stripTrailingZeros().toPlainString() + "%).";
-        if (triggered) {
+        String explanation;
+        if (hardFloorTriggered) {
+            explanation = "TP-extension rebase is active and price " + current
+                    + " breached the protected-profit safety floor " + hardProfitFloor + "." + profileText;
+        } else if (state == ProfitLockState.TP_EXTENSION_REBASE) {
+            explanation = "Profit Lock is rebasing to the extended take-profit geometry; the historical lock "
+                    + lockPrice + " remains persisted but is non-executable. Current best progress is "
+                    + progress.setScale(2, RoundingMode.HALF_UP) + "% and reactivation starts at "
+                    + activation.stripTrailingZeros().toPlainString() + "%." + profileText;
+        } else if (triggered) {
             explanation = "Price " + current + " reached the protected profit-lock level " + lockPrice
                     + " after the position had reached " + progress.setScale(2, RoundingMode.HALF_UP)
                     + "% of its take-profit distance." + profileText;
-        } else if (active) {
+        } else if (executableActive) {
             explanation = "Profit Lock active at " + lockPrice + "; best progress is "
                     + progress.setScale(2, RoundingMode.HALF_UP) + "% of take-profit distance." + profileText;
         } else {
@@ -149,8 +196,60 @@ public class DynamicProfitLockService {
                     + activation.stripTrailingZeros().toPlainString() + "%." + profileText;
         }
 
-        return new Evaluation(true, active, triggered, position.getId(), current, highest,
-                progress, lockPrice, activation, explanation);
+        return new Evaluation(true, executableActive, triggered, position.getId(), current, highest,
+                progress, lockPrice, activation, state, hardProfitFloor, hardFloorTriggered, explanation);
+    }
+
+    /**
+     * FIX-118 TP-extension transition. Called in the same transaction that persists the new TP.
+     * ACTIVE protection enters REBASE only when the wider target pushes current best progress
+     * below the configured activation threshold. Otherwise the existing state remains valid.
+     */
+    public ExtensionTransition onTakeProfitExtended(WalletManagedPosition position, BigDecimal newTarget, BigDecimal extensionPrice, Instant changedAt) {
+        if (position == null || newTarget == null || position.getAverageEntryPriceUsdt() == null) {
+            return ExtensionTransition.none();
+        }
+        ProfitLockState previousState = normalizedState(position);
+        BigDecimal extensionHighest = position.getHighestPriceUsdt() == null
+                ? position.getAverageEntryPriceUsdt()
+                : position.getHighestPriceUsdt();
+        if (extensionPrice != null && extensionPrice.compareTo(extensionHighest) > 0) {
+            extensionHighest = extensionPrice;
+            position.setHighestPriceUsdt(extensionHighest);
+        }
+        BigDecimal progress = progressPercent(position.getAverageEntryPriceUsdt(), newTarget, extensionHighest);
+        BigDecimal activation = configuredProfile(settings()).activationPercent();
+        ProfitLockState nextState = previousState;
+        // TP changed now, so persist progress against the new geometry immediately even though
+        // the extension tick returns before the next normal Profit Lock evaluation.
+        position.setProfitLockProgressPercent(progress);
+
+        if (previousState == ProfitLockState.ACTIVE && progress.compareTo(activation) < 0) {
+            nextState = ProfitLockState.TP_EXTENSION_REBASE;
+            position.setProfitLockState(nextState);
+            position.setProfitLockRebaseStartedAt(changedAt == null ? Instant.now() : changedAt);
+            // Legacy compatibility flag deliberately stays true; ProfitLockState is the sole
+            // authority for whether the persisted historical lock may execute.
+            position.setProfitLockActive(true);
+        } else if (previousState == ProfitLockState.TP_EXTENSION_REBASE) {
+            // Repeated TP extensions keep the rebase active and refresh progress against the
+            // newest geometry without resetting the original rebase start timestamp.
+        }
+
+        return new ExtensionTransition(previousState, nextState, progress, activation);
+    }
+
+    private ProfitLockState normalizedState(WalletManagedPosition position) {
+        if (position.getProfitLockState() != null) return position.getProfitLockState();
+        return position.isProfitLockActive() ? ProfitLockState.ACTIVE : ProfitLockState.INACTIVE;
+    }
+
+    private BigDecimal progressPercent(BigDecimal entry, BigDecimal target, BigDecimal highest) {
+        if (entry == null || target == null || highest == null || target.compareTo(entry) <= 0) return BigDecimal.ZERO;
+        BigDecimal favorable = highest.subtract(entry);
+        if (favorable.signum() < 0) favorable = BigDecimal.ZERO;
+        return favorable.multiply(HUNDRED)
+                .divide(target.subtract(entry), 6, RoundingMode.HALF_UP);
     }
 
     @Transactional(readOnly = true)
@@ -158,7 +257,7 @@ public class DynamicProfitLockService {
         if (symbol == null || symbol.isBlank()) return false;
         return positionRepository.findTopBySymbolAndStatusOrderByOpenedAtDesc(
                         symbol.trim().toUpperCase(Locale.ROOT), "OPEN")
-                .map(WalletManagedPosition::isProfitLockActive)
+                .map(p -> normalizedState(p) == ProfitLockState.ACTIVE)
                 .orElse(false);
     }
 
@@ -214,6 +313,18 @@ public class DynamicProfitLockService {
         return a.compareTo(b) != 0;
     }
 
+    public record ExtensionTransition(
+            ProfitLockState previousState,
+            ProfitLockState state,
+            BigDecimal progressPercent,
+            BigDecimal activationPercent
+    ) {
+        static ExtensionTransition none() {
+            return new ExtensionTransition(ProfitLockState.INACTIVE, ProfitLockState.INACTIVE,
+                    BigDecimal.ZERO, BigDecimal.ZERO);
+        }
+    }
+
     public record Evaluation(
             boolean available,
             boolean active,
@@ -224,11 +335,18 @@ public class DynamicProfitLockService {
             BigDecimal progressPercent,
             BigDecimal lockPrice,
             BigDecimal activationPercent,
+            ProfitLockState state,
+            BigDecimal hardProfitFloor,
+            boolean hardProfitFloorTriggered,
             String explanation
     ) {
+        public boolean rebasing() {
+            return state == ProfitLockState.TP_EXTENSION_REBASE;
+        }
+
         public static Evaluation inactive(String explanation) {
             return new Evaluation(false, false, false, null, null, null,
-                    BigDecimal.ZERO, null, null, explanation);
+                    BigDecimal.ZERO, null, null, ProfitLockState.INACTIVE, null, false, explanation);
         }
     }
 }

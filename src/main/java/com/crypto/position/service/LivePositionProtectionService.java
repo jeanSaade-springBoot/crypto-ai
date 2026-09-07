@@ -71,20 +71,20 @@ public class LivePositionProtectionService {
                 BigDecimal newTarget = oldTarget.add(distance.multiply(BigDecimal.valueOf(0.50), MC), MC);
                 Instant changedAt = Instant.now();
 
-                // FIX-118 diagnostic instrumentation only. The extension tick returns before
-                // DynamicProfitLockService is evaluated, so capture the exact pre-extension
-                // Profit Lock state and the progress implied by the NEW geometry here.
-                BigDecimal fix118NewProgress = managed.getHighestPriceUsdt() == null
-                        ? BigDecimal.ZERO
-                        : managed.getHighestPriceUsdt().subtract(managed.getAverageEntryPriceUsdt(), MC)
-                                .multiply(BigDecimal.valueOf(100), MC)
-                                .divide(newTarget.subtract(managed.getAverageEntryPriceUsdt(), MC), 6, java.math.RoundingMode.HALF_UP);
+                // FIX-118 behavioral phase: if Profit Lock was already earned under the old TP
+                // but the wider approved target moves current progress back below activation,
+                // persist TP_EXTENSION_REBASE before saving the new geometry. The historical
+                // lock remains stored but is non-executable until new-geometry activation is
+                // earned again.
+                DynamicProfitLockService.ExtensionTransition fix118Transition =
+                        dynamicProfitLockService.onTakeProfitExtended(managed, newTarget, price, changedAt);
                 log.info("[FIX-118][PRODUCTION][TP_EXTENSION] positionId={}, symbol={}, marketPrice={}, entry={}, oldTp={}, newTp={}, " +
-                                "highest={}, profitLockActive={}, profitLockPrice={}, storedProgressPct={}, newGeometryProgressPct={}, " +
-                                "note=extension tick returns before Profit Lock evaluation",
+                                "highest={}, profitLockActive={}, profitLockPrice={}, previousState={}, state={}, " +
+                                "newGeometryProgressPct={}, activationPct={}",
                         managed.getId(), symbol, price, managed.getAverageEntryPriceUsdt(), oldTarget, newTarget,
                         managed.getHighestPriceUsdt(), managed.isProfitLockActive(), managed.getProfitLockPriceUsdt(),
-                        managed.getProfitLockProgressPercent(), fix118NewProgress);
+                        fix118Transition.previousState(), fix118Transition.state(), fix118Transition.progressPercent(),
+                        fix118Transition.activationPercent());
 
                 managed.setTakeProfitUsdt(newTarget);
                 // FIX-11T: TP extension changes the planned entry->TP distance. Any old Near-TP
@@ -144,11 +144,26 @@ public class LivePositionProtectionService {
         }
 
         DynamicProfitLockService.Evaluation lock = dynamicProfitLockService.evaluatePrice(symbol, price);
-        if (lock.active() || lock.triggered()) {
+
+        // FIX-118: during TP_EXTENSION_REBASE the superseded lock is intentionally
+        // non-executable, but earned profit is not left completely unprotected. Stop Loss
+        // has already had absolute priority above; this standalone floor is the next safety
+        // authority and does not depend on the old lock being triggered.
+        if (lock.hardProfitFloorTriggered()) {
+            String reason = lock.explanation();
+            log.info("[FIX-118][PRODUCTION][REBASE_HARD_FLOOR] positionId={}, symbol={}, price={}, floor={}, target={}",
+                    lock.walletPositionId(), symbol, price, lock.hardProfitFloor(), managed.getTakeProfitUsdt());
+            if (walletAutoExecutionService.executeMechanicalExit(symbol, price, "PROFIT_LOCK_HARD_EXIT", reason)) {
+                closePaper(symbol, price, PositionStatus.CLOSED, "PROFIT_LOCK_HARD_EXIT", reason, one);
+            }
+            return;
+        }
+
+        if (lock.active() || lock.triggered() || lock.rebasing()) {
             log.info("[FIX-118][PRODUCTION][LIVE_PATH] positionId={}, symbol={}, price={}, target={}, highest={}, active={}, " +
-                            "progressPct={}, activationPct={}, lock={}, triggered={}",
+                            "progressPct={}, activationPct={}, lock={}, state={}, triggered={}",
                     lock.walletPositionId(), symbol, price, managed.getTakeProfitUsdt(), lock.highestPrice(), lock.active(),
-                    lock.progressPercent(), lock.activationPercent(), lock.lockPrice(), lock.triggered());
+                    lock.progressPercent(), lock.activationPercent(), lock.lockPrice(), lock.state(), lock.triggered());
         }
         if (lock.triggered()) {
             log.info("[FIX-118][PRODUCTION][LIVE_TRIGGER] positionId={}, symbol={}, price={}, lock={}, progressPct={}, target={}",

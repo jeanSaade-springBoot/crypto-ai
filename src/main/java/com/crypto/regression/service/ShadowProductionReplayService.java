@@ -11,6 +11,7 @@ import com.crypto.position.service.NearTpFailureProtectionPolicy;
 import com.crypto.position.service.NearTpState;
 import com.crypto.position.service.PositionExitPolicy;
 import com.crypto.position.service.ProfitLockPolicy;
+import com.crypto.position.service.ProfitLockState;
 import com.crypto.position.service.PositionPriceAuthorityPolicy;
 import com.crypto.market.service.MarketPriceEventService;
 import com.crypto.service.TradeExecutionValidationService;
@@ -198,7 +199,9 @@ public class ShadowProductionReplayService {
                     continue;
                 } else {
                     if (exit.newTakeProfit() != null) {
-                        open = open.withTakeProfit(exit.newTakeProfit());
+                        open = rebaseForExtendedTarget(open, exit.newTakeProfit(), signal.getLatestPrice(), signal.getGeneratedAt())
+                                .withTakeProfit(exit.newTakeProfit());
+                        persistProfitLockState(open);
                         persistNearTpState(open);
                     }
                     open = updateProfitLock(open, signal);
@@ -321,6 +324,7 @@ public class ShadowProductionReplayService {
                     // Replay must not drop entry structure and silently evaluate a different exit policy.
                     open = new ShadowPosition(positionId, executionSignal.getGeneratedAt(), fresh.price(), qty, budget,
                             effectivePercent, executionSignal.getStopLoss(), executionSignal.getTakeProfit(), fresh.price(), false, null,
+                            ProfitLockState.INACTIVE, null,
                             executionSignal.getTotalScore(), executionSignal.getConfidenceScore(), executionSignal.getTrendScore(), executionSignal.getTrendStructureScore(),
                             executionSignal.getMomentumScore(), executionSignal.getVolumeScore(),
                             NearTpState.INACTIVE, null, 0, null, false, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
@@ -399,18 +403,16 @@ public class ShadowProductionReplayService {
                 BigDecimal distance = current.takeProfit().subtract(current.entryPrice());
                 BigDecimal oldTarget = current.takeProfit();
                 BigDecimal newTarget = oldTarget.add(distance.multiply(BigDecimal.valueOf(0.50), MC), MC);
-                BigDecimal fix118NewProgress = current.highest() == null
-                        ? BigDecimal.ZERO
-                        : current.highest().subtract(current.entryPrice(), MC)
-                                .multiply(BigDecimal.valueOf(100), MC)
-                                .divide(newTarget.subtract(current.entryPrice(), MC), 6, RoundingMode.HALF_UP);
+                ProfitLockState beforeState = current.profitLockState();
+                current = rebaseForExtendedTarget(current, newTarget, price, event.observedAt()).withTakeProfit(newTarget);
+                BigDecimal fix118NewProgress = progressPercent(current.entryPrice(), newTarget, current.highest());
                 log.info("[FIX-118][REPLAY][TP_EXTENSION] runId={}, positionId={}, symbol={}, observedAt={}, marketPrice={}, " +
-                                "entry={}, oldTp={}, newTp={}, highest={}, profitLockActive={}, profitLockPrice={}, newGeometryProgressPct={}, " +
-                                "note=extension event returns before replay Profit Lock evaluation",
+                                "entry={}, oldTp={}, newTp={}, highest={}, profitLockActive={}, profitLockPrice={}, previousState={}, state={}, " +
+                                "newGeometryProgressPct={}",
                         runId, current.positionId(), symbol, event.observedAt(), price, current.entryPrice(), oldTarget, newTarget,
-                        current.highest(), current.profitLockActive(), current.profitLockPrice(), fix118NewProgress);
-                current = current.withTakeProfit(newTarget);
+                        current.highest(), current.profitLockActive(), current.profitLockPrice(), beforeState, current.profitLockState(), fix118NewProgress);
                 jdbcTemplate.update("UPDATE wallet_position_test SET take_profit_usdt=? WHERE id=?", newTarget, current.positionId());
+                persistProfitLockState(current);
                 persistNearTpState(current);
                 persistManagementAtPrice(runId, symbol, event, "TAKE_PROFIT_EXTENDED", oldTarget, newTarget, current, continuation.explanation());
                 return new LivePriceEvaluation(ExitDecision.hold(), current);
@@ -438,30 +440,45 @@ public class ShadowProductionReplayService {
         ShadowPosition updated = profitLockState(current, price);
         if (!equalsNullable(current.highest(), updated.highest())
                 || current.profitLockActive() != updated.profitLockActive()
-                || !equalsNullable(current.profitLockPrice(), updated.profitLockPrice())) {
-            jdbcTemplate.update("UPDATE wallet_position_test SET highest_price_usdt=?, profit_lock_active=?, profit_lock_price_usdt=? WHERE id=?",
-                    updated.highest(), updated.profitLockActive(), updated.profitLockPrice(), updated.positionId());
+                || !equalsNullable(current.profitLockPrice(), updated.profitLockPrice())
+                || current.profitLockState() != updated.profitLockState()
+                || !java.util.Objects.equals(current.profitLockRebaseStartedAt(), updated.profitLockRebaseStartedAt())) {
+            jdbcTemplate.update("UPDATE wallet_position_test SET highest_price_usdt=?, profit_lock_active=?, profit_lock_price_usdt=?, profit_lock_state=?, profit_lock_rebase_started_at=? WHERE id=?",
+                    updated.highest(), updated.profitLockActive(), updated.profitLockPrice(), updated.profitLockState().name(),
+                    updated.profitLockRebaseStartedAt() == null ? null : Timestamp.from(updated.profitLockRebaseStartedAt()), updated.positionId());
         }
-        if (updated.profitLockActive()
+        if (updated.profitLockState() == ProfitLockState.ACTIVE
+                || updated.profitLockState() == ProfitLockState.TP_EXTENSION_REBASE
                 || !equalsNullable(current.highest(), updated.highest())
                 || current.profitLockActive() != updated.profitLockActive()
-                || !equalsNullable(current.profitLockPrice(), updated.profitLockPrice())) {
+                || !equalsNullable(current.profitLockPrice(), updated.profitLockPrice())
+                || current.profitLockState() != updated.profitLockState()) {
             BigDecimal fix118Progress = updated.takeProfit() == null || updated.takeProfit().compareTo(updated.entryPrice()) <= 0
                     ? BigDecimal.ZERO
                     : updated.highest().subtract(updated.entryPrice(), MC)
                             .multiply(BigDecimal.valueOf(100), MC)
                             .divide(updated.takeProfit().subtract(updated.entryPrice(), MC), 6, RoundingMode.HALF_UP);
             log.info("[FIX-118][REPLAY][LIVE_PATH] runId={}, positionId={}, symbol={}, observedAt={}, price={}, entry={}, target={}, " +
-                            "highest={}, previousActive={}, active={}, previousLock={}, lock={}, progressPct={}, triggered={}",
+                            "highest={}, previousActive={}, active={}, previousState={}, state={}, previousLock={}, lock={}, progressPct={}, triggered={}",
                     runId, updated.positionId(), symbol, event.observedAt(), price, updated.entryPrice(), updated.takeProfit(),
-                    updated.highest(), current.profitLockActive(), updated.profitLockActive(), current.profitLockPrice(),
-                    updated.profitLockPrice(), fix118Progress,
-                    updated.profitLockActive() && updated.profitLockPrice() != null
+                    updated.highest(), current.profitLockActive(), updated.profitLockActive(), current.profitLockState(), updated.profitLockState(),
+                    current.profitLockPrice(), updated.profitLockPrice(), fix118Progress,
+                    updated.profitLockState() == ProfitLockState.ACTIVE && updated.profitLockPrice() != null
                             && price.compareTo(updated.profitLockPrice()) <= 0);
         }
         current = updated;
 
-        if (current.profitLockActive() && current.profitLockPrice() != null
+        BigDecimal rebaseHardFloor = current.entryPrice().multiply(BigDecimal.valueOf(1.0005), MC);
+        if (current.profitLockState() == ProfitLockState.TP_EXTENSION_REBASE
+                && price.compareTo(rebaseHardFloor) < 0) {
+            String reason = "TP-extension rebase safety floor was breached at " + rebaseHardFloor + ". " + profitLockConfigText();
+            log.info("[FIX-118][REPLAY][REBASE_HARD_FLOOR] runId={}, positionId={}, symbol={}, observedAt={}, price={}, floor={}, target={}",
+                    runId, current.positionId(), symbol, event.observedAt(), price, rebaseHardFloor, current.takeProfit());
+            persistManagementAtPrice(runId, symbol, event, "PROFIT_LOCK_HARD_EXIT", current.takeProfit(), current.takeProfit(), current, reason);
+            return new LivePriceEvaluation(new ExitDecision(true, "PROFIT_LOCK_HARD_EXIT", reason), current);
+        }
+
+        if (current.profitLockState() == ProfitLockState.ACTIVE && current.profitLockPrice() != null
                 && price.compareTo(current.profitLockPrice()) <= 0) {
             log.info("[FIX-118][REPLAY][LIVE_TRIGGER] runId={}, positionId={}, symbol={}, observedAt={}, price={}, lock={}, target={}",
                     runId, current.positionId(), symbol, event.observedAt(), price, current.profitLockPrice(), current.takeProfit());
@@ -572,24 +589,35 @@ public class ShadowProductionReplayService {
             return new ExitDecision(true, "STOP_LOSS", "Price reached the stored stop loss.");
 
         ShadowPosition updated = authoritativePrice ? profitLockState(p, price) : p;
-        if (authoritativePrice && (updated.profitLockActive()
+        if (authoritativePrice && (updated.profitLockState() == ProfitLockState.ACTIVE
+                || updated.profitLockState() == ProfitLockState.TP_EXTENSION_REBASE
                 || p.profitLockActive() != updated.profitLockActive()
-                || !equalsNullable(p.profitLockPrice(), updated.profitLockPrice()))) {
+                || !equalsNullable(p.profitLockPrice(), updated.profitLockPrice())
+                || p.profitLockState() != updated.profitLockState())) {
             BigDecimal fix118Progress = updated.takeProfit() == null || updated.takeProfit().compareTo(updated.entryPrice()) <= 0
                     ? BigDecimal.ZERO
                     : updated.highest().subtract(updated.entryPrice(), MC)
                             .multiply(BigDecimal.valueOf(100), MC)
                             .divide(updated.takeProfit().subtract(updated.entryPrice(), MC), 6, RoundingMode.HALF_UP);
             log.info("[FIX-118][REPLAY][SIGNAL_PATH] runId={}, positionId={}, signalId={}, symbol={}, generatedAt={}, price={}, " +
-                            "entry={}, target={}, highest={}, previousActive={}, active={}, previousLock={}, lock={}, progressPct={}, triggered={}",
+                            "entry={}, target={}, highest={}, previousActive={}, active={}, previousState={}, state={}, previousLock={}, lock={}, progressPct={}, triggered={}",
                     runId, updated.positionId(), s.getId(), s.getSymbol(), s.getGeneratedAt(), price,
                     updated.entryPrice(), updated.takeProfit(), updated.highest(), p.profitLockActive(), updated.profitLockActive(),
-                    p.profitLockPrice(), updated.profitLockPrice(), fix118Progress,
-                    updated.profitLockActive() && updated.profitLockPrice() != null
+                    p.profitLockState(), updated.profitLockState(), p.profitLockPrice(), updated.profitLockPrice(), fix118Progress,
+                    updated.profitLockState() == ProfitLockState.ACTIVE && updated.profitLockPrice() != null
                             && price.compareTo(updated.profitLockPrice()) <= 0);
         }
         BigDecimal minimumProfitableExit = p.entryPrice().multiply(BigDecimal.valueOf(1.0005));
-        if (authoritativePrice && updated.profitLockActive() && updated.profitLockPrice() != null
+        if (authoritativePrice && updated.profitLockState() == ProfitLockState.TP_EXTENSION_REBASE
+                && price.compareTo(minimumProfitableExit) < 0) {
+            String floorReason = "TP-extension rebase safety floor was breached at " + minimumProfitableExit + ". "
+                    + profitLockConfigText();
+            log.info("[FIX-118][REPLAY][SIGNAL_REBASE_HARD_FLOOR] runId={}, positionId={}, signalId={}, symbol={}, generatedAt={}, price={}, floor={}",
+                    runId, updated.positionId(), s.getId(), s.getSymbol(), s.getGeneratedAt(), price, minimumProfitableExit);
+            persistManagement(runId, s, "PROFIT_LOCK_HARD_EXIT", p.takeProfit(), p.takeProfit(), updated, floorReason);
+            return new ExitDecision(true, "PROFIT_LOCK_HARD_EXIT", floorReason);
+        }
+        if (authoritativePrice && updated.profitLockState() == ProfitLockState.ACTIVE && updated.profitLockPrice() != null
                 && price.compareTo(updated.profitLockPrice()) <= 0) {
             log.info("[FIX-118][REPLAY][SIGNAL_TRIGGER] runId={}, positionId={}, signalId={}, symbol={}, generatedAt={}, price={}, lock={}, target={}",
                     runId, updated.positionId(), s.getId(), s.getSymbol(), s.getGeneratedAt(), price,
@@ -676,23 +704,71 @@ public class ShadowProductionReplayService {
         if (s.getLatestPrice() == null || !priceAuthorityPolicy.canUseSignalPrice(s, p.entryTime())) return p;
         ShadowPosition n = profitLockState(p, s.getLatestPrice());
         if (!equalsNullable(p.highest(), n.highest()) || p.profitLockActive() != n.profitLockActive()
-                || !equalsNullable(p.profitLockPrice(), n.profitLockPrice())) {
-            jdbcTemplate.update("UPDATE wallet_position_test SET highest_price_usdt=?, profit_lock_active=?, profit_lock_price_usdt=? WHERE id=?",
-                    n.highest(), n.profitLockActive(), n.profitLockPrice(), p.positionId());
+                || !equalsNullable(p.profitLockPrice(), n.profitLockPrice())
+                || p.profitLockState() != n.profitLockState()
+                || !java.util.Objects.equals(p.profitLockRebaseStartedAt(), n.profitLockRebaseStartedAt())) {
+            jdbcTemplate.update("UPDATE wallet_position_test SET highest_price_usdt=?, profit_lock_active=?, profit_lock_price_usdt=?, profit_lock_state=?, profit_lock_rebase_started_at=? WHERE id=?",
+                    n.highest(), n.profitLockActive(), n.profitLockPrice(), n.profitLockState().name(),
+                    n.profitLockRebaseStartedAt() == null ? null : Timestamp.from(n.profitLockRebaseStartedAt()), p.positionId());
         }
         return n;
     }
 
     private ShadowPosition profitLockState(ShadowPosition p, BigDecimal price) {
         WalletSettings settings = walletSettings();
+        BigDecimal activation = nvl(settings.getProfitLockActivationPercent(), BigDecimal.valueOf(70));
+        BigDecimal highest = p.highest() == null ? price : p.highest().max(price);
+        BigDecimal progress = progressPercent(p.entryPrice(), p.takeProfit(), highest);
+
+        if (p.profitLockState() == ProfitLockState.TP_EXTENSION_REBASE
+                && progress.compareTo(activation) < 0) {
+            // Replay parity with Production FIX-118: preserve the historical lock/legacy flag,
+            // but keep it non-executable until the new TP geometry earns activation again.
+            return p.withLock(highest, true, p.profitLockPrice(), ProfitLockState.TP_EXTENSION_REBASE,
+                    p.profitLockRebaseStartedAt());
+        }
+
         ProfitLockPolicy.State state = profitLockPolicy.evaluate(
-                p.entryPrice(), p.takeProfit(), price, p.highest(),
-                p.profitLockActive(), p.profitLockPrice(),
-                settings.isDynamicProfitLockEnabled(),
-                nvl(settings.getProfitLockActivationPercent(), BigDecimal.valueOf(70)),
+                p.entryPrice(), p.takeProfit(), price, highest,
+                p.profitLockState() == ProfitLockState.ACTIVE || p.profitLockActive(), p.profitLockPrice(),
+                settings.isDynamicProfitLockEnabled(), activation,
                 nvl(settings.getProfitLockInitialPercent(), BigDecimal.valueOf(40)),
                 nvl(settings.getProfitLockTrailStepPercent(), BigDecimal.valueOf(10)));
-        return p.withLock(state.highestPrice(), state.active(), state.lockPrice());
+        ProfitLockState nextState = state.active() ? ProfitLockState.ACTIVE : ProfitLockState.INACTIVE;
+        return p.withLock(state.highestPrice(), state.active(), state.lockPrice(), nextState, null);
+    }
+
+    private ShadowPosition rebaseForExtendedTarget(ShadowPosition p, BigDecimal newTarget, BigDecimal extensionPrice, Instant at) {
+        if (p == null || newTarget == null) return p;
+        BigDecimal activation = nvl(walletSettings().getProfitLockActivationPercent(), BigDecimal.valueOf(70));
+        BigDecimal extensionHighest = p.highest() == null ? p.entryPrice() : p.highest();
+        if (extensionPrice != null && extensionPrice.compareTo(extensionHighest) > 0) extensionHighest = extensionPrice;
+        ShadowPosition withExtensionHigh = p.withLock(extensionHighest, p.profitLockActive(), p.profitLockPrice(),
+                p.profitLockState(), p.profitLockRebaseStartedAt());
+        BigDecimal progress = progressPercent(p.entryPrice(), newTarget, extensionHighest);
+        if (p.profitLockState() == ProfitLockState.ACTIVE && progress.compareTo(activation) < 0) {
+            return withExtensionHigh.withLock(extensionHighest, true, p.profitLockPrice(), ProfitLockState.TP_EXTENSION_REBASE,
+                    at == null ? Instant.now() : at);
+        }
+        if (p.profitLockState() == ProfitLockState.TP_EXTENSION_REBASE) {
+            return withExtensionHigh.withLock(extensionHighest, true, p.profitLockPrice(), ProfitLockState.TP_EXTENSION_REBASE,
+                    p.profitLockRebaseStartedAt());
+        }
+        return withExtensionHigh;
+    }
+
+    private BigDecimal progressPercent(BigDecimal entry, BigDecimal target, BigDecimal highest) {
+        if (entry == null || target == null || highest == null || target.compareTo(entry) <= 0) return BigDecimal.ZERO;
+        BigDecimal favorable = highest.subtract(entry);
+        if (favorable.signum() < 0) favorable = BigDecimal.ZERO;
+        return favorable.multiply(BigDecimal.valueOf(100), MC)
+                .divide(target.subtract(entry, MC), 6, RoundingMode.HALF_UP);
+    }
+
+    private void persistProfitLockState(ShadowPosition p) {
+        jdbcTemplate.update("UPDATE wallet_position_test SET profit_lock_active=?, profit_lock_price_usdt=?, profit_lock_state=?, profit_lock_rebase_started_at=? WHERE id=?",
+                p.profitLockActive(), p.profitLockPrice(), p.profitLockState().name(),
+                p.profitLockRebaseStartedAt() == null ? null : Timestamp.from(p.profitLockRebaseStartedAt()), p.positionId());
     }
 
     private void persistManagement(long runId, TradeSignal s, String code, BigDecimal oldTp, BigDecimal newTp, ShadowPosition p, String explanation) {
@@ -923,14 +999,16 @@ public class ShadowProductionReplayService {
     private record ShadowPosition(long positionId, Instant entryTime, BigDecimal entryPrice, BigDecimal quantity,
                                   BigDecimal cost, int positionPercent, BigDecimal stopLoss, BigDecimal takeProfit,
                                   BigDecimal highest, boolean profitLockActive, BigDecimal profitLockPrice,
+                                  ProfitLockState profitLockState, Instant profitLockRebaseStartedAt,
                                   int entryScore, int entryConfidence, int entryTrend, int entryStructure,
                                   int entryMomentum, int entryVolume, NearTpState nearTpState, BigDecimal nearTpBestPrice,
                                   int nearTpBearishStreak, Long nearTpLastOneMinuteSignalId, boolean nearTpHarvestUsed,
                                   BigDecimal nearTpHarvestedQuantity, BigDecimal partialRealizedPnl,
                                   BigDecimal partialHarvestCostBasis) {
-        ShadowPosition withLock(BigDecimal h, boolean a, BigDecimal l) {
+        ShadowPosition withLock(BigDecimal h, boolean a, BigDecimal l, ProfitLockState state, Instant rebaseStartedAt) {
             return new ShadowPosition(positionId, entryTime, entryPrice, quantity, cost, positionPercent, stopLoss, takeProfit,
-                    h, a, l, entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
+                    h, a, l, state, rebaseStartedAt,
+                    entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
                     nearTpState, nearTpBestPrice, nearTpBearishStreak, nearTpLastOneMinuteSignalId, nearTpHarvestUsed,
                     nearTpHarvestedQuantity, partialRealizedPnl, partialHarvestCostBasis);
         }
@@ -952,40 +1030,41 @@ public class ShadowProductionReplayService {
                         bearishStreak = 0;
                         lastOneMinuteSignalId = null;
                     }
-                    case NEAR_TP_ARMED -> {
-                        // Preserve earned state and historical best price exactly.
-                    }
+                    case NEAR_TP_ARMED -> { }
                     case NEAR_TP_REJECTION_DETECTED -> {
                         bearishStreak = 0;
                         lastOneMinuteSignalId = null;
                     }
-                    case NEAR_TP_PARTIAL_HARVESTED -> {
-                        // Existing terminal behavior; nearTpHarvestUsed is normally true here.
-                    }
+                    case NEAR_TP_PARTIAL_HARVESTED -> { }
                 }
             }
 
             return new ShadowPosition(positionId, entryTime, entryPrice, quantity, cost, positionPercent, stopLoss, tp,
-                    highest, profitLockActive, profitLockPrice, entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
+                    highest, profitLockActive, profitLockPrice, profitLockState, profitLockRebaseStartedAt,
+                    entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
                     state, bestPrice, bearishStreak, lastOneMinuteSignalId, nearTpHarvestUsed,
                     nearTpHarvestedQuantity, partialRealizedPnl, partialHarvestCostBasis);
         }
         ShadowPosition withAdd(BigDecimal newEntry, BigDecimal newQuantity, BigDecimal newCost, int newPercent, BigDecimal newStop, BigDecimal newTakeProfit) {
             NearTpState state = nearTpHarvestUsed ? nearTpState : NearTpState.INACTIVE;
             return new ShadowPosition(positionId, entryTime, newEntry, newQuantity, newCost, newPercent, newStop, newTakeProfit,
-                    highest, profitLockActive, profitLockPrice, entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
+                    highest, profitLockActive, profitLockPrice, profitLockState, profitLockRebaseStartedAt,
+                    entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
                     state, nearTpHarvestUsed ? nearTpBestPrice : null, nearTpHarvestUsed ? nearTpBearishStreak : 0,
-                    nearTpHarvestUsed ? nearTpLastOneMinuteSignalId : null, nearTpHarvestUsed, nearTpHarvestedQuantity, partialRealizedPnl, partialHarvestCostBasis);
+                    nearTpHarvestUsed ? nearTpLastOneMinuteSignalId : null, nearTpHarvestUsed, nearTpHarvestedQuantity,
+                    partialRealizedPnl, partialHarvestCostBasis);
         }
         ShadowPosition withNearTp(NearTpFailureProtectionPolicy.State state) {
             return new ShadowPosition(positionId, entryTime, entryPrice, quantity, cost, positionPercent, stopLoss, takeProfit,
-                    highest, profitLockActive, profitLockPrice, entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
+                    highest, profitLockActive, profitLockPrice, profitLockState, profitLockRebaseStartedAt,
+                    entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
                     state.nearTpState(), state.bestPrice(), state.consecutiveBearishOneMinute(), state.lastEvaluatedOneMinuteSignalId(),
                     state.harvestUsed(), nearTpHarvestedQuantity, partialRealizedPnl, partialHarvestCostBasis);
         }
         ShadowPosition withPartialHarvest(BigDecimal soldQty, BigDecimal soldCost, BigDecimal realizedPnl) {
             return new ShadowPosition(positionId, entryTime, entryPrice, quantity.subtract(soldQty, MC), cost.subtract(soldCost, MC),
                     positionPercent, stopLoss, takeProfit, highest, profitLockActive, profitLockPrice,
+                    profitLockState, profitLockRebaseStartedAt,
                     entryScore, entryConfidence, entryTrend, entryStructure, entryMomentum, entryVolume,
                     NearTpState.NEAR_TP_PARTIAL_HARVESTED, nearTpBestPrice, nearTpBearishStreak, nearTpLastOneMinuteSignalId, true,
                     nearTpHarvestedQuantity.add(soldQty, MC), partialRealizedPnl.add(realizedPnl, MC),
@@ -1002,4 +1081,5 @@ public class ShadowProductionReplayService {
             return a == null ? b == null : b != null && a.compareTo(b) == 0;
         }
     }
+
 }

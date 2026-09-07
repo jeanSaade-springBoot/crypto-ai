@@ -743,8 +743,17 @@ public class ExecutionIntelligenceService {
         }
 
         // Intelligent evidence path: BUY and strong WATCH observations can build one opportunity.
+        // FIX-119: accumulated evidence may prove that an opportunity is still valid without
+        // proving that the current price is a good place to open the initial position. Keep
+        // the existing shared Entry Quality guard first, then defer only LATE_ENTRY
+        // ACCUMULATED_EVIDENCE decisions that have neither accumulated BUY evidence nor a
+        // fresh bullish 5m setup. The opportunity remains BUILDING and is re-evaluated by
+        // the existing lifecycle on subsequent signals. All other execution routes are
+        // structurally outside this guard.
         ExecutionDecision accumulated = applyInitialEntryQualityGuard(
                 accumulatedDecision(signal, evidence), entryQuality);
+        accumulated = applyAccumulatedLateEntryTimingGuard(
+                signal, accumulated, evidence, entryQuality);
         saveOpportunity(signal, evidence,
                 accumulated.allowed() ? "CONFIRMED" : accumulated.state(),
                 accumulated.source(), accumulated.positionPercent(),
@@ -1178,6 +1187,112 @@ public class ExecutionIntelligenceService {
                 decision.explanation() + capReason + " capped the initial allocation at " + reduced
                         + "% so confirmation can add later instead of committing full size at once.",
                 decision.evidence());
+    }
+
+    /**
+     * FIX-119 — Accumulated-evidence late-entry timing deferral.
+     *
+     * ACCUMULATED_EVIDENCE is opportunity memory. It may legitimately open a
+     * position without a current BUY when persistent WATCH evidence has matured;
+     * ICPUSDT #1702 is a proven example and must remain executable.
+     *
+     * The defect appears when that same WATCH-only authority reaches a price that
+     * Entry Quality already classifies as LATE_ENTRY. In the current implementation,
+     * scores 50-54 remain executable with reduced sizing, including cases where a
+     * recent rejection-zone penalty was deliberately floored at the 50-point chase
+     * cutoff. Historical BTCUSDT #1701, EDUUSDT #1716 and UNIUSDT #1731 demonstrate
+     * that this can convert a valid opportunity into a poorly timed initial entry.
+     *
+     * FIX-119 therefore defers only when all of the following are simultaneously true:
+     *   - the candidate is an allowed ACCUMULATED_EVIDENCE initial entry;
+     *   - Entry Quality is LATE_ENTRY;
+     *   - accumulated fresh 1m evidence contains zero BUY observations; and
+     *   - fresh 5m setup context is not BUY/STRONG_BUY.
+     *
+     * The result stays BUILDING rather than being rejected. Existing opportunity
+     * evidence is preserved by saveOpportunity(), so subsequent signals can release
+     * the opportunity when price geometry improves or fresh BUY authority appears.
+     *
+     * Good controls intentionally preserved:
+     *   - ICPUSDT #1702: 0 BUY / 10 WATCH but ACCEPTABLE_ENTRY 55 -> unchanged.
+     *   - SUIUSDT #1696: LATE_ENTRY 50 but accumulated BUY evidence and 5m BUY
+     *     -> unchanged.
+     *
+     * A 1h BUY by itself does not bypass this guard. EDUUSDT #1716 had 1h BUY /
+     * BALANCED_STRONG but remained a badly timed WATCH-only accumulated entry.
+     */
+    private ExecutionDecision applyAccumulatedLateEntryTimingGuard(
+            TradeSignal signal,
+            ExecutionDecision decision,
+            Evidence evidence,
+            EntryQuality entryQuality) {
+
+        if (decision == null
+                || !decision.allowed()
+                || !"ACCUMULATED_EVIDENCE".equals(decision.source())
+                || evidence == null
+                || entryQuality == null) {
+            return decision;
+        }
+
+        if (!"LATE_ENTRY".equals(entryQuality.classification())) {
+            return decision;
+        }
+
+        boolean hasAccumulatedBuyEvidence = evidence.buyCount() > 0;
+        boolean hasFreshFiveMinuteBuy = isBullish(evidence.fiveMinute());
+
+        if (hasAccumulatedBuyEvidence || hasFreshFiveMinuteBuy) {
+            return decision;
+        }
+
+        String rejectionContext = entryQuality.recentRejectedHigh() == null
+                ? "none"
+                : entryQuality.recentRejectedHigh()
+                        + " (distance="
+                        + format(entryQuality.distanceFromRejectedHighPercent())
+                        + "%)";
+
+        log.info(
+                "[FIX-119][ACCUMULATED_LATE_ENTRY_DEFERRED] "
+                        + "signalId={}, symbol={}, generatedAt={}, price={}, "
+                        + "entryQuality={}/{}, rejectionZone={}, "
+                        + "buyCount={}, watchCount={}, neutralCount={}, "
+                        + "evidenceScore={}, averageScore={}, averageConfidence={}, "
+                        + "fiveMinute={}, oneHour={}, result=BUILDING",
+                signal == null ? null : signal.getId(),
+                signal == null ? null : signal.getSymbol(),
+                signal == null ? null : signal.getGeneratedAt(),
+                signal == null ? null : signal.getLatestPrice(),
+                entryQuality.score(),
+                entryQuality.classification(),
+                rejectionContext,
+                evidence.buyCount(),
+                evidence.watchCount(),
+                evidence.neutralCount(),
+                evidence.evidenceScore(),
+                evidence.averageScore(),
+                evidence.averageConfidence(),
+                evidence.fiveMinute(),
+                evidence.oneHour());
+
+        return ExecutionDecision.building(
+                "ACCUMULATED_LATE_ENTRY_DEFERRED",
+                "Accumulated evidence remains valid, but execution is deferred because "
+                        + "Entry Quality is " + entryQuality.score() + "/100 ("
+                        + entryQuality.classification() + "), accumulated fresh evidence "
+                        + "contains no BUY observation, and fresh 5m setup context is "
+                        + evidence.fiveMinute() + "."
+                        + (entryQuality.recentRejectedHigh() == null
+                                ? ""
+                                : " A recent rejection zone near "
+                                        + entryQuality.recentRejectedHigh()
+                                        + " is only "
+                                        + format(entryQuality.distanceFromRejectedHighPercent())
+                                        + "% from the current entry price.")
+                        + " The opportunity remains BUILDING for improved entry geometry "
+                        + "or fresh BUY confirmation.",
+                evidence);
     }
 
     private String format(double value) {

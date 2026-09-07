@@ -2815,6 +2815,126 @@ class ExecutionIntelligenceServiceTest {
     }
 
     @Test
+    void fix119DefersLateWatchOnlyAccumulatedEntry_BtcUniPattern() {
+        TradeSignal current = signal(9001L, "FIX119USDT", "1m",
+                SignalDecision.WATCH, SignalDecision.WATCH, now, 71, 72);
+
+        var evidence = new ExecutionIntelligenceService.Evidence(
+                7, 0, 7, 0, 0, 7, 70, 0, 0, 70, 74,
+                SignalDecision.WATCH, SignalDecision.WATCH, null, List.of(9001L));
+        var late = new ExecutionIntelligenceService.EntryQuality(
+                50, "LATE_ENTRY", 0.5, 2.2, 1.0, 5,
+                false, new BigDecimal("7.179"), 1, 0.03d, false, null);
+        var accumulated = ExecutionIntelligenceService.ExecutionDecision.allow(
+                "ACCUMULATED_EVIDENCE", "OPPORTUNITY_CONFIRMED", 25,
+                "test accumulated authority", evidence);
+
+        ExecutionIntelligenceService.ExecutionDecision result = ReflectionTestUtils.invokeMethod(
+                service, "applyAccumulatedLateEntryTimingGuard",
+                current, accumulated, evidence, late);
+
+        assertThat(result).isNotNull();
+        assertThat(result.allowed()).isFalse();
+        assertThat(result.state()).isEqualTo("BUILDING");
+        assertThat(result.source()).isEqualTo("ACCUMULATED_EVIDENCE");
+        assertThat(result.code()).isEqualTo("ACCUMULATED_LATE_ENTRY_DEFERRED");
+        assertThat(result.evidence()).isSameAs(evidence);
+    }
+
+    @Test
+    void fix119OneHourBuyAloneDoesNotBypassLateGuard_EduPattern() {
+        TradeSignal current = signal(9002L, "EDUUSDT", "1m",
+                SignalDecision.WATCH, SignalDecision.WATCH, now, 69, 73);
+
+        var evidence = new ExecutionIntelligenceService.Evidence(
+                16, 0, 16, 0, 0, 16, 75, 0, 0, 69, 73,
+                SignalDecision.WATCH, SignalDecision.BUY, null, List.of(9002L));
+        var late = new ExecutionIntelligenceService.EntryQuality(
+                53, "LATE_ENTRY", 0.4, 1.6, 1.5, 4,
+                false, new BigDecimal("0.0571"), 1, 0.18d, false, null);
+        var accumulated = ExecutionIntelligenceService.ExecutionDecision.allow(
+                "ACCUMULATED_EVIDENCE", "OPPORTUNITY_CONFIRMED", 25,
+                "test accumulated authority", evidence);
+
+        ExecutionIntelligenceService.ExecutionDecision result = ReflectionTestUtils.invokeMethod(
+                service, "applyAccumulatedLateEntryTimingGuard",
+                current, accumulated, evidence, late);
+
+        assertThat(result).isNotNull();
+        assertThat(result.allowed()).isFalse();
+        assertThat(result.code()).isEqualTo("ACCUMULATED_LATE_ENTRY_DEFERRED");
+        assertThat(result.evidence().oneHour()).isEqualTo(SignalDecision.BUY);
+    }
+
+    @Test
+    void fix119PreservesAcceptableWatchOnlyAccumulatedEntry_Icp1702Control() {
+        TradeSignal current = signal(9003L, "ICPUSDT", "1m",
+                SignalDecision.WATCH, SignalDecision.WATCH, now, 65, 72);
+
+        var evidence = new ExecutionIntelligenceService.Evidence(
+                10, 0, 10, 0, 0, 10, 75, 0, 0, 65, 72,
+                SignalDecision.WATCH, SignalDecision.WATCH, null, List.of(9003L));
+        var acceptable = new ExecutionIntelligenceService.EntryQuality(
+                55, "ACCEPTABLE_ENTRY", 0.2, 1.1, 1.5, 3);
+        var accumulated = ExecutionIntelligenceService.ExecutionDecision.allow(
+                "ACCUMULATED_EVIDENCE", "OPPORTUNITY_CONFIRMED", 25,
+                "test accumulated authority", evidence);
+
+        ExecutionIntelligenceService.ExecutionDecision result = ReflectionTestUtils.invokeMethod(
+                service, "applyAccumulatedLateEntryTimingGuard",
+                current, accumulated, evidence, acceptable);
+
+        assertThat(result).isSameAs(accumulated);
+        assertThat(result.allowed()).isTrue();
+    }
+
+    @Test
+    void fix119PreservesLateAccumulatedEntryWithFreshBuyAuthority_Sui1696Control() {
+        TradeSignal current = signal(9004L, "SUIUSDT", "1m",
+                SignalDecision.WATCH, SignalDecision.WATCH, now, 67, 70);
+
+        var evidence = new ExecutionIntelligenceService.Evidence(
+                12, 1, 11, 0, 0, 14, 80, 0, 0, 67, 70,
+                SignalDecision.BUY, SignalDecision.NEUTRAL, null, List.of(9004L));
+        var late = new ExecutionIntelligenceService.EntryQuality(
+                50, "LATE_ENTRY", 0.4, 2.0, 1.5, 5,
+                false, new BigDecimal("0.8023"), 1, 0.16d, false, null);
+        var accumulated = ExecutionIntelligenceService.ExecutionDecision.allow(
+                "ACCUMULATED_EVIDENCE", "OPPORTUNITY_CONFIRMED", 25,
+                "test accumulated authority", evidence);
+
+        ExecutionIntelligenceService.ExecutionDecision result = ReflectionTestUtils.invokeMethod(
+                service, "applyAccumulatedLateEntryTimingGuard",
+                current, accumulated, evidence, late);
+
+        assertThat(result).isSameAs(accumulated);
+        assertThat(result.allowed()).isTrue();
+    }
+
+    @Test
+    void fix119DoesNotTouchNonAccumulatedEntryAuthorities() {
+        TradeSignal current = signal(9005L, "UNIUSDT", "1m",
+                SignalDecision.BUY, SignalDecision.BUY, now, 77, 66);
+
+        var evidence = new ExecutionIntelligenceService.Evidence(
+                1, 0, 1, 0, 0, 1, 70, 0, 0, 70, 70,
+                SignalDecision.WATCH, SignalDecision.WATCH, null, List.of(9005L));
+        var late = new ExecutionIntelligenceService.EntryQuality(
+                50, "LATE_ENTRY", 0.3, 1.1, 1.5, 2);
+        var immediate = ExecutionIntelligenceService.ExecutionDecision.allow(
+                "IMMEDIATE_VALIDATION", "BALANCED_NEUTRAL_5M_WATCH_1H", 25,
+                "test immediate authority", evidence);
+
+        ExecutionIntelligenceService.ExecutionDecision result = ReflectionTestUtils.invokeMethod(
+                service, "applyAccumulatedLateEntryTimingGuard",
+                current, immediate, evidence, late);
+
+        assertThat(result).isSameAs(immediate);
+        assertThat(result.allowed()).isTrue();
+        assertThat(result.source()).isEqualTo("IMMEDIATE_VALIDATION");
+    }
+
+    @Test
 
     void balancedEarlyDoesNotOpenWhenEntryQualityIsAlreadyLate() {
 

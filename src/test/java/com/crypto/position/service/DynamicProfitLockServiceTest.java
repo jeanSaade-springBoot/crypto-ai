@@ -40,6 +40,7 @@ class DynamicProfitLockServiceTest {
                 .takeProfitUsdt(new BigDecimal("1918.79430386"))
                 .highestPriceUsdt(new BigDecimal("1912.62"))
                 .profitLockActive(false)
+                .profitLockState(ProfitLockState.INACTIVE)
                 .profitLockProgressPercent(BigDecimal.ZERO)
                 .status("OPEN")
                 .openedAt(Instant.now())
@@ -138,6 +139,201 @@ class DynamicProfitLockServiceTest {
 
         assertThat(result.active()).isTrue();
         assertThat(result.triggered()).isTrue();
+    }
+
+    @Test
+    void fix118ActiveLockEntersRebaseWhenExtendedGeometryFallsBelowActivation() {
+        position.setAverageEntryPriceUsdt(new BigDecimal("2.700"));
+        position.setTakeProfitUsdt(new BigDecimal("2.719244613453"));
+        position.setHighestPriceUsdt(new BigDecimal("2.719"));
+        position.setProfitLockActive(true);
+        position.setProfitLockState(ProfitLockState.ACTIVE);
+        position.setProfitLockPriceUsdt(new BigDecimal("2.711546768072"));
+        position.setProfitLockProgressPercent(new BigDecimal("103.925000"));
+        Instant changedAt = Instant.parse("2026-09-06T13:00:55.693804Z");
+
+        var transition = service.onTakeProfitExtended(
+                position, new BigDecimal("2.728866920180"), new BigDecimal("2.720"), changedAt);
+
+        assertThat(transition.previousState()).isEqualTo(ProfitLockState.ACTIVE);
+        assertThat(transition.state()).isEqualTo(ProfitLockState.TP_EXTENSION_REBASE);
+        assertThat(transition.progressPercent()).isLessThan(new BigDecimal("70"));
+        assertThat(position.getProfitLockState()).isEqualTo(ProfitLockState.TP_EXTENSION_REBASE);
+        assertThat(position.getHighestPriceUsdt()).isEqualByComparingTo("2.720");
+        assertThat(position.isProfitLockActive()).isTrue();
+        assertThat(position.getProfitLockPriceUsdt()).isEqualByComparingTo("2.711546768072");
+        assertThat(position.getProfitLockRebaseStartedAt()).isEqualTo(changedAt);
+    }
+
+    @Test
+    void fix118RebaseMakesHistoricalLockNonExecutableUntilNewGeometryReactivates() {
+        stubEthOpenPosition();
+        position.setAverageEntryPriceUsdt(new BigDecimal("100"));
+        position.setTakeProfitUsdt(new BigDecimal("130"));
+        position.setHighestPriceUsdt(new BigDecimal("115"));
+        position.setProfitLockActive(true);
+        position.setProfitLockState(ProfitLockState.TP_EXTENSION_REBASE);
+        position.setProfitLockPriceUsdt(new BigDecimal("112"));
+        position.setProfitLockProgressPercent(new BigDecimal("50"));
+        position.setProfitLockRebaseStartedAt(Instant.parse("2026-09-06T13:00:55Z"));
+
+        var result = service.evaluatePrice("ETHUSDT", new BigDecimal("111"));
+
+        assertThat(result.rebasing()).isTrue();
+        assertThat(result.active()).isFalse();
+        assertThat(result.triggered()).isFalse();
+        assertThat(result.lockPrice()).isEqualByComparingTo("112");
+        assertThat(position.isProfitLockActive()).isTrue();
+        assertThat(position.getProfitLockState()).isEqualTo(ProfitLockState.TP_EXTENSION_REBASE);
+    }
+
+    @Test
+    void fix118RebaseReactivatesAtConfiguredNewGeometryActivation() {
+        stubEthOpenPosition();
+        position.setAverageEntryPriceUsdt(new BigDecimal("100"));
+        position.setTakeProfitUsdt(new BigDecimal("130"));
+        position.setHighestPriceUsdt(new BigDecimal("115"));
+        position.setProfitLockActive(true);
+        position.setProfitLockState(ProfitLockState.TP_EXTENSION_REBASE);
+        position.setProfitLockPriceUsdt(new BigDecimal("112"));
+        position.setProfitLockRebaseStartedAt(Instant.parse("2026-09-06T13:00:55Z"));
+
+        var result = service.evaluatePrice("ETHUSDT", new BigDecimal("121"));
+
+        assertThat(result.progressPercent()).isGreaterThanOrEqualTo(new BigDecimal("70"));
+        assertThat(result.state()).isEqualTo(ProfitLockState.ACTIVE);
+        assertThat(result.active()).isTrue();
+        assertThat(position.getProfitLockState()).isEqualTo(ProfitLockState.ACTIVE);
+        assertThat(position.getProfitLockRebaseStartedAt()).isNull();
+    }
+
+    @Test
+    void fix118RebaseHasStandaloneProtectedProfitFloor() {
+        stubEthOpenPosition();
+        position.setAverageEntryPriceUsdt(new BigDecimal("100"));
+        position.setTakeProfitUsdt(new BigDecimal("130"));
+        position.setHighestPriceUsdt(new BigDecimal("115"));
+        position.setProfitLockActive(true);
+        position.setProfitLockState(ProfitLockState.TP_EXTENSION_REBASE);
+        position.setProfitLockPriceUsdt(new BigDecimal("112"));
+        position.setProfitLockRebaseStartedAt(Instant.parse("2026-09-06T13:00:55Z"));
+
+        var result = service.evaluatePrice("ETHUSDT", new BigDecimal("100.01"));
+
+        assertThat(result.rebasing()).isTrue();
+        assertThat(result.triggered()).isFalse();
+        assertThat(result.hardProfitFloor()).isEqualByComparingTo("100.0500");
+        assertThat(result.hardProfitFloorTriggered()).isTrue();
+    }
+
+
+    @Test
+    void fix118HistoricalIcp1010ExtendedTpMakesOldLockNonExecutableAtActualExitPrice() {
+        BigDecimal newTarget = new BigDecimal("2.728866920180");
+        Instant extensionAt = Instant.parse("2026-09-06T13:00:55.693804Z");
+
+        position.setId(1010L);
+        position.setSymbol("ICPUSDT");
+        position.setAverageEntryPriceUsdt(new BigDecimal("2.700"));
+        position.setTakeProfitUsdt(new BigDecimal("2.719244613453"));
+        position.setHighestPriceUsdt(new BigDecimal("2.719"));
+        position.setProfitLockActive(true);
+        position.setProfitLockState(ProfitLockState.ACTIVE);
+        position.setProfitLockPriceUsdt(new BigDecimal("2.711546768072"));
+        position.setProfitLockProgressPercent(new BigDecimal("103.925000"));
+        position.setProfitLockActivatedAt(Instant.parse("2026-09-06T13:00:19.595302Z"));
+
+        var transition = service.onTakeProfitExtended(
+                position, newTarget, new BigDecimal("2.720"), extensionAt);
+        position.setTakeProfitUsdt(newTarget);
+
+        when(positionRepository.findFirstBySymbolAndStatusOrderByOpenedAtDesc("ICPUSDT", "OPEN"))
+                .thenReturn(Optional.of(position));
+
+        // Historical production exit was 2.710 at 13:01:03Z. Under FIX-118 the lock
+        // earned against the superseded TP must be persisted but non-executable here.
+        var result = service.evaluatePrice("ICPUSDT", new BigDecimal("2.710"));
+
+        assertThat(transition.state()).isEqualTo(ProfitLockState.TP_EXTENSION_REBASE);
+        assertThat(transition.progressPercent()).isEqualByComparingTo("69.283456");
+        assertThat(position.getProfitLockState()).isEqualTo(ProfitLockState.TP_EXTENSION_REBASE);
+        assertThat(position.getProfitLockPriceUsdt()).isEqualByComparingTo("2.711546768072");
+        assertThat(result.rebasing()).isTrue();
+        assertThat(result.active()).isFalse();
+        assertThat(result.triggered()).isFalse();
+        assertThat(result.hardProfitFloorTriggered()).isFalse();
+    }
+
+    @Test
+    void fix118HistoricalIcp1014FourthExtensionMakesOldLockNonExecutableAtActualExitPrice() {
+        BigDecimal finalTarget = new BigDecimal("2.845204291157");
+        Instant extensionAt = Instant.parse("2026-09-06T14:05:27Z");
+
+        position.setId(1014L);
+        position.setSymbol("ICPUSDT");
+        position.setAverageEntryPriceUsdt(new BigDecimal("2.727"));
+        position.setTakeProfitUsdt(new BigDecimal("2.805802860771"));
+        position.setHighestPriceUsdt(new BigDecimal("2.806"));
+        position.setProfitLockActive(true);
+        position.setProfitLockState(ProfitLockState.ACTIVE);
+        position.setProfitLockPriceUsdt(new BigDecimal("2.774281716463"));
+        position.setProfitLockProgressPercent(new BigDecimal("100.250000"));
+        position.setProfitLockActivatedAt(Instant.parse("2026-09-06T13:47:11Z"));
+
+        var transition = service.onTakeProfitExtended(
+                position, finalTarget, new BigDecimal("2.806"), extensionAt);
+        position.setTakeProfitUsdt(finalTarget);
+
+        when(positionRepository.findFirstBySymbolAndStatusOrderByOpenedAtDesc("ICPUSDT", "OPEN"))
+                .thenReturn(Optional.of(position));
+
+        // Historical production exit was 2.766. It is below the old lock 2.774281716463,
+        // but still safely above the FIX-118 protected-profit floor for the rebase window.
+        var result = service.evaluatePrice("ICPUSDT", new BigDecimal("2.766"));
+
+        assertThat(transition.state()).isEqualTo(ProfitLockState.TP_EXTENSION_REBASE);
+        assertThat(transition.progressPercent()).isEqualByComparingTo("66.833445");
+        assertThat(position.getProfitLockPriceUsdt()).isEqualByComparingTo("2.774281716463");
+        assertThat(result.rebasing()).isTrue();
+        assertThat(result.active()).isFalse();
+        assertThat(result.triggered()).isFalse();
+        assertThat(result.hardProfitFloorTriggered()).isFalse();
+    }
+
+    @Test
+    void fix118RepeatedExtensionWhileAlreadyRebasingKeepsOriginalRebaseTimestamp() {
+        Instant firstExtensionAt = Instant.parse("2026-09-06T13:48:13Z");
+        Instant secondExtensionAt = Instant.parse("2026-09-06T13:51:37Z");
+
+        position.setId(1014L);
+        position.setSymbol("ICPUSDT");
+        position.setAverageEntryPriceUsdt(new BigDecimal("2.727"));
+        position.setTakeProfitUsdt(new BigDecimal("2.750348995784"));
+        position.setHighestPriceUsdt(new BigDecimal("2.750348995784"));
+        position.setProfitLockActive(true);
+        position.setProfitLockState(ProfitLockState.ACTIVE);
+        position.setProfitLockPriceUsdt(new BigDecimal("2.741009397470"));
+
+        var first = service.onTakeProfitExtended(
+                position,
+                new BigDecimal("2.762023493676"),
+                new BigDecimal("2.750348995784"),
+                firstExtensionAt);
+        position.setTakeProfitUsdt(new BigDecimal("2.762023493676"));
+
+        var second = service.onTakeProfitExtended(
+                position,
+                new BigDecimal("2.779535240514"),
+                new BigDecimal("2.762023493676"),
+                secondExtensionAt);
+
+        assertThat(first.state()).isEqualTo(ProfitLockState.TP_EXTENSION_REBASE);
+        assertThat(second.previousState()).isEqualTo(ProfitLockState.TP_EXTENSION_REBASE);
+        assertThat(second.state()).isEqualTo(ProfitLockState.TP_EXTENSION_REBASE);
+        assertThat(second.progressPercent()).isEqualByComparingTo("66.666667");
+        assertThat(position.getProfitLockRebaseStartedAt()).isEqualTo(firstExtensionAt);
+        assertThat(position.getHighestPriceUsdt()).isEqualByComparingTo("2.762023493676");
+        assertThat(position.isProfitLockActive()).isTrue();
     }
 
 }

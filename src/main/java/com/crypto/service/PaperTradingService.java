@@ -106,16 +106,15 @@ public class PaperTradingService {
                     : DynamicProfitLockService.Evaluation.inactive(
                             "Signal price predates the open position and is context-only for mechanical protection.");
 
-            // FIX-118 diagnostic instrumentation only. PaperTradingService is an independent
-            // Production exit authority: if this evaluation is triggered it can close both the
-            // paper position and wallet through closeFromProfitLock(...). Keep this trace separate
-            // from the live-price path so the server log identifies which authority acted.
-            if (authoritativePrice && (profitLock.active() || profitLock.triggered())) {
+            // FIX-118 Production trace for the independent signal-price Profit Lock authority.
+            // The explicit ProfitLockState now also shows whether the historical lock is ACTIVE
+            // or temporarily non-executable while TP extension is rebasing.
+            if (authoritativePrice && (profitLock.active() || profitLock.triggered() || profitLock.rebasing())) {
                 log.info("[FIX-118][PRODUCTION][SIGNAL_PATH] signalId={}, positionId={}, symbol={}, interval={}, price={}, " +
-                                "active={}, progressPct={}, activationPct={}, lock={}, triggered={}",
+                                "active={}, progressPct={}, activationPct={}, lock={}, state={}, triggered={}",
                         signal.getId(), profitLock.walletPositionId(), symbol, signal.getInterval(), price,
                         profitLock.active(), profitLock.progressPercent(), profitLock.activationPercent(),
-                        profitLock.lockPrice(), profitLock.triggered());
+                        profitLock.lockPrice(), profitLock.state(), profitLock.triggered());
             }
 
             // FIX-067: The wallet-managed position is the authoritative Production source for
@@ -153,6 +152,16 @@ public class PaperTradingService {
             if (authoritativePrice && price.compareTo(position.getStopLoss()) <= 0) {
                 return Optional.of(closeFromSignal(position, signal, PositionStatus.STOPPED,
                         "STOP_LOSS", "Price reached the configured stop loss."));
+            }
+
+            // FIX-118: in TP_EXTENSION_REBASE the old Profit Lock cannot execute, but the
+            // direct protected-profit floor still applies. Stop Loss remains absolute and
+            // therefore keeps priority immediately above this branch.
+            if (authoritativePrice && profitLock.hardProfitFloorTriggered()) {
+                log.info("[FIX-118][PRODUCTION][SIGNAL_REBASE_HARD_FLOOR] signalId={}, positionId={}, symbol={}, price={}, floor={}",
+                        signal.getId(), profitLock.walletPositionId(), symbol, price, profitLock.hardProfitFloor());
+                return Optional.of(closeFromSignal(position, signal, PositionStatus.CLOSED,
+                        "PROFIT_LOCK_HARD_EXIT", profitLock.explanation()));
             }
 
             if (signal.getDecision() == SignalDecision.SELL

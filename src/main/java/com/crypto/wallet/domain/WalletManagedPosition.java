@@ -1,6 +1,7 @@
 package com.crypto.wallet.domain;
 
 import com.crypto.position.service.NearTpState;
+import com.crypto.position.service.ProfitLockState;
 import jakarta.persistence.*;
 import lombok.*;
 import java.math.BigDecimal;
@@ -58,6 +59,14 @@ public class WalletManagedPosition {
     private BigDecimal profitLockProgressPercent;
     @Column(name = "profit_lock_activated_at")
     private Instant profitLockActivatedAt;
+    // FIX-118: explicit execution state decouples historically earned protection from
+    // whether the old lock is executable after an approved TP extension.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "profit_lock_state", nullable = false, length = 40)
+    @Builder.Default
+    private ProfitLockState profitLockState = ProfitLockState.INACTIVE;
+    @Column(name = "profit_lock_rebase_started_at")
+    private Instant profitLockRebaseStartedAt;
     @Column(name = "entry_stage", nullable = false, length = 30)
     private String entryStage;
     @Column(name = "allocated_position_percent", nullable = false)
