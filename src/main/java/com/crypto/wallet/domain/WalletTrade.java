@@ -57,6 +57,7 @@ public class WalletTrade {
     private Instant executedAt;
     @Column(length = 500)
     private String notes;
-    @Column(name = "execution_message", length = 1000)
+    // FIX-126: complete execution explanations must not abort wallet persistence.
+    @Column(name = "execution_message", columnDefinition = "MEDIUMTEXT")
     private String executionMessage;
 }

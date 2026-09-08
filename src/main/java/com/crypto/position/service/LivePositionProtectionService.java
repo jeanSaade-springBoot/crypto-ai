@@ -48,9 +48,19 @@ public class LivePositionProtectionService {
         if (symbolValue == null || symbolValue.isBlank() || price == null || price.signum() <= 0) return;
         String symbol = symbolValue.trim().toUpperCase(Locale.ROOT);
 
-        WalletManagedPosition managed = managedPositionRepository
-                .findFirstBySymbolAndStatusOrderByOpenedAtDesc(symbol, "OPEN")
-                .orElse(null);
+        // FIX-124: classify ONLY the first lock failure. The caller may retry after
+        // rollback in a fresh transaction; failures after evaluation are not retried.
+        WalletManagedPosition managed;
+        try {
+            managed = managedPositionRepository
+                    .findFirstBySymbolAndStatusOrderByOpenedAtDesc(symbol, "OPEN")
+                    .orElse(null);
+        } catch (RuntimeException failure) {
+            if (com.crypto.infrastructure.transaction.InitialPositionLockDeadlock.isMysqlDeadlock(failure)) {
+                throw new com.crypto.infrastructure.transaction.InitialPositionLockDeadlock(failure);
+            }
+            throw failure;
+        }
         if (managed == null || managed.getQuantity() == null || managed.getQuantity().signum() <= 0) return;
 
         TradeSignal one = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "1m").orElse(null);

@@ -1,0 +1,127 @@
+--- /dev/null
++++ b/md/DELIVERY-FIX-124-126.md
+@@ -0,0 +1,30 @@
++# FIX-124 / FIX-126 candidate delivery
++
++Baseline: latest crypto-ai-trader FIX-122 package including planned FIX-125, itself based on the approved FIX-120 baseline plus FIX-121. No crypto-ai-next code is included.
++
++## Included changes
++
++- FIX-124: candidate live-protection initial-deadlock recovery and transaction isolation. Persist input before protection, allow one initial-lock retry after rollback, retain input on failure, and show durable Production incidents in Proven / Analyze Trades. Broader analysis/recovery deadlocks remain open.
++- FIX-126: nullable MEDIUMTEXT execution_message migration and matching WalletTrade mapping.
++- Separate sequential patches under patches/. The complete source already contains BOTH; do not apply the patches again to this ZIP.
++- FIX-123 sizing and FIX-125 wallet synchronization-through-commit remain planned and unimplemented.
++
++## Actual checks
++
++- Node: 11 tests passed, zero failures (existing FIX-121/FIX-122 plus new FIX-124 UI checks).
++- JS syntax checks: Proven / Analyze Trades and fix registry succeeded.
++- Java parser: 330 files, zero syntax errors. Parsing does NOT check imports, dependencies, type compatibility or compile the application.
++- Maven invocation: `mvn -f fix124-126/pom.xml test` failed to start, exit 127, `mvn: command not found`. New JUnit tests are included but unrun. Authoring runtime has Java 17; project requires Java 21.
++- Not run: MySQL migrations, live Spring/JPA concurrency tests, historical Replay comparison, full app build, deployment.
++
++## Review and local verification
++
++From the extracted project root, using Java 21 and Maven:
++
++```bat
++mvn test
++```
++
++Send the actual Maven result before treating this as a validated build. Validate V84 and V85 against a COPY of crypto_ai. Retain crypto-ai-next / crypto_ai_v2 separately.
++
++FIX-124 changes transaction boundaries and failure recovery; it does not claim no possible execution impact. Previously failed checks may now execute, and market input commits before protection. See FIX-124.md for failure, crash-window, retry and ordering semantics. The precise trader lock cycle is not yet reproduced; do not label FIX-124 as a complete deadlock elimination.
+--- /dev/null
++++ b/md/FIX-126.md
+@@ -0,0 +1,22 @@
++# FIX-126 — Preserve complete wallet execution explanations
++
++Status: CANDIDATE IMPLEMENTED; Maven/JUnit and MySQL migration validation pending.
++
++## Confirmed defect
++
++At 2026-09-08 02:14:23 UTC+02:00 crypto-ai-trader failed to persist wallet BUY signal #634982 because execution_message exceeded the database's VARCHAR(1000). The supplied schema confirms that limit, and the supplied wallet query returns no trade for that signal. The BUY path adds wallet metadata to the execution explanation and price details without limiting the concatenated message. The subsequent ICP recovery rollback is consistent with the same persistence failure.
++
++## Scope
++
++V85 changes wallet_trade.execution_message to nullable MEDIUMTEXT with the existing utf8mb4_unicode_ci collation. WalletTrade's Java column mapping matches. Existing audit text is retained; no truncation or synthetic replacement is introduced. MEDIUMTEXT provides substantially more room but is not unlimited.
++
++No execution service or BUY/SELL decision formula changes. Longer already-approved executions can now persist rather than fail because of their explanation length. Both BUY and SELL messages use the shared column. No historical failed trade is replayed, backdated or inserted. FIX-122 diagnostics do not directly append to this message and are not identified as its cause.
++
++Existing trade reporting continues to show the stored message. No new per-trade log is added solely for a column change: Flyway records the FIX-126 migration and existing execution logs continue. FIX-124 adds its own separate incident diagnostics and review UI.
++
++## Validation
++
++Added Fix126ExecutionMessageTest: reproduce rejection under VARCHAR(1000), execute the migration's type/nullability change in H2 MySQL mode (omitting only unsupported collation syntax), retain existing/null rows, round-trip long Unicode BUY and SELL messages, and check the actual entity mapping.
++Maven was invoked but is absent (exit 127); this JUnit test has NOT run. H2 is not proof of MySQL migration behavior. Validate the actual migration and ORM persistence on a copied crypto_ai database, then run the Maven suite under Java 21 before deployment.
++
++A MEDIUMTEXT column migration may require a table rebuild/metadata lock depending on the MySQL version and table state. Measure the migration on the copy. Do not alter an already-applied Flyway migration; V85 is a new migration. Do not shrink back to VARCHAR(1000) after storing longer messages.
+--- a/src/main/java/com/crypto/wallet/domain/WalletTrade.java
++++ b/src/main/java/com/crypto/wallet/domain/WalletTrade.java
+@@ -57,6 +57,7 @@
+     private Instant executedAt;
+     @Column(length = 500)
+     private String notes;
+-    @Column(name = "execution_message", length = 1000)
++    // FIX-126: complete execution explanations must not abort wallet persistence.
++    @Column(name = "execution_message", columnDefinition = "MEDIUMTEXT")
+     private String executionMessage;
+ }
+--- /dev/null
++++ b/src/main/resources/db/migration/V85__fix_126_wallet_execution_message.sql
+@@ -0,0 +1,5 @@
++-- FIX-126: signal #634982 BUY rolled back because its audit explanation exceeded
++-- VARCHAR(1000). Preserve complete BUY/SELL explanations; do not truncate lineage.
++ALTER TABLE wallet_trade
++    MODIFY COLUMN execution_message MEDIUMTEXT
++    CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL;
+--- a/src/main/resources/static/js/fix-registry.js
++++ b/src/main/resources/static/js/fix-registry.js
+@@ -1,5 +1,6 @@
+ (() => {
+     const FIXES = [
++        {"id": "FIX-126", "title": "Preserve complete wallet execution explanations", "status": "CANDIDATE — MAVEN/MYSQL VALIDATION PENDING", "scenario": "BUY signal #634982 failed to persist because execution_message exceeded VARCHAR(1000).", "cause": "Execution explanation plus wallet/price metadata exceeds the schema capacity.", "solution": "V85 widens the nullable audit column to MEDIUMTEXT and matches WalletTrade mapping; preserve complete Unicode messages.", "behavior": "Already-approved BUY/SELL persistence no longer has the 1000-character audit limit. No scoring, sizing, exit rule or historical backfill change.", "regression": "Long BUY/SELL migration round-trip JUnit test added; Maven could not start. MySQL migration/ORM validation pending.", "symbol": "ALL", "entry": "UNCHANGED RULES", "exit": "UNCHANGED RULES", "entryTime": "UNCHANGED", "exitTime": "UNCHANGED", "replayWindow": "No Replay decision changes; compare existing windows.", "location": "Wallet audit persistence", "classes": ["WalletTrade", "V85__fix_126_wallet_execution_message.sql", "md/FIX-126.md"]},
+         {"id": "FIX-125", "title": "Wallet transaction coordination through commit", "status": "PLANNED — TO BE DONE", "scenario": "A synchronized wallet method can release its monitor before the surrounding Spring transaction commits.", "cause": "Possible monitor-release/commit race identified structurally; an actual failure has not been reproduced. This is distinct from the reported deadlocks.", "solution": "First reproduce the ordering with a deterministic concurrency test. Then coordinate the relevant wallet BUY/SELL paths through transaction completion, including rollback, without bundling sizing or unrelated deadlock repairs.", "behavior": "Reservation only. Not implemented. FIX-122 committed reads and its later recheck do not close this race window.", "regression": "Pending deterministic reproduction, commit/rollback and concurrent BUY/SELL tests; verify Production coordination and Replay decision parity.", "symbol": "ALL", "entry": "PLANNED", "exit": "UNCHANGED", "entryTime": "NOT IMPLEMENTED", "exitTime": "UNCHANGED", "replayWindow": "To be selected from the reproduced scenario; no performance or profitability claim.", "location": "Wallet transaction coordination — separate from FIX-124", "classes": ["md/FIX-125.md"]},
+         {"id": "FIX-124", "title": "Live protection deadlock recovery and input isolation", "status": "CANDIDATE — MAVEN/MYSQL VALIDATION PENDING", "scenario": "Trader logs confirm four deadlocks; UNI live protection failed at its initial managed-position lock and rolled back the shared kline transaction.", "cause": "Shared transaction spreads protection rollback into input persistence. Exact trader competing lock cycle remains unproven.", "solution": "Commit candle/exact price before protection; retry only initial MySQL 1213/40001 once after rollback; persist incident outcomes and show Production history in Proven review.", "behavior": "Transaction boundaries and failure recovery change. Business formulas unchanged. Other analysis/recovery deadlocks and FIX-125 commit coordination remain open.", "regression": "H2 transaction and first-lock tests added but Maven unavailable. Node checks passed; MySQL reproduction and historical parity pending.", "symbol": "ALL", "entry": "UNCHANGED RULES", "exit": "UNCHANGED", "entryTime": "LIVE PRICE", "exitTime": "UNCHANGED", "replayWindow": "Identical OLD/NEW windows with complete preceding stop and winning/losing controls.", "location": "Kline transaction boundary / Proven incident history", "classes": ["KlineTransactionCoordinator", "InitialPositionLockDeadlock", "Fix124ProtectionStore", "BinanceKlineService", "Fix124DiagnosticsController", "md/FIX-124.md"]},
+         {"id": "FIX-123", "title": "ATR-overextended ACCUMULATED_EVIDENCE sizing review", "status": "PLANNED — TO BE DONE", "scenario": "Team proposes larger already-qualified accumulated-evidence entries when ATR-overextended.", "cause": "Population totals, initial-entry/add attribution, winners-only validation and scope mismatch remain unresolved.", "solution": "Reconstruct full positions with wins and losses, confirm exact cohort and existing caps, then define and evaluate a precise sizing change on the accepted baseline.", "behavior": "Planning only. No sizing change. No proposed amount or multiplier is approved.", "regression": "Pending corrected analysis, separate approval and Production/Replay sizing tests.", "symbol": "ALL", "entry": "PLANNED", "exit": "UNCHANGED", "entryTime": "NOT IMPLEMENTED", "exitTime": "UNCHANGED", "replayWindow": "Identical OLD/NEW windows with complete preceding stop and winning/losing controls.", "location": "Separate planned work", "classes": ["md/FIX-123.md"]},
+--- /dev/null
++++ b/src/test/java/com/crypto/wallet/Fix126ExecutionMessageTest.java
+@@ -0,0 +1,38 @@
++package com.crypto.wallet;
++
++import com.crypto.wallet.domain.WalletTrade;
++import jakarta.persistence.Column;
++import org.junit.jupiter.api.Test;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.jdbc.datasource.DriverManagerDataSource;
++import java.nio.charset.StandardCharsets;
++import java.util.UUID;
++import static org.junit.jupiter.api.Assertions.*;
++
++/** FIX-126: old limit fails, production migration preserves existing and long
++ * Unicode audit text. H2 MySQL mode is not a substitute for a MySQL rollout test. */
++class Fix126ExecutionMessageTest {
++    @Test void migrationPreservesFullBuySellMessagesAndExistingRows() throws Exception {
++        var jdbc = new JdbcTemplate(new DriverManagerDataSource("jdbc:h2:mem:"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1","sa",""));
++        jdbc.execute("CREATE TABLE wallet_trade(id BIGINT PRIMARY KEY, execution_message VARCHAR(1000))");
++        jdbc.update("INSERT INTO wallet_trade VALUES(1,?)","existing audit");
++        String longMessage = "Execution Intelligence — إشارة BUY 🚀 ".repeat(100);
++        assertThrows(org.springframework.dao.DataAccessException.class,
++                () -> jdbc.update("INSERT INTO wallet_trade VALUES(2,?)",longMessage));
++        String sql;
++        try(var input = getClass().getResourceAsStream("/db/migration/V85__fix_126_wallet_execution_message.sql")) {
++            assertNotNull(input);
++            sql = new String(input.readAllBytes(),StandardCharsets.UTF_8);
++        }
++        // H2 has no MySQL collation support. Execute the same type/nullability change.
++        jdbc.execute(sql.replace("CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", ""));
++        jdbc.update("INSERT INTO wallet_trade VALUES(2,?)",longMessage);
++        jdbc.update("INSERT INTO wallet_trade VALUES(3,?)",longMessage.replace("BUY","SELL"));
++        jdbc.execute("INSERT INTO wallet_trade VALUES(4,NULL)");
++        assertEquals("existing audit",jdbc.queryForObject("SELECT execution_message FROM wallet_trade WHERE id=1",String.class));
++        assertEquals(longMessage,jdbc.queryForObject("SELECT execution_message FROM wallet_trade WHERE id=2",String.class));
++        assertEquals(longMessage.replace("BUY","SELL"),jdbc.queryForObject("SELECT execution_message FROM wallet_trade WHERE id=3",String.class));
++        assertNull(jdbc.queryForObject("SELECT execution_message FROM wallet_trade WHERE id=4",String.class));
++        assertEquals("MEDIUMTEXT",WalletTrade.class.getDeclaredField("executionMessage").getAnnotation(Column.class).columnDefinition());
++    }
++}

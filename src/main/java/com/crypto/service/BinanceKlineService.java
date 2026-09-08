@@ -7,11 +7,11 @@ import com.crypto.debug.monitor.service.PriceMoveMonitorService;
 import com.crypto.market.service.MarketPriceEventService;
 import com.fasterxml.jackson.databind.JsonNode;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
+import com.crypto.infrastructure.transaction.KlineTransactionCoordinator;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -19,8 +19,7 @@ import java.util.Locale;
 
 @Service
 public class BinanceKlineService {
-    private static final Logger log =
-            LoggerFactory.getLogger(BinanceKlineService.class);
+    private final KlineTransactionCoordinator transactions;
     private final CandleRepository candleRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final LivePositionProtectionService livePositionProtectionService;
@@ -32,8 +31,10 @@ public class BinanceKlineService {
             ApplicationEventPublisher eventPublisher,
             LivePositionProtectionService livePositionProtectionService,
             PriceMoveMonitorService priceMoveMonitorService,
-            MarketPriceEventService marketPriceEventService
+            MarketPriceEventService marketPriceEventService,
+            KlineTransactionCoordinator transactions
     ) {
+        this.transactions = transactions;
         this.candleRepository = candleRepository;
         this.eventPublisher = eventPublisher;
         this.livePositionProtectionService = livePositionProtectionService;
@@ -41,7 +42,8 @@ public class BinanceKlineService {
         this.marketPriceEventService = marketPriceEventService;
     }
 
-    @Transactional
+    // FIX-124: no suspended caller transaction may retain market-data locks.
+    @Transactional(propagation = Propagation.NEVER)
     public boolean processKline(JsonNode root) {
 
         JsonNode data = root.has("data")
@@ -77,77 +79,23 @@ public class BinanceKlineService {
                 .asBoolean(false);
         BigDecimal livePrice = decimal(kline, "c");
 
-        candleRepository.upsert(
-                symbol,
-                intervalCode,
-                openTime,
-                closeTime,
-                decimal(kline, "o"),
-                decimal(kline, "h"),
-                decimal(kline, "l"),
-                livePrice,
-                decimal(kline, "v"),
-                decimal(kline, "q"),
-                kline.path("n").asLong(),
-                decimal(kline, "V"),
-                decimal(kline, "Q"),
-                closed
-        );
-
-        // Mechanical position protection must react to live price updates, not wait
-        // for a candle-close analysis signal. Use the 1m stream as the canonical live feed
-        // to avoid duplicate checks from 5m/1h subscriptions.
-        if ("1m".equals(intervalCode)) {
-            // FIX-052: persist the exact canonical live-price observation BEFORE
-            // Production position protection consumes it. Replay later uses this
-            // same UTC-timestamped event stream and ordering instead of candle-close
-            // approximations for TP/SL/profit-lock decisions.
-            Instant observedAt = data.path("E").asLong(0L) > 0
-                    ? Instant.ofEpochMilli(data.path("E").asLong())
-                    : Instant.now();
-            try {
-                marketPriceEventService.record(symbol, livePrice, observedAt);
-            } catch (RuntimeException ex) {
-                log.error("Unable to persist live price event for exact Replay parity: symbol={}, price={}, observedAt={}, error={}",
-                        symbol, livePrice, observedAt, ex.getMessage(), ex);
-            }
-            try {
-                livePositionProtectionService.onPrice(symbol, livePrice);
-            } catch (RuntimeException ex) {
-                log.error("Live position protection failed: symbol={}, price={}, error={}",
-                        symbol, livePrice, ex.getMessage(), ex);
-            }
-            try {
-                // DEBUG-ONLY one-way observer. It records price moves and cannot influence trading decisions.
-                priceMoveMonitorService.onPrice(symbol, livePrice, Instant.now());
-            } catch (RuntimeException ex) {
-                log.warn("Debug price move monitor failed: symbol={}, price={}, error={}",
-                        symbol, livePrice, ex.getMessage());
-            }
-        }
-
-        
-        log.info(
-        	    "before closed event triggered fro symbol ={}, interval={}",
-        	    symbol,
-        	    intervalCode
-        	);
-        
-        if (closed) {
-        	
-        	 log.info(
-             	    "closed event triggered fro symbol ={}, interval={}",
-             	    symbol,
-             	    intervalCode
-             	);
-            eventPublisher.publishEvent(
-                    new CandleClosedEvent(
-                            symbol,
-                            intervalCode,
-                            openTime
-                    )
-            );
-        }
+        Instant observedAt = data.path("E").asLong(0L) > 0
+                ? Instant.ofEpochMilli(data.path("E").asLong()) : Instant.now();
+        boolean canonical = "1m".equals(intervalCode);
+        // FIX-124: input commit -> protection commit/rollback -> observer -> close
+        // dispatch. Exact candle identity and Binance observation time are retained.
+        transactions.process(symbol, intervalCode, openTime, observedAt, livePrice,
+                () -> {
+                    candleRepository.upsert(
+                            symbol, intervalCode, openTime, closeTime,
+                            decimal(kline, "o"), decimal(kline, "h"), decimal(kline, "l"), livePrice,
+                            decimal(kline, "v"), decimal(kline, "q"), kline.path("n").asLong(),
+                            decimal(kline, "V"), decimal(kline, "Q"), closed);
+                    if (canonical) marketPriceEventService.record(symbol, livePrice, observedAt);
+                },
+                canonical ? () -> livePositionProtectionService.onPrice(symbol, livePrice) : null,
+                canonical ? () -> priceMoveMonitorService.onPrice(symbol, livePrice, Instant.now()) : null,
+                closed ? () -> eventPublisher.publishEvent(new CandleClosedEvent(symbol, intervalCode, openTime)) : null);
 
         return closed;
     }

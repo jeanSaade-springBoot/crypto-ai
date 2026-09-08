@@ -1,0 +1,820 @@
+--- a/md/FIX-124.md
++++ b/md/FIX-124.md
+@@ -1,7 +1,43 @@
+-# FIX-124 — Wallet deadlock investigation and repair
++# FIX-124 — Live protection deadlock recovery and input isolation
+ 
+-Status: PLANNED — TO BE DONE. No wallet transaction/locking code changed.
++Status: CANDIDATE IMPLEMENTED; Maven/JUnit and MySQL validation pending. The broader deadlock investigation remains open. This is not a claim that all wallet deadlocks are eliminated.
+ 
+-The team reports nine wallet_managed_position deadlock incidents. Those incidents have not been independently verified here. Obtain actual deadlock/transaction evidence, reproduce the cause and design one scoped repair with concurrency, rollback and recovery tests.
++## Evidence and project identity
+ 
+-A possible synchronized-method/transaction-commit visibility gap was identified during FIX-122 review but not reproduced. Do not call it the deadlock cause without evidence. Transaction coordination for this possible race is now reserved separately as FIX-125. FIX-122 uses read-only committed history and a price-stage recheck; it does not claim to repair wallet serialization.
++Project crypto-ai-trader; database crypto_ai; log C:\apps\crypto-ai\crypto-ai.log.
++On 2026-09-08 the trader log records deadlocks at 01:55:05 (PEPE candle analysis), 07:41:05 (UNI live protection), 09:15:34 (BNB recovery), and 09:33:02 (BNB live protection), all UTC+02:00. The complete UNI stack places failure at LivePositionProtectionService's first managed-position locking lookup. BinanceKlineService catches the exception but its surrounding transaction subsequently throws UnexpectedRollbackException at commit. This confirms a protection failure can invalidate writes sharing the kline transaction.
++
++The separately supplied InnoDB latest-deadlock report names crypto_ai_v2, the crypto-ai-next database. Its lock cycle is NOT treated as proof of trader's root cause. The trader lookup index (symbol,status,opened_at) already exists.
++
++## Candidate change and explicit behavioral effects
++
++BinanceKlineService now requires no ambient transaction. KlineTransactionCoordinator performs sequential independent transactions:
++
++1. Persist the candle and, for the canonical 1m stream, its exact price observation together; commit before acquiring any position lock.
++2. Evaluate the existing live-protection business logic in a fresh transaction. Only a MySQL 1213/40001 thrown by the FIRST managed-position lookup receives a retry marker. After rollback, allow one immediate retry (two attempts total). No retry of later decision, wallet, observer or ambiguous commit failures.
++3. Persist a RECOVERED or FAILED incident for a retried/failed evaluation in a separate bounded transaction. A normal tick creates no diagnostic row. RECOVERED means evaluation committed, not necessarily that a SELL executed.
++4. Run the existing debug observer independently. Its rollback cannot undo input or protection.
++5. Publish a closed-candle event inside a new transaction after protection finishes, retaining the existing AFTER_COMMIT listener and protection-before-dispatch ordering.
++
++An exhausted or nonretryable protection failure retains the input and allows closed-candle dispatch; the incident remains visible. If input persistence itself fails, protection and dispatch are not invoked. This intentionally prevents protection from consuming an input that failed to persist. No delayed background replay of failed price ticks is introduced.
++
++These are Production transaction/recovery changes. A previously failed initial check can now succeed, so actual executions can differ during contention. Input becomes visible to other database readers earlier, and a protection commit is retained even if the later observer or dispatch fails. The split no longer provides one all-or-nothing kline/protection transaction. A process crash after input commit but before protection/dispatch can leave committed input without that evaluation; durable exactly-once tick processing is not introduced by this patch. No score, threshold, sizing, exit formula, price fallback or wallet authority is changed. Exact symbol + interval + candle_open_time lineage and Binance observed time remain intact.
++
++## Observability and Replay
++
++Search [FIX-124][PRODUCTION][INITIAL_LOCK_RETRY], [RECOVERED], [FAILED], [OBSERVER_FAILED], and [DIAGNOSTIC_PERSIST_FAILED]. The latter reports inability to persist diagnostics; it does not undo committed work.
++V84 creates fix124_protection_incident with original candle/observation identity, price, attempts, outcome and failure text. No foreign-key lock on the managed position is added. Queries are indexed by symbol/observed_at.
++Proven / Analyze Trades displays Production incidents for active/archived Replay windows and a saved trade's own entry/exit window, explicitly labelled as Production history rather than simulated outcomes. This is a live query of durable history, not a frozen saved snapshot. No rows means no recorded incidents in that window, not proof that all checks succeeded. Historical incidents before this migration are not fabricated. Results are limited to 500 and truncation is disclosed.
++Replay's simulated business logic and OLD/NEW data paths are unchanged. Replay never reads the incident table as a decision input. Retry mechanics are not copied into a single-threaded simulated wallet. No historical parity or timing result is claimed.
++
++## Tests and validation
++
++Added Maven/JUnit tests using H2 JDBC transactions to reproduce the old catch-and-continue rollback symptom, and verify new input retention, rollback before retry, bounded exhaustion, no late-failure retry, observer isolation, input-failure suppression, diagnostic failure isolation, first-lock-only marking, exact observation persistence and protection-before-close commit ordering. Controlled exceptions model the reported failure point; they do NOT reproduce the unidentified MySQL competing transaction.
++
++Actual authoring checks: 11 Node tests passed, zero failures. Java syntax parsing and JS syntax checks recorded in DELIVERY-FIX-124-126.md. `mvn -f fix124-126/pom.xml test` could not start: command not found (exit 127). Maven/JUnit tests have NOT passed or run here. Environment provides Java 17; project requires Java 21. No MySQL migration, full application compile, live concurrency or historical Replay comparison was run.
++
++Before deployment: run Maven under Java 21; validate V84/V85 on a copy of crypto_ai; exercise real Spring/JPA concurrent protection and analysis with MySQL; compare representative Replay windows. Keep the exact trader deadlock cycle and PEPE/BNB analysis/recovery failures OPEN until reproduced and verified. This patch handles the identified live-protection failure boundary, not every analysis/transaction path.
++
++## Separate work
++
++FIX-123 sizing remains planned. FIX-125 synchronization through wallet commit remains planned and unimplemented. FIX-126 addresses audit-message capacity separately. No synchronized wallet BUY/SELL method or wallet transaction coordinator is changed by this candidate.
+--- /dev/null
++++ b/src/main/java/com/crypto/infrastructure/transaction/Fix124ProtectionStore.java
+@@ -0,0 +1,42 @@
++package com.crypto.infrastructure.transaction;
++
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.PlatformTransactionManager;
++import org.springframework.transaction.TransactionDefinition;
++import org.springframework.transaction.support.TransactionTemplate;
++import javax.sql.DataSource;
++import java.math.BigDecimal;
++import java.sql.Timestamp;
++import java.time.Instant;
++
++/** FIX-124: persist only recovery/failure incidents, not every price tick. These
++ * Production observations are reporting data, never Replay decision inputs. */
++@Service
++public class Fix124ProtectionStore {
++    private static final Logger log = LoggerFactory.getLogger(Fix124ProtectionStore.class);
++    private final JdbcTemplate jdbc;
++    private final TransactionTemplate transaction;
++    public Fix124ProtectionStore(DataSource source, PlatformTransactionManager manager) {
++        jdbc = new JdbcTemplate(source);
++        jdbc.setQueryTimeout(2);
++        transaction = new TransactionTemplate(manager);
++        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
++        transaction.setTimeout(2);
++    }
++    public void record(String symbol, String interval, Instant candleOpenTime, Instant observedAt,
++                       BigDecimal price, int attempts, String outcome, RuntimeException failure) {
++        try {
++            transaction.executeWithoutResult(tx -> jdbc.update("""
++                    INSERT INTO fix124_protection_incident
++                    (symbol, interval_code, candle_open_time, observed_at, price, attempts, outcome, error_message)
++                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
++                    """, symbol, interval, Timestamp.from(candleOpenTime), Timestamp.from(observedAt),
++                    price, attempts, outcome, failure == null ? null : failure.toString()));
++        } catch (RuntimeException ex) {
++            log.error("[FIX-124][DIAGNOSTIC_PERSIST_FAILED] symbol={}, observedAt={}, outcome={}", symbol, observedAt, outcome, ex);
++        }
++    }
++}
+--- /dev/null
++++ b/src/main/java/com/crypto/infrastructure/transaction/InitialPositionLockDeadlock.java
+@@ -0,0 +1,23 @@
++package com.crypto.infrastructure.transaction;
++
++import java.sql.SQLException;
++import java.util.Collections;
++import java.util.IdentityHashMap;
++import java.util.Set;
++
++/** FIX-124: retry permission for a MySQL deadlock at the FIRST position lookup only.
++ * No trading decision or wallet write has occurred at this point. Never wrap a
++ * later failure with this marker: replaying a partially evaluated exit is unsafe.
++ */
++public final class InitialPositionLockDeadlock extends RuntimeException {
++    public InitialPositionLockDeadlock(RuntimeException cause) { super(cause); }
++
++    public static boolean isMysqlDeadlock(Throwable failure) {
++        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
++        for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause()) {
++            if (cause instanceof SQLException sql && sql.getErrorCode() == 1213
++                    && "40001".equals(sql.getSQLState())) return true;
++        }
++        return false;
++    }
++}
+--- /dev/null
++++ b/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java
+@@ -0,0 +1,76 @@
++package com.crypto.infrastructure.transaction;
++
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.PlatformTransactionManager;
++import org.springframework.transaction.TransactionDefinition;
++import org.springframework.transaction.support.TransactionTemplate;
++
++import java.math.BigDecimal;
++import java.time.Instant;
++
++/** FIX-124: commit market input before locking a position. Execute protection
++ * before publishing the closed-candle event, preserving that ordering. No outer
++ * transaction may retain candle locks while a protection transaction runs.
++ */
++@Service
++public class KlineTransactionCoordinator {
++    private static final Logger log = LoggerFactory.getLogger(KlineTransactionCoordinator.class);
++    private static final int MAX_ATTEMPTS = 2;
++    private final TransactionTemplate transaction;
++    private final Fix124ProtectionStore diagnostics;
++
++    public KlineTransactionCoordinator(PlatformTransactionManager manager, Fix124ProtectionStore diagnostics) {
++        transaction = new TransactionTemplate(manager);
++        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
++        this.diagnostics = diagnostics;
++    }
++
++    public void process(String symbol, String interval, Instant candleOpenTime, Instant observedAt,
++                        BigDecimal price, Runnable persistInput, Runnable protect,
++                        Runnable observe, Runnable publishClosed) {
++        // Candle and exact canonical price observation commit together. A failed
++        // input write must not produce an unrecorded protection decision.
++        transaction.executeWithoutResult(tx -> persistInput.run());
++        if (protect != null) {
++            int attempts = 0;
++            RuntimeException failure = null;
++            do {
++                attempts++;
++                try {
++                    transaction.executeWithoutResult(tx -> protect.run());
++                    failure = null;
++                    break;
++                } catch (RuntimeException ex) {
++                    failure = ex;
++                    // executeWithoutResult has finished rollback before this catch.
++                    // Never retry a late wallet/commit error or an unknown outcome.
++                    if (!(ex instanceof InitialPositionLockDeadlock) || attempts == MAX_ATTEMPTS) break;
++                    log.warn("[FIX-124][PRODUCTION][INITIAL_LOCK_RETRY] symbol={}, candleOpenTime={}, observedAt={}, attempt={}",
++                            symbol, candleOpenTime, observedAt, attempts);
++                }
++            } while (attempts < MAX_ATTEMPTS);
++            if (failure != null || attempts > 1) {
++                String outcome = failure == null ? "RECOVERED" : "FAILED";
++                if (failure == null) {
++                    log.info("[FIX-124][PRODUCTION][RECOVERED] symbol={}, observedAt={}, attempts={}", symbol, observedAt, attempts);
++                } else {
++                    log.error("[FIX-124][PRODUCTION][FAILED] symbol={}, observedAt={}, attempts={}; input committed, protection failed",
++                            symbol, observedAt, attempts, failure);
++                }
++                diagnostics.record(symbol, interval, candleOpenTime, observedAt, price, attempts, outcome, failure);
++            }
++        }
++        if (observe != null) {
++            try {
++                transaction.executeWithoutResult(tx -> observe.run());
++            } catch (RuntimeException ex) {
++                log.warn("[FIX-124][OBSERVER_FAILED] symbol={}; committed input and protection retained", symbol, ex);
++            }
++        }
++        // AFTER_COMMIT listener still receives an actual committed transaction;
++        // publishing outside a transaction would silently drop the analysis event.
++        if (publishClosed != null) transaction.executeWithoutResult(tx -> publishClosed.run());
++    }
++}
+--- a/src/main/java/com/crypto/position/service/LivePositionProtectionService.java
++++ b/src/main/java/com/crypto/position/service/LivePositionProtectionService.java
+@@ -48,9 +48,19 @@
+         if (symbolValue == null || symbolValue.isBlank() || price == null || price.signum() <= 0) return;
+         String symbol = symbolValue.trim().toUpperCase(Locale.ROOT);
+ 
+-        WalletManagedPosition managed = managedPositionRepository
+-                .findFirstBySymbolAndStatusOrderByOpenedAtDesc(symbol, "OPEN")
+-                .orElse(null);
++        // FIX-124: classify ONLY the first lock failure. The caller may retry after
++        // rollback in a fresh transaction; failures after evaluation are not retried.
++        WalletManagedPosition managed;
++        try {
++            managed = managedPositionRepository
++                    .findFirstBySymbolAndStatusOrderByOpenedAtDesc(symbol, "OPEN")
++                    .orElse(null);
++        } catch (RuntimeException failure) {
++            if (com.crypto.infrastructure.transaction.InitialPositionLockDeadlock.isMysqlDeadlock(failure)) {
++                throw new com.crypto.infrastructure.transaction.InitialPositionLockDeadlock(failure);
++            }
++            throw failure;
++        }
+         if (managed == null || managed.getQuantity() == null || managed.getQuantity().signum() <= 0) return;
+ 
+         TradeSignal one = tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "1m").orElse(null);
+--- /dev/null
++++ b/src/main/java/com/crypto/regression/controller/Fix124DiagnosticsController.java
+@@ -0,0 +1,40 @@
++package com.crypto.regression.controller;
++
++import lombok.RequiredArgsConstructor;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.web.bind.annotation.*;
++import java.util.*;
++
++/** FIX-124: Production incident history for the selected review window. This is
++ * NOT simulated Replay output and must never be consumed by trading services. */
++@RestController
++@RequestMapping("/api/administration/regression-tests")
++@RequiredArgsConstructor
++public class Fix124DiagnosticsController {
++    private final JdbcTemplate jdbc;
++
++    @GetMapping("/runs/{id}/fix124")
++    public Map<String,Object> run(@PathVariable long id) {
++        return rows(jdbc.queryForMap("SELECT symbol,start_time,end_time FROM analysis_test_run WHERE id=?", id));
++    }
++    @GetMapping("/archives/{id}/fix124")
++    public Map<String,Object> archive(@PathVariable long id) {
++        return rows(jdbc.queryForMap("SELECT symbol,start_time,end_time FROM regression_test_archive_batch WHERE id=?", id));
++    }
++    @GetMapping("/proven-trades/{id}/fix124")
++    public Map<String,Object> proven(@PathVariable long id) {
++        // Use the saved trade's own identity/window, never a reused Replay run ID.
++        return rows(jdbc.queryForMap("SELECT symbol,entry_time AS start_time,COALESCE(exit_time,entry_time) AS end_time FROM proven_analyzed_trade WHERE id=?", id));
++    }
++    private Map<String,Object> rows(Map<String,Object> window) {
++        List<Map<String,Object>> rows = jdbc.queryForList("""
++                SELECT id,symbol,interval_code,candle_open_time,observed_at,price,attempts,outcome,error_message
++                FROM fix124_protection_incident
++                WHERE symbol=? AND observed_at>=? AND observed_at<=?
++                ORDER BY observed_at,id LIMIT 501
++                """, window.get("symbol"), window.get("start_time"), window.get("end_time"));
++        boolean truncated = rows.size() > 500;
++        return Map.of("scope", "PRODUCTION_HISTORY", "truncated", truncated,
++                "rows", truncated ? rows.subList(0,500) : rows);
++    }
++}
+--- a/src/main/java/com/crypto/service/BinanceKlineService.java
++++ b/src/main/java/com/crypto/service/BinanceKlineService.java
+@@ -7,11 +7,11 @@
+ import com.crypto.market.service.MarketPriceEventService;
+ import com.fasterxml.jackson.databind.JsonNode;
+ 
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+ import org.springframework.context.ApplicationEventPublisher;
+ import org.springframework.stereotype.Service;
+ import org.springframework.transaction.annotation.Transactional;
++import org.springframework.transaction.annotation.Propagation;
++import com.crypto.infrastructure.transaction.KlineTransactionCoordinator;
+ 
+ import java.math.BigDecimal;
+ import java.time.Instant;
+@@ -19,8 +19,7 @@
+ 
+ @Service
+ public class BinanceKlineService {
+-    private static final Logger log =
+-            LoggerFactory.getLogger(BinanceKlineService.class);
++    private final KlineTransactionCoordinator transactions;
+     private final CandleRepository candleRepository;
+     private final ApplicationEventPublisher eventPublisher;
+     private final LivePositionProtectionService livePositionProtectionService;
+@@ -32,8 +31,10 @@
+             ApplicationEventPublisher eventPublisher,
+             LivePositionProtectionService livePositionProtectionService,
+             PriceMoveMonitorService priceMoveMonitorService,
+-            MarketPriceEventService marketPriceEventService
++            MarketPriceEventService marketPriceEventService,
++            KlineTransactionCoordinator transactions
+     ) {
++        this.transactions = transactions;
+         this.candleRepository = candleRepository;
+         this.eventPublisher = eventPublisher;
+         this.livePositionProtectionService = livePositionProtectionService;
+@@ -41,7 +42,8 @@
+         this.marketPriceEventService = marketPriceEventService;
+     }
+ 
+-    @Transactional
++    // FIX-124: no suspended caller transaction may retain market-data locks.
++    @Transactional(propagation = Propagation.NEVER)
+     public boolean processKline(JsonNode root) {
+ 
+         JsonNode data = root.has("data")
+@@ -77,77 +79,23 @@
+                 .asBoolean(false);
+         BigDecimal livePrice = decimal(kline, "c");
+ 
+-        candleRepository.upsert(
+-                symbol,
+-                intervalCode,
+-                openTime,
+-                closeTime,
+-                decimal(kline, "o"),
+-                decimal(kline, "h"),
+-                decimal(kline, "l"),
+-                livePrice,
+-                decimal(kline, "v"),
+-                decimal(kline, "q"),
+-                kline.path("n").asLong(),
+-                decimal(kline, "V"),
+-                decimal(kline, "Q"),
+-                closed
+-        );
+-
+-        // Mechanical position protection must react to live price updates, not wait
+-        // for a candle-close analysis signal. Use the 1m stream as the canonical live feed
+-        // to avoid duplicate checks from 5m/1h subscriptions.
+-        if ("1m".equals(intervalCode)) {
+-            // FIX-052: persist the exact canonical live-price observation BEFORE
+-            // Production position protection consumes it. Replay later uses this
+-            // same UTC-timestamped event stream and ordering instead of candle-close
+-            // approximations for TP/SL/profit-lock decisions.
+-            Instant observedAt = data.path("E").asLong(0L) > 0
+-                    ? Instant.ofEpochMilli(data.path("E").asLong())
+-                    : Instant.now();
+-            try {
+-                marketPriceEventService.record(symbol, livePrice, observedAt);
+-            } catch (RuntimeException ex) {
+-                log.error("Unable to persist live price event for exact Replay parity: symbol={}, price={}, observedAt={}, error={}",
+-                        symbol, livePrice, observedAt, ex.getMessage(), ex);
+-            }
+-            try {
+-                livePositionProtectionService.onPrice(symbol, livePrice);
+-            } catch (RuntimeException ex) {
+-                log.error("Live position protection failed: symbol={}, price={}, error={}",
+-                        symbol, livePrice, ex.getMessage(), ex);
+-            }
+-            try {
+-                // DEBUG-ONLY one-way observer. It records price moves and cannot influence trading decisions.
+-                priceMoveMonitorService.onPrice(symbol, livePrice, Instant.now());
+-            } catch (RuntimeException ex) {
+-                log.warn("Debug price move monitor failed: symbol={}, price={}, error={}",
+-                        symbol, livePrice, ex.getMessage());
+-            }
+-        }
+-
+-        
+-        log.info(
+-        	    "before closed event triggered fro symbol ={}, interval={}",
+-        	    symbol,
+-        	    intervalCode
+-        	);
+-        
+-        if (closed) {
+-        	
+-        	 log.info(
+-             	    "closed event triggered fro symbol ={}, interval={}",
+-             	    symbol,
+-             	    intervalCode
+-             	);
+-            eventPublisher.publishEvent(
+-                    new CandleClosedEvent(
+-                            symbol,
+-                            intervalCode,
+-                            openTime
+-                    )
+-            );
+-        }
++        Instant observedAt = data.path("E").asLong(0L) > 0
++                ? Instant.ofEpochMilli(data.path("E").asLong()) : Instant.now();
++        boolean canonical = "1m".equals(intervalCode);
++        // FIX-124: input commit -> protection commit/rollback -> observer -> close
++        // dispatch. Exact candle identity and Binance observation time are retained.
++        transactions.process(symbol, intervalCode, openTime, observedAt, livePrice,
++                () -> {
++                    candleRepository.upsert(
++                            symbol, intervalCode, openTime, closeTime,
++                            decimal(kline, "o"), decimal(kline, "h"), decimal(kline, "l"), livePrice,
++                            decimal(kline, "v"), decimal(kline, "q"), kline.path("n").asLong(),
++                            decimal(kline, "V"), decimal(kline, "Q"), closed);
++                    if (canonical) marketPriceEventService.record(symbol, livePrice, observedAt);
++                },
++                canonical ? () -> livePositionProtectionService.onPrice(symbol, livePrice) : null,
++                canonical ? () -> priceMoveMonitorService.onPrice(symbol, livePrice, Instant.now()) : null,
++                closed ? () -> eventPublisher.publishEvent(new CandleClosedEvent(symbol, intervalCode, openTime)) : null);
+ 
+         return closed;
+     }
+--- /dev/null
++++ b/src/main/resources/db/migration/V84__fix_124_protection_incidents.sql
+@@ -0,0 +1,15 @@
++-- FIX-124: Production incident history, independent of failed wallet transactions.
++-- Exact candle lineage is retained; these rows are NOT Replay decision inputs.
++CREATE TABLE fix124_protection_incident (
++    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
++    symbol VARCHAR(30) NOT NULL,
++    interval_code VARCHAR(10) NOT NULL,
++    candle_open_time TIMESTAMP(6) NOT NULL,
++    observed_at TIMESTAMP(6) NOT NULL,
++    price DECIMAL(30,12) NOT NULL,
++    attempts INT NOT NULL,
++    outcome VARCHAR(20) NOT NULL,
++    error_message MEDIUMTEXT NULL,
++    recorded_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
++    KEY idx_fix124_symbol_observed (symbol, observed_at, id)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+--- a/src/main/resources/static/js/fix-registry.js
++++ b/src/main/resources/static/js/fix-registry.js
+@@ -1,7 +1,7 @@
+ (() => {
+     const FIXES = [
+         {"id": "FIX-125", "title": "Wallet transaction coordination through commit", "status": "PLANNED — TO BE DONE", "scenario": "A synchronized wallet method can release its monitor before the surrounding Spring transaction commits.", "cause": "Possible monitor-release/commit race identified structurally; an actual failure has not been reproduced. This is distinct from the reported deadlocks.", "solution": "First reproduce the ordering with a deterministic concurrency test. Then coordinate the relevant wallet BUY/SELL paths through transaction completion, including rollback, without bundling sizing or unrelated deadlock repairs.", "behavior": "Reservation only. Not implemented. FIX-122 committed reads and its later recheck do not close this race window.", "regression": "Pending deterministic reproduction, commit/rollback and concurrent BUY/SELL tests; verify Production coordination and Replay decision parity.", "symbol": "ALL", "entry": "PLANNED", "exit": "UNCHANGED", "entryTime": "NOT IMPLEMENTED", "exitTime": "UNCHANGED", "replayWindow": "To be selected from the reproduced scenario; no performance or profitability claim.", "location": "Wallet transaction coordination — separate from FIX-124", "classes": ["md/FIX-125.md"]},
+-        {"id": "FIX-124", "title": "Wallet deadlock investigation and evidence-based repair", "status": "PLANNED — TO BE DONE", "scenario": "Team reports wallet_managed_position deadlocks; incidents and lock ordering require independent verification.", "cause": "Actual deadlock cause is not yet established here. A possible transaction visibility race is also unproven and must not be conflated with deadlocks.", "solution": "Inspect incident/deadlock evidence, reproduce the failure, and propose one scoped correction with concurrency and rollback tests. Transaction monitor-release/commit coordination is reserved separately as FIX-125.", "behavior": "Planning only. No wallet locking, transaction ordering or trading behavior changed by this entry.", "regression": "Pending investigation and separately reviewed implementation.", "symbol": "ALL", "entry": "PLANNED", "exit": "UNCHANGED", "entryTime": "NOT IMPLEMENTED", "exitTime": "UNCHANGED", "replayWindow": "Identical OLD/NEW windows with complete preceding stop and winning/losing controls.", "location": "Separate planned work", "classes": ["md/FIX-124.md"]},
++        {"id": "FIX-124", "title": "Live protection deadlock recovery and input isolation", "status": "CANDIDATE — MAVEN/MYSQL VALIDATION PENDING", "scenario": "Trader logs confirm four deadlocks; UNI live protection failed at its initial managed-position lock and rolled back the shared kline transaction.", "cause": "Shared transaction spreads protection rollback into input persistence. Exact trader competing lock cycle remains unproven.", "solution": "Commit candle/exact price before protection; retry only initial MySQL 1213/40001 once after rollback; persist incident outcomes and show Production history in Proven review.", "behavior": "Transaction boundaries and failure recovery change. Business formulas unchanged. Other analysis/recovery deadlocks and FIX-125 commit coordination remain open.", "regression": "H2 transaction and first-lock tests added but Maven unavailable. Node checks passed; MySQL reproduction and historical parity pending.", "symbol": "ALL", "entry": "UNCHANGED RULES", "exit": "UNCHANGED", "entryTime": "LIVE PRICE", "exitTime": "UNCHANGED", "replayWindow": "Identical OLD/NEW windows with complete preceding stop and winning/losing controls.", "location": "Kline transaction boundary / Proven incident history", "classes": ["KlineTransactionCoordinator", "InitialPositionLockDeadlock", "Fix124ProtectionStore", "BinanceKlineService", "Fix124DiagnosticsController", "md/FIX-124.md"]},
+         {"id": "FIX-123", "title": "ATR-overextended ACCUMULATED_EVIDENCE sizing review", "status": "PLANNED — TO BE DONE", "scenario": "Team proposes larger already-qualified accumulated-evidence entries when ATR-overextended.", "cause": "Population totals, initial-entry/add attribution, winners-only validation and scope mismatch remain unresolved.", "solution": "Reconstruct full positions with wins and losses, confirm exact cohort and existing caps, then define and evaluate a precise sizing change on the accepted baseline.", "behavior": "Planning only. No sizing change. No proposed amount or multiplier is approved.", "regression": "Pending corrected analysis, separate approval and Production/Replay sizing tests.", "symbol": "ALL", "entry": "PLANNED", "exit": "UNCHANGED", "entryTime": "NOT IMPLEMENTED", "exitTime": "UNCHANGED", "replayWindow": "Identical OLD/NEW windows with complete preceding stop and winning/losing controls.", "location": "Separate planned work", "classes": ["md/FIX-123.md"]},
+         {"id": "FIX-122", "title": "Fresh entry evidence after a completed stop-loss", "status": "IMPLEMENTED — ENABLED BY DEFAULT — MAVEN VALIDATION PENDING", "scenario": "BICO #1814/#1817, ALLO #1826 and ICP #1811 can reuse pre-stop BUY evidence; ONG #1832 also has a pre-stop deferred origin.", "cause": "Opportunity completion does not restrict the rolling historical signal evidence or deferred-origin selectors.", "solution": "Use committed STOP_LOSS wallet history and run-local Replay stops to filter initial-entry evidence and deferred origins by exact 1m candle close. Recheck stamped approvals at execution-price validation. Persist blocked/allowed evaluations and show them in Proven / Analyze Trades.", "behavior": "Production and Replay enabled by default. Entry eligibility and derived evidence/allocation can change. No cooldown or new scoring/sizing formula. Additions and exits remain on the existing path. Lookup errors defer new entries. No wallet concurrency/deadlock repair included.", "regression": "New Maven/JUnit policy, service, evidence integration and database tests added; Maven unavailable in authoring environment. Standalone policy and UI checks reported in md/FIX-122.md; historical OLD/NEW P/L comparison pending.", "symbol": "ALL", "entry": "INITIAL ENTRY", "exit": "UNCHANGED", "entryTime": "Post-stop evaluation", "exitTime": "UNCHANGED", "replayWindow": "Identical OLD/NEW windows with complete preceding stop and winning/losing controls.", "location": "Production and Replay execution / Proven analysis", "classes": ["StopLossEvidencePolicy", "StopLossEvidenceStore", "StopLossEvidenceService", "ExecutionIntelligenceService", "ExecutionReplayScope", "ShadowProductionReplayService", "Fix122DiagnosticsController", "V83__fix_122_stop_evidence_diagnostics.sql", "md/FIX-122.md"]},
+ 
+--- a/src/main/resources/static/js/proven-analyzed-trades.js
++++ b/src/main/resources/static/js/proven-analyzed-trades.js
+@@ -155,7 +155,7 @@
+         body.innerHTML = rows.map(a => `<tr>
+             <td>#${a.archive_batch_id}</td><td>#${a.source_test_run_id}</td><td><strong>${escapeHtml(a.test_name)}</strong></td>
+             <td>${escapeHtml(a.symbol)}</td><td>${formatMoveTime(a.start_time)} → ${formatMoveTime(a.end_time)}</td>
+-            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button></td>
++            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button> <button type="button" class="secondary-button" data-fix124-proven-id="${trade.id}">Protection incidents</button></td>
+         </tr>`).join('') || '<tr><td colspan="7">No archived test runs yet.</td></tr>';
+         return rows;
+     } catch (error) { body.innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`; return []; }
+@@ -628,7 +628,8 @@
+             api(`${base}/opportunities`),
+             api(`${base}/trades`),
+             api(`${base}/position-management`),
+-            api(`${base}/fix122`)
++            api(`${base}/fix122`),
++            api(`${base}/fix124`)
+         ]);
+         if (requestToken !== regressionDetailRequestToken) return finished;
+         const signals = detailResults[0].status === 'fulfilled' ? detailResults[0].value : [];
+@@ -636,6 +637,7 @@
+         const trades = detailResults[2].status === 'fulfilled' ? detailResults[2].value : [];
+         // FIX-122: failure is visible; it must never render as a successful rule check.
+         renderFix122(detailResults[4]);
++        renderFix124(detailResults[5]);
+         const management = detailResults[3].status === 'fulfilled' ? detailResults[3].value : [];
+ 
+         // FIX-11O: always expose fresh directional Replay signals independently of the BUY-centric
+@@ -716,8 +718,9 @@
+ async function loadRegressionArchiveDetail(archiveBatchId) {
+     const base = `/api/administration/regression-tests/archives/${archiveBatchId}`;
+     const [run, trades] = await Promise.all([api(base), api(`${base}/trades`)]);
+-    const fix122=await Promise.allSettled([api(`${base}/fix122`)]);
++    const fix122=await Promise.allSettled([api(`${base}/fix122`), api(`${base}/fix124`)]);
+     renderFix122(fix122[0]);
++    renderFix124(fix122[1]);
+     const panel = document.getElementById('regression-archive-detail');
+     const body = document.getElementById('regression-archive-trades-body');
+     if (!panel || !body) return;
+@@ -1585,6 +1588,44 @@
+     } finally { button.disabled=false; }
+ });
+ 
++// FIX-124: never label absent historical diagnostics as a successful protection test.
++function renderFix124(result) {
++    const panel = document.getElementById('fix124-panel');
++    const summary = document.getElementById('fix124-summary');
++    const body = document.getElementById('fix124-body');
++    if (!panel || !summary || !body) return;
++    panel.classList.remove('hidden');
++    body.replaceChildren();
++    if (!result || result.status !== 'fulfilled') {
++        summary.textContent = 'Protection incident history could not be loaded.';
++        return;
++    }
++    const data = result.value;
++    summary.textContent = 'Production incident history for this window; not simulated Replay results. '
++        + (data.truncated ? 'Showing first 500 incidents. ' : '')
++        + 'Recording begins with FIX-124; an empty list does not prove every protection check succeeded.';
++    for (const row of data.rows || []) {
++        const tr = document.createElement('tr');
++        for (const value of [row.symbol, row.candle_open_time, row.observed_at, row.price,
++                             row.attempts, row.outcome, row.error_message || '']) {
++            const td = document.createElement('td');
++            td.textContent = String(value ?? '');
++            tr.appendChild(td);
++        }
++        body.appendChild(tr);
++    }
++}
++document.addEventListener('click', async event => {
++    const button = event.target.closest('[data-fix124-proven-id]');
++    if (!button) return;
++    button.disabled = true;
++    try {
++        const results = await Promise.allSettled([api(`/api/administration/regression-tests/proven-trades/${encodeURIComponent(button.dataset.fix124ProvenId)}/fix124`)]);
++        renderFix124(results[0]);
++        document.getElementById('fix124-panel')?.scrollIntoView({behavior:'smooth'});
++    } finally { button.disabled = false; }
++});
++
+ // FIX-122: persisted per-evaluation evidence, escaped before HTML insertion.
+ function renderFix122(result) {
+     const panel=document.getElementById('fix122-panel');
+@@ -1609,3 +1650,4 @@
+         <td><details><summary>${escapeHtml(p.status||'Details')} · ${(p.excluded||[]).length} exclusions</summary><pre>${escapeHtml(exclusions||'No observations excluded.')}</pre><p>${escapeHtml(p.explanation||'')}</p><small>Evaluation result; wallet execution is recorded separately.</small></details></td></tr>`;
+     }).join('') || '<tr><td colspan="6">No FIX-122 evaluations recorded for this window.</td></tr>';
+ }
++
+--- a/src/main/resources/static/proven-analyzed-trades.html
++++ b/src/main/resources/static/proven-analyzed-trades.html
+@@ -176,6 +176,12 @@
+ 
+ 
+ <!-- FIX-122 includes evaluations that did not produce a trade. -->
++<!-- FIX-124: persisted Production incidents, clearly separated from Replay outcomes. -->
++<section id="fix124-panel" class="regression-detail hidden">
++<h3>FIX-124 · Production protection incidents</h3>
++<p id="fix124-summary"></p>
++<div class="table-responsive"><table><thead><tr><th>Symbol</th><th>Candle open (UTC)</th><th>Observed (UTC)</th><th>Price</th><th>Attempts</th><th>Outcome</th><th>Error</th></tr></thead><tbody id="fix124-body"></tbody></table></div>
++</section>
+ <section id="fix122-panel" class="regression-detail hidden">
+ <h3>FIX-122 · Post-stop entry evidence</h3>
+ <p id="fix122-summary">Not recorded.</p>
+--- /dev/null
++++ b/src/test/java/com/crypto/infrastructure/transaction/BinanceKlineTransactionTest.java
+@@ -0,0 +1,67 @@
++package com.crypto.infrastructure.transaction;
++
++import com.crypto.service.BinanceKlineService;
++import com.crypto.repository.CandleRepository;
++import com.crypto.position.service.LivePositionProtectionService;
++import com.crypto.debug.monitor.service.PriceMoveMonitorService;
++import com.crypto.market.service.MarketPriceEventService;
++import com.crypto.indicator.event.CandleClosedEvent;
++import com.fasterxml.jackson.databind.ObjectMapper;
++import org.junit.jupiter.api.Test;
++import org.springframework.context.ApplicationEventPublisher;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.jdbc.datasource.DriverManagerDataSource;
++import org.springframework.jdbc.datasource.DataSourceTransactionManager;
++import org.springframework.transaction.support.TransactionSynchronization;
++import org.springframework.transaction.support.TransactionSynchronizationManager;
++import java.math.BigDecimal;
++import java.time.Instant;
++import java.util.*;
++import static org.junit.jupiter.api.Assertions.*;
++import static org.mockito.Mockito.*;
++import static org.mockito.ArgumentMatchers.*;
++
++class BinanceKlineTransactionTest {
++    @Test void exactPriceCommitsBeforeProtectionAndCloseDispatchFollowsProtection() throws Exception {
++        var ds=new DriverManagerDataSource("jdbc:h2:mem:"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1","sa","");
++        var jdbc=new JdbcTemplate(ds);
++        jdbc.execute("CREATE TABLE market_price_event(id BIGINT AUTO_INCREMENT PRIMARY KEY,symbol VARCHAR(30),observed_at TIMESTAMP(6),price DECIMAL(30,12),source VARCHAR(40))");
++        var manager=new DataSourceTransactionManager(ds);
++        var coordinator=new KlineTransactionCoordinator(manager,mock(Fix124ProtectionStore.class));
++        var candle=mock(CandleRepository.class);
++        var protection=mock(LivePositionProtectionService.class);
++        var observer=mock(PriceMoveMonitorService.class);
++        List<String> order=new ArrayList<>();
++        doAnswer(invocation->{
++            // Independent connection can see the exact event: input commit finished.
++            try(var connection=ds.getConnection();var statement=connection.createStatement();
++                var rows=statement.executeQuery("SELECT COUNT(*) FROM market_price_event")) {
++                assertTrue(rows.next());assertEquals(1,rows.getInt(1));
++            }
++            assertEquals(new BigDecimal("7.046"),invocation.getArgument(1));
++            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization(){
++                @Override public void afterCommit(){order.add("protection committed");}
++            });
++            return null;
++        }).when(protection).onPrice(eq("UNIUSDT"),any());
++        ApplicationEventPublisher publisher=event->{
++            assertInstanceOf(CandleClosedEvent.class,event);
++            assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
++            assertEquals(List.of("protection committed"),order);
++            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization(){
++                @Override public void afterCommit(){order.add("close dispatched");}
++            });
++        };
++        var service=new BinanceKlineService(candle,publisher,protection,observer,new MarketPriceEventService(jdbc),coordinator);
++        var message=new ObjectMapper().readTree("""
++                {"E":1788846065434,"k":{"s":"UNIUSDT","i":"1m","t":1788846060000,"T":1788846119999,
++                "x":true,"o":"7","h":"7.1","l":"6.9","c":"7.046","v":"20","q":"140","n":4,"V":"10","Q":"70"}}
++                """);
++        assertTrue(service.processKline(message));
++        assertEquals(List.of("protection committed","close dispatched"),order);
++        assertEquals(Instant.ofEpochMilli(1788846065434L),jdbc.queryForObject("SELECT observed_at FROM market_price_event",java.sql.Timestamp.class).toInstant());
++        verify(candle).upsert(eq("UNIUSDT"),eq("1m"),eq(Instant.ofEpochMilli(1788846060000L)),
++                eq(Instant.ofEpochMilli(1788846119999L)),any(),any(),any(),eq(new BigDecimal("7.046")),any(),any(),eq(4L),any(),any(),eq(true));
++        verify(observer).onPrice(eq("UNIUSDT"),eq(new BigDecimal("7.046")),any());
++    }
++}
+--- /dev/null
++++ b/src/test/java/com/crypto/infrastructure/transaction/InitialPositionLockDeadlockTest.java
+@@ -0,0 +1,15 @@
++package com.crypto.infrastructure.transaction;
++
++import org.junit.jupiter.api.Test;
++import java.sql.SQLException;
++import static org.junit.jupiter.api.Assertions.*;
++
++class InitialPositionLockDeadlockTest {
++    @Test void onlyMysql1213With40001IsRetryable() {
++        assertTrue(InitialPositionLockDeadlock.isMysqlDeadlock(new RuntimeException(new SQLException("deadlock","40001",1213))));
++        assertFalse(InitialPositionLockDeadlock.isMysqlDeadlock(new SQLException("timeout","HY000",1205)));
++        assertFalse(InitialPositionLockDeadlock.isMysqlDeadlock(new SQLException("message too long","22001",1406)));
++        assertFalse(InitialPositionLockDeadlock.isMysqlDeadlock(new SQLException("serialization","40001",0)));
++        assertFalse(InitialPositionLockDeadlock.isMysqlDeadlock(new IllegalStateException("Deadlock found")));
++    }
++}
+--- /dev/null
++++ b/src/test/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinatorTest.java
+@@ -0,0 +1,115 @@
++package com.crypto.infrastructure.transaction;
++
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.jdbc.datasource.DriverManagerDataSource;
++import org.springframework.jdbc.datasource.DataSourceTransactionManager;
++import org.springframework.transaction.support.TransactionSynchronization;
++import org.springframework.transaction.support.TransactionSynchronizationManager;
++import org.springframework.transaction.support.TransactionTemplate;
++import java.math.BigDecimal;
++import java.sql.SQLException;
++import java.time.Instant;
++import java.util.*;
++import java.util.concurrent.atomic.AtomicInteger;
++import static org.junit.jupiter.api.Assertions.*;
++
++/** FIX-124: real JDBC commit/rollback boundaries with controlled failure injection.
++ * This reproduces rollback propagation, NOT the unknown MySQL competing lock cycle.
++ */
++class KlineTransactionCoordinatorTest {
++    JdbcTemplate jdbc;
++    DataSourceTransactionManager manager;
++    KlineTransactionCoordinator coordinator;
++    List<String> order;
++    final Instant at = Instant.parse("2026-09-08T05:41:05.434Z");
++    @BeforeEach void setup() {
++        var ds = new DriverManagerDataSource("jdbc:h2:mem:"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
++        jdbc = new JdbcTemplate(ds);
++        manager = new DataSourceTransactionManager(ds);
++        jdbc.execute("CREATE TABLE writes(id INT PRIMARY KEY, label VARCHAR(40))");
++        jdbc.execute("CREATE TABLE fix124_protection_incident(id BIGINT AUTO_INCREMENT PRIMARY KEY,symbol VARCHAR(30),interval_code VARCHAR(10),candle_open_time TIMESTAMP(6),observed_at TIMESTAMP(6),price DECIMAL(30,12),attempts INT,outcome VARCHAR(20),error_message CLOB)");
++        coordinator = new KlineTransactionCoordinator(manager, new Fix124ProtectionStore(ds,manager));
++        order = new ArrayList<>();
++    }
++    InitialPositionLockDeadlock deadlock() {
++        return new InitialPositionLockDeadlock(new RuntimeException(new SQLException("deadlock", "40001",1213)));
++    }
++    void committed(String label) {
++        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
++            @Override public void afterCommit() { order.add(label); }
++        });
++    }
++    void process(Runnable protect, Runnable observer) {
++        coordinator.process("UNIUSDT","1m",at.minusSeconds(5),at,new BigDecimal("7.046"),
++                () -> { jdbc.update("INSERT INTO writes VALUES(1,'candle'),(2,'exact price')"); committed("input"); },
++                protect, observer, () -> { committed("closed event"); });
++    }
++    @Test void initialDeadlockRollsBackThenRetriesAndCommitsExactlyOnce() {
++        AtomicInteger attempts = new AtomicInteger();
++        process(() -> {
++            assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));
++            // Synthetic write makes rollback observable; the real initial lock has no wallet writes.
++            jdbc.update("INSERT INTO writes VALUES(3,'protection')");
++            if (attempts.incrementAndGet()==1) throw deadlock();
++            committed("protection");
++        }, () -> committed("observer"));
++        assertEquals(2,attempts.get());
++        assertEquals(3,jdbc.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));
++        assertEquals(List.of("input","protection","observer","closed event"),order);
++        assertEquals("RECOVERED",jdbc.queryForObject("SELECT outcome FROM fix124_protection_incident",String.class));
++        assertEquals(2,jdbc.queryForObject("SELECT attempts FROM fix124_protection_incident",Integer.class));
++    }
++    @Test void exhaustionRetainsInputAndDispatchesClosureAfterTwoAttempts() {
++        AtomicInteger attempts = new AtomicInteger();
++        process(() -> { attempts.incrementAndGet(); throw deadlock(); },null);
++        assertEquals(2,attempts.get());
++        assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));
++        assertEquals(List.of("input","closed event"),order);
++        assertEquals("FAILED",jdbc.queryForObject("SELECT outcome FROM fix124_protection_incident",String.class));
++    }
++    @Test void lateWalletFailureIsRolledBackWithoutRetryOrDuplicateExecution() {
++        AtomicInteger attempts = new AtomicInteger();
++        process(() -> {
++            attempts.incrementAndGet();
++            jdbc.update("INSERT INTO writes VALUES(3,'wallet')");
++            throw new RuntimeException(new SQLException("late deadlock", "40001",1213));
++        },null);
++        assertEquals(1,attempts.get());
++        assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));
++        assertEquals(List.of("input","closed event"),order);
++    }
++    @Test void inputFailurePreventsProtectionAndCloseDispatch() {
++        assertThrows(RuntimeException.class, () -> coordinator.process("UNIUSDT","1m",at,at,BigDecimal.ONE,
++                () -> { jdbc.update("INSERT INTO writes VALUES(1,'candle')"); throw new IllegalStateException("price insert failed"); },
++                () -> fail("unrecorded input must not trade"),null,() -> fail("must not publish")));
++        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));
++    }
++    @Test void observerRollbackCannotUndoInputOrCommittedProtection() {
++        process(() -> { jdbc.update("INSERT INTO writes VALUES(3,'wallet')"); committed("protection"); },
++                () -> { jdbc.update("INSERT INTO writes VALUES(4,'observer')"); throw new IllegalStateException("observer failure"); });
++        assertEquals(3,jdbc.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));
++        assertEquals(List.of("input","protection","closed event"),order);
++    }
++    @Test void oldSharedTransactionLosesInputAfterCaughtParticipantFailure() {
++        var outer = new TransactionTemplate(manager);
++        var joined = new TransactionTemplate(manager);
++        assertThrows(org.springframework.transaction.UnexpectedRollbackException.class, () -> outer.executeWithoutResult(tx -> {
++            jdbc.update("INSERT INTO writes VALUES(1,'candle')");
++            try { joined.executeWithoutResult(inner -> { throw deadlock(); }); }
++            catch (InitialPositionLockDeadlock ignored) { /* former catch-and-continue */ }
++        }));
++        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));
++    }
++    @Test void diagnosticFailureDoesNotSuppressCloseDispatch() {
++        jdbc.execute("DROP TABLE fix124_protection_incident");
++        process(() -> { throw deadlock(); },null);
++        assertEquals(List.of("input","closed event"),order);
++    }
++    @Test void healthyTickWritesNoIncidentAndNonCanonicalStreamDoesNotProtect() {
++        process(null,null);
++        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM fix124_protection_incident",Integer.class));
++        assertEquals(List.of("input","closed event"),order);
++    }
++}
+--- /dev/null
++++ b/src/test/java/com/crypto/infrastructure/transaction/LiveProtectionInitialLockTest.java
+@@ -0,0 +1,38 @@
++package com.crypto.infrastructure.transaction;
++
++import com.crypto.position.service.*;
++import com.crypto.audit.service.ProductionExitAuditService;
++import com.crypto.wallet.repository.WalletManagedPositionRepository;
++import com.crypto.wallet.service.WalletAutoExecutionService;
++import com.crypto.repository.PaperPositionRepository;
++import com.crypto.repository.TradeSignalRepository;
++import com.crypto.wallet.domain.WalletManagedPosition;
++import org.junit.jupiter.api.Test;
++import org.springframework.dao.CannotAcquireLockException;
++import java.math.BigDecimal;
++import java.sql.SQLException;
++import java.util.Optional;
++import static org.junit.jupiter.api.Assertions.*;
++import static org.mockito.Mockito.*;
++
++class LiveProtectionInitialLockTest {
++    @Test void initialLockIsMarkedButFailureAfterLockIsNeverMarked() {
++        var positions=mock(WalletManagedPositionRepository.class);
++        var signals=mock(TradeSignalRepository.class);
++        var wallet=mock(WalletAutoExecutionService.class);
++        var service=new LivePositionProtectionService(positions,mock(PaperPositionRepository.class),
++                mock(DynamicProfitLockService.class),mock(PositionContinuationPolicy.class),
++                mock(PositionExitPolicy.class),signals,wallet,mock(ProductionExitAuditService.class),
++                mock(com.crypto.position.repository.PositionManagementEventRepository.class),
++                mock(NearTpFailureProtectionPolicy.class));
++        var error=new CannotAcquireLockException("deadlock",new SQLException("deadlock","40001",1213));
++        when(positions.findFirstBySymbolAndStatusOrderByOpenedAtDesc("UNIUSDT","OPEN")).thenThrow(error);
++        assertThrows(InitialPositionLockDeadlock.class,()->service.onPrice("UNIUSDT",BigDecimal.ONE));
++        verifyNoInteractions(wallet,signals);
++        doReturn(Optional.of(WalletManagedPosition.builder().quantity(BigDecimal.ONE).build()))
++                .when(positions).findFirstBySymbolAndStatusOrderByOpenedAtDesc("UNIUSDT","OPEN");
++        when(signals.findTopBySymbolAndIntervalOrderByGeneratedAtDesc("UNIUSDT","1m")).thenThrow(error);
++        assertSame(error,assertThrows(CannotAcquireLockException.class,()->service.onPrice("UNIUSDT",BigDecimal.ONE)));
++        verifyNoInteractions(wallet);
++    }
++}
+--- /dev/null
++++ b/src/test/js/fix124-diagnostics.test.cjs
+@@ -0,0 +1,25 @@
++const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
++const assert=require('node:assert/strict'),{test}=require('node:test');
++const source=fs.readFileSync(path.resolve(__dirname,'../../main/resources/static/js/proven-analyzed-trades.js'),'utf8');
++function node(){return {textContent:'',children:[],classList:{remove(){}},replaceChildren(){this.children=[]},appendChild(n){this.children.push(n)}};}
++function render(result){
++ const nodes=Object.fromEntries(['fix124-panel','fix124-summary','fix124-body'].map(id=>[id,node()]));
++ const ctx=vm.createContext({document:{getElementById:id=>nodes[id],createElement:()=>node()}});
++ const start=source.indexOf('function renderFix124(');
++ vm.runInContext(source.slice(start,source.indexOf("document.addEventListener('click'",start)),ctx);
++ ctx.renderFix124(result);return nodes;
++}
++test('failed fetch is visible',()=>assert.match(render({status:'rejected'})['fix124-summary'].textContent,/could not be loaded/));
++test('empty history does not claim successful protection or Replay parity',()=>{
++ const n=render({status:'fulfilled',value:{rows:[]}});
++ assert.match(n['fix124-summary'].textContent,/not simulated Replay/);
++ assert.match(n['fix124-summary'].textContent,/does not prove/);
++});
++test('outcomes and exact lineage render as text, never executable HTML',()=>{
++ const n=render({status:'fulfilled',value:{rows:[{symbol:'UNIUSDT',candle_open_time:'2026-09-08T05:41:00Z',observed_at:'2026-09-08T05:41:05.434Z',price:'7.046',attempts:2,outcome:'FAILED',error_message:'<img onerror=alert(1)>'}]}});
++ const cells=n['fix124-body'].children[0].children;
++ assert.equal(cells[1].textContent,'2026-09-08T05:41:00Z');
++ assert.equal(cells[4].textContent,'2');assert.equal(cells[5].textContent,'FAILED');
++ assert.equal(cells[6].textContent,'<img onerror=alert(1)>');
++ assert.equal(cells[6].innerHTML,undefined);
++});

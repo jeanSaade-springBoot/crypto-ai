@@ -155,7 +155,7 @@ async function loadRegressionArchives() {
         body.innerHTML = rows.map(a => `<tr>
             <td>#${a.archive_batch_id}</td><td>#${a.source_test_run_id}</td><td><strong>${escapeHtml(a.test_name)}</strong></td>
             <td>${escapeHtml(a.symbol)}</td><td>${formatMoveTime(a.start_time)} → ${formatMoveTime(a.end_time)}</td>
-            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button></td>
+            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button> <button type="button" class="secondary-button" data-fix124-proven-id="${trade.id}">Protection incidents</button></td>
         </tr>`).join('') || '<tr><td colspan="7">No archived test runs yet.</td></tr>';
         return rows;
     } catch (error) { body.innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`; return []; }
@@ -628,7 +628,8 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
             api(`${base}/opportunities`),
             api(`${base}/trades`),
             api(`${base}/position-management`),
-            api(`${base}/fix122`)
+            api(`${base}/fix122`),
+            api(`${base}/fix124`)
         ]);
         if (requestToken !== regressionDetailRequestToken) return finished;
         const signals = detailResults[0].status === 'fulfilled' ? detailResults[0].value : [];
@@ -636,6 +637,7 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
         const trades = detailResults[2].status === 'fulfilled' ? detailResults[2].value : [];
         // FIX-122: failure is visible; it must never render as a successful rule check.
         renderFix122(detailResults[4]);
+        renderFix124(detailResults[5]);
         const management = detailResults[3].status === 'fulfilled' ? detailResults[3].value : [];
 
         // FIX-11O: always expose fresh directional Replay signals independently of the BUY-centric
@@ -716,8 +718,9 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
 async function loadRegressionArchiveDetail(archiveBatchId) {
     const base = `/api/administration/regression-tests/archives/${archiveBatchId}`;
     const [run, trades] = await Promise.all([api(base), api(`${base}/trades`)]);
-    const fix122=await Promise.allSettled([api(`${base}/fix122`)]);
+    const fix122=await Promise.allSettled([api(`${base}/fix122`), api(`${base}/fix124`)]);
     renderFix122(fix122[0]);
+    renderFix124(fix122[1]);
     const panel = document.getElementById('regression-archive-detail');
     const body = document.getElementById('regression-archive-trades-body');
     if (!panel || !body) return;
@@ -1585,6 +1588,44 @@ document.getElementById('proven-saved-trades-body')?.addEventListener('click',as
     } finally { button.disabled=false; }
 });
 
+// FIX-124: never label absent historical diagnostics as a successful protection test.
+function renderFix124(result) {
+    const panel = document.getElementById('fix124-panel');
+    const summary = document.getElementById('fix124-summary');
+    const body = document.getElementById('fix124-body');
+    if (!panel || !summary || !body) return;
+    panel.classList.remove('hidden');
+    body.replaceChildren();
+    if (!result || result.status !== 'fulfilled') {
+        summary.textContent = 'Protection incident history could not be loaded.';
+        return;
+    }
+    const data = result.value;
+    summary.textContent = 'Production incident history for this window; not simulated Replay results. '
+        + (data.truncated ? 'Showing first 500 incidents. ' : '')
+        + 'Recording begins with FIX-124; an empty list does not prove every protection check succeeded.';
+    for (const row of data.rows || []) {
+        const tr = document.createElement('tr');
+        for (const value of [row.symbol, row.candle_open_time, row.observed_at, row.price,
+                             row.attempts, row.outcome, row.error_message || '']) {
+            const td = document.createElement('td');
+            td.textContent = String(value ?? '');
+            tr.appendChild(td);
+        }
+        body.appendChild(tr);
+    }
+}
+document.addEventListener('click', async event => {
+    const button = event.target.closest('[data-fix124-proven-id]');
+    if (!button) return;
+    button.disabled = true;
+    try {
+        const results = await Promise.allSettled([api(`/api/administration/regression-tests/proven-trades/${encodeURIComponent(button.dataset.fix124ProvenId)}/fix124`)]);
+        renderFix124(results[0]);
+        document.getElementById('fix124-panel')?.scrollIntoView({behavior:'smooth'});
+    } finally { button.disabled = false; }
+});
+
 // FIX-122: persisted per-evaluation evidence, escaped before HTML insertion.
 function renderFix122(result) {
     const panel=document.getElementById('fix122-panel');
@@ -1609,3 +1650,4 @@ function renderFix122(result) {
         <td><details><summary>${escapeHtml(p.status||'Details')} · ${(p.excluded||[]).length} exclusions</summary><pre>${escapeHtml(exclusions||'No observations excluded.')}</pre><p>${escapeHtml(p.explanation||'')}</p><small>Evaluation result; wallet execution is recorded separately.</small></details></td></tr>`;
     }).join('') || '<tr><td colspan="6">No FIX-122 evaluations recorded for this window.</td></tr>';
 }
+
