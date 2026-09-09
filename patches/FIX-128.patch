@@ -1,0 +1,253 @@
+--- /dev/null
++++ b/md/FIX-128.md
+@@ -0,0 +1,57 @@
++# FIX-128 — Bounded quarantine transactions
++
++Implementation candidate for crypto-ai-trader / crypto_ai, based on FIX-127. Enabled when installed. No deployment performed here.
++
++## Evidence and scope
++
++The supplied trader-fix127-review.txt identifies one exception at 2026-09-09 16:45:06.371 +02:00. Original lines 32026–32069 show SignalProcessingStore.quarantineInterrupted executing a bulk UPDATE of signal_processing_work. Neither wallet_managed_position nor WalletManagedPosition occurs in that exception block. This establishes the victim operation, not all competing locks or transactions. No claim of complete independence from wallet activity or elimination of all deadlocks is made.
++
++The FIX-127 scanner put quarantine and pending recovery in one outer try block. A quarantine error consequently skipped pending recovery for that cycle.
++
++## Change
++
++- Discover at most 50 RUNNING records older than the existing five-minute cutoff, ordered by signal_id, using a non-locking SELECT in a short independent transaction.
++- Retain the candidate's signal_id, owner token and updated_at. Discovery grants no permission to overwrite a later state.
++- For each candidate, open a separate REQUIRES_NEW transaction using the existing three-second transaction timeout. Lock the primary key first. Check RUNNING and the original owner, then UPDATE by primary key with the original timestamp and cutoff predicates.
++- Completed, renewed, differently owned or deleted records are skipped. Successful quarantine remains REVIEW_REQUIRED / INTERRUPTED_ATTEMPT; attempts are not reset, and no automatic replay is authorized.
++- Catch each candidate failure after transaction rollback and continue with later candidates. No immediate retry loop is introduced; a still-eligible record can be reconsidered on a later scan.
++- Catch quarantine discovery failure separately so pending recovery is still attempted. Pending-signal failures retain existing per-signal isolation.
++
++This bounds transaction scope to one candidate and scan size to 50. It is not a guaranteed wall-clock scan deadline: actual driver/lock-timeout enforcement must be validated on MySQL, and multiple slow candidates can delay pending recovery. Discovery can still examine more rows than the returned limit. No new index, isolation level, SQL session setting or schema migration is included. A perpetually failing low-ID group may delay later quarantine candidates; it cannot suppress the separate pending scan indefinitely by a single thrown exception.
++
++## Observability
++
++Search [FIX-128][QUARANTINED], [FIX-128][QUARANTINE_ROW_FAILED] and [FIX-128][QUARANTINE_SCAN_FAILED]. Row logs include signal_id. The scanner retains FIX-127 pending-recovery diagnostics and quarantine count summary.
++
++Successful quarantine writes a FIX-128 explanation to the existing durable error_message field. Proven / Analyze Trades displays it through the existing Signal processing panel, whose explanatory text now describes bounded quarantine. A failed quarantine write does not claim a durable success; the original row stays authoritative and the failure is logged. No extra diagnostics table is introduced.
++
++Production entry/exit rules, sizing, scoring, FIX-122, FIX-124, FIX-125 reservation and Replay business logic remain unchanged. The existing age threshold, origin restrictions, exact freshness checks and two-attempt processing limit remain unchanged. This correction changes housekeeping locking and recovery availability only. Missing-candle data-quality blocks are separate and untouched.
++
++## Tests and actual verification
++
++Seven JUnit tests were added for completion after discovery, changed owner/timestamp, bounded discovery and fresh-owner exclusion, independent commit surviving caller rollback, per-row failure isolation, discovery failure allowing pending recovery, and per-pending-signal isolation.
++
++Actual authoring checks:
++
++- Node: 15 tests passed, 0 failed.
++- Java syntax parser: 338 files, 0 syntax errors. This is not compilation or type checking.
++- mvn test: could not start (exit 127; Maven not installed). JUnit tests are authored but unrun.
++
++On Java 21, run `mvn test` and retain Surefire output. On an isolated MySQL copy, exercise quarantine concurrently with completion and ownership renewal; verify no overwrite, one-row transaction scope and continued pending recovery after injected housekeeping failure. Capture the matching InnoDB report for any remaining deadlock. H2 and mock tests do not establish the actual MySQL lock cycle or prove its elimination.
++
++## Delivery
++
++Full source ZIP includes this correction on FIX-127. Alternatively, apply patches/FIX-128.patch once to the exact FIX-127 baseline using `git apply -p1`; do not reapply historical patches also included in the ZIP. No JAR or new migration is included. The existing V86 ledger must remain intact; do not delete or reset records to clear errors.
++
++Read-only verification on crypto_ai:
++
++```sql
++SELECT DATABASE();
++SELECT signal_id, status, attempts, owner_token, updated_at, failure_stage, error_message
++FROM signal_processing_work
++WHERE status IN ('RUNNING','REVIEW_REQUIRED','RETRYABLE_FAILURE')
++ORDER BY updated_at DESC LIMIT 100;
++SHOW ENGINE INNODB STATUS;
++```
++
++An absence of new error messages is not sufficient proof of recovery correctness. Check durable statuses and pending processing outcomes as well.
+--- a/src/main/java/com/crypto/execution/processing/SignalProcessingRecovery.java
++++ b/src/main/java/com/crypto/execution/processing/SignalProcessingRecovery.java
+@@ -19,6 +19,11 @@
+         try {
+             int quarantined = store.quarantineInterrupted();
+             if (quarantined > 0) log.warn("[FIX-127][INTERRUPTED_REVIEW] count={}; no automatic replay", quarantined);
++        } catch(RuntimeException ex) {
++            log.error("[FIX-128][QUARANTINE_SCAN_FAILED] pending recovery will still be attempted",ex);
++        }
++        // FIX-128: housekeeping failure must not suppress eligible pending work.
++        try {
+             for(long id:store.due()) {
+                 try { paper.recoverRegisteredSignal(id); }
+                 catch(RuntimeException ex) {log.error("[FIX-127][RECOVERY_FAILED] signalId={}",id,ex);}
+--- a/src/main/java/com/crypto/execution/processing/SignalProcessingStore.java
++++ b/src/main/java/com/crypto/execution/processing/SignalProcessingStore.java
+@@ -16,6 +16,8 @@
+  * interrupted RUNNING record is review-only; it is never blindly replayed. */
+ @Service
+ public class SignalProcessingStore {
++    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SignalProcessingStore.class);
++    private static final int QUARANTINE_BATCH_SIZE = 50;
+     private final JdbcTemplate jdbc;
+     private final TransactionTemplate independent;
+     public SignalProcessingStore(JdbcTemplate jdbc, PlatformTransactionManager manager) {
+@@ -85,14 +87,52 @@
+                 ORDER BY next_attempt_at,signal_id LIMIT 50
+                 """,(rs,n)->rs.getLong(1),Timestamp.from(Instant.now()));
+     }
++    public record QuarantineCandidate(long signalId, String owner, Instant updatedAt) {}
++
++    /** FIX-128: discovery is non-locking and bounded; never bulk UPDATE the RUNNING
++     * secondary-index range. The observed owner/version is rechecked under a PK lock. */
++    public List<QuarantineCandidate> quarantineCandidates(Instant cutoff) {
++        return independent.execute(tx -> jdbc.query("""
++                SELECT signal_id,owner_token,updated_at FROM signal_processing_work
++                WHERE status='RUNNING' AND updated_at<? ORDER BY signal_id LIMIT ?
++                """, (rs,n) -> new QuarantineCandidate(rs.getLong(1),rs.getString(2),rs.getTimestamp(3).toInstant()),
++                Timestamp.from(cutoff),QUARANTINE_BATCH_SIZE));
++    }
++
++    /** FIX-128: one candidate, one independent transaction. Lock the primary key
++     * first, then conditionally update. A completed, renewed or differently owned
++     * record must never be overwritten by an earlier discovery snapshot. */
++    public boolean quarantineCandidate(QuarantineCandidate candidate, Instant cutoff) {
++        return Boolean.TRUE.equals(independent.execute(tx -> {
++            Work current = locked(candidate.signalId());
++            if (current == null || !"RUNNING".equals(current.status())
++                    || !java.util.Objects.equals(current.owner(),candidate.owner())) return false;
++            return jdbc.update("""
++                    UPDATE signal_processing_work SET status='REVIEW_REQUIRED',failure_stage='INTERRUPTED_ATTEMPT',
++                    error_message='[FIX-128] Interrupted processing requires review; no automatic replay',
++                    owner_token=NULL,updated_at=?
++                    WHERE signal_id=? AND status='RUNNING' AND updated_at=? AND updated_at<?
++                    """,Timestamp.from(Instant.now()),candidate.signalId(),Timestamp.from(candidate.updatedAt()),
++                    Timestamp.from(cutoff)) == 1;
++        }));
++    }
++
+     public int quarantineInterrupted() {
+-        // A live business transaction holds this row lock: re-evaluation of the
+-        // predicate after lock wait cannot overwrite its committed COMPLETED status.
+-        return independent.execute(tx -> jdbc.update("""
+-                UPDATE signal_processing_work SET status='REVIEW_REQUIRED',failure_stage='INTERRUPTED_ATTEMPT',
+-                error_message='Processing ownership interrupted or exceeded review timeout; no automatic replay',owner_token=NULL,updated_at=?
+-                WHERE status='RUNNING' AND updated_at<?
+-                """,Timestamp.from(Instant.now()),Timestamp.from(Instant.now().minusSeconds(300))));
++        Instant cutoff = Instant.now().minusSeconds(300);
++        int changed = 0;
++        // Each call completes commit/rollback before the next candidate. A failed
++        // row remains untouched and may be examined on a later scheduled scan.
++        for (QuarantineCandidate candidate : quarantineCandidates(cutoff)) {
++            try {
++                if (quarantineCandidate(candidate,cutoff)) {
++                    changed++;
++                    log.warn("[FIX-128][QUARANTINED] signalId={}; review only, no automatic replay",candidate.signalId());
++                }
++            } catch (RuntimeException ex) {
++                log.error("[FIX-128][QUARANTINE_ROW_FAILED] signalId={}; continuing scan",candidate.signalId(),ex);
++            }
++        }
++        return changed;
+     }
+     private static void requireTransaction() {
+         if (!TransactionSynchronizationManager.isActualTransactionActive())
+--- a/src/main/resources/static/js/fix-registry.js
++++ b/src/main/resources/static/js/fix-registry.js
+@@ -1,5 +1,6 @@
+ (() => {
+     const FIXES = [
++        {"id": "FIX-128", "title": "Bounded quarantine transactions and recovery scan isolation", "status": "CANDIDATE \u2014 MAVEN/MYSQL VALIDATION PENDING", "scenario": "FIX-127 recovery scan failed at 2026-09-09 16:45:06 +02:00 during bulk UPDATE signal_processing_work.", "cause": "Quarantine used one range update; its failure also skipped pending recovery. Stack trace identifies the victim operation, not the complete competing lock cycle.", "solution": "Discover at most 50 stale RUNNING candidates without locking; process each under an independent primary-key lock and recheck status, owner and timestamp. Isolate row and discovery failures from pending recovery.", "behavior": "Housekeeping transaction granularity and scan failure isolation change. Review-only semantics, five-minute age, two processing attempts, freshness, wallet rules and Replay decisions unchanged.", "regression": "Seven JUnit tests added; Maven execution pending. MySQL deadlock reproduction remains pending.", "symbol": "ALL", "entry": "UNCHANGED", "exit": "UNCHANGED", "entryTime": "UNCHANGED", "exitTime": "UNCHANGED", "replayWindow": "Production diagnostics overlay only; no simulated rule change.", "location": "Signal processing recovery housekeeping", "classes": ["SignalProcessingStore", "SignalProcessingRecovery", "md/FIX-128.md"]},
+         {"id": "FIX-127", "title": "Signal-path initial lock and durable processing recovery", "status": "CANDIDATE \u2014 MAVEN/MYSQL VALIDATION PENDING", "scenario": "FIX-124 recovered four logged kline incidents; six remaining worker failures reached the managed-position lock through the signal path.", "cause": "Signal processing can write position advice before its locking lookup. Saved signal existence also prevents missing-signal recovery from revisiting an unfinished processing attempt. Exact MySQL competing lock cycle remains unproven.", "solution": "Route worker, eligible scheduled recovery, startup and explicit signal calls through a transaction coordinator. Acquire the initial managed-position lock before the unchanged body; allow at most two total attempts only for initial MySQL 1213/40001. Register work atomically with eligible signal creation and complete it atomically with processing. Recover only fresh automatic work; quarantine interrupted or uncertain attempts.", "behavior": "Production transaction ordering, duplicate handling and failure recovery change. Scoring, sizing and exit formulas are unchanged. Operational trade outcomes can change. Replay business code stays unchanged; Proven displays current Production state as a separate overlay. FIX-124 and FIX-125 remain separate.", "regression": "22 new JUnit/H2 transaction and recovery tests authored; Maven unavailable, tests not run. Fifteen Node tests passed. Java syntax check only; real MySQL contention and historical parity pending.", "symbol": "ALL", "entry": "UNCHANGED RULES; RECOVERY CHANGES", "exit": "UNCHANGED RULES", "entryTime": "Original call or fresh bounded recovery", "exitTime": "Existing authority", "replayWindow": "Identical OLD/NEW windows; no Production ledger used to simulate Replay.", "location": "Shared Production signal entry points / Proven Signal processing", "classes": ["SignalProcessingCoordinator", "SignalProcessingStore", "SignalProcessingRecovery", "SignalProcessingFreshness", "AnalysisService", "PaperTradingService", "Fix127DiagnosticsController", "V86__fix_127_signal_processing.sql", "md/FIX-127.md"]},
+         {"id": "FIX-126", "title": "Preserve complete wallet execution explanations", "status": "CANDIDATE — MAVEN/MYSQL VALIDATION PENDING", "scenario": "BUY signal #634982 failed to persist because execution_message exceeded VARCHAR(1000).", "cause": "Execution explanation plus wallet/price metadata exceeds the schema capacity.", "solution": "V85 widens the nullable audit column to MEDIUMTEXT and matches WalletTrade mapping; preserve complete Unicode messages.", "behavior": "Already-approved BUY/SELL persistence no longer has the 1000-character audit limit. No scoring, sizing, exit rule or historical backfill change.", "regression": "Long BUY/SELL migration round-trip JUnit test added; Maven could not start. MySQL migration/ORM validation pending.", "symbol": "ALL", "entry": "UNCHANGED RULES", "exit": "UNCHANGED RULES", "entryTime": "UNCHANGED", "exitTime": "UNCHANGED", "replayWindow": "No Replay decision changes; compare existing windows.", "location": "Wallet audit persistence", "classes": ["WalletTrade", "V85__fix_126_wallet_execution_message.sql", "md/FIX-126.md"]},
+         {"id": "FIX-125", "title": "Wallet transaction coordination through commit", "status": "PLANNED — TO BE DONE", "scenario": "A synchronized wallet method can release its monitor before the surrounding Spring transaction commits.", "cause": "Possible monitor-release/commit race identified structurally; an actual failure has not been reproduced. This is distinct from the reported deadlocks.", "solution": "First reproduce the ordering with a deterministic concurrency test. Then coordinate the relevant wallet BUY/SELL paths through transaction completion, including rollback, without bundling sizing or unrelated deadlock repairs.", "behavior": "Reservation only. Not implemented. FIX-122 committed reads and its later recheck do not close this race window.", "regression": "Pending deterministic reproduction, commit/rollback and concurrent BUY/SELL tests; verify Production coordination and Replay decision parity.", "symbol": "ALL", "entry": "PLANNED", "exit": "UNCHANGED", "entryTime": "NOT IMPLEMENTED", "exitTime": "UNCHANGED", "replayWindow": "To be selected from the reproduced scenario; no performance or profitability claim.", "location": "Wallet transaction coordination — separate from FIX-124", "classes": ["md/FIX-125.md"]},
+--- a/src/main/resources/static/js/proven-analyzed-trades.js
++++ b/src/main/resources/static/js/proven-analyzed-trades.js
+@@ -1647,6 +1647,7 @@
+         + (data.precedingHour ? 'Includes one hour before the saved entry for context; no inferred trade pairing. ' : '')
+         + (data.truncated ? 'Showing first 500 records. ' : '')
+         + 'COMPLETED means processing committed, not necessarily a trade. REVIEW_REQUIRED is not automatically replayed. '
++        + 'FIX-128 quarantines interrupted work in bounded individual transactions; these rows remain review-only. '
+         + 'Recording begins with FIX-127; an empty list does not prove processing succeeded.';
+     for (const row of data.rows || []) {
+         const tr = document.createElement('tr');
+--- /dev/null
++++ b/src/test/java/com/crypto/execution/processing/Fix128RecoveryIsolationTest.java
+@@ -0,0 +1,36 @@
++package com.crypto.execution.processing;
++
++import com.crypto.service.PaperTradingService;
++import org.junit.jupiter.api.Test;
++import java.time.Instant;
++import java.util.List;
++import static org.mockito.Mockito.*;
++import static org.junit.jupiter.api.Assertions.*;
++
++class Fix128RecoveryIsolationTest {
++    @Test void failedQuarantineDiscoveryDoesNotSuppressPendingRecovery() {
++        var store=mock(SignalProcessingStore.class);var paper=mock(PaperTradingService.class);
++        when(store.quarantineInterrupted()).thenThrow(new IllegalStateException("housekeeping failed"));
++        when(store.due()).thenReturn(List.of(12L,13L));
++        new SignalProcessingRecovery(store,paper).recover();
++        verify(paper).recoverRegisteredSignal(12);verify(paper).recoverRegisteredSignal(13);
++    }
++    @Test void oneFailedQuarantineRowDoesNotSuppressLaterCandidates() {
++        var store=mock(SignalProcessingStore.class);
++        var first=new SignalProcessingStore.QuarantineCandidate(1,"a",Instant.EPOCH);
++        var second=new SignalProcessingStore.QuarantineCandidate(2,"b",Instant.EPOCH);
++        when(store.quarantineCandidates(any())).thenReturn(List.of(first,second));
++        when(store.quarantineCandidate(eq(first),any())).thenThrow(new IllegalStateException("deadlock"));
++        when(store.quarantineCandidate(eq(second),any())).thenReturn(true);
++        when(store.quarantineInterrupted()).thenCallRealMethod();
++        assertEquals(1,store.quarantineInterrupted());
++        verify(store).quarantineCandidate(eq(first),any());verify(store).quarantineCandidate(eq(second),any());
++    }
++    @Test void oneFailedPendingSignalDoesNotSuppressNextSignal() {
++        var store=mock(SignalProcessingStore.class);var paper=mock(PaperTradingService.class);
++        when(store.due()).thenReturn(List.of(12L,13L));
++        when(paper.recoverRegisteredSignal(12)).thenThrow(new IllegalStateException("processing failed"));
++        new SignalProcessingRecovery(store,paper).recover();
++        verify(paper).recoverRegisteredSignal(13);
++    }
++}
+--- a/src/test/java/com/crypto/execution/processing/SignalProcessingCoordinatorTest.java
++++ b/src/test/java/com/crypto/execution/processing/SignalProcessingCoordinatorTest.java
+@@ -246,4 +246,47 @@
+         jdbc.update("INSERT INTO candle VALUES('PEPEUSDT','1m',?,?,1)",Timestamp.from(open.plusSeconds(60)),Timestamp.from(open.plusSeconds(119)));
+         assertFalse(gate.eligible(work,open.plusSeconds(120)),"no nearest-candle fallback");
+     }
++    // FIX-128: these tests exercise real JDBC transactions, not the InnoDB lock cycle.
++    void ageOwner() {
++        jdbc.update("UPDATE signal_processing_work SET updated_at=? WHERE signal_id=127",
++                Timestamp.from(Instant.now().minusSeconds(600)));
++    }
++    @Test void fix128CompletionAfterDiscoveryCannotBeOverwritten() {
++        register(ProcessingOrigin.WORKER);var work=store.claim(127,true);ageOwner();
++        var cutoff=Instant.now().minusSeconds(300);var candidate=store.quarantineCandidates(cutoff).get(0);
++        tx.executeWithoutResult(t->store.complete(work,99L));
++        assertFalse(store.quarantineCandidate(candidate,cutoff));assertEquals("COMPLETED",status());
++    }
++    @Test void fix128OwnerAndTimestampChangesInvalidateDiscoveredCandidate() {
++        register(ProcessingOrigin.WORKER);var work=store.claim(127,true);ageOwner();
++        var cutoff=Instant.now().minusSeconds(300);var candidate=store.quarantineCandidates(cutoff).get(0);
++        jdbc.update("UPDATE signal_processing_work SET owner_token='other' WHERE signal_id=127");
++        assertFalse(store.quarantineCandidate(candidate,cutoff));
++        jdbc.update("UPDATE signal_processing_work SET owner_token=?,updated_at=? WHERE signal_id=127",
++                work.owner(),Timestamp.from(Instant.now()));
++        assertFalse(store.quarantineCandidate(candidate,cutoff));assertEquals("RUNNING",status());
++    }
++    @Test void fix128DiscoveryIsBoundedAndExcludesFreshOwners() {
++        register(ProcessingOrigin.WORKER);store.claim(127,true);
++        assertTrue(store.quarantineCandidates(Instant.now().minusSeconds(300)).isEmpty());
++        for(int id=200;id<260;id++) {
++            signal.setId((long)id);register(ProcessingOrigin.WORKER);store.claim(id,true);
++        }
++        jdbc.update("UPDATE signal_processing_work SET updated_at=? WHERE signal_id>=200",Timestamp.from(Instant.now().minusSeconds(600)));
++        var candidates=store.quarantineCandidates(Instant.now().minusSeconds(300));
++        assertEquals(50,candidates.size());assertEquals(200,candidates.get(0).signalId());
++        assertEquals(50,store.quarantineInterrupted());assertEquals(10,store.quarantineInterrupted());
++        assertEquals("RUNNING",status());
++    }
++    @Test void fix128QuarantineCommitSurvivesAmbientCallerRollback() {
++        register(ProcessingOrigin.WORKER);store.claim(127,true);ageOwner();
++        var candidate=store.quarantineCandidates(Instant.now().minusSeconds(300)).get(0);
++        // Independent housekeeping commit survives a caller transaction rollback.
++        assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(t->{
++            assertTrue(store.quarantineCandidate(candidate,Instant.now().minusSeconds(300)));
++            jdbc.update("INSERT INTO writes VALUES(1,'unrelated')");throw new IllegalStateException("rollback");
++        }));
++        assertEquals("REVIEW_REQUIRED",status());assertEquals(0,countWrites());assertNull(store.claim(127,true));
++    }
++
+ }

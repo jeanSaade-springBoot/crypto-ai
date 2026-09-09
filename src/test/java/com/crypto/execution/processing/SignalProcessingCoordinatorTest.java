@@ -246,4 +246,47 @@ class SignalProcessingCoordinatorTest {
         jdbc.update("INSERT INTO candle VALUES('PEPEUSDT','1m',?,?,1)",Timestamp.from(open.plusSeconds(60)),Timestamp.from(open.plusSeconds(119)));
         assertFalse(gate.eligible(work,open.plusSeconds(120)),"no nearest-candle fallback");
     }
+    // FIX-128: these tests exercise real JDBC transactions, not the InnoDB lock cycle.
+    void ageOwner() {
+        jdbc.update("UPDATE signal_processing_work SET updated_at=? WHERE signal_id=127",
+                Timestamp.from(Instant.now().minusSeconds(600)));
+    }
+    @Test void fix128CompletionAfterDiscoveryCannotBeOverwritten() {
+        register(ProcessingOrigin.WORKER);var work=store.claim(127,true);ageOwner();
+        var cutoff=Instant.now().minusSeconds(300);var candidate=store.quarantineCandidates(cutoff).get(0);
+        tx.executeWithoutResult(t->store.complete(work,99L));
+        assertFalse(store.quarantineCandidate(candidate,cutoff));assertEquals("COMPLETED",status());
+    }
+    @Test void fix128OwnerAndTimestampChangesInvalidateDiscoveredCandidate() {
+        register(ProcessingOrigin.WORKER);var work=store.claim(127,true);ageOwner();
+        var cutoff=Instant.now().minusSeconds(300);var candidate=store.quarantineCandidates(cutoff).get(0);
+        jdbc.update("UPDATE signal_processing_work SET owner_token='other' WHERE signal_id=127");
+        assertFalse(store.quarantineCandidate(candidate,cutoff));
+        jdbc.update("UPDATE signal_processing_work SET owner_token=?,updated_at=? WHERE signal_id=127",
+                work.owner(),Timestamp.from(Instant.now()));
+        assertFalse(store.quarantineCandidate(candidate,cutoff));assertEquals("RUNNING",status());
+    }
+    @Test void fix128DiscoveryIsBoundedAndExcludesFreshOwners() {
+        register(ProcessingOrigin.WORKER);store.claim(127,true);
+        assertTrue(store.quarantineCandidates(Instant.now().minusSeconds(300)).isEmpty());
+        for(int id=200;id<260;id++) {
+            signal.setId((long)id);register(ProcessingOrigin.WORKER);store.claim(id,true);
+        }
+        jdbc.update("UPDATE signal_processing_work SET updated_at=? WHERE signal_id>=200",Timestamp.from(Instant.now().minusSeconds(600)));
+        var candidates=store.quarantineCandidates(Instant.now().minusSeconds(300));
+        assertEquals(50,candidates.size());assertEquals(200,candidates.get(0).signalId());
+        assertEquals(50,store.quarantineInterrupted());assertEquals(10,store.quarantineInterrupted());
+        assertEquals("RUNNING",status());
+    }
+    @Test void fix128QuarantineCommitSurvivesAmbientCallerRollback() {
+        register(ProcessingOrigin.WORKER);store.claim(127,true);ageOwner();
+        var candidate=store.quarantineCandidates(Instant.now().minusSeconds(300)).get(0);
+        // Independent housekeeping commit survives a caller transaction rollback.
+        assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(t->{
+            assertTrue(store.quarantineCandidate(candidate,Instant.now().minusSeconds(300)));
+            jdbc.update("INSERT INTO writes VALUES(1,'unrelated')");throw new IllegalStateException("rollback");
+        }));
+        assertEquals("REVIEW_REQUIRED",status());assertEquals(0,countWrites());assertNull(store.claim(127,true));
+    }
+
 }

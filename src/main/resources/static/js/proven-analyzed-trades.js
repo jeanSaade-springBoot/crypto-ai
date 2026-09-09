@@ -1647,6 +1647,7 @@ function renderFix127(result) {
         + (data.precedingHour ? 'Includes one hour before the saved entry for context; no inferred trade pairing. ' : '')
         + (data.truncated ? 'Showing first 500 records. ' : '')
         + 'COMPLETED means processing committed, not necessarily a trade. REVIEW_REQUIRED is not automatically replayed. '
+        + 'FIX-128 quarantines interrupted work in bounded individual transactions; these rows remain review-only. '
         + 'Recording begins with FIX-127; an empty list does not prove processing succeeded.';
     for (const row of data.rows || []) {
         const tr = document.createElement('tr');

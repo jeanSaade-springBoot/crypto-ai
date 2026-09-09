@@ -16,6 +16,8 @@ import java.util.UUID;
  * interrupted RUNNING record is review-only; it is never blindly replayed. */
 @Service
 public class SignalProcessingStore {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SignalProcessingStore.class);
+    private static final int QUARANTINE_BATCH_SIZE = 50;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate independent;
     public SignalProcessingStore(JdbcTemplate jdbc, PlatformTransactionManager manager) {
@@ -85,14 +87,52 @@ public class SignalProcessingStore {
                 ORDER BY next_attempt_at,signal_id LIMIT 50
                 """,(rs,n)->rs.getLong(1),Timestamp.from(Instant.now()));
     }
+    public record QuarantineCandidate(long signalId, String owner, Instant updatedAt) {}
+
+    /** FIX-128: discovery is non-locking and bounded; never bulk UPDATE the RUNNING
+     * secondary-index range. The observed owner/version is rechecked under a PK lock. */
+    public List<QuarantineCandidate> quarantineCandidates(Instant cutoff) {
+        return independent.execute(tx -> jdbc.query("""
+                SELECT signal_id,owner_token,updated_at FROM signal_processing_work
+                WHERE status='RUNNING' AND updated_at<? ORDER BY signal_id LIMIT ?
+                """, (rs,n) -> new QuarantineCandidate(rs.getLong(1),rs.getString(2),rs.getTimestamp(3).toInstant()),
+                Timestamp.from(cutoff),QUARANTINE_BATCH_SIZE));
+    }
+
+    /** FIX-128: one candidate, one independent transaction. Lock the primary key
+     * first, then conditionally update. A completed, renewed or differently owned
+     * record must never be overwritten by an earlier discovery snapshot. */
+    public boolean quarantineCandidate(QuarantineCandidate candidate, Instant cutoff) {
+        return Boolean.TRUE.equals(independent.execute(tx -> {
+            Work current = locked(candidate.signalId());
+            if (current == null || !"RUNNING".equals(current.status())
+                    || !java.util.Objects.equals(current.owner(),candidate.owner())) return false;
+            return jdbc.update("""
+                    UPDATE signal_processing_work SET status='REVIEW_REQUIRED',failure_stage='INTERRUPTED_ATTEMPT',
+                    error_message='[FIX-128] Interrupted processing requires review; no automatic replay',
+                    owner_token=NULL,updated_at=?
+                    WHERE signal_id=? AND status='RUNNING' AND updated_at=? AND updated_at<?
+                    """,Timestamp.from(Instant.now()),candidate.signalId(),Timestamp.from(candidate.updatedAt()),
+                    Timestamp.from(cutoff)) == 1;
+        }));
+    }
+
     public int quarantineInterrupted() {
-        // A live business transaction holds this row lock: re-evaluation of the
-        // predicate after lock wait cannot overwrite its committed COMPLETED status.
-        return independent.execute(tx -> jdbc.update("""
-                UPDATE signal_processing_work SET status='REVIEW_REQUIRED',failure_stage='INTERRUPTED_ATTEMPT',
-                error_message='Processing ownership interrupted or exceeded review timeout; no automatic replay',owner_token=NULL,updated_at=?
-                WHERE status='RUNNING' AND updated_at<?
-                """,Timestamp.from(Instant.now()),Timestamp.from(Instant.now().minusSeconds(300))));
+        Instant cutoff = Instant.now().minusSeconds(300);
+        int changed = 0;
+        // Each call completes commit/rollback before the next candidate. A failed
+        // row remains untouched and may be examined on a later scheduled scan.
+        for (QuarantineCandidate candidate : quarantineCandidates(cutoff)) {
+            try {
+                if (quarantineCandidate(candidate,cutoff)) {
+                    changed++;
+                    log.warn("[FIX-128][QUARANTINED] signalId={}; review only, no automatic replay",candidate.signalId());
+                }
+            } catch (RuntimeException ex) {
+                log.error("[FIX-128][QUARANTINE_ROW_FAILED] signalId={}; continuing scan",candidate.signalId(),ex);
+            }
+        }
+        return changed;
     }
     private static void requireTransaction() {
         if (!TransactionSynchronizationManager.isActualTransactionActive())

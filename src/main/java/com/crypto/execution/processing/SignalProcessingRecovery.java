@@ -19,6 +19,11 @@ public class SignalProcessingRecovery {
         try {
             int quarantined = store.quarantineInterrupted();
             if (quarantined > 0) log.warn("[FIX-127][INTERRUPTED_REVIEW] count={}; no automatic replay", quarantined);
+        } catch(RuntimeException ex) {
+            log.error("[FIX-128][QUARANTINE_SCAN_FAILED] pending recovery will still be attempted",ex);
+        }
+        // FIX-128: housekeeping failure must not suppress eligible pending work.
+        try {
             for(long id:store.due()) {
                 try { paper.recoverRegisteredSignal(id); }
                 catch(RuntimeException ex) {log.error("[FIX-127][RECOVERY_FAILED] signalId={}",id,ex);}
