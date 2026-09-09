@@ -96,6 +96,25 @@ public class AnalysisService {
     // Do not move this logic into replay-only code; both paths must share the same AnalysisService decision flow.
     private final RangeEntryLocationService rangeEntryLocationService;
 
+    // FIX-127: required at runtime; registration joins signal creation atomically.
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.crypto.execution.processing.SignalProcessingStore processingStore;
+
+    @Transactional
+    public TradeSignal analyzeForProcessing(TechnicalIndicator indicator,
+            com.crypto.execution.processing.ProcessingOrigin origin) {
+        TradeSignal signal = analyze(indicator);
+        processingStore.register(signal, origin);
+        return signal;
+    }
+
+    @Transactional
+    public TradeSignal analyzeRecoveredForProcessing(TechnicalIndicator indicator, Instant at) {
+        TradeSignal signal = analyzeRecovered(indicator, at);
+        processingStore.register(signal, com.crypto.execution.processing.ProcessingOrigin.RECOVERY);
+        return signal;
+    }
+
     /**
      * Manual entry point used by controllers or recovery jobs.
      * It reads the latest already-persisted technical indicator.

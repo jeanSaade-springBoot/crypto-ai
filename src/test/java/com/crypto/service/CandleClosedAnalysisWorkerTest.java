@@ -64,13 +64,13 @@ class CandleClosedAnalysisWorkerTest {
                 .thenReturn(Optional.of(indicator));
         when(tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime(
                 "BTCUSDT", "1h", openTime)).thenReturn(false);
-        when(analysisService.analyze(indicator)).thenReturn(signal);
+        when(analysisService.analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER)).thenReturn(signal);
         when(paperTradingService.processSignal(signal)).thenReturn(Optional.of(position));
 
         worker.process(event);
 
         verify(technicalIndicatorService).calculateAndPersist("BTCUSDT", "1h", openTime);
-        verify(analysisService).analyze(indicator);
+        verify(analysisService).analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER);
         verify(paperTradingService).processSignal(signal);
     }
 
@@ -93,7 +93,7 @@ class CandleClosedAnalysisWorkerTest {
 
         worker.process(event);
 
-        verify(analysisService, never()).analyze(indicator);
+        verify(analysisService, never()).analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER);
         verify(paperTradingService, never()).processSignal(org.mockito.ArgumentMatchers.any());
     }
 }

@@ -86,7 +86,7 @@ public class CandleClosedAnalysisWorker {
                 return;
             }
 
-            TradeSignal signal = analysisService.analyze(indicator);
+            TradeSignal signal = analysisService.analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER);
             Optional<PaperPosition> position = paperTradingService.processSignal(signal);
 
             log.info(

@@ -1,0 +1,1099 @@
+--- /dev/null
++++ b/md/DELIVERY-FIX-127.md
+@@ -0,0 +1,18 @@
++# FIX-127 delivery
++
++Full source candidate based on the preceding FIX-124 + FIX-126 package. Contains all earlier source changes, the FIX-123/FIX-125 reservations, V86, shared signal processing coordination, bounded recovery, logs, comments, Proven / Analyze Trades diagnostics, registry update and 22 new JUnit tests.
++
++Use the full source tree OR apply `patches/FIX-127.patch` once to the exact preceding FIX-124 + FIX-126 tree (`git apply -p1`). Do not also reapply the older FIX-124/FIX-126 patches already included for historical review. No JAR is included and no server was deployed from this workspace.
++
++Validation actually run: 15 Node tests passed; 337 Java files parsed with no syntax errors. `mvn test` failed to start because Maven is absent. Java compilation, all JUnit tests, MySQL migration/concurrency and historical parity remain unverified. This package is a candidate, not a verified production build.
++
++On the Java 21 build machine:
++
++```powershell
++java -version
++mvn test
++```
++
++Read `md/FIX-127.md` for behaviour changes, recovery policy, read-only verification queries and remaining gates. In particular, FIX-127 changes failure recovery and duplicate handling; it does not prove that all deadlocks are eliminated and does not complete FIX-125's wallet monitor-through-commit repair.
++
++V86 is additive and does not backfill historical signals. Do not delete durable processing rows to reset errors. Returning to the previous application version disables its use of this ledger; retain it for investigation. A rollback does not undo trades that already committed.
+--- /dev/null
++++ b/md/FIX-127.md
+@@ -0,0 +1,127 @@
++# FIX-127 — Signal-path lock ordering and durable processing recovery
++
++Status: implementation candidate, enabled when installed. Not deployed from this workspace. Maven/JUnit, full Java compilation, MySQL migration/concurrency validation and historical parity remain pending.
++
++Target: **crypto-ai-trader / crypto_ai**. Baseline: the complete FIX-124 + FIX-126 candidate, which already includes FIX-122 and the FIX-125 reservation. Do not apply this delta to FIX-118/119/120 or replace a newer server tree without comparing it first.
++
++## Evidence and boundaries
++
++The supplied trader-fix124-review.txt shows four FIX-124 initial-lock incidents recovered on attempt 2. It also shows six worker failures on the signal path through PaperTradingService → DynamicProfitLockService → the managed-position locking lookup. The scheduler calls the same PaperTradingService entry point independently of KlineTransactionCoordinator; the log excerpt alone does not prove that the scheduler was the competing transaction in any particular deadlock.
++
++PositionManagementService.analyze runs before the old profit-lock lookup. It can insert position_analysis (with a managed-position foreign key) and can request POSITION_STOP_LOSS. It is not purely advisory. This creates a potential lock-upgrade/order conflict; the exact opposing MySQL transaction and lock cycle have not been established from a crypto_ai InnoDB report. FIX-127 therefore does not claim that all deadlocks are eliminated.
++
++The separate recovery gap is structural: an existing trade_signal causes the worker and missing-signal scheduler to skip that candle, even if processing previously failed after the signal was saved. Signal existence cannot serve as a processing completion marker.
++
++FIX-124's classes and live-kline retry logic are unchanged. WalletAutoExecutionService is unchanged. FIX-125 still concerns wallet monitor ownership through transaction commit and is not completed by this work. FIX-123 sizing is still planned separately.
++
++## 1. Shared entry point and initial lock
++
++PaperTradingService.processSignal, openFromSignal, openFromLatestSignal and recoverRegisteredSignal use one SignalProcessingCoordinator. These entry points require no ambient transaction (Propagation.NEVER); the coordinator also checks this directly. This prevents a retry from running inside the failed caller transaction.
++
++Inside a fresh transaction the coordinator locks its claimed work row, then calls findFirstBySymbolAndStatusOrderByOpenedAtDesc(symbol, "OPEN"). After that lock is acquired, it reloads the persisted signal by exact ID, verifies its symbol, interval and candle_open_time against the ledger, and checks recovery freshness before entering the existing PaperTradingService business body. Ordinary signal/freshness reads occur after the lock wait, avoiding a pre-lock repeatable-read snapshot and evaluating grace after contention. The returned managed entity is retained in the same persistence context. Existing advisory, TP, profit-lock, SL, SELL and progressive-entry decision order is preserved.
++
++Only a MySQL error with both code 1213 and SQLSTATE 40001 at that initial lookup receives a private retry marker. A private marker prevents a later callback from accidentally supplying retry permission. The failed transaction rolls back before another claim/attempt begins. Maximum: **two total attempts per signal**, including recovery after restart. A late wallet, advisory, database, timeout or commit exception is never automatically retried. MySQL 1205 lock-wait timeout is not treated as 1213.
++
++This is a lock-order change, not a transaction-shortening claim. Acquiring the lock earlier holds it through more work and may increase contention. Empty-position locking queries may also acquire InnoDB gap/range locks. No symbol-global lock, new index, isolation-level change or wallet-monitor repair is bundled here. Source application configuration already has open-in-view=false; keep this configuration for fresh per-attempt persistence contexts.
++
++Mandatory Spring injection supplies the coordinator. Existing manually constructed PaperTradingService policy fixtures can still call the legacy body without it; this compatibility branch is not a runtime feature flag. Normal Spring startup cannot omit the coordinator bean.
++
++## 2. Durable work registration and completion
++
++V86 creates signal_processing_work. It has no foreign keys, deliberately avoiding parent-row locks for claims. Its identity is signal_id plus the persisted, checked symbol + interval + candle_open_time lineage. No generated_at or nearest-candle fallback is used. There is no historical backfill.
++
++| Caller | Signal creation / registration | Background recovery |
++| --- | --- | --- |
++| CandleClosedAnalysisWorker | analyzeForProcessing(..., WORKER), one transaction | Eligible, subject to exact freshness |
++| ScheduledAnalysisService | Latest fresh newly recovered signal uses analyzeRecoveredForProcessing | Eligible, subject to exact freshness |
++| Older scheduler gap repair | Existing analyzeRecovered; analysis only | Never registered for execution |
++| MarketDataBootstrapService | analyzeForProcessing(..., STARTUP), one transaction | Never |
++| Explicit existing-signal request | Coordinator registers EXPLICIT if absent | Never |
++| Replay | Existing isolated analysis and execution paths | Never reads this Production work ledger |
++
++AnalysisService wrappers register work in the same transaction that saves the signal. If registration fails, signal creation rolls back. Explicit registration never resets an existing origin, status or attempt count. The migration does not turn historical signals into pending work.
++
++A short independent claim transaction locks one ledger row, checks status and origin, increments attempts and installs a UUID owner. The business transaction locks that row and verifies ownership before doing anything. Completion and business database writes commit together on the configured shared datasource/transaction manager. COMPLETED can represent a hold, rejection or other no-trade result; it does not imply a BUY/SELL.
++
++A duplicate completed or currently owned signal is not processed again. Explicit open-from-latest retains its existing error when the callback cannot return a position; that attempt is review-only after rollback. This now also prevents repeated explicit execution of a completed signal, rather than treating the signal as reusable authority.
++
++These transactions cannot make external side effects transactional. In-memory mutations and any independently committed participant state also cannot be undone by the outer database rollback. That is why no failure after business processing begins receives automatic retry permission. The package does not claim globally exactly-once wallet execution or closure of FIX-125.
++
++## 3. Recovery-gap addendum
++
++| Status | Meaning / next action |
++| --- | --- |
++| PENDING | Registered; no processing claim yet |
++| RUNNING | Durable owner and attempt; no automatic duplicate execution |
++| RETRYABLE_FAILURE | Confirmed initial-lock failure after rollback, one attempt left |
++| COMPLETED | Processing transaction committed; not necessarily a trade |
++| EXPIRED | Recovery/retry candle is no longer latest and fresh; no business callback |
++| REVIEW_REQUIRED | Exhausted initial retries, later failure, uncertain outcome or interrupted owner; no automatic replay |
++
++The independent background scan defaults to 30 seconds (`trading.fix127.recovery-delay-ms`). Newly registered rows become scan candidates after 30 seconds, allowing the immediate caller to claim first. It scans up to 50 due WORKER/RECOVERY rows, not missing historical signals. It runs independently of the old missing-analysis scan's enablement, since its input is already-registered eligible work.
++
++Automatic recovery, and every second attempt, require the exact original candle to be the latest actual closed candle for the same symbol/interval with close_time <= current Production time. Its close must still be within existing FIX-043 grace: 1m 90 seconds; 5m 2 minutes; 1h 5 minutes; 4h 10 minutes; 1d 30 minutes; default 2 minutes. A missing candle, later exact candle, future close or expired grace prevents execution. Initial foreground calls retain existing eligibility checks. Operational recovery uses current Production time; Replay event semantics remain separate.
++
++An interrupted RUNNING record older than five minutes becomes REVIEW_REQUIRED, not retryable. A live business transaction holds its ledger row; the quarantine update cannot overwrite a committed COMPLETED row after waiting for that lock. A delayed owner that has not entered business loses ownership and cannot execute after quarantine. This timeout can deliberately sacrifice liveness when the result cannot be established safely. There is no automatic startup/manual replay and no automatic reset from review to pending.
++
++Claim/diagnostic database errors propagate or are logged by the recovery scanner. They never cause fallback to untracked business execution. A completion already committed cannot be overwritten by a later error handler because the failure update requires the old RUNNING owner. If an error cannot be recorded, its durable owner remains unavailable for replay and is eventually quarantined. The guarded no-update case logs **[FIX-127][FAILURE_RECORD_NOT_UPDATED]**.
++
++The ledger retains the last initial-lock error even when attempt 2 completes. It is a durable current-state record, not a full event-sourced attempt history. There is no retention purge or automatic manual repair action in this patch.
++
++## 4. Logs and Proven / Analyze Trades
++
++Search `[FIX-127]`. Tags include ATTEMPT, COMPLETED, NOT_CLAIMED, EXPIRED, RETRYABLE_FAILURE, REVIEW_REQUIRED, FAILURE_RECORD_NOT_UPDATED, INTERRUPTED_REVIEW, RECOVERY_FAILED and RECOVERY_SCAN_FAILED. ATTEMPT includes exact signal/candle identity, origin and cumulative attempt count. COMPLETED is logged after transaction completion.
++
++The Signal processing panel shows signal ID, symbol, interval, exact candle open, origin, status, attempts, update time, optional paper-position reference and last failure. It appears with run/archive detail and via a saved-Proven button.
++
++This is **current Production processing state**, not simulated Replay output and not a frozen archive snapshot. Run/archive selection uses that window's symbol and candle-open range. A saved Proven trade includes the hour before entry through exit (or entry when open) for context; it does not infer a trade pairing. It can omit earlier timeframe origins outside that range; query the exact signal ID when needed. The first 500 records are shown with a truncation notice. Failed loads and empty/pre-FIX-127 history are explicitly not presented as successful processing/parity.
++
++JavaScript inserts diagnostic values with textContent. No Replay service consumes the Production ledger. No Replay timing, Shadow-write optimization, verifyEventResolution removal, scoring, sizing, threshold or exit formula changes are included.
++
++## Validation and present limitations
++
++Actual authoring checks on 2026-09-09:
++
++- `node --test src/test/js/*.test.cjs`: **15 passed, 0 failed** (four new FIX-127 UI tests).
++- Java parser: **337 files, 0 syntax errors**. This is NOT compilation or dependency/type checking.
++- `mvn test`: **could not start; exit 127, mvn: command not found**. No JUnit pass claim.
++- Authoring Java is 17; project requires Java 21. No MySQL service or target database was used. No performance, profit, full parity or deadlock-elimination claim.
++
++Twenty-two new JUnit/H2 tests cover initial-before-body ordering, one retry, exhaustion, non-retryable timeout and later failure, private-marker isolation, before/after-commit errors, rollback/completion atomicity, ownership, concurrent claims, durable pending recovery, interrupted quarantine, cumulative attempts across restart, no startup/explicit background execution, lineage mismatch, freshness and real Spring-proxied registration rollback. Existing worker/scheduler tests were updated to verify the registration entry points. H2 controlled exceptions do not reproduce the unknown InnoDB cycle, JPA persistence-context behaviour or the full runtime wallet graph.
++
++Before treating this candidate as validated:
++
++1. On Java 21, run the full `mvn test` and retain Surefire output. Test actual Spring startup and Flyway V86 on a disposable crypto_ai copy.
++2. Exercise worker, scheduler and kline concurrently for the same symbol with an existing managed position and with no position. Capture a **crypto_ai** InnoDB deadlock report if any conflict remains; verify initial attempts stay bounded and later failures are review-only. Check both successful and rollback wallet/advisory writes using the real JPA transaction manager.
++3. Interrupt after signal registration, after claim and around business commit. Confirm fresh PENDING recovery, RUNNING review, no duplicate execution and atomic completion. Include a transaction exceeding five minutes and the quarantine/commit race.
++4. Run identical OLD/NEW Replay windows covering the original losses, confirmed winners and preceding stop boundaries. Compare decisions, quantities, executions and P/L. Replay cannot itself prove Production thread coordination. Compare healthy Production signal processing separately; operational recovery can intentionally create different executions after a transient failure.
++5. Review queue growth and initial-lock latency under load before making a throughput or deadlock-closure claim.
++
++## Read-only trader verification queries
++
++Run these on the trader connection. Confirm `SELECT DATABASE()` returns `crypto_ai`; the next application's `crypto_ai_v2` is not relevant evidence.
++
++```sql
++SELECT DATABASE();
++SHOW CREATE TABLE signal_processing_work;
++
++SELECT status, origin, COUNT(*) AS records, MAX(attempts) AS max_attempts
++FROM signal_processing_work GROUP BY status, origin ORDER BY status, origin;
++
++SELECT signal_id, symbol, interval_code, candle_open_time, origin, status,
++       attempts, updated_at, completed_at, paper_position_id, failure_stage, error_message
++FROM signal_processing_work
++WHERE status IN ('REVIEW_REQUIRED','RETRYABLE_FAILURE','RUNNING')
++ORDER BY updated_at DESC LIMIT 100;
++
++-- Replace only the exact signal ID under investigation; do not guess a nearest BUY.
++SELECT signal_id, symbol, interval_code, candle_open_time, origin, status,
++       attempts, failure_stage, error_message
++FROM signal_processing_work WHERE signal_id = 127;
++SELECT id, signal_id, symbol, side, status, execution_reason, executed_at
++FROM wallet_trade WHERE signal_id = 127 ORDER BY id;
++
++SHOW ENGINE INNODB STATUS;
++```
++
++If a signal predates V86, absence from the work table is expected. Do not bulk-register historical signals to make the report look complete. REVIEW_REQUIRED needs examination of durable execution/position history; this delivery deliberately supplies no blind requeue command.
+--- /dev/null
++++ b/src/main/java/com/crypto/execution/processing/ProcessingOrigin.java
+@@ -0,0 +1,7 @@
++package com.crypto.execution.processing;
++
++/** FIX-127: only eligible automatic work may be recovered by the background scan. */
++public enum ProcessingOrigin {
++    WORKER, RECOVERY, STARTUP, EXPLICIT;
++    public boolean automaticRecovery() { return this == WORKER || this == RECOVERY; }
++}
+--- /dev/null
++++ b/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java
+@@ -0,0 +1,102 @@
++package com.crypto.execution.processing;
++
++import com.crypto.domain.PaperPosition;
++import com.crypto.domain.TradeSignal;
++import com.crypto.repository.TradeSignalRepository;
++import com.crypto.wallet.repository.WalletManagedPositionRepository;
++import com.crypto.infrastructure.transaction.InitialPositionLockDeadlock;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.PlatformTransactionManager;
++import org.springframework.transaction.TransactionDefinition;
++import org.springframework.transaction.support.TransactionTemplate;
++import org.springframework.transaction.support.TransactionSynchronizationManager;
++import java.time.Instant;
++import java.util.Optional;
++import java.util.function.Function;
++
++/** FIX-127: one coordinator for all Production signal callers. No retry of the
++ * existing body after it has begun; only the new initial lock is retry-marked. */
++@Service
++public class SignalProcessingCoordinator {
++    private static final Logger log=LoggerFactory.getLogger(SignalProcessingCoordinator.class);
++    private final SignalProcessingStore store;
++    private final TradeSignalRepository signals;
++    private final WalletManagedPositionRepository positions;
++    private final SignalProcessingFreshness freshness;
++    private final TransactionTemplate transaction;
++    public SignalProcessingCoordinator(SignalProcessingStore store, TradeSignalRepository signals,
++            WalletManagedPositionRepository positions, SignalProcessingFreshness freshness, PlatformTransactionManager manager) {
++        this.store=store;this.signals=signals;this.positions=positions;this.freshness=freshness;
++        transaction=new TransactionTemplate(manager);
++        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
++    }
++    public Optional<PaperPosition> process(long signalId, boolean background,
++            Function<TradeSignal,Optional<PaperPosition>> business) {
++        if(TransactionSynchronizationManager.isActualTransactionActive())
++            throw new IllegalStateException("FIX-127 caller must be outside the processing transaction");
++        if(!background) {
++            // Automatic callers have already registered atomically with creation.
++            // Explicit existing-signal calls register only at the user's request.
++            transaction.executeWithoutResult(tx->store.register(signals.findById(signalId)
++                    .orElseThrow(()->new IllegalArgumentException("Signal not found: "+signalId)),ProcessingOrigin.EXPLICIT));
++        }
++        for(int localAttempt=0;localAttempt<2;localAttempt++) {
++            var work=store.claim(signalId,background);
++            if(work==null) {
++                log.info("[FIX-127][NOT_CLAIMED] signalId={}, background={}; no processing performed",signalId,background);
++                return Optional.empty();
++            }
++            log.info("[FIX-127][ATTEMPT] signalId={}, symbol={}, interval={}, candleOpenTime={}, origin={}, attempt={}, background={}",
++                    signalId,work.symbol(),work.interval(),work.candleOpenTime(),work.origin(),work.attempts(),background);
++            try {
++                Optional<PaperPosition> result=transaction.execute(tx->{
++                    var owned=store.locked(signalId);
++                    if(owned==null || !"RUNNING".equals(owned.status()) || !work.owner().equals(owned.owner()))
++                        throw new IllegalStateException("FIX-127 processing ownership changed");
++                    // Acquire before PositionManagementService inserts a referencing
++                    // advisory or executes POSITION_STOP_LOSS. No rules evaluated yet.
++                    try {
++                        positions.findFirstBySymbolAndStatusOrderByOpenedAtDesc(work.symbol(),"OPEN");
++                    } catch(RuntimeException ex) {
++                        if(InitialPositionLockDeadlock.isMysqlDeadlock(ex))throw new InitialLockFailure(ex);
++                        throw ex;
++                    }
++                    // Read signal/freshness after lock acquisition: lock wait must not
++                    // consume the recovery grace before it is checked, or establish an
++                    // ordinary repeatable-read snapshot before the position is locked.
++                    TradeSignal signal=signals.findById(signalId).orElseThrow(()->new IllegalArgumentException("Signal missing"));
++                    if(!work.symbol().equals(signal.getSymbol()) || !work.interval().equals(signal.getInterval())
++                            || !work.candleOpenTime().equals(signal.getCandleOpenTime()))
++                        throw new IllegalStateException("FIX-127 signal lineage changed");
++                    if((background || work.attempts()>1) && !freshness.eligible(work,Instant.now()))throw new Expired();
++                    Optional<PaperPosition> outcome=business.apply(signal);
++                    store.complete(work,outcome.map(PaperPosition::getId).orElse(null));
++                    return outcome;
++                });
++                log.info("[FIX-127][COMPLETED] signalId={}, symbol={}, interval={}, attempt={}; processing committed (not necessarily a trade)",
++                        signalId,work.symbol(),work.interval(),work.attempts());
++                return result;
++            } catch(Expired ex) {
++                store.finishWithoutBusiness(work,"EXPIRED","FRESHNESS","Exact candle is no longer latest and fresh for recovery");
++                log.warn("[FIX-127][EXPIRED] signalId={}, symbol={}, attempt={}",signalId,work.symbol(),work.attempts());
++                return Optional.empty();
++            } catch(RuntimeException ex) {
++                boolean initial=ex instanceof InitialLockFailure;
++                String status=initial && work.attempts()<2 ? "RETRYABLE_FAILURE" : "REVIEW_REQUIRED";
++                int recorded=store.finishWithoutBusiness(work,status,initial ? "INITIAL_POSITION_LOCK" : "PROCESSING_OR_COMMIT",ex.toString());
++                log.error("[FIX-127][{}] signalId={}, symbol={}, interval={}, attempt={}, initialLock={}",
++                        recorded==1 ? status : "FAILURE_RECORD_NOT_UPDATED",signalId,work.symbol(),work.interval(),work.attempts(),initial,ex);
++                if(!initial || work.attempts()>=2)throw ex;
++                // TransactionTemplate completed rollback before entering this catch.
++            }
++        }
++        return Optional.empty();
++    }
++    // A private marker cannot be supplied by a later business callback.
++    private static final class InitialLockFailure extends RuntimeException {
++        InitialLockFailure(RuntimeException cause) { super(cause); }
++    }
++    private static final class Expired extends RuntimeException {}
++}
+--- /dev/null
++++ b/src/main/java/com/crypto/execution/processing/SignalProcessingFreshness.java
+@@ -0,0 +1,34 @@
++package com.crypto.execution.processing;
++
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.stereotype.Service;
++import java.sql.Timestamp;
++import java.time.Duration;
++import java.time.Instant;
++
++/** FIX-127 recovery gate only. Uses actual closed candle lineage, never generated_at
++ * or a nearest candle. Grace periods match FIX-043's existing recovery contract. */
++@Service
++public class SignalProcessingFreshness {
++    private final JdbcTemplate jdbc;
++    public SignalProcessingFreshness(JdbcTemplate jdbc) { this.jdbc=jdbc; }
++    public boolean eligible(SignalProcessingStore.Work work, Instant now) {
++        var candles=jdbc.query("""
++                SELECT open_time,close_time FROM candle WHERE symbol=? AND interval_code=?
++                AND closed=1 AND close_time<=? ORDER BY open_time DESC LIMIT 1
++                """,(rs,n)->new Instant[]{rs.getTimestamp(1).toInstant(),rs.getTimestamp(2).toInstant()},
++                work.symbol(),work.interval(),Timestamp.from(now));
++        if(candles.isEmpty() || !candles.get(0)[0].equals(work.candleOpenTime()))return false;
++        return !candles.get(0)[1].plus(grace(work.interval())).isBefore(now);
++    }
++    static Duration grace(String interval) {
++        return switch(interval) {
++            case "1m" -> Duration.ofSeconds(90);
++            case "5m" -> Duration.ofMinutes(2);
++            case "1h" -> Duration.ofMinutes(5);
++            case "4h" -> Duration.ofMinutes(10);
++            case "1d" -> Duration.ofMinutes(30);
++            default -> Duration.ofMinutes(2);
++        };
++    }
++}
+--- /dev/null
++++ b/src/main/java/com/crypto/execution/processing/SignalProcessingRecovery.java
+@@ -0,0 +1,28 @@
++package com.crypto.execution.processing;
++
++import com.crypto.service.PaperTradingService;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.scheduling.annotation.Scheduled;
++import org.springframework.stereotype.Service;
++
++/** FIX-127: scans only registered work. Never discovers trades by backfilling
++ * historic trade_signal rows. Explicit/startup work is never background executed. */
++@Service
++public class SignalProcessingRecovery {
++    private static final Logger log=LoggerFactory.getLogger(SignalProcessingRecovery.class);
++    private final SignalProcessingStore store;
++    private final PaperTradingService paper;
++    public SignalProcessingRecovery(SignalProcessingStore store,PaperTradingService paper) {this.store=store;this.paper=paper;}
++    @Scheduled(fixedDelayString="${trading.fix127.recovery-delay-ms:30000}")
++    public void recover() {
++        try {
++            int quarantined = store.quarantineInterrupted();
++            if (quarantined > 0) log.warn("[FIX-127][INTERRUPTED_REVIEW] count={}; no automatic replay", quarantined);
++            for(long id:store.due()) {
++                try { paper.recoverRegisteredSignal(id); }
++                catch(RuntimeException ex) {log.error("[FIX-127][RECOVERY_FAILED] signalId={}",id,ex);}
++            }
++        } catch(RuntimeException ex) {log.error("[FIX-127][RECOVERY_SCAN_FAILED]",ex);}
++    }
++}
+--- /dev/null
++++ b/src/main/java/com/crypto/execution/processing/SignalProcessingStore.java
+@@ -0,0 +1,101 @@
++package com.crypto.execution.processing;
++
++import com.crypto.domain.TradeSignal;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.PlatformTransactionManager;
++import org.springframework.transaction.TransactionDefinition;
++import org.springframework.transaction.support.TransactionTemplate;
++import org.springframework.transaction.support.TransactionSynchronizationManager;
++import java.sql.Timestamp;
++import java.time.Instant;
++import java.util.List;
++import java.util.UUID;
++
++/** FIX-127: claims are durable, completion joins the business transaction. An
++ * interrupted RUNNING record is review-only; it is never blindly replayed. */
++@Service
++public class SignalProcessingStore {
++    private final JdbcTemplate jdbc;
++    private final TransactionTemplate independent;
++    public SignalProcessingStore(JdbcTemplate jdbc, PlatformTransactionManager manager) {
++        this.jdbc = jdbc;
++        independent = new TransactionTemplate(manager);
++        independent.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
++        independent.setTimeout(3);
++    }
++    public record Work(long signalId, String symbol, String interval, Instant candleOpenTime,
++                       ProcessingOrigin origin, String status, int attempts, String owner) {}
++    public void register(TradeSignal signal, ProcessingOrigin origin) {
++        requireTransaction();
++        if (signal == null || signal.getId() == null || signal.getCandleOpenTime() == null
++                || signal.getSymbol() == null || signal.getInterval() == null) {
++            throw new IllegalArgumentException("FIX-127 requires persisted exact signal lineage");
++        }
++        Instant now = Instant.now();
++        // Duplicate callers must not reset status, origin, attempts or ownership.
++        jdbc.update("""
++                INSERT INTO signal_processing_work
++                (signal_id,symbol,interval_code,candle_open_time,origin,status,attempts,next_attempt_at,updated_at)
++                VALUES (?,?,?,?,?,'PENDING',0,?,?)
++                ON DUPLICATE KEY UPDATE signal_id=signal_id
++                """, signal.getId(), signal.getSymbol(), signal.getInterval(), Timestamp.from(signal.getCandleOpenTime()),
++                origin.name(), Timestamp.from(now.plusSeconds(30)), Timestamp.from(now));
++    }
++    public Work claim(long id, boolean background) {
++        return independent.execute(tx -> {
++            Work work = locked(id);
++            if (work == null || !("PENDING".equals(work.status()) || "RETRYABLE_FAILURE".equals(work.status()))) return null;
++            if (background && !work.origin().automaticRecovery()) return null;
++            if (work.attempts() >= 2) return null;
++            String owner = UUID.randomUUID().toString();
++            jdbc.update("UPDATE signal_processing_work SET status='RUNNING',attempts=attempts+1,owner_token=?,updated_at=? WHERE signal_id=?",
++                    owner, Timestamp.from(Instant.now()), id);
++            return new Work(id,work.symbol(),work.interval(),work.candleOpenTime(),work.origin(),"RUNNING",work.attempts()+1,owner);
++        });
++    }
++    public Work locked(long id) {
++        requireTransaction();
++        List<Work> rows = jdbc.query("SELECT * FROM signal_processing_work WHERE signal_id=? FOR UPDATE", (rs,n) ->
++                new Work(rs.getLong("signal_id"),rs.getString("symbol"),rs.getString("interval_code"),
++                        rs.getTimestamp("candle_open_time").toInstant(),ProcessingOrigin.valueOf(rs.getString("origin")),
++                        rs.getString("status"),rs.getInt("attempts"),rs.getString("owner_token")),id);
++        return rows.isEmpty() ? null : rows.get(0);
++    }
++    public void complete(Work work, Long positionId) {
++        requireTransaction();
++        // Retain the last failure even after recovery; attempts=2 must remain explainable.
++        int changed = jdbc.update("""
++                UPDATE signal_processing_work SET status='COMPLETED',completed_at=?,updated_at=?,
++                paper_position_id=?,owner_token=NULL
++                WHERE signal_id=? AND status='RUNNING' AND owner_token=?
++                """, Timestamp.from(Instant.now()), Timestamp.from(Instant.now()), positionId, work.signalId(),work.owner());
++        if (changed != 1) throw new IllegalStateException("FIX-127 lost processing ownership");
++    }
++    public int finishWithoutBusiness(Work work, String status, String stage, String error) {
++        return independent.execute(tx -> jdbc.update("""
++                UPDATE signal_processing_work SET status=?,failure_stage=?,error_message=?,owner_token=NULL,
++                updated_at=?,next_attempt_at=? WHERE signal_id=? AND status='RUNNING' AND owner_token=?
++                """,status,stage,error,Timestamp.from(Instant.now()),Timestamp.from(Instant.now().plusSeconds(30)),work.signalId(),work.owner()));
++    }
++    public List<Long> due() {
++        return jdbc.query("""
++                SELECT signal_id FROM signal_processing_work WHERE status IN ('PENDING','RETRYABLE_FAILURE')
++                AND origin IN ('WORKER','RECOVERY') AND attempts<2 AND next_attempt_at<=?
++                ORDER BY next_attempt_at,signal_id LIMIT 50
++                """,(rs,n)->rs.getLong(1),Timestamp.from(Instant.now()));
++    }
++    public int quarantineInterrupted() {
++        // A live business transaction holds this row lock: re-evaluation of the
++        // predicate after lock wait cannot overwrite its committed COMPLETED status.
++        return independent.execute(tx -> jdbc.update("""
++                UPDATE signal_processing_work SET status='REVIEW_REQUIRED',failure_stage='INTERRUPTED_ATTEMPT',
++                error_message='Processing ownership interrupted or exceeded review timeout; no automatic replay',owner_token=NULL,updated_at=?
++                WHERE status='RUNNING' AND updated_at<?
++                """,Timestamp.from(Instant.now()),Timestamp.from(Instant.now().minusSeconds(300))));
++    }
++    private static void requireTransaction() {
++        if (!TransactionSynchronizationManager.isActualTransactionActive())
++            throw new IllegalStateException("FIX-127 operation requires a transaction");
++    }
++}
+--- a/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java
++++ b/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java
+@@ -86,7 +86,7 @@
+                 return;
+             }
+ 
+-            TradeSignal signal = analysisService.analyze(indicator);
++            TradeSignal signal = analysisService.analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER);
+             Optional<PaperPosition> position = paperTradingService.processSignal(signal);
+ 
+             log.info(
+--- /dev/null
++++ b/src/main/java/com/crypto/regression/controller/Fix127DiagnosticsController.java
+@@ -0,0 +1,44 @@
++package com.crypto.regression.controller;
++
++import lombok.RequiredArgsConstructor;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.web.bind.annotation.*;
++import java.util.*;
++
++/** FIX-127: current durable Production processing state alongside a review window.
++ * This read-only overlay is not a Replay execution source or an archived snapshot. */
++@RestController
++@RequestMapping("/api/administration/regression-tests")
++@RequiredArgsConstructor
++public class Fix127DiagnosticsController {
++    private final JdbcTemplate jdbc;
++
++    @GetMapping("/runs/{id}/fix127")
++    public Map<String,Object> run(@PathVariable long id) {
++        return rows(jdbc.queryForMap("SELECT symbol,start_time,end_time FROM analysis_test_run WHERE id=?",id),false);
++    }
++    @GetMapping("/archives/{id}/fix127")
++    public Map<String,Object> archive(@PathVariable long id) {
++        return rows(jdbc.queryForMap("SELECT symbol,start_time,end_time FROM regression_test_archive_batch WHERE id=?",id),false);
++    }
++    @GetMapping("/proven-trades/{id}/fix127")
++    public Map<String,Object> proven(@PathVariable long id) {
++        // Include preceding candles for context, not a guessed BUY/signal pairing.
++        return rows(jdbc.queryForMap("""
++                SELECT symbol,DATE_SUB(entry_time,INTERVAL 1 HOUR) AS start_time,
++                COALESCE(exit_time,entry_time) AS end_time FROM proven_analyzed_trade WHERE id=?
++                """,id),true);
++    }
++    private Map<String,Object> rows(Map<String,Object> window, boolean precedingHour) {
++        var rows=jdbc.queryForList("""
++                SELECT signal_id,symbol,interval_code,candle_open_time,origin,status,attempts,
++                updated_at,completed_at,paper_position_id,failure_stage,error_message
++                FROM signal_processing_work WHERE symbol=? AND candle_open_time>=? AND candle_open_time<=?
++                ORDER BY candle_open_time,signal_id LIMIT 501
++                """,window.get("symbol"),window.get("start_time"),window.get("end_time"));
++        boolean truncated=rows.size()>500;
++        return Map.of("scope","PRODUCTION_CURRENT_PROCESSING_STATE","truncated",truncated,
++                "precedingHour",precedingHour,"startTime",window.get("start_time"),"endTime",window.get("end_time"),
++                "rows",truncated ? rows.subList(0,500) : rows);
++    }
++}
+--- a/src/main/java/com/crypto/service/AnalysisService.java
++++ b/src/main/java/com/crypto/service/AnalysisService.java
+@@ -95,6 +95,25 @@
+     // FIX-042: wire the proven FIX-036 RANGE entry-location guard into the real production/replay pipeline.
+     // Do not move this logic into replay-only code; both paths must share the same AnalysisService decision flow.
+     private final RangeEntryLocationService rangeEntryLocationService;
++
++    // FIX-127: required at runtime; registration joins signal creation atomically.
++    @org.springframework.beans.factory.annotation.Autowired
++    private com.crypto.execution.processing.SignalProcessingStore processingStore;
++
++    @Transactional
++    public TradeSignal analyzeForProcessing(TechnicalIndicator indicator,
++            com.crypto.execution.processing.ProcessingOrigin origin) {
++        TradeSignal signal = analyze(indicator);
++        processingStore.register(signal, origin);
++        return signal;
++    }
++
++    @Transactional
++    public TradeSignal analyzeRecoveredForProcessing(TechnicalIndicator indicator, Instant at) {
++        TradeSignal signal = analyzeRecovered(indicator, at);
++        processingStore.register(signal, com.crypto.execution.processing.ProcessingOrigin.RECOVERY);
++        return signal;
++    }
+ 
+     /**
+      * Manual entry point used by controllers or recovery jobs.
+--- a/src/main/java/com/crypto/service/MarketDataBootstrapService.java
++++ b/src/main/java/com/crypto/service/MarketDataBootstrapService.java
+@@ -119,7 +119,7 @@
+                 return;
+             }
+ 
+-            TradeSignal signal = analysisService.analyze(indicator);
++            TradeSignal signal = analysisService.analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.STARTUP);
+             paperTradingService.processSignal(signal);
+ 
+             log.info(
+--- a/src/main/java/com/crypto/service/PaperTradingService.java
++++ b/src/main/java/com/crypto/service/PaperTradingService.java
+@@ -49,18 +49,25 @@
+     private final DynamicProfitLockService dynamicProfitLockService;
+     private final PositionPriceAuthorityPolicy priceAuthorityPolicy;
+ 
+-    /** Advisory-only; optional injection preserves existing constructor-based tests. */
++    /** Position management; optional injection preserves constructor-based policy tests. */
+     @Autowired(required = false)
+     private PositionManagementService positionManagementService;
+ 
+-    @Transactional
++    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NEVER)
+     public PaperPosition openFromLatestSignal(String symbol) {
+         String normalized = normalizeSymbol(symbol);
+         TradeSignal signal = signalRepository
+                 .findTopBySymbolOrderByGeneratedAtDesc(normalized)
+                 .orElseThrow(() -> new IllegalArgumentException("No signal found for " + normalized));
+ 
+-        return processSignal(signal)
++        if (processingCoordinator != null) {
++            return processingCoordinator.process(signal.getId(), false, fresh -> {
++                Optional<PaperPosition> result = processSignalBody(fresh);
++                if (result.isEmpty()) throw new IllegalStateException("The latest signal did not open a new position.");
++                return result;
++            }).orElseThrow(() -> new IllegalStateException("Signal was not claimed for processing."));
++        }
++        return processSignalBody(signal)
+                 .orElseThrow(() -> new IllegalStateException(
+                         "The latest signal did not open a new position. It may be WATCH/NEUTRAL/SELL, " +
+                                 "or a position for this symbol is already open."
+@@ -72,16 +79,33 @@
+      * BUY opens one position, WATCH/NEUTRAL holds it, and SELL closes it.
+      * Stop-loss and take-profit are checked before the signal decision.
+      */
+-    @Transactional
++    // FIX-127: mandatory in Spring. Null only supports existing manually constructed
++    // business-policy unit tests; Production cannot start without the coordinator.
++    @Autowired
++    private com.crypto.execution.processing.SignalProcessingCoordinator processingCoordinator;
++
++    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NEVER)
+     public Optional<PaperPosition> processSignal(TradeSignal signal) {
++        if (processingCoordinator == null) return processSignalBody(signal);
++        if (signal == null || signal.getId() == null) throw new IllegalArgumentException("Persisted signal required");
++        return processingCoordinator.process(signal.getId(), false, this::processSignalBody);
++    }
++
++    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NEVER)
++    public Optional<PaperPosition> recoverRegisteredSignal(long signalId) {
++        return processingCoordinator.process(signalId, true, this::processSignalBody);
++    }
++
++    /** FIX-127: existing decision order; invoked inside the coordinator's transaction. */
++    private Optional<PaperPosition> processSignalBody(TradeSignal signal) {
+         if (signal == null) {
+             throw new IllegalArgumentException("Trade signal is required");
+         }
+ 
+         String symbol = normalizeSymbol(signal.getSymbol());
+ 
+-        // Shadow-mode position management. This persists HOLD/REDUCE/EXIT advice only.
+-        // It never changes the market signal and never executes a wallet transaction.
++        // FIX-127: position management persists advice and can request POSITION_STOP_LOSS.
++        // Keep its existing decision order, but acquire the initial managed lock before entering here.
+         if (positionManagementService != null) {
+             try {
+                 positionManagementService.analyze(signal);
+@@ -385,7 +409,7 @@
+     }
+ 
+     /** Kept for compatibility with older callers. */
+-    @Transactional
++    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NEVER)
+     public Optional<PaperPosition> openFromSignal(TradeSignal signal) {
+         return processSignal(signal);
+     }
+--- a/src/main/java/com/crypto/service/ScheduledAnalysisService.java
++++ b/src/main/java/com/crypto/service/ScheduledAnalysisService.java
+@@ -162,8 +162,6 @@
+             var existingSignal = tradeSignalRepository
+                     .findBySymbolAndIntervalAndCandleOpenTime(symbol, interval, candle.getOpenTime());
+             boolean newlyRecoveredSignal = existingSignal.isEmpty();
+-            TradeSignal signal = existingSignal
+-                    .orElseGet(() -> analysisService.analyzeRecovered(indicator, candle.getCloseTime()));
+ 
+             // FIX-043 safety: never buy/sell now using a recovered historical candle price.
+             // Only the newest closed candle can be an execution candidate, and even that candle
+@@ -172,6 +170,11 @@
+             boolean latest = latestClosed != null
+                     && latestClosed.getOpenTime().equals(candle.getOpenTime());
+             boolean fresh = isFreshEnoughForExecution(candle, interval, now);
++            // FIX-127: only the already-eligible fresh latest recovery signal creates
++            // execution work. Historical backfill remains non-executing.
++            TradeSignal signal = existingSignal.orElseGet(() -> latest && fresh
++                    ? analysisService.analyzeRecoveredForProcessing(indicator, candle.getCloseTime())
++                    : analysisService.analyzeRecovered(indicator, candle.getCloseTime()));
+             if (latest && fresh && newlyRecoveredSignal) {
+                 paperTradingService.processSignal(signal);
+                 log.info(
+--- /dev/null
++++ b/src/main/resources/db/migration/V86__fix_127_signal_processing.sql
+@@ -0,0 +1,20 @@
++-- FIX-127: no historical backfill. Signal existence is not processing completion.
++-- No foreign keys: ledger claims must not acquire signal/position parent locks.
++CREATE TABLE signal_processing_work (
++    signal_id BIGINT NOT NULL PRIMARY KEY,
++    symbol VARCHAR(30) NOT NULL,
++    interval_code VARCHAR(10) NOT NULL,
++    candle_open_time TIMESTAMP(6) NOT NULL,
++    origin VARCHAR(20) NOT NULL,
++    status VARCHAR(30) NOT NULL,
++    attempts INT NOT NULL DEFAULT 0,
++    owner_token VARCHAR(36) NULL,
++    next_attempt_at TIMESTAMP(6) NOT NULL,
++    updated_at TIMESTAMP(6) NOT NULL,
++    completed_at TIMESTAMP(6) NULL,
++    paper_position_id BIGINT NULL,
++    failure_stage VARCHAR(40) NULL,
++    error_message MEDIUMTEXT NULL,
++    KEY idx_fix127_due (status,next_attempt_at,signal_id),
++    KEY idx_fix127_window (symbol,candle_open_time,signal_id)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+--- a/src/main/resources/static/js/fix-registry.js
++++ b/src/main/resources/static/js/fix-registry.js
+@@ -1,5 +1,6 @@
+ (() => {
+     const FIXES = [
++        {"id": "FIX-127", "title": "Signal-path initial lock and durable processing recovery", "status": "CANDIDATE \u2014 MAVEN/MYSQL VALIDATION PENDING", "scenario": "FIX-124 recovered four logged kline incidents; six remaining worker failures reached the managed-position lock through the signal path.", "cause": "Signal processing can write position advice before its locking lookup. Saved signal existence also prevents missing-signal recovery from revisiting an unfinished processing attempt. Exact MySQL competing lock cycle remains unproven.", "solution": "Route worker, eligible scheduled recovery, startup and explicit signal calls through a transaction coordinator. Acquire the initial managed-position lock before the unchanged body; allow at most two total attempts only for initial MySQL 1213/40001. Register work atomically with eligible signal creation and complete it atomically with processing. Recover only fresh automatic work; quarantine interrupted or uncertain attempts.", "behavior": "Production transaction ordering, duplicate handling and failure recovery change. Scoring, sizing and exit formulas are unchanged. Operational trade outcomes can change. Replay business code stays unchanged; Proven displays current Production state as a separate overlay. FIX-124 and FIX-125 remain separate.", "regression": "22 new JUnit/H2 transaction and recovery tests authored; Maven unavailable, tests not run. Fifteen Node tests passed. Java syntax check only; real MySQL contention and historical parity pending.", "symbol": "ALL", "entry": "UNCHANGED RULES; RECOVERY CHANGES", "exit": "UNCHANGED RULES", "entryTime": "Original call or fresh bounded recovery", "exitTime": "Existing authority", "replayWindow": "Identical OLD/NEW windows; no Production ledger used to simulate Replay.", "location": "Shared Production signal entry points / Proven Signal processing", "classes": ["SignalProcessingCoordinator", "SignalProcessingStore", "SignalProcessingRecovery", "SignalProcessingFreshness", "AnalysisService", "PaperTradingService", "Fix127DiagnosticsController", "V86__fix_127_signal_processing.sql", "md/FIX-127.md"]},
+         {"id": "FIX-126", "title": "Preserve complete wallet execution explanations", "status": "CANDIDATE — MAVEN/MYSQL VALIDATION PENDING", "scenario": "BUY signal #634982 failed to persist because execution_message exceeded VARCHAR(1000).", "cause": "Execution explanation plus wallet/price metadata exceeds the schema capacity.", "solution": "V85 widens the nullable audit column to MEDIUMTEXT and matches WalletTrade mapping; preserve complete Unicode messages.", "behavior": "Already-approved BUY/SELL persistence no longer has the 1000-character audit limit. No scoring, sizing, exit rule or historical backfill change.", "regression": "Long BUY/SELL migration round-trip JUnit test added; Maven could not start. MySQL migration/ORM validation pending.", "symbol": "ALL", "entry": "UNCHANGED RULES", "exit": "UNCHANGED RULES", "entryTime": "UNCHANGED", "exitTime": "UNCHANGED", "replayWindow": "No Replay decision changes; compare existing windows.", "location": "Wallet audit persistence", "classes": ["WalletTrade", "V85__fix_126_wallet_execution_message.sql", "md/FIX-126.md"]},
+         {"id": "FIX-125", "title": "Wallet transaction coordination through commit", "status": "PLANNED — TO BE DONE", "scenario": "A synchronized wallet method can release its monitor before the surrounding Spring transaction commits.", "cause": "Possible monitor-release/commit race identified structurally; an actual failure has not been reproduced. This is distinct from the reported deadlocks.", "solution": "First reproduce the ordering with a deterministic concurrency test. Then coordinate the relevant wallet BUY/SELL paths through transaction completion, including rollback, without bundling sizing or unrelated deadlock repairs.", "behavior": "Reservation only. Not implemented. FIX-122 committed reads and its later recheck do not close this race window.", "regression": "Pending deterministic reproduction, commit/rollback and concurrent BUY/SELL tests; verify Production coordination and Replay decision parity.", "symbol": "ALL", "entry": "PLANNED", "exit": "UNCHANGED", "entryTime": "NOT IMPLEMENTED", "exitTime": "UNCHANGED", "replayWindow": "To be selected from the reproduced scenario; no performance or profitability claim.", "location": "Wallet transaction coordination — separate from FIX-124", "classes": ["md/FIX-125.md"]},
+         {"id": "FIX-124", "title": "Live protection deadlock recovery and input isolation", "status": "CANDIDATE — MAVEN/MYSQL VALIDATION PENDING", "scenario": "Trader logs confirm four deadlocks; UNI live protection failed at its initial managed-position lock and rolled back the shared kline transaction.", "cause": "Shared transaction spreads protection rollback into input persistence. Exact trader competing lock cycle remains unproven.", "solution": "Commit candle/exact price before protection; retry only initial MySQL 1213/40001 once after rollback; persist incident outcomes and show Production history in Proven review.", "behavior": "Transaction boundaries and failure recovery change. Business formulas unchanged. Other analysis/recovery deadlocks and FIX-125 commit coordination remain open.", "regression": "H2 transaction and first-lock tests added but Maven unavailable. Node checks passed; MySQL reproduction and historical parity pending.", "symbol": "ALL", "entry": "UNCHANGED RULES", "exit": "UNCHANGED", "entryTime": "LIVE PRICE", "exitTime": "UNCHANGED", "replayWindow": "Identical OLD/NEW windows with complete preceding stop and winning/losing controls.", "location": "Kline transaction boundary / Proven incident history", "classes": ["KlineTransactionCoordinator", "InitialPositionLockDeadlock", "Fix124ProtectionStore", "BinanceKlineService", "Fix124DiagnosticsController", "md/FIX-124.md"]},
+--- a/src/main/resources/static/js/proven-analyzed-trades.js
++++ b/src/main/resources/static/js/proven-analyzed-trades.js
+@@ -155,7 +155,7 @@
+         body.innerHTML = rows.map(a => `<tr>
+             <td>#${a.archive_batch_id}</td><td>#${a.source_test_run_id}</td><td><strong>${escapeHtml(a.test_name)}</strong></td>
+             <td>${escapeHtml(a.symbol)}</td><td>${formatMoveTime(a.start_time)} → ${formatMoveTime(a.end_time)}</td>
+-            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button> <button type="button" class="secondary-button" data-fix124-proven-id="${trade.id}">Protection incidents</button></td>
++            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button> <button type="button" class="secondary-button" data-fix124-proven-id="${trade.id}">Protection incidents</button> <button type="button" class="secondary-button" data-fix127-proven-id="${trade.id}">Signal processing</button></td>
+         </tr>`).join('') || '<tr><td colspan="7">No archived test runs yet.</td></tr>';
+         return rows;
+     } catch (error) { body.innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`; return []; }
+@@ -629,7 +629,8 @@
+             api(`${base}/trades`),
+             api(`${base}/position-management`),
+             api(`${base}/fix122`),
+-            api(`${base}/fix124`)
++            api(`${base}/fix124`),
++            api(`${base}/fix127`)
+         ]);
+         if (requestToken !== regressionDetailRequestToken) return finished;
+         const signals = detailResults[0].status === 'fulfilled' ? detailResults[0].value : [];
+@@ -638,6 +639,7 @@
+         // FIX-122: failure is visible; it must never render as a successful rule check.
+         renderFix122(detailResults[4]);
+         renderFix124(detailResults[5]);
++        renderFix127(detailResults[6]);
+         const management = detailResults[3].status === 'fulfilled' ? detailResults[3].value : [];
+ 
+         // FIX-11O: always expose fresh directional Replay signals independently of the BUY-centric
+@@ -718,9 +720,10 @@
+ async function loadRegressionArchiveDetail(archiveBatchId) {
+     const base = `/api/administration/regression-tests/archives/${archiveBatchId}`;
+     const [run, trades] = await Promise.all([api(base), api(`${base}/trades`)]);
+-    const fix122=await Promise.allSettled([api(`${base}/fix122`), api(`${base}/fix124`)]);
++    const fix122=await Promise.allSettled([api(`${base}/fix122`), api(`${base}/fix124`), api(`${base}/fix127`)]);
+     renderFix122(fix122[0]);
+     renderFix124(fix122[1]);
++    renderFix127(fix122[2]);
+     const panel = document.getElementById('regression-archive-detail');
+     const body = document.getElementById('regression-archive-trades-body');
+     if (!panel || !body) return;
+@@ -1626,6 +1629,48 @@
+     } finally { button.disabled = false; }
+ });
+ 
++// FIX-127: COMPLETED describes processing commit, not a BUY/SELL or a parity result.
++function renderFix127(result) {
++    const panel = document.getElementById('fix127-panel');
++    const summary = document.getElementById('fix127-summary');
++    const body = document.getElementById('fix127-body');
++    if (!panel || !summary || !body) return;
++    panel.classList.remove('hidden');
++    body.replaceChildren();
++    if (!result || result.status !== 'fulfilled') {
++        summary.textContent = 'Signal processing history could not be loaded.';
++        return;
++    }
++    const data = result.value;
++    summary.textContent = 'Current Production processing state; not simulated Replay results or an archived snapshot. '
++        + 'Selected by exact candle-open time: ' + String(data.startTime ?? '') + ' to ' + String(data.endTime ?? '') + '. '
++        + (data.precedingHour ? 'Includes one hour before the saved entry for context; no inferred trade pairing. ' : '')
++        + (data.truncated ? 'Showing first 500 records. ' : '')
++        + 'COMPLETED means processing committed, not necessarily a trade. REVIEW_REQUIRED is not automatically replayed. '
++        + 'Recording begins with FIX-127; an empty list does not prove processing succeeded.';
++    for (const row of data.rows || []) {
++        const tr = document.createElement('tr');
++        for (const value of [row.signal_id, row.symbol, row.interval_code, row.candle_open_time,
++                row.origin, row.status, row.attempts, row.updated_at, row.paper_position_id,
++                row.failure_stage, row.error_message]) {
++            const td = document.createElement('td');
++            td.textContent = String(value ?? '');
++            tr.appendChild(td);
++        }
++        body.appendChild(tr);
++    }
++}
++document.addEventListener('click', async event => {
++    const button = event.target.closest('[data-fix127-proven-id]');
++    if (!button) return;
++    button.disabled = true;
++    try {
++        const results = await Promise.allSettled([api(`/api/administration/regression-tests/proven-trades/${encodeURIComponent(button.dataset.fix127ProvenId)}/fix127`)]);
++        renderFix127(results[0]);
++        document.getElementById('fix127-panel')?.scrollIntoView({behavior:'smooth'});
++    } finally { button.disabled = false; }
++});
++
+ // FIX-122: persisted per-evaluation evidence, escaped before HTML insertion.
+ function renderFix122(result) {
+     const panel=document.getElementById('fix122-panel');
+--- a/src/main/resources/static/proven-analyzed-trades.html
++++ b/src/main/resources/static/proven-analyzed-trades.html
+@@ -182,6 +182,12 @@
+ <p id="fix124-summary"></p>
+ <div class="table-responsive"><table><thead><tr><th>Symbol</th><th>Candle open (UTC)</th><th>Observed (UTC)</th><th>Price</th><th>Attempts</th><th>Outcome</th><th>Error</th></tr></thead><tbody id="fix124-body"></tbody></table></div>
+ </section>
++<!-- FIX-127: operational Production state, not simulated historical executions. -->
++<section id="fix127-panel" class="regression-detail hidden">
++<h3>FIX-127 · Signal processing</h3>
++<p id="fix127-summary"></p>
++<div class="table-responsive"><table><thead><tr><th>Signal</th><th>Symbol</th><th>Interval</th><th>Candle open (UTC)</th><th>Origin</th><th>Status</th><th>Attempts</th><th>Updated (UTC)</th><th>Paper position</th><th>Last failure stage</th><th>Last error</th></tr></thead><tbody id="fix127-body"></tbody></table></div>
++</section>
+ <section id="fix122-panel" class="regression-detail hidden">
+ <h3>FIX-122 · Post-stop entry evidence</h3>
+ <p id="fix122-summary">Not recorded.</p>
+--- /dev/null
++++ b/src/test/java/com/crypto/execution/processing/SignalProcessingCoordinatorTest.java
+@@ -0,0 +1,249 @@
++package com.crypto.execution.processing;
++
++import com.crypto.domain.TradeSignal;
++import com.crypto.domain.TechnicalIndicator;
++import com.crypto.repository.TradeSignalRepository;
++import com.crypto.wallet.repository.WalletManagedPositionRepository;
++import com.crypto.service.AnalysisService;
++import com.crypto.infrastructure.transaction.InitialPositionLockDeadlock;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.aop.framework.ProxyFactory;
++import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
++import org.springframework.transaction.interceptor.TransactionInterceptor;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.jdbc.datasource.DriverManagerDataSource;
++import org.springframework.jdbc.datasource.DataSourceTransactionManager;
++import org.springframework.transaction.support.TransactionTemplate;
++import org.springframework.test.util.ReflectionTestUtils;
++import java.sql.SQLException;
++import java.sql.Timestamp;
++import java.time.Instant;
++import java.util.*;
++import java.util.concurrent.*;
++import java.util.concurrent.atomic.AtomicInteger;
++import static org.junit.jupiter.api.Assertions.*;
++import static org.mockito.Mockito.*;
++
++/** FIX-127: real H2 transactions with injected lock failures. These tests verify
++ * atomicity and retry permission, NOT MySQL's unidentified competing lock cycle. */
++class SignalProcessingCoordinatorTest {
++    JdbcTemplate jdbc;
++    DataSourceTransactionManager manager;
++    TransactionTemplate tx;
++    SignalProcessingStore store;
++    SignalProcessingCoordinator coordinator;
++    TradeSignalRepository signals;
++    WalletManagedPositionRepository positions;
++    TradeSignal signal;
++    Instant open=Instant.parse("2026-09-09T10:00:00Z");
++
++    @BeforeEach void setup() {
++        var ds=new DriverManagerDataSource("jdbc:h2:mem:"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1","sa","");
++        jdbc=new JdbcTemplate(ds);manager=new DataSourceTransactionManager(ds);tx=new TransactionTemplate(manager);
++        // Minimal test schema; full V86 MySQL migration must also be tested on MySQL.
++        jdbc.execute("""
++            CREATE TABLE signal_processing_work(signal_id BIGINT PRIMARY KEY,symbol VARCHAR(30),
++            interval_code VARCHAR(10),candle_open_time TIMESTAMP(6),origin VARCHAR(20),status VARCHAR(30),
++            attempts INT,owner_token VARCHAR(36),next_attempt_at TIMESTAMP(6),updated_at TIMESTAMP(6),
++            completed_at TIMESTAMP(6),paper_position_id BIGINT,failure_stage VARCHAR(40),error_message CLOB)
++            """);
++        jdbc.execute("CREATE TABLE writes(id INT PRIMARY KEY,label VARCHAR(40))");
++        jdbc.execute("CREATE TABLE candle(symbol VARCHAR(30),interval_code VARCHAR(10),open_time TIMESTAMP(6),close_time TIMESTAMP(6),closed INT)");
++        store=new SignalProcessingStore(jdbc,manager);
++        signals=mock(TradeSignalRepository.class);positions=mock(WalletManagedPositionRepository.class);
++        signal=new TradeSignal();signal.setId(127L);signal.setSymbol("PEPEUSDT");signal.setInterval("1m");signal.setCandleOpenTime(open);
++        when(signals.findById(127L)).thenReturn(Optional.of(signal));
++        coordinator=new SignalProcessingCoordinator(store,signals,positions,new SignalProcessingFreshness(jdbc),manager);
++    }
++    RuntimeException deadlock() {return new RuntimeException(new SQLException("controlled initial conflict","40001",1213));}
++    void register(ProcessingOrigin origin) {tx.executeWithoutResult(t->store.register(signal,origin));}
++    String status() {return jdbc.queryForObject("SELECT status FROM signal_processing_work WHERE signal_id=127",String.class);}
++    int countWrites() {return jdbc.queryForObject("SELECT COUNT(*) FROM writes",Integer.class);}
++    void freshCandle() {
++        // Fixed lineage, recent close: SQL gate uses exact open identity and actual close age.
++        jdbc.update("INSERT INTO candle VALUES('PEPEUSDT','1m',?,?,1)",Timestamp.from(open),Timestamp.from(Instant.now().minusSeconds(5)));
++    }
++    @Test void normalProcessingCompletesAtomicallyAndDuplicateCallDoesNotRepeatBody() {
++        AtomicInteger calls=new AtomicInteger();
++        coordinator.process(127,false,s->{calls.incrementAndGet();jdbc.update("INSERT INTO writes VALUES(1,'wallet')");return Optional.empty();});
++        assertEquals("COMPLETED",status());assertEquals(1,countWrites());
++        coordinator.process(127,false,s->{fail("completed signals must not execute twice");return Optional.empty();});
++        assertEquals(1,calls.get());
++    }
++    @Test void firstLockFailsBeforeBusinessThenSecondAttemptCommitsOnce() {
++        freshCandle();AtomicInteger locks=new AtomicInteger();AtomicInteger calls=new AtomicInteger();
++        when(positions.findFirstBySymbolAndStatusOrderByOpenedAtDesc("PEPEUSDT","OPEN")).thenAnswer(inv->{
++            assertEquals(0,countWrites(),"lock must precede advisory/wallet callback");
++            if(locks.incrementAndGet()==1)throw deadlock();return Optional.empty();
++        });
++        coordinator.process(127,false,s->{calls.incrementAndGet();jdbc.update("INSERT INTO writes VALUES(1,'wallet')");return Optional.empty();});
++        assertEquals(2,locks.get());assertEquals(1,calls.get());assertEquals(1,countWrites());assertEquals("COMPLETED",status());
++        assertEquals(2,jdbc.queryForObject("SELECT attempts FROM signal_processing_work",Integer.class));
++        assertEquals("INITIAL_POSITION_LOCK",jdbc.queryForObject("SELECT failure_stage FROM signal_processing_work",String.class));
++    }
++    @Test void lateDeadlockRollsBackAllWritesAndIsNeverRetried() {
++        AtomicInteger calls=new AtomicInteger();
++        assertThrows(RuntimeException.class,()->coordinator.process(127,false,s->{
++            calls.incrementAndGet();jdbc.update("INSERT INTO writes VALUES(1,'advisory'),(2,'wallet')");throw deadlock();
++        }));
++        assertEquals(1,calls.get());assertEquals(0,countWrites());assertEquals("REVIEW_REQUIRED",status());
++        assertNull(store.claim(127,true));
++    }
++    @Test void evenAnInitialLockMarkerFromALaterBodyCannotAuthorizeRetry() {
++        AtomicInteger calls=new AtomicInteger();
++        assertThrows(RuntimeException.class,()->coordinator.process(127,false,s->{
++            calls.incrementAndGet();throw new InitialPositionLockDeadlock(deadlock());
++        }));
++        assertEquals(1,calls.get());assertEquals("REVIEW_REQUIRED",status());
++    }
++    @Test void beforeCommitFailureRollsBackWithoutRetry() {
++        AtomicInteger calls=new AtomicInteger();
++        assertThrows(IllegalStateException.class,()->coordinator.process(127,false,s->{
++            calls.incrementAndGet();jdbc.update("INSERT INTO writes VALUES(1,'wallet')");
++            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
++                new org.springframework.transaction.support.TransactionSynchronization() {
++                    @Override public void beforeCommit(boolean readOnly) { throw new IllegalStateException("commit failure"); }
++                });
++            return Optional.empty();
++        }));
++        assertEquals(1,calls.get());assertEquals(0,countWrites());assertEquals("REVIEW_REQUIRED",status());
++    }
++    @Test void afterCommitExceptionCannotEraseDurableCompletionOrRepeatBusiness() {
++        AtomicInteger calls=new AtomicInteger();
++        assertThrows(IllegalStateException.class,()->coordinator.process(127,false,s->{
++            calls.incrementAndGet();jdbc.update("INSERT INTO writes VALUES(1,'wallet')");
++            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
++                new org.springframework.transaction.support.TransactionSynchronization() {
++                    @Override public void afterCommit() { throw new IllegalStateException("ack failure"); }
++                });
++            return Optional.empty();
++        }));
++        assertEquals("COMPLETED",status());assertEquals(1,countWrites());
++        coordinator.process(127,false,s->{calls.incrementAndGet();return Optional.empty();});
++        assertEquals(1,calls.get());
++    }
++    @Test void recoveredInitialFailureHasOnlyOneRemainingAttemptAfterRestart() {
++        register(ProcessingOrigin.WORKER);freshCandle();var work=store.claim(127,true);
++        store.finishWithoutBusiness(work,"RETRYABLE_FAILURE","INITIAL_POSITION_LOCK","confirmed rollback");
++        when(positions.findFirstBySymbolAndStatusOrderByOpenedAtDesc("PEPEUSDT","OPEN")).thenThrow(deadlock());
++        assertThrows(RuntimeException.class,()->coordinator.process(127,true,s->Optional.empty()));
++        verify(positions).findFirstBySymbolAndStatusOrderByOpenedAtDesc("PEPEUSDT","OPEN");
++        assertEquals(2,jdbc.queryForObject("SELECT attempts FROM signal_processing_work",Integer.class));
++        assertEquals("REVIEW_REQUIRED",status());
++    }
++    @Test void exhaustedInitialLockRetriesRequireReview() {
++        freshCandle();when(positions.findFirstBySymbolAndStatusOrderByOpenedAtDesc("PEPEUSDT","OPEN")).thenThrow(deadlock());
++        assertThrows(RuntimeException.class,()->coordinator.process(127,false,s->{fail("no business before successful lock");return Optional.empty();}));
++        verify(positions,times(2)).findFirstBySymbolAndStatusOrderByOpenedAtDesc("PEPEUSDT","OPEN");
++        assertEquals("REVIEW_REQUIRED",status());assertNull(store.claim(127,false));
++    }
++    @Test void lockTimeoutDoesNotAcquireDeadlockRetryPermission() {
++        when(positions.findFirstBySymbolAndStatusOrderByOpenedAtDesc("PEPEUSDT","OPEN"))
++                .thenThrow(new RuntimeException(new SQLException("timeout","HY000",1205)));
++        assertThrows(RuntimeException.class,()->coordinator.process(127,false,s->Optional.empty()));
++        verify(positions).findFirstBySymbolAndStatusOrderByOpenedAtDesc("PEPEUSDT","OPEN");assertEquals("REVIEW_REQUIRED",status());
++    }
++    @Test void expiredRegisteredWorkCannotReachBusinessAfterLock() {
++        register(ProcessingOrigin.WORKER);
++        coordinator.process(127,true,s->{fail("stale/missing candle cannot trade");return Optional.empty();});
++        assertEquals("EXPIRED",status());verify(positions).findFirstBySymbolAndStatusOrderByOpenedAtDesc("PEPEUSDT","OPEN");
++    }
++    @Test void freshnessIsCheckedAfterPositionLockRatherThanBeforeItsWait() {
++        register(ProcessingOrigin.WORKER);freshCandle();
++        when(positions.findFirstBySymbolAndStatusOrderByOpenedAtDesc("PEPEUSDT","OPEN")).thenAnswer(inv->{
++            // Simulate a newer closed candle becoming available at lock acquisition.
++            jdbc.update("INSERT INTO candle VALUES('PEPEUSDT','1m',?,?,1)",
++                    Timestamp.from(open.plusSeconds(60)),Timestamp.from(Instant.now().minusSeconds(4)));
++            return Optional.empty();
++        });
++        coordinator.process(127,true,s->{fail("superseded candle cannot execute after waiting");return Optional.empty();});
++        assertEquals("EXPIRED",status());
++    }
++    @Test void pendingWorkSurvivesStoreRecreationAndFreshRecoveryCommits() {
++        register(ProcessingOrigin.RECOVERY);freshCandle();
++        store=new SignalProcessingStore(jdbc,manager);
++        coordinator=new SignalProcessingCoordinator(store,signals,positions,new SignalProcessingFreshness(jdbc),manager);
++        coordinator.process(127,true,s->{jdbc.update("INSERT INTO writes VALUES(1,'recovered')");return Optional.empty();});
++        assertEquals("COMPLETED",status());assertEquals(1,countWrites());
++    }
++    @Test void startupAndExplicitWorkNeverBecomeBackgroundTrades() {
++        register(ProcessingOrigin.STARTUP);assertNull(store.claim(127,true));assertTrue(store.due().isEmpty());
++        jdbc.update("DELETE FROM signal_processing_work");register(ProcessingOrigin.EXPLICIT);
++        assertNull(store.claim(127,true));assertTrue(store.due().isEmpty());assertEquals("PENDING",status());
++    }
++    @Test void interruptedOwnerIsQuarantinedWithoutReplaying() {
++        register(ProcessingOrigin.WORKER);assertNotNull(store.claim(127,true));
++        jdbc.update("UPDATE signal_processing_work SET updated_at=?",Timestamp.from(Instant.now().minusSeconds(301)));
++        assertEquals(1,store.quarantineInterrupted());assertEquals("REVIEW_REQUIRED",status());
++        assertNull(store.claim(127,true));assertTrue(store.due().isEmpty());
++    }
++    @Test void concurrentClaimsGrantExactlyOneOwner() throws Exception {
++        register(ProcessingOrigin.WORKER);
++        var pool=Executors.newFixedThreadPool(2);var start=new CountDownLatch(1);
++        try {
++            Callable<SignalProcessingStore.Work> claim=()->{start.await();return store.claim(127,true);};
++            var first=pool.submit(claim);var second=pool.submit(claim);start.countDown();
++            var a=first.get(5,TimeUnit.SECONDS);var b=second.get(5,TimeUnit.SECONDS);
++            assertTrue((a==null) != (b==null));
++            assertEquals(1,jdbc.queryForObject("SELECT attempts FROM signal_processing_work",Integer.class));
++        } finally {pool.shutdownNow();}
++    }
++    @Test void completionRollsBackWithBusinessAndCannotBeCommittedByWrongOwner() {
++        register(ProcessingOrigin.WORKER);var work=store.claim(127,true);
++        assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(t->{
++            jdbc.update("INSERT INTO writes VALUES(1,'wallet')");store.complete(work,null);throw new IllegalStateException("rollback");
++        }));
++        assertEquals(0,countWrites());assertEquals("RUNNING",status());
++        var wrong=new SignalProcessingStore.Work(work.signalId(),work.symbol(),work.interval(),work.candleOpenTime(),work.origin(),work.status(),work.attempts(),"wrong");
++        assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(t->store.complete(wrong,null)));
++        assertEquals("RUNNING",status());
++    }
++    @Test void duplicateRegistrationNeverResetsOriginOrCompletion() {
++        register(ProcessingOrigin.WORKER);var work=store.claim(127,false);tx.executeWithoutResult(t->store.complete(work,99L));
++        register(ProcessingOrigin.EXPLICIT);assertEquals("COMPLETED",status());
++        assertEquals("WORKER",jdbc.queryForObject("SELECT origin FROM signal_processing_work",String.class));
++        assertEquals(99L,jdbc.queryForObject("SELECT paper_position_id FROM signal_processing_work",Long.class));
++    }
++    @Test void lineageMismatchRequiresReviewWithoutBusiness() {
++        register(ProcessingOrigin.WORKER);signal.setCandleOpenTime(open.plusSeconds(60));
++        assertThrows(IllegalStateException.class,()->coordinator.process(127,true,s->Optional.empty()));
++        assertEquals("REVIEW_REQUIRED",status());verify(positions).findFirstBySymbolAndStatusOrderByOpenedAtDesc("PEPEUSDT","OPEN");
++    }
++    @Test void ambientTransactionIsRejectedBeforeAnyClaimOrRegistration() {
++        assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(t->coordinator.process(127,false,s->Optional.empty())));
++        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM signal_processing_work",Integer.class));
++    }
++    @Test void registrationMustShareTheSignalCreationTransaction() {
++        assertThrows(IllegalStateException.class,()->store.register(signal,ProcessingOrigin.WORKER));
++        assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(t->{
++            jdbc.update("INSERT INTO writes VALUES(1,'signal')");store.register(signal,ProcessingOrigin.WORKER);throw new IllegalStateException("abort creation");
++        }));
++        assertEquals(0,countWrites());assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM signal_processing_work",Integer.class));
++    }
++    @Test void realAnalysisWrapperProxyRollsSignalCreationBackWhenRegistrationFails() {
++        // Real wrapper + Spring transaction interceptor; only expensive scoring is stubbed.
++        var analysis=mock(AnalysisService.class,CALLS_REAL_METHODS);
++        ReflectionTestUtils.setField(analysis,"processingStore",store);
++        var indicator=new TechnicalIndicator();
++        doAnswer(inv->{jdbc.update("INSERT INTO writes VALUES(1,'signal')");return signal;}).when(analysis).analyze(indicator);
++        var factory=new ProxyFactory(analysis);factory.setProxyTargetClass(true);
++        factory.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
++        var proxy=(AnalysisService)factory.getProxy();
++        signal.setCandleOpenTime(null);
++        assertThrows(IllegalArgumentException.class,()->proxy.analyzeForProcessing(indicator,ProcessingOrigin.WORKER));
++        assertEquals(0,countWrites());assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM signal_processing_work",Integer.class));
++        signal.setCandleOpenTime(open);
++        proxy.analyzeForProcessing(indicator,ProcessingOrigin.WORKER);
++        assertEquals(1,countWrites());assertEquals("PENDING",status());
++    }
++    @Test void freshnessUsesExactLatestClosedCandleAndRejectsFutureAndOldData() {
++        var gate=new SignalProcessingFreshness(jdbc);register(ProcessingOrigin.WORKER);
++        var work=tx.execute(t->store.locked(127));var now=open.plusSeconds(70);
++        jdbc.update("INSERT INTO candle VALUES('PEPEUSDT','1m',?,?,1)",Timestamp.from(open),Timestamp.from(open.plusSeconds(59)));
++        assertTrue(gate.eligible(work,now));assertFalse(gate.eligible(work,open.plusSeconds(150)));
++        assertFalse(gate.eligible(work,open.plusSeconds(58)),"future close must not be used");
++        jdbc.update("INSERT INTO candle VALUES('PEPEUSDT','1m',?,?,1)",Timestamp.from(open.plusSeconds(60)),Timestamp.from(open.plusSeconds(119)));
++        assertFalse(gate.eligible(work,open.plusSeconds(120)),"no nearest-candle fallback");
++    }
++}
+--- a/src/test/java/com/crypto/service/CandleClosedAnalysisWorkerTest.java
++++ b/src/test/java/com/crypto/service/CandleClosedAnalysisWorkerTest.java
+@@ -64,13 +64,13 @@
+                 .thenReturn(Optional.of(indicator));
+         when(tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime(
+                 "BTCUSDT", "1h", openTime)).thenReturn(false);
+-        when(analysisService.analyze(indicator)).thenReturn(signal);
++        when(analysisService.analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER)).thenReturn(signal);
+         when(paperTradingService.processSignal(signal)).thenReturn(Optional.of(position));
+ 
+         worker.process(event);
+ 
+         verify(technicalIndicatorService).calculateAndPersist("BTCUSDT", "1h", openTime);
+-        verify(analysisService).analyze(indicator);
++        verify(analysisService).analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER);
+         verify(paperTradingService).processSignal(signal);
+     }
+ 
+@@ -93,7 +93,7 @@
+ 
+         worker.process(event);
+ 
+-        verify(analysisService, never()).analyze(indicator);
++        verify(analysisService, never()).analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER);
+         verify(paperTradingService, never()).processSignal(org.mockito.ArgumentMatchers.any());
+     }
+ }
+--- a/src/test/java/com/crypto/service/ScheduledAnalysisServiceTest.java
++++ b/src/test/java/com/crypto/service/ScheduledAnalysisServiceTest.java
+@@ -105,7 +105,7 @@
+                 .thenReturn(Optional.of(indicator));
+         when(tradeSignalRepository.findBySymbolAndIntervalAndCandleOpenTime("ACEUSDT", "1m", latest.getOpenTime()))
+                 .thenReturn(Optional.empty());
+-        when(analysisService.analyzeRecovered(indicator, latest.getCloseTime())).thenReturn(signal);
++        when(analysisService.analyzeRecoveredForProcessing(indicator, latest.getCloseTime())).thenReturn(signal);
+ 
+         ScheduledAnalysisService service = new ScheduledAnalysisService(
+                 properties, coinConfigurationService, candleRepository, technicalIndicatorRepository,
+@@ -142,6 +142,7 @@
+         verify(technicalIndicatorService, never()).calculateAndPersist(
+                 "ACEUSDT", "1m", candle.getOpenTime());
+         verify(analysisService, never()).analyzeRecovered(any(), any());
++        verify(analysisService, never()).analyzeRecoveredForProcessing(any(), any());
+         verify(paperTradingService, never()).processSignal(any());
+     }
+ 
+--- /dev/null
++++ b/src/test/js/fix127-diagnostics.test.cjs
+@@ -0,0 +1,26 @@
++const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
++const assert=require('node:assert/strict'),{test}=require('node:test');
++const source=fs.readFileSync(path.resolve(__dirname,'../../main/resources/static/js/proven-analyzed-trades.js'),'utf8');
++function node(){return {textContent:'',children:[],classList:{remove(){}},replaceChildren(){this.children=[]},appendChild(n){this.children.push(n)}};}
++function render(result){
++ const nodes=Object.fromEntries(['fix127-panel','fix127-summary','fix127-body'].map(id=>[id,node()]));
++ const ctx=vm.createContext({document:{getElementById:id=>nodes[id],createElement:()=>node()}});
++ const start=source.indexOf('function renderFix127(');
++ vm.runInContext(source.slice(start,source.indexOf("document.addEventListener('click'",start)),ctx);
++ ctx.renderFix127(result);return nodes;
++}
++test('processing fetch failure is visible',()=>assert.match(render({status:'rejected'})['fix127-summary'].textContent,/could not be loaded/));
++test('empty processing history is not a Replay pass or successful trade',()=>{
++ const text=render({status:'fulfilled',value:{rows:[]}})['fix127-summary'].textContent;
++ assert.match(text,/not simulated Replay/);assert.match(text,/not necessarily a trade/);assert.match(text,/does not prove/);
++});
++test('processing review status, attempts, exact lineage and error render as text',()=>{
++ const nodes=render({status:'fulfilled',value:{rows:[{signal_id:127,symbol:'PEPEUSDT',interval_code:'5m',candle_open_time:'2026-09-09T10:00:00Z',origin:'WORKER',status:'REVIEW_REQUIRED',attempts:2,error_message:'<img onerror=alert(1)>'}]}});
++ const cells=nodes['fix127-body'].children[0].children;
++ assert.equal(cells[3].textContent,'2026-09-09T10:00:00Z');assert.equal(cells[5].textContent,'REVIEW_REQUIRED');
++ assert.equal(cells[6].textContent,'2');assert.equal(cells[10].textContent,'<img onerror=alert(1)>');assert.equal(cells[10].innerHTML,undefined);
++});
++test('truncation and saved-entry context are disclosed',()=>{
++ const text=render({status:'fulfilled',value:{rows:[],truncated:true,precedingHour:true,startTime:'START',endTime:'END'}})['fix127-summary'].textContent;
++ assert.match(text,/first 500/);assert.match(text,/one hour before/);assert.match(text,/START to END/);assert.match(text,/no inferred trade pairing/);
++});

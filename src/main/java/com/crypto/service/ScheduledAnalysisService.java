@@ -162,8 +162,6 @@ public class ScheduledAnalysisService {
             var existingSignal = tradeSignalRepository
                     .findBySymbolAndIntervalAndCandleOpenTime(symbol, interval, candle.getOpenTime());
             boolean newlyRecoveredSignal = existingSignal.isEmpty();
-            TradeSignal signal = existingSignal
-                    .orElseGet(() -> analysisService.analyzeRecovered(indicator, candle.getCloseTime()));
 
             // FIX-043 safety: never buy/sell now using a recovered historical candle price.
             // Only the newest closed candle can be an execution candidate, and even that candle
@@ -172,6 +170,11 @@ public class ScheduledAnalysisService {
             boolean latest = latestClosed != null
                     && latestClosed.getOpenTime().equals(candle.getOpenTime());
             boolean fresh = isFreshEnoughForExecution(candle, interval, now);
+            // FIX-127: only the already-eligible fresh latest recovery signal creates
+            // execution work. Historical backfill remains non-executing.
+            TradeSignal signal = existingSignal.orElseGet(() -> latest && fresh
+                    ? analysisService.analyzeRecoveredForProcessing(indicator, candle.getCloseTime())
+                    : analysisService.analyzeRecovered(indicator, candle.getCloseTime()));
             if (latest && fresh && newlyRecoveredSignal) {
                 paperTradingService.processSignal(signal);
                 log.info(

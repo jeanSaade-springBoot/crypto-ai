@@ -155,7 +155,7 @@ async function loadRegressionArchives() {
         body.innerHTML = rows.map(a => `<tr>
             <td>#${a.archive_batch_id}</td><td>#${a.source_test_run_id}</td><td><strong>${escapeHtml(a.test_name)}</strong></td>
             <td>${escapeHtml(a.symbol)}</td><td>${formatMoveTime(a.start_time)} → ${formatMoveTime(a.end_time)}</td>
-            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button> <button type="button" class="secondary-button" data-fix124-proven-id="${trade.id}">Protection incidents</button></td>
+            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button> <button type="button" class="secondary-button" data-fix124-proven-id="${trade.id}">Protection incidents</button> <button type="button" class="secondary-button" data-fix127-proven-id="${trade.id}">Signal processing</button></td>
         </tr>`).join('') || '<tr><td colspan="7">No archived test runs yet.</td></tr>';
         return rows;
     } catch (error) { body.innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`; return []; }
@@ -629,7 +629,8 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
             api(`${base}/trades`),
             api(`${base}/position-management`),
             api(`${base}/fix122`),
-            api(`${base}/fix124`)
+            api(`${base}/fix124`),
+            api(`${base}/fix127`)
         ]);
         if (requestToken !== regressionDetailRequestToken) return finished;
         const signals = detailResults[0].status === 'fulfilled' ? detailResults[0].value : [];
@@ -638,6 +639,7 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
         // FIX-122: failure is visible; it must never render as a successful rule check.
         renderFix122(detailResults[4]);
         renderFix124(detailResults[5]);
+        renderFix127(detailResults[6]);
         const management = detailResults[3].status === 'fulfilled' ? detailResults[3].value : [];
 
         // FIX-11O: always expose fresh directional Replay signals independently of the BUY-centric
@@ -718,9 +720,10 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
 async function loadRegressionArchiveDetail(archiveBatchId) {
     const base = `/api/administration/regression-tests/archives/${archiveBatchId}`;
     const [run, trades] = await Promise.all([api(base), api(`${base}/trades`)]);
-    const fix122=await Promise.allSettled([api(`${base}/fix122`), api(`${base}/fix124`)]);
+    const fix122=await Promise.allSettled([api(`${base}/fix122`), api(`${base}/fix124`), api(`${base}/fix127`)]);
     renderFix122(fix122[0]);
     renderFix124(fix122[1]);
+    renderFix127(fix122[2]);
     const panel = document.getElementById('regression-archive-detail');
     const body = document.getElementById('regression-archive-trades-body');
     if (!panel || !body) return;
@@ -1623,6 +1626,48 @@ document.addEventListener('click', async event => {
         const results = await Promise.allSettled([api(`/api/administration/regression-tests/proven-trades/${encodeURIComponent(button.dataset.fix124ProvenId)}/fix124`)]);
         renderFix124(results[0]);
         document.getElementById('fix124-panel')?.scrollIntoView({behavior:'smooth'});
+    } finally { button.disabled = false; }
+});
+
+// FIX-127: COMPLETED describes processing commit, not a BUY/SELL or a parity result.
+function renderFix127(result) {
+    const panel = document.getElementById('fix127-panel');
+    const summary = document.getElementById('fix127-summary');
+    const body = document.getElementById('fix127-body');
+    if (!panel || !summary || !body) return;
+    panel.classList.remove('hidden');
+    body.replaceChildren();
+    if (!result || result.status !== 'fulfilled') {
+        summary.textContent = 'Signal processing history could not be loaded.';
+        return;
+    }
+    const data = result.value;
+    summary.textContent = 'Current Production processing state; not simulated Replay results or an archived snapshot. '
+        + 'Selected by exact candle-open time: ' + String(data.startTime ?? '') + ' to ' + String(data.endTime ?? '') + '. '
+        + (data.precedingHour ? 'Includes one hour before the saved entry for context; no inferred trade pairing. ' : '')
+        + (data.truncated ? 'Showing first 500 records. ' : '')
+        + 'COMPLETED means processing committed, not necessarily a trade. REVIEW_REQUIRED is not automatically replayed. '
+        + 'Recording begins with FIX-127; an empty list does not prove processing succeeded.';
+    for (const row of data.rows || []) {
+        const tr = document.createElement('tr');
+        for (const value of [row.signal_id, row.symbol, row.interval_code, row.candle_open_time,
+                row.origin, row.status, row.attempts, row.updated_at, row.paper_position_id,
+                row.failure_stage, row.error_message]) {
+            const td = document.createElement('td');
+            td.textContent = String(value ?? '');
+            tr.appendChild(td);
+        }
+        body.appendChild(tr);
+    }
+}
+document.addEventListener('click', async event => {
+    const button = event.target.closest('[data-fix127-proven-id]');
+    if (!button) return;
+    button.disabled = true;
+    try {
+        const results = await Promise.allSettled([api(`/api/administration/regression-tests/proven-trades/${encodeURIComponent(button.dataset.fix127ProvenId)}/fix127`)]);
+        renderFix127(results[0]);
+        document.getElementById('fix127-panel')?.scrollIntoView({behavior:'smooth'});
     } finally { button.disabled = false; }
 });
 

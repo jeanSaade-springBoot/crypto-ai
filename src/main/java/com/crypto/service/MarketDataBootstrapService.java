@@ -119,7 +119,7 @@ public class MarketDataBootstrapService implements ApplicationRunner {
                 return;
             }
 
-            TradeSignal signal = analysisService.analyze(indicator);
+            TradeSignal signal = analysisService.analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.STARTUP);
             paperTradingService.processSignal(signal);
 
             log.info(

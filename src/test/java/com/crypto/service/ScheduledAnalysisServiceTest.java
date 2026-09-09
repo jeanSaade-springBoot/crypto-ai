@@ -105,7 +105,7 @@ class ScheduledAnalysisServiceTest {
                 .thenReturn(Optional.of(indicator));
         when(tradeSignalRepository.findBySymbolAndIntervalAndCandleOpenTime("ACEUSDT", "1m", latest.getOpenTime()))
                 .thenReturn(Optional.empty());
-        when(analysisService.analyzeRecovered(indicator, latest.getCloseTime())).thenReturn(signal);
+        when(analysisService.analyzeRecoveredForProcessing(indicator, latest.getCloseTime())).thenReturn(signal);
 
         ScheduledAnalysisService service = new ScheduledAnalysisService(
                 properties, coinConfigurationService, candleRepository, technicalIndicatorRepository,
@@ -142,6 +142,7 @@ class ScheduledAnalysisServiceTest {
         verify(technicalIndicatorService, never()).calculateAndPersist(
                 "ACEUSDT", "1m", candle.getOpenTime());
         verify(analysisService, never()).analyzeRecovered(any(), any());
+        verify(analysisService, never()).analyzeRecoveredForProcessing(any(), any());
         verify(paperTradingService, never()).processSignal(any());
     }
 

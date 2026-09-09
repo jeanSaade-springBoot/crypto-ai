@@ -49,18 +49,25 @@ public class PaperTradingService {
     private final DynamicProfitLockService dynamicProfitLockService;
     private final PositionPriceAuthorityPolicy priceAuthorityPolicy;
 
-    /** Advisory-only; optional injection preserves existing constructor-based tests. */
+    /** Position management; optional injection preserves constructor-based policy tests. */
     @Autowired(required = false)
     private PositionManagementService positionManagementService;
 
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NEVER)
     public PaperPosition openFromLatestSignal(String symbol) {
         String normalized = normalizeSymbol(symbol);
         TradeSignal signal = signalRepository
                 .findTopBySymbolOrderByGeneratedAtDesc(normalized)
                 .orElseThrow(() -> new IllegalArgumentException("No signal found for " + normalized));
 
-        return processSignal(signal)
+        if (processingCoordinator != null) {
+            return processingCoordinator.process(signal.getId(), false, fresh -> {
+                Optional<PaperPosition> result = processSignalBody(fresh);
+                if (result.isEmpty()) throw new IllegalStateException("The latest signal did not open a new position.");
+                return result;
+            }).orElseThrow(() -> new IllegalStateException("Signal was not claimed for processing."));
+        }
+        return processSignalBody(signal)
                 .orElseThrow(() -> new IllegalStateException(
                         "The latest signal did not open a new position. It may be WATCH/NEUTRAL/SELL, " +
                                 "or a position for this symbol is already open."
@@ -72,16 +79,33 @@ public class PaperTradingService {
      * BUY opens one position, WATCH/NEUTRAL holds it, and SELL closes it.
      * Stop-loss and take-profit are checked before the signal decision.
      */
-    @Transactional
+    // FIX-127: mandatory in Spring. Null only supports existing manually constructed
+    // business-policy unit tests; Production cannot start without the coordinator.
+    @Autowired
+    private com.crypto.execution.processing.SignalProcessingCoordinator processingCoordinator;
+
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NEVER)
     public Optional<PaperPosition> processSignal(TradeSignal signal) {
+        if (processingCoordinator == null) return processSignalBody(signal);
+        if (signal == null || signal.getId() == null) throw new IllegalArgumentException("Persisted signal required");
+        return processingCoordinator.process(signal.getId(), false, this::processSignalBody);
+    }
+
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NEVER)
+    public Optional<PaperPosition> recoverRegisteredSignal(long signalId) {
+        return processingCoordinator.process(signalId, true, this::processSignalBody);
+    }
+
+    /** FIX-127: existing decision order; invoked inside the coordinator's transaction. */
+    private Optional<PaperPosition> processSignalBody(TradeSignal signal) {
         if (signal == null) {
             throw new IllegalArgumentException("Trade signal is required");
         }
 
         String symbol = normalizeSymbol(signal.getSymbol());
 
-        // Shadow-mode position management. This persists HOLD/REDUCE/EXIT advice only.
-        // It never changes the market signal and never executes a wallet transaction.
+        // FIX-127: position management persists advice and can request POSITION_STOP_LOSS.
+        // Keep its existing decision order, but acquire the initial managed lock before entering here.
         if (positionManagementService != null) {
             try {
                 positionManagementService.analyze(signal);
@@ -385,7 +409,7 @@ public class PaperTradingService {
     }
 
     /** Kept for compatibility with older callers. */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NEVER)
     public Optional<PaperPosition> openFromSignal(TradeSignal signal) {
         return processSignal(signal);
     }
