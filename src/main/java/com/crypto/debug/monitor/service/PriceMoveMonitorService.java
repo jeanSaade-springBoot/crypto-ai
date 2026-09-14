@@ -43,6 +43,10 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 @RequiredArgsConstructor
 public class PriceMoveMonitorService {
+    // FIX-129: timings do not move retrospective work or alter the tracker/transaction lifecycle.
+    private com.crypto.infrastructure.transaction.KlineTiming timing = com.crypto.infrastructure.transaction.KlineTiming.loggingOnly();
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setTiming(com.crypto.infrastructure.transaction.KlineTiming timing) { this.timing = timing; }
     private static final long SETTINGS_CACHE_MILLIS = 10_000L;
     private static final int BLOCK_HOURS = 8;
     private static final int HISTORY_DAYS = 3650; // caught moves are evidence; keep them long-term.
@@ -79,7 +83,9 @@ public class PriceMoveMonitorService {
         BlockTracker tracker = trackers.computeIfAbsent(symbol, ignored -> new BlockTracker(blockStart));
         synchronized (tracker) {
             if (!tracker.blockStart.equals(blockStart)) {
-                finalizeBlock(symbol, tracker);
+                // Block identity is the prior UTC block, not an invented candle identity.
+                var timingContext = timing.context(symbol, null, null, observedAt, tracker.blockStart);
+                timing.measure(timingContext, "BLOCK_FINALIZATION", true, () -> finalizeBlock(symbol, tracker));
                 tracker.reset(blockStart);
             }
             tracker.observe(price, observedAt);

@@ -18,6 +18,9 @@ import java.time.Instant;
 public class KlineTransactionCoordinator {
     private static final Logger log = LoggerFactory.getLogger(KlineTransactionCoordinator.class);
     private static final int MAX_ATTEMPTS = 2;
+    private KlineTiming timing = KlineTiming.loggingOnly();
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setTiming(KlineTiming timing) { this.timing = timing; }
     private final TransactionTemplate transaction;
     private final Fix124ProtectionStore diagnostics;
 
@@ -30,16 +33,17 @@ public class KlineTransactionCoordinator {
     public void process(String symbol, String interval, Instant candleOpenTime, Instant observedAt,
                         BigDecimal price, Runnable persistInput, Runnable protect,
                         Runnable observe, Runnable publishClosed) {
+        var context = timing.context(symbol, interval, candleOpenTime, observedAt, null);
         // Candle and exact canonical price observation commit together. A failed
         // input write must not produce an unrecorded protection decision.
-        transaction.executeWithoutResult(tx -> persistInput.run());
+        timing.measure(context, "INPUT_TRANSACTION", false, () -> transaction.executeWithoutResult(tx -> persistInput.run()));
         if (protect != null) {
             int attempts = 0;
             RuntimeException failure = null;
             do {
                 attempts++;
                 try {
-                    transaction.executeWithoutResult(tx -> protect.run());
+                    timing.measure(context, "PROTECTION_TRANSACTION", false, () -> transaction.executeWithoutResult(tx -> protect.run()));
                     failure = null;
                     break;
                 } catch (RuntimeException ex) {
@@ -64,13 +68,14 @@ public class KlineTransactionCoordinator {
         }
         if (observe != null) {
             try {
-                transaction.executeWithoutResult(tx -> observe.run());
+                timing.measure(context, "OBSERVER_TRANSACTION", false, () -> transaction.executeWithoutResult(tx -> observe.run()));
             } catch (RuntimeException ex) {
                 log.warn("[FIX-124][OBSERVER_FAILED] symbol={}; committed input and protection retained", symbol, ex);
             }
         }
         // AFTER_COMMIT listener still receives an actual committed transaction;
         // publishing outside a transaction would silently drop the analysis event.
-        if (publishClosed != null) transaction.executeWithoutResult(tx -> publishClosed.run());
+        if (publishClosed != null) timing.measure(context, "CLOSE_DISPATCH_TRANSACTION", false,
+                () -> transaction.executeWithoutResult(tx -> publishClosed.run()));
     }
 }

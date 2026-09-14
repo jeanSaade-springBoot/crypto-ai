@@ -31,6 +31,11 @@ class KlineTransactionCoordinatorTest {
         jdbc.execute("CREATE TABLE writes(id INT PRIMARY KEY, label VARCHAR(40))");
         jdbc.execute("CREATE TABLE fix124_protection_incident(id BIGINT AUTO_INCREMENT PRIMARY KEY,symbol VARCHAR(30),interval_code VARCHAR(10),candle_open_time TIMESTAMP(6),observed_at TIMESTAMP(6),price DECIMAL(30,12),attempts INT,outcome VARCHAR(20),error_message CLOB)");
         coordinator = new KlineTransactionCoordinator(manager, new Fix124ProtectionStore(ds,manager));
+        // FIX-129: exercise the existing commit/rollback/retry suite with every stage recorded
+        // and a failing diagnostic sink. Neither failure classification nor ordering may change.
+        AtomicInteger clock = new AtomicInteger();
+        coordinator.setTiming(new KlineTiming(() -> clock.getAndIncrement() * 2_000_000_000L,
+                row -> { throw new IllegalStateException("diagnostics unavailable"); }));
         order = new ArrayList<>();
     }
     InitialPositionLockDeadlock deadlock() {

@@ -1,0 +1,593 @@
+--- a/md/FIX-129.md
++++ b/md/FIX-129.md
+@@ -0,0 +1,66 @@
++# FIX-129 — Ingestion and eight-hour block timing diagnostics
++
++Status: candidate implementation; Maven/JUnit and live measurement pending. Baseline: FIX-128.
++
++## Evidence and scope
++
++The September 10 trader logs show the 07:59 UTC one-minute candles reaching close-event workers progressively between 10:00 and 10:15:54 +02:00. Scheduled recovery could read some exact closed candles before the WebSocket processing-completion message. This supports investigating the path after input persistence. It does not prove a particular method blocked.
++
++PriceMoveMonitorService synchronously finalizes its prior eight-hour UTC block before candle-event publication. Its 00:00/08:00/16:00 UTC boundaries align with the observed 02:00/10:00 +02:00 disruption starts. This is a candidate explanation, not a measured root cause. The shutdown stack includes sendCloseMessage; it does not prove a heartbeat failure caused the stall. The excerpt did not establish CallerRunsPolicy activation.
++
++This patch measures existing work. It does not move block finalization, change queries, shorten transactions, alter retries, change executor behavior for analysis, repair candles, reconnect differently, or change Production/Replay business decisions. It does not resolve the deadlock or FIX-125 wallet commit-coordination issue.
++
++## Measurements
++
++KlineTransactionCoordinator wraps its existing transaction calls:
++
++- INPUT_TRANSACTION: upsert and canonical market observation, including commit/rollback.
++- PROTECTION_TRANSACTION: each existing attempt separately, including commit/rollback. Correlation ID is shared across attempts; retry policy is unchanged.
++- OBSERVER_TRANSACTION: existing observer transaction, including commit/rollback.
++- CLOSE_DISPATCH_TRANSACTION: publication transaction and synchronous after-commit handoff. It is not total asynchronous analysis duration; caller-run work, if it occurs, is included.
++
++PriceMoveMonitorService wraps only finalizeBlock with BLOCK_FINALIZATION, inside the existing synchronized tracker block. Reset and subsequent price processing keep their original ordering. All finalizations emit BLOCK_BEGIN and a completion measurement, including short ones. A BEGIN without completion may indicate an unfinished call or interrupted logging/process; it is not proof of its cause.
++
++Elapsed milliseconds use System.nanoTime. started_at/finished_at are actual UTC observation timestamps. Kline context preserves exact symbol, interval, candle_open_time and Binance observed_at; no nearest candle or generated_at fallback is introduced. Block measurements use the prior block_start and deliberately leave candle identity null. Their observed_at is the existing observer's wall-time argument, not Binance event time. Block measurements have separate correlation IDs; match their enclosing observer by symbol and time overlap, not an assumed shared ID.
++
++Slow stages (at least 1,000 ms), failed stages and every block finalization are logged and submitted for persistence. Successful sub-second ordinary stages are omitted. RETURNED means the measured Runnable returned; it does not establish a trade, parity, or final analysis result. FAILED measurements preserve the original thrown exception. Block duration is nested inside observer duration: never sum these as independent work.
++
++## Persistence and review
++
++V87 creates reporting-only fix129_stage_timing, with no foreign key to trading rows. No existing entity/schema is changed. Fields: correlation_id, symbol, nullable interval_code/candle_open_time/observed_at/block_start, stage, started_at, finished_at, elapsed_ms, outcome and thread_name. Indexes support symbol/time review and correlation lookup.
++
++A single dedicated daemon writer with queue capacity 256 performs inserts. JDBC query timeout is two seconds. It never uses CallerRunsPolicy; rejected submissions do not execute JDBC on ingestion threads. Connection acquisition still follows the existing DataSource timeout, so a stalled database can occupy this one writer and fill its queue. Queue rejection, database errors and shutdown loss are best-effort observability limitations. Stage logs remain the fallback. No full exception payload is persisted. Existing logging and diagnostic allocations still incur overhead; zero overhead is not claimed.
++
++Logs: [FIX-129][BLOCK_BEGIN], [STAGE_TIMING], [PERSIST_DROPPED], [PERSIST_FAILED], [DIAGNOSTIC_FAILED].
++
++Proven / Analyze Trades displays Ingestion timing for a saved trade, a run, or an archive, through the corresponding /fix129 read endpoint. It selects the symbol and wall-time measurements overlapping the saved review window, returning at most 500 rows with truncation disclosed. Block identity is displayed separately from candle identity. These are current persisted Production observations, not a frozen archive or simulated Replay result. Historical windows before installation have no measurements. Empty results cannot prove healthy ingestion. No automatic retention deletion is introduced.
++
++## Validation actually performed
++
++- Maven command attempted: `mvn -f fix129/pom.xml test`; exit 127, `mvn: command not found`. Runtime provides Java 17, project requires Java 21. No Maven/JUnit pass claimed.
++- Seven new JUnit tests cover the timing threshold, exact lineage, block identity, exception propagation, sink failure isolation, dedicated writer execution and rejection without caller JDBC.
++- Existing KlineTransactionCoordinator H2 transaction/retry tests now inject an always-recording clock and failing diagnostic sink to exercise commit/rollback behavior with instrumentation. These tests remain unrun here.
++- Node: 18 tests passed, zero failed, including three new timing-panel tests.
++- Java syntax parser: 343 files, zero syntax errors. This is not Java compilation or dependency/type checking.
++- No MySQL migration deployment, live before/after timing, or historical Replay parity run was performed here.
++
++## Operator steps
++
++On Java 21 with Maven, from the project root:
++
++```bat
++mvn test
++```
++
++After successful validation and deployment, Flyway applies V87. Capture the next block rollover; boundaries in +02:00 logs are 02:00, 10:00 and 18:00. In a +03:00 display they are 03:00, 11:00 and 19:00. These are inspection windows, not claims that every rollover will stall.
++
++From Windows CMD:
++
++```bat
++powershell -Command "Select-String -Path 'C:\apps\crypto-ai\crypto-ai.log' -Pattern '\[FIX-129\]' | Out-File -Encoding utf8 -Width 4096 'C:\apps\crypto-ai\trader-fix129-timing.txt'"
++notepad "C:\apps\crypto-ai\trader-fix129-timing.txt"
++```
++
++Compare measured BLOCK_FINALIZATION duration with its enclosing OBSERVER_TRANSACTION. If observer time is high but finalization is short, investigate the remaining observer work/transaction rather than blaming rollover. If protection/input/dispatch dominates, follow that measured stage. No optimization should be inferred from an empty result.
++
++Rollback of application instrumentation can restore FIX-128 while retaining the additive reporting table. Do not modify an already-applied Flyway migration or delete diagnostic history as part of rollback.
+--- a/src/main/java/com/crypto/debug/monitor/service/PriceMoveMonitorService.java
++++ b/src/main/java/com/crypto/debug/monitor/service/PriceMoveMonitorService.java
+@@ -43,6 +43,10 @@
+ @Service
+ @RequiredArgsConstructor
+ public class PriceMoveMonitorService {
++    // FIX-129: timings do not move retrospective work or alter the tracker/transaction lifecycle.
++    private com.crypto.infrastructure.transaction.KlineTiming timing = com.crypto.infrastructure.transaction.KlineTiming.loggingOnly();
++    @org.springframework.beans.factory.annotation.Autowired
++    public void setTiming(com.crypto.infrastructure.transaction.KlineTiming timing) { this.timing = timing; }
+     private static final long SETTINGS_CACHE_MILLIS = 10_000L;
+     private static final int BLOCK_HOURS = 8;
+     private static final int HISTORY_DAYS = 3650; // caught moves are evidence; keep them long-term.
+@@ -79,7 +83,9 @@
+         BlockTracker tracker = trackers.computeIfAbsent(symbol, ignored -> new BlockTracker(blockStart));
+         synchronized (tracker) {
+             if (!tracker.blockStart.equals(blockStart)) {
+-                finalizeBlock(symbol, tracker);
++                // Block identity is the prior UTC block, not an invented candle identity.
++                var timingContext = timing.context(symbol, null, null, observedAt, tracker.blockStart);
++                timing.measure(timingContext, "BLOCK_FINALIZATION", true, () -> finalizeBlock(symbol, tracker));
+                 tracker.reset(blockStart);
+             }
+             tracker.observe(price, observedAt);
+--- a/src/main/java/com/crypto/infrastructure/transaction/KlineTiming.java
++++ b/src/main/java/com/crypto/infrastructure/transaction/KlineTiming.java
+@@ -0,0 +1,60 @@
++package com.crypto.infrastructure.transaction;
++
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.stereotype.Component;
++import java.time.Instant;
++import java.util.UUID;
++import java.util.function.Consumer;
++import java.util.function.LongSupplier;
++
++/** FIX-129: observational wall-duration measurements, never decision inputs.
++ * nanoTime measures elapsed work including transaction commit/rollback. UTC wall
++ * timestamps locate observations; Binance event time is retained separately.
++ */
++@Component
++public class KlineTiming {
++    private static final Logger log = LoggerFactory.getLogger(KlineTiming.class);
++    private final LongSupplier nanos;
++    private final Consumer<Measurement> sink;
++    public record Context(String correlationId, String symbol, String interval,
++                          Instant candleOpenTime, Instant observedAt, Instant blockStart) {}
++    public record Measurement(Context context, String stage, Instant startedAt, Instant finishedAt,
++                              long elapsedMs, String outcome, String threadName) {}
++    @Autowired
++    public KlineTiming(KlineTimingStore store) { this(System::nanoTime, store::submit); }
++    KlineTiming(LongSupplier nanos, Consumer<Measurement> sink) {
++        this.nanos = nanos; this.sink = sink;
++    }
++    // Directly constructed legacy unit-test subjects still get logging, without a database.
++    public static KlineTiming loggingOnly() { return new KlineTiming(System::nanoTime, m -> {}); }
++    public Context context(String symbol, String interval, Instant candle, Instant observed, Instant block) {
++        return new Context(UUID.randomUUID().toString(), symbol, interval, candle, observed, block);
++    }
++    public void measure(Context context, String stage, boolean alwaysRecord, Runnable work) {
++        Instant started = Instant.now();
++        long start = nanos.getAsLong();
++        String outcome = "FAILED";
++        // A BEGIN without END can locate a stuck block. It is not proof of completion.
++        if (alwaysRecord) log.info("[FIX-129][BLOCK_BEGIN] context={}, stage={}, thread={}", context, stage, Thread.currentThread().getName());
++        try {
++            work.run();
++            outcome = "RETURNED";
++        } finally {
++            long elapsed = Math.max(0L, (nanos.getAsLong() - start) / 1_000_000L);
++            if (alwaysRecord || elapsed >= 1000 || !"RETURNED".equals(outcome)) {
++                Measurement m = new Measurement(context, stage, started, Instant.now(), elapsed,
++                        outcome, Thread.currentThread().getName());
++                // Diagnostic sink failures must never mask the business exception or change retry eligibility.
++                try {
++                    log.info("[FIX-129][STAGE_TIMING] context={}, stage={}, elapsedMs={}, outcome={}, thread={}",
++                            context, stage, elapsed, outcome, m.threadName());
++                    sink.accept(m);
++                } catch (RuntimeException ignored) {
++                    log.warn("[FIX-129][DIAGNOSTIC_FAILED] stage={}, symbol={}", stage, context.symbol());
++                }
++            }
++        }
++    }
++}
+--- a/src/main/java/com/crypto/infrastructure/transaction/KlineTimingStore.java
++++ b/src/main/java/com/crypto/infrastructure/transaction/KlineTimingStore.java
+@@ -0,0 +1,57 @@
++package com.crypto.infrastructure.transaction;
++
++import jakarta.annotation.PreDestroy;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.stereotype.Service;
++import javax.sql.DataSource;
++import java.sql.Timestamp;
++import java.time.Instant;
++import java.util.concurrent.*;
++
++/** FIX-129: bounded, best-effort diagnostics only. Never CallerRuns: no diagnostic
++ * JDBC work runs on the ingestion thread. Queue loss and database failure are
++ * explicit; these rows are not a complete market-event ledger.
++ */
++@Service
++public class KlineTimingStore {
++    private static final Logger log = LoggerFactory.getLogger(KlineTimingStore.class);
++    private final JdbcTemplate jdbc;
++    private final ThreadPoolExecutor writer = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
++            new ArrayBlockingQueue<>(256), task -> {
++                Thread thread = new Thread(task, "fix129-diagnostics");
++                thread.setDaemon(true); return thread;
++            }, new ThreadPoolExecutor.AbortPolicy());
++    public KlineTimingStore(DataSource source) {
++        jdbc = new JdbcTemplate(source); jdbc.setQueryTimeout(2);
++    }
++    public void submit(KlineTiming.Measurement m) {
++        try { writer.execute(() -> persist(m)); }
++        catch (RejectedExecutionException ex) {
++            log.warn("[FIX-129][PERSIST_DROPPED] correlationId={}, stage={}; timing remains in logs",
++                    m.context().correlationId(), m.stage());
++        }
++    }
++    private void persist(KlineTiming.Measurement m) {
++        try {
++            var c = m.context();
++            // Dedicated thread has no inherited business transaction; single insert only.
++            jdbc.update("""
++                INSERT INTO fix129_stage_timing
++                (correlation_id,symbol,interval_code,candle_open_time,observed_at,block_start,
++                 stage,started_at,finished_at,elapsed_ms,outcome,thread_name)
++                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
++                """, c.correlationId(),c.symbol(),c.interval(),ts(c.candleOpenTime()),ts(c.observedAt()),
++                    ts(c.blockStart()),m.stage(),ts(m.startedAt()),ts(m.finishedAt()),m.elapsedMs(),m.outcome(),m.threadName());
++        } catch (RuntimeException ex) {
++            log.warn("[FIX-129][PERSIST_FAILED] correlationId={}, stage={}; timing remains in logs",
++                    m.context().correlationId(),m.stage(),ex);
++        }
++    }
++    private static Timestamp ts(Instant value) { return value == null ? null : Timestamp.from(value); }
++    @PreDestroy public void shutdown() {
++        // Do not delay market shutdown for diagnostics. Already queued records may be lost on process exit.
++        writer.shutdown();
++    }
++}
+--- a/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java
++++ b/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java
+@@ -18,6 +18,9 @@
+ public class KlineTransactionCoordinator {
+     private static final Logger log = LoggerFactory.getLogger(KlineTransactionCoordinator.class);
+     private static final int MAX_ATTEMPTS = 2;
++    private KlineTiming timing = KlineTiming.loggingOnly();
++    @org.springframework.beans.factory.annotation.Autowired
++    public void setTiming(KlineTiming timing) { this.timing = timing; }
+     private final TransactionTemplate transaction;
+     private final Fix124ProtectionStore diagnostics;
+ 
+@@ -30,16 +33,17 @@
+     public void process(String symbol, String interval, Instant candleOpenTime, Instant observedAt,
+                         BigDecimal price, Runnable persistInput, Runnable protect,
+                         Runnable observe, Runnable publishClosed) {
++        var context = timing.context(symbol, interval, candleOpenTime, observedAt, null);
+         // Candle and exact canonical price observation commit together. A failed
+         // input write must not produce an unrecorded protection decision.
+-        transaction.executeWithoutResult(tx -> persistInput.run());
++        timing.measure(context, "INPUT_TRANSACTION", false, () -> transaction.executeWithoutResult(tx -> persistInput.run()));
+         if (protect != null) {
+             int attempts = 0;
+             RuntimeException failure = null;
+             do {
+                 attempts++;
+                 try {
+-                    transaction.executeWithoutResult(tx -> protect.run());
++                    timing.measure(context, "PROTECTION_TRANSACTION", false, () -> transaction.executeWithoutResult(tx -> protect.run()));
+                     failure = null;
+                     break;
+                 } catch (RuntimeException ex) {
+@@ -64,13 +68,14 @@
+         }
+         if (observe != null) {
+             try {
+-                transaction.executeWithoutResult(tx -> observe.run());
++                timing.measure(context, "OBSERVER_TRANSACTION", false, () -> transaction.executeWithoutResult(tx -> observe.run()));
+             } catch (RuntimeException ex) {
+                 log.warn("[FIX-124][OBSERVER_FAILED] symbol={}; committed input and protection retained", symbol, ex);
+             }
+         }
+         // AFTER_COMMIT listener still receives an actual committed transaction;
+         // publishing outside a transaction would silently drop the analysis event.
+-        if (publishClosed != null) transaction.executeWithoutResult(tx -> publishClosed.run());
++        if (publishClosed != null) timing.measure(context, "CLOSE_DISPATCH_TRANSACTION", false,
++                () -> transaction.executeWithoutResult(tx -> publishClosed.run()));
+     }
+ }
+--- a/src/main/java/com/crypto/regression/controller/Fix129DiagnosticsController.java
++++ b/src/main/java/com/crypto/regression/controller/Fix129DiagnosticsController.java
+@@ -0,0 +1,39 @@
++package com.crypto.regression.controller;
++
++import lombok.RequiredArgsConstructor;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.web.bind.annotation.*;
++import java.util.*;
++
++/** FIX-129: Production incident history for the selected review window. This is
++ * NOT simulated Replay output and must never be consumed by trading services. */
++@RestController
++@RequestMapping("/api/administration/regression-tests")
++@RequiredArgsConstructor
++public class Fix129DiagnosticsController {
++    private final JdbcTemplate jdbc;
++
++    @GetMapping("/runs/{id}/fix129")
++    public Map<String,Object> run(@PathVariable long id) {
++        return rows(jdbc.queryForMap("SELECT symbol,start_time,end_time FROM analysis_test_run WHERE id=?", id));
++    }
++    @GetMapping("/archives/{id}/fix129")
++    public Map<String,Object> archive(@PathVariable long id) {
++        return rows(jdbc.queryForMap("SELECT symbol,start_time,end_time FROM regression_test_archive_batch WHERE id=?", id));
++    }
++    @GetMapping("/proven-trades/{id}/fix129")
++    public Map<String,Object> proven(@PathVariable long id) {
++        // Use the saved trade's own identity/window, never a reused Replay run ID.
++        return rows(jdbc.queryForMap("SELECT symbol,entry_time AS start_time,COALESCE(exit_time,entry_time) AS end_time FROM proven_analyzed_trade WHERE id=?", id));
++    }
++    private Map<String,Object> rows(Map<String,Object> window) {
++        List<Map<String,Object>> rows = jdbc.queryForList("""
++                SELECT * FROM fix129_stage_timing
++                WHERE symbol=? AND finished_at>=? AND started_at<=?
++                ORDER BY started_at,id LIMIT 501
++                """, window.get("symbol"), window.get("start_time"), window.get("end_time"));
++        boolean truncated = rows.size() > 500;
++        return Map.of("scope", "PRODUCTION_HISTORY", "truncated", truncated,
++                "rows", truncated ? rows.subList(0,500) : rows);
++    }
++}
+--- a/src/main/resources/db/migration/V87__fix_129_stage_timing.sql
++++ b/src/main/resources/db/migration/V87__fix_129_stage_timing.sql
+@@ -0,0 +1,18 @@
++-- FIX-129: reporting-only measurements; no FK or lock on trading tables.
++CREATE TABLE fix129_stage_timing (
++ id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
++ correlation_id VARCHAR(36) NOT NULL,
++ symbol VARCHAR(30) NOT NULL,
++ interval_code VARCHAR(10) NULL,
++ candle_open_time TIMESTAMP(6) NULL,
++ observed_at TIMESTAMP(6) NULL,
++ block_start TIMESTAMP(6) NULL,
++ stage VARCHAR(40) NOT NULL,
++ started_at TIMESTAMP(6) NOT NULL,
++ finished_at TIMESTAMP(6) NOT NULL,
++ elapsed_ms BIGINT NOT NULL,
++ outcome VARCHAR(20) NOT NULL,
++ thread_name VARCHAR(100) NOT NULL,
++ INDEX idx_fix129_symbol_started (symbol, started_at),
++ INDEX idx_fix129_correlation (correlation_id)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+--- a/src/main/resources/static/js/fix-registry.js
++++ b/src/main/resources/static/js/fix-registry.js
+@@ -1,5 +1,6 @@
+ (() => {
+     const FIXES = [
++        {"id": "FIX-129", "title": "Ingestion and eight-hour block timing diagnostics", "status": "CANDIDATE \u2014 MAVEN VALIDATION PENDING", "scenario": "Old candle events dispatched up to nearly 16 minutes late around 02:00 and 10:00 +02:00.", "cause": "Synchronous eight-hour PriceMoveMonitor finalization is a candidate; elapsed stage measurements are needed. No proven root cause.", "solution": "Measure input, protection, observer and dispatch transactions plus block finalization. Log slow/failed stages and all rollovers; persist asynchronously through a bounded reporting-only writer. Show Production history in Proven / Analyze Trades.", "behavior": "Instrumentation only. Existing transactions, retries, ordering, block processing, wallet authority and Replay decisions unchanged. Diagnostics incur overhead.", "regression": "JUnit tests added; Maven execution pending. No live performance or parity result claimed.", "symbol": "ALL", "entry": "UNCHANGED", "exit": "UNCHANGED", "entryTime": "UNCHANGED RULES", "exitTime": "UNCHANGED RULES", "replayWindow": "Production timing overlay; never consumed by Replay decisions.", "location": "Kline ingestion / price monitor / Proven", "classes": ["KlineTiming", "KlineTimingStore", "KlineTransactionCoordinator", "PriceMoveMonitorService", "Fix129DiagnosticsController", "V87__fix_129_stage_timing.sql", "md/FIX-129.md"]},
+         {"id": "FIX-128", "title": "Bounded quarantine transactions and recovery scan isolation", "status": "CANDIDATE \u2014 MAVEN/MYSQL VALIDATION PENDING", "scenario": "FIX-127 recovery scan failed at 2026-09-09 16:45:06 +02:00 during bulk UPDATE signal_processing_work.", "cause": "Quarantine used one range update; its failure also skipped pending recovery. Stack trace identifies the victim operation, not the complete competing lock cycle.", "solution": "Discover at most 50 stale RUNNING candidates without locking; process each under an independent primary-key lock and recheck status, owner and timestamp. Isolate row and discovery failures from pending recovery.", "behavior": "Housekeeping transaction granularity and scan failure isolation change. Review-only semantics, five-minute age, two processing attempts, freshness, wallet rules and Replay decisions unchanged.", "regression": "Seven JUnit tests added; Maven execution pending. MySQL deadlock reproduction remains pending.", "symbol": "ALL", "entry": "UNCHANGED", "exit": "UNCHANGED", "entryTime": "UNCHANGED", "exitTime": "UNCHANGED", "replayWindow": "Production diagnostics overlay only; no simulated rule change.", "location": "Signal processing recovery housekeeping", "classes": ["SignalProcessingStore", "SignalProcessingRecovery", "md/FIX-128.md"]},
+         {"id": "FIX-127", "title": "Signal-path initial lock and durable processing recovery", "status": "CANDIDATE \u2014 MAVEN/MYSQL VALIDATION PENDING", "scenario": "FIX-124 recovered four logged kline incidents; six remaining worker failures reached the managed-position lock through the signal path.", "cause": "Signal processing can write position advice before its locking lookup. Saved signal existence also prevents missing-signal recovery from revisiting an unfinished processing attempt. Exact MySQL competing lock cycle remains unproven.", "solution": "Route worker, eligible scheduled recovery, startup and explicit signal calls through a transaction coordinator. Acquire the initial managed-position lock before the unchanged body; allow at most two total attempts only for initial MySQL 1213/40001. Register work atomically with eligible signal creation and complete it atomically with processing. Recover only fresh automatic work; quarantine interrupted or uncertain attempts.", "behavior": "Production transaction ordering, duplicate handling and failure recovery change. Scoring, sizing and exit formulas are unchanged. Operational trade outcomes can change. Replay business code stays unchanged; Proven displays current Production state as a separate overlay. FIX-124 and FIX-125 remain separate.", "regression": "22 new JUnit/H2 transaction and recovery tests authored; Maven unavailable, tests not run. Fifteen Node tests passed. Java syntax check only; real MySQL contention and historical parity pending.", "symbol": "ALL", "entry": "UNCHANGED RULES; RECOVERY CHANGES", "exit": "UNCHANGED RULES", "entryTime": "Original call or fresh bounded recovery", "exitTime": "Existing authority", "replayWindow": "Identical OLD/NEW windows; no Production ledger used to simulate Replay.", "location": "Shared Production signal entry points / Proven Signal processing", "classes": ["SignalProcessingCoordinator", "SignalProcessingStore", "SignalProcessingRecovery", "SignalProcessingFreshness", "AnalysisService", "PaperTradingService", "Fix127DiagnosticsController", "V86__fix_127_signal_processing.sql", "md/FIX-127.md"]},
+         {"id": "FIX-126", "title": "Preserve complete wallet execution explanations", "status": "CANDIDATE — MAVEN/MYSQL VALIDATION PENDING", "scenario": "BUY signal #634982 failed to persist because execution_message exceeded VARCHAR(1000).", "cause": "Execution explanation plus wallet/price metadata exceeds the schema capacity.", "solution": "V85 widens the nullable audit column to MEDIUMTEXT and matches WalletTrade mapping; preserve complete Unicode messages.", "behavior": "Already-approved BUY/SELL persistence no longer has the 1000-character audit limit. No scoring, sizing, exit rule or historical backfill change.", "regression": "Long BUY/SELL migration round-trip JUnit test added; Maven could not start. MySQL migration/ORM validation pending.", "symbol": "ALL", "entry": "UNCHANGED RULES", "exit": "UNCHANGED RULES", "entryTime": "UNCHANGED", "exitTime": "UNCHANGED", "replayWindow": "No Replay decision changes; compare existing windows.", "location": "Wallet audit persistence", "classes": ["WalletTrade", "V85__fix_126_wallet_execution_message.sql", "md/FIX-126.md"]},
+--- a/src/main/resources/static/js/proven-analyzed-trades.js
++++ b/src/main/resources/static/js/proven-analyzed-trades.js
+@@ -155,7 +155,7 @@
+         body.innerHTML = rows.map(a => `<tr>
+             <td>#${a.archive_batch_id}</td><td>#${a.source_test_run_id}</td><td><strong>${escapeHtml(a.test_name)}</strong></td>
+             <td>${escapeHtml(a.symbol)}</td><td>${formatMoveTime(a.start_time)} → ${formatMoveTime(a.end_time)}</td>
+-            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button> <button type="button" class="secondary-button" data-fix124-proven-id="${trade.id}">Protection incidents</button> <button type="button" class="secondary-button" data-fix127-proven-id="${trade.id}">Signal processing</button></td>
++            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button> <button type="button" class="secondary-button" data-fix124-proven-id="${trade.id}">Protection incidents</button> <button type="button" class="secondary-button" data-fix127-proven-id="${trade.id}">Signal processing</button> <button type="button" class="secondary-button" data-fix129-proven-id="${trade.id}">Ingestion timing</button></td>
+         </tr>`).join('') || '<tr><td colspan="7">No archived test runs yet.</td></tr>';
+         return rows;
+     } catch (error) { body.innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`; return []; }
+@@ -630,7 +630,8 @@
+             api(`${base}/position-management`),
+             api(`${base}/fix122`),
+             api(`${base}/fix124`),
+-            api(`${base}/fix127`)
++            api(`${base}/fix127`),
++            api(`${base}/fix129`)
+         ]);
+         if (requestToken !== regressionDetailRequestToken) return finished;
+         const signals = detailResults[0].status === 'fulfilled' ? detailResults[0].value : [];
+@@ -640,6 +641,7 @@
+         renderFix122(detailResults[4]);
+         renderFix124(detailResults[5]);
+         renderFix127(detailResults[6]);
++        renderFix129(detailResults[7]);
+         const management = detailResults[3].status === 'fulfilled' ? detailResults[3].value : [];
+ 
+         // FIX-11O: always expose fresh directional Replay signals independently of the BUY-centric
+@@ -720,10 +722,11 @@
+ async function loadRegressionArchiveDetail(archiveBatchId) {
+     const base = `/api/administration/regression-tests/archives/${archiveBatchId}`;
+     const [run, trades] = await Promise.all([api(base), api(`${base}/trades`)]);
+-    const fix122=await Promise.allSettled([api(`${base}/fix122`), api(`${base}/fix124`), api(`${base}/fix127`)]);
++    const fix122=await Promise.allSettled([api(`${base}/fix122`), api(`${base}/fix124`), api(`${base}/fix127`), api(`${base}/fix129`)]);
+     renderFix122(fix122[0]);
+     renderFix124(fix122[1]);
+     renderFix127(fix122[2]);
++    renderFix129(fix122[3]);
+     const panel = document.getElementById('regression-archive-detail');
+     const body = document.getElementById('regression-archive-trades-body');
+     if (!panel || !body) return;
+@@ -1672,6 +1675,47 @@
+     } finally { button.disabled = false; }
+ });
+ 
++// FIX-129: measured Production processing time, never a simulated Replay result.
++function renderFix129(result) {
++    const panel = document.getElementById('fix129-panel');
++    const summary = document.getElementById('fix129-summary');
++    const body = document.getElementById('fix129-body');
++    if (!panel || !summary || !body) return;
++    panel.classList.remove('hidden');
++    body.replaceChildren();
++    if (!result || result.status !== 'fulfilled') {
++        summary.textContent = 'Ingestion timing history could not be loaded.';
++        return;
++    }
++    const data = result.value;
++    summary.textContent = 'Production observations overlapping this review window; not Replay timings or an archived snapshot. '
++        + 'Records include stages lasting at least 1 second, failures, and block finalizations. '
++        + 'Block finalization is included within observer time: do not add them together. '
++        + 'RETURNED means the measured call returned, not that a trade executed or async analysis completed. '
++        + 'Recording begins with FIX-129. Background persistence is best effort; an empty list does not prove healthy ingestion. '
++        + (data.truncated ? 'Showing first 500 records.' : '');
++    for (const row of data.rows || []) {
++        const tr = document.createElement('tr');
++        for (const value of [row.symbol, row.interval_code, row.candle_open_time, row.block_start,
++            row.stage, row.started_at, row.finished_at, row.elapsed_ms, row.outcome, row.thread_name, row.correlation_id]) {
++            const td = document.createElement('td');
++            td.textContent = String(value ?? '');
++            tr.appendChild(td);
++        }
++        body.appendChild(tr);
++    }
++}
++document.addEventListener('click', async event => {
++    const button = event.target.closest('[data-fix129-proven-id]');
++    if (!button) return;
++    button.disabled = true;
++    try {
++        const results = await Promise.allSettled([api(`/api/administration/regression-tests/proven-trades/${encodeURIComponent(button.dataset.fix129ProvenId)}/fix129`)]);
++        renderFix129(results[0]);
++        document.getElementById('fix129-panel')?.scrollIntoView({behavior:'smooth'});
++    } finally { button.disabled = false; }
++});
++
+ // FIX-122: persisted per-evaluation evidence, escaped before HTML insertion.
+ function renderFix122(result) {
+     const panel=document.getElementById('fix122-panel');
+@@ -1697,3 +1741,4 @@
+     }).join('') || '<tr><td colspan="6">No FIX-122 evaluations recorded for this window.</td></tr>';
+ }
+ 
++
+--- a/src/main/resources/static/proven-analyzed-trades.html
++++ b/src/main/resources/static/proven-analyzed-trades.html
+@@ -183,6 +183,12 @@
+ <div class="table-responsive"><table><thead><tr><th>Symbol</th><th>Candle open (UTC)</th><th>Observed (UTC)</th><th>Price</th><th>Attempts</th><th>Outcome</th><th>Error</th></tr></thead><tbody id="fix124-body"></tbody></table></div>
+ </section>
+ <!-- FIX-127: operational Production state, not simulated historical executions. -->
++<!-- FIX-129: Production wall-time observations alongside local-history review. -->
++<section id="fix129-panel" class="regression-detail hidden">
++<h3>Ingestion timing · FIX-129</h3>
++<p id="fix129-summary"></p>
++<div class="table-responsive"><table><thead><tr><th>Symbol</th><th>Interval</th><th>Candle open (UTC)</th><th>Prior block (UTC)</th><th>Stage</th><th>Started (UTC)</th><th>Finished (UTC)</th><th>Elapsed ms</th><th>Outcome</th><th>Thread</th><th>Correlation</th></tr></thead><tbody id="fix129-body"></tbody></table></div>
++</section>
+ <section id="fix127-panel" class="regression-detail hidden">
+ <h3>FIX-127 · Signal processing</h3>
+ <p id="fix127-summary"></p>
+--- a/src/test/java/com/crypto/infrastructure/transaction/Fix129KlineTimingTest.java
++++ b/src/test/java/com/crypto/infrastructure/transaction/Fix129KlineTimingTest.java
+@@ -0,0 +1,56 @@
++package com.crypto.infrastructure.transaction;
++
++import org.junit.jupiter.api.Test;
++import java.time.Instant;
++import java.util.ArrayList;
++import java.util.concurrent.atomic.AtomicLong;
++import static org.junit.jupiter.api.Assertions.*;
++
++class Fix129KlineTimingTest {
++    @Test void thresholdPreservesExactLineageAndMeasuresElapsedWork() {
++        var clock = new AtomicLong();
++        var rows = new ArrayList<KlineTiming.Measurement>();
++        var timing = new KlineTiming(clock::get, rows::add);
++        Instant candle = Instant.parse("2026-09-10T07:59:00Z");
++        var context = timing.context("UNIUSDT", "1m", candle, candle.plusSeconds(60), null);
++        timing.measure(context, "INPUT_TRANSACTION", false, () -> clock.addAndGet(999_000_000L));
++        assertTrue(rows.isEmpty());
++        timing.measure(context, "OBSERVER_TRANSACTION", false, () -> clock.addAndGet(1_000_000_000L));
++        assertEquals(1, rows.size());
++        assertSame(context, rows.get(0).context());
++        assertEquals(candle, rows.get(0).context().candleOpenTime());
++        assertEquals(1000L, rows.get(0).elapsedMs());
++        assertEquals("RETURNED", rows.get(0).outcome());
++    }
++    @Test void failingSinkCannotMaskOriginalExceptionOrRunWorkTwice() {
++        var timing = new KlineTiming(() -> 0L, row -> { throw new IllegalStateException("sink unavailable"); });
++        var count = new AtomicLong();
++        var original = new IllegalArgumentException("original");
++        assertSame(original, assertThrows(IllegalArgumentException.class, () -> timing.measure(
++                timing.context("UNIUSDT", "1m", Instant.EPOCH, Instant.EPOCH, null), "INPUT_TRANSACTION", false,
++                () -> { count.incrementAndGet(); throw original; })));
++        assertEquals(1, count.get());
++    }
++    @Test void fastFailureIsRecordedAndStillPropagates() {
++        var rows = new ArrayList<KlineTiming.Measurement>();
++        var timing = new KlineTiming(() -> 0L, rows::add);
++        assertThrows(IllegalStateException.class, () -> timing.measure(
++                timing.context("UNIUSDT", "1m", Instant.EPOCH, Instant.EPOCH, null), "PROTECTION_TRANSACTION", false,
++                () -> { throw new IllegalStateException(); }));
++        assertEquals("FAILED", rows.get(0).outcome());
++    }
++    @Test void fastBlockRolloverIsRecordedWithoutInventingCandleIdentity() {
++        var rows = new ArrayList<KlineTiming.Measurement>();
++        var timing = new KlineTiming(() -> 0L, rows::add);
++        timing.measure(timing.context("UNIUSDT", null, null, Instant.EPOCH.plusSeconds(28800), Instant.EPOCH),
++                "BLOCK_FINALIZATION", true, () -> {});
++        assertEquals(1, rows.size());
++        assertNull(rows.get(0).context().candleOpenTime());
++        assertEquals(Instant.EPOCH, rows.get(0).context().blockStart());
++    }
++    @Test void failingSinkDoesNotTurnSuccessfulWorkIntoFailure() {
++        var timing = new KlineTiming(() -> 0L, row -> { throw new IllegalStateException(); });
++        assertDoesNotThrow(() -> timing.measure(timing.context("UNIUSDT", null, null, null, Instant.EPOCH),
++                "BLOCK_FINALIZATION", true, () -> {}));
++    }
++}
+--- a/src/test/java/com/crypto/infrastructure/transaction/Fix129TimingStoreTest.java
++++ b/src/test/java/com/crypto/infrastructure/transaction/Fix129TimingStoreTest.java
+@@ -0,0 +1,45 @@
++package com.crypto.infrastructure.transaction;
++
++import org.junit.jupiter.api.Test;
++import javax.sql.DataSource;
++import java.sql.SQLException;
++import java.time.Instant;
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.TimeUnit;
++import java.util.concurrent.atomic.AtomicReference;
++import static org.junit.jupiter.api.Assertions.*;
++import static org.mockito.Mockito.*;
++
++class Fix129TimingStoreTest {
++    private KlineTiming.Measurement measurement() {
++        return new KlineTiming.Measurement(new KlineTiming.Context("test", "UNIUSDT", "1m",
++                Instant.EPOCH, Instant.EPOCH, null), "OBSERVER_TRANSACTION", Instant.EPOCH,
++                Instant.EPOCH.plusSeconds(1), 1000, "RETURNED", "caller");
++    }
++    @Test void persistenceUsesDedicatedThreadAndFailureDoesNotEscapeToCaller() throws Exception {
++        DataSource source = mock(DataSource.class);
++        var reached = new CountDownLatch(1);
++        var release = new CountDownLatch(1);
++        var thread = new AtomicReference<String>();
++        when(source.getConnection()).thenAnswer(call -> {
++            thread.set(Thread.currentThread().getName());
++            reached.countDown();
++            release.await(5, TimeUnit.SECONDS);
++            throw new SQLException("unavailable");
++        });
++        var store = new KlineTimingStore(source);
++        try {
++            assertDoesNotThrow(() -> store.submit(measurement()));
++            assertTrue(reached.await(5, TimeUnit.SECONDS));
++            assertEquals("fix129-diagnostics", thread.get());
++            assertNotEquals(Thread.currentThread().getName(), thread.get());
++        } finally { release.countDown(); store.shutdown(); }
++    }
++    @Test void rejectedDiagnosticsNeverFallBackToCallerJdbc() {
++        DataSource source = mock(DataSource.class);
++        var store = new KlineTimingStore(source);
++        store.shutdown();
++        assertDoesNotThrow(() -> store.submit(measurement()));
++        verifyNoInteractions(source);
++    }
++}
+--- a/src/test/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinatorTest.java
++++ b/src/test/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinatorTest.java
+@@ -31,6 +31,11 @@
+         jdbc.execute("CREATE TABLE writes(id INT PRIMARY KEY, label VARCHAR(40))");
+         jdbc.execute("CREATE TABLE fix124_protection_incident(id BIGINT AUTO_INCREMENT PRIMARY KEY,symbol VARCHAR(30),interval_code VARCHAR(10),candle_open_time TIMESTAMP(6),observed_at TIMESTAMP(6),price DECIMAL(30,12),attempts INT,outcome VARCHAR(20),error_message CLOB)");
+         coordinator = new KlineTransactionCoordinator(manager, new Fix124ProtectionStore(ds,manager));
++        // FIX-129: exercise the existing commit/rollback/retry suite with every stage recorded
++        // and a failing diagnostic sink. Neither failure classification nor ordering may change.
++        AtomicInteger clock = new AtomicInteger();
++        coordinator.setTiming(new KlineTiming(() -> clock.getAndIncrement() * 2_000_000_000L,
++                row -> { throw new IllegalStateException("diagnostics unavailable"); }));
+         order = new ArrayList<>();
+     }
+     InitialPositionLockDeadlock deadlock() {
+--- a/src/test/js/fix129-diagnostics.test.cjs
++++ b/src/test/js/fix129-diagnostics.test.cjs
+@@ -0,0 +1,22 @@
++const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
++const assert=require('node:assert/strict'),{test}=require('node:test');
++const source=fs.readFileSync(path.resolve(__dirname,'../../main/resources/static/js/proven-analyzed-trades.js'),'utf8');
++function node(){return {textContent:'',children:[],classList:{remove(){}},replaceChildren(){this.children=[]},appendChild(n){this.children.push(n)}};}
++function render(result){
++ const nodes=Object.fromEntries(['fix129-panel','fix129-summary','fix129-body'].map(id=>[id,node()]));
++ const ctx=vm.createContext({document:{getElementById:id=>nodes[id],createElement:()=>node()}});
++ const start=source.indexOf('function renderFix129(');
++ vm.runInContext(source.slice(start,source.indexOf("document.addEventListener('click'",start)),ctx);
++ ctx.renderFix129(result);return nodes;
++}
++test('timing fetch failure remains distinct from empty history',()=>assert.match(render({status:'rejected'})['fix129-summary'].textContent,/could not be loaded/));
++test('empty timing history discloses sampling, nesting and persistence limitations',()=>{
++ const text=render({status:'fulfilled',value:{rows:[]}})['fix129-summary'].textContent;
++ for(const pattern of [/not Replay timings/,/at least 1 second/,/do not add/,/best effort/,/does not prove/]) assert.match(text,pattern);
++});
++test('measured timing and exact identity render safely without invented candle',()=>{
++ const nodes=render({status:'fulfilled',value:{rows:[{symbol:'UNIUSDT',candle_open_time:null,block_start:'2026-09-10T00:00:00Z',stage:'BLOCK_FINALIZATION',elapsed_ms:1234,outcome:'RETURNED',thread_name:'<img onerror=alert(1)>'}]}});
++ const cells=nodes['fix129-body'].children[0].children;
++ assert.equal(cells[2].textContent,'');assert.equal(cells[3].textContent,'2026-09-10T00:00:00Z');
++ assert.equal(cells[7].textContent,'1234');assert.equal(cells[9].textContent,'<img onerror=alert(1)>');assert.equal(cells[9].innerHTML,undefined);
++});

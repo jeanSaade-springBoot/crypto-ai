@@ -155,7 +155,7 @@ async function loadRegressionArchives() {
         body.innerHTML = rows.map(a => `<tr>
             <td>#${a.archive_batch_id}</td><td>#${a.source_test_run_id}</td><td><strong>${escapeHtml(a.test_name)}</strong></td>
             <td>${escapeHtml(a.symbol)}</td><td>${formatMoveTime(a.start_time)} → ${formatMoveTime(a.end_time)}</td>
-            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button> <button type="button" class="secondary-button" data-fix124-proven-id="${trade.id}">Protection incidents</button> <button type="button" class="secondary-button" data-fix127-proven-id="${trade.id}">Signal processing</button></td>
+            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button> <button type="button" class="secondary-button" data-fix124-proven-id="${trade.id}">Protection incidents</button> <button type="button" class="secondary-button" data-fix127-proven-id="${trade.id}">Signal processing</button> <button type="button" class="secondary-button" data-fix129-proven-id="${trade.id}">Ingestion timing</button></td>
         </tr>`).join('') || '<tr><td colspan="7">No archived test runs yet.</td></tr>';
         return rows;
     } catch (error) { body.innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`; return []; }
@@ -630,7 +630,8 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
             api(`${base}/position-management`),
             api(`${base}/fix122`),
             api(`${base}/fix124`),
-            api(`${base}/fix127`)
+            api(`${base}/fix127`),
+            api(`${base}/fix129`)
         ]);
         if (requestToken !== regressionDetailRequestToken) return finished;
         const signals = detailResults[0].status === 'fulfilled' ? detailResults[0].value : [];
@@ -640,6 +641,7 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
         renderFix122(detailResults[4]);
         renderFix124(detailResults[5]);
         renderFix127(detailResults[6]);
+        renderFix129(detailResults[7]);
         const management = detailResults[3].status === 'fulfilled' ? detailResults[3].value : [];
 
         // FIX-11O: always expose fresh directional Replay signals independently of the BUY-centric
@@ -720,10 +722,11 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
 async function loadRegressionArchiveDetail(archiveBatchId) {
     const base = `/api/administration/regression-tests/archives/${archiveBatchId}`;
     const [run, trades] = await Promise.all([api(base), api(`${base}/trades`)]);
-    const fix122=await Promise.allSettled([api(`${base}/fix122`), api(`${base}/fix124`), api(`${base}/fix127`)]);
+    const fix122=await Promise.allSettled([api(`${base}/fix122`), api(`${base}/fix124`), api(`${base}/fix127`), api(`${base}/fix129`)]);
     renderFix122(fix122[0]);
     renderFix124(fix122[1]);
     renderFix127(fix122[2]);
+    renderFix129(fix122[3]);
     const panel = document.getElementById('regression-archive-detail');
     const body = document.getElementById('regression-archive-trades-body');
     if (!panel || !body) return;
@@ -1672,6 +1675,47 @@ document.addEventListener('click', async event => {
     } finally { button.disabled = false; }
 });
 
+// FIX-129: measured Production processing time, never a simulated Replay result.
+function renderFix129(result) {
+    const panel = document.getElementById('fix129-panel');
+    const summary = document.getElementById('fix129-summary');
+    const body = document.getElementById('fix129-body');
+    if (!panel || !summary || !body) return;
+    panel.classList.remove('hidden');
+    body.replaceChildren();
+    if (!result || result.status !== 'fulfilled') {
+        summary.textContent = 'Ingestion timing history could not be loaded.';
+        return;
+    }
+    const data = result.value;
+    summary.textContent = 'Production observations overlapping this review window; not Replay timings or an archived snapshot. '
+        + 'Records include stages lasting at least 1 second, failures, and block finalizations. '
+        + 'Block finalization is included within observer time: do not add them together. '
+        + 'RETURNED means the measured call returned, not that a trade executed or async analysis completed. '
+        + 'Recording begins with FIX-129. Background persistence is best effort; an empty list does not prove healthy ingestion. '
+        + (data.truncated ? 'Showing first 500 records.' : '');
+    for (const row of data.rows || []) {
+        const tr = document.createElement('tr');
+        for (const value of [row.symbol, row.interval_code, row.candle_open_time, row.block_start,
+            row.stage, row.started_at, row.finished_at, row.elapsed_ms, row.outcome, row.thread_name, row.correlation_id]) {
+            const td = document.createElement('td');
+            td.textContent = String(value ?? '');
+            tr.appendChild(td);
+        }
+        body.appendChild(tr);
+    }
+}
+document.addEventListener('click', async event => {
+    const button = event.target.closest('[data-fix129-proven-id]');
+    if (!button) return;
+    button.disabled = true;
+    try {
+        const results = await Promise.allSettled([api(`/api/administration/regression-tests/proven-trades/${encodeURIComponent(button.dataset.fix129ProvenId)}/fix129`)]);
+        renderFix129(results[0]);
+        document.getElementById('fix129-panel')?.scrollIntoView({behavior:'smooth'});
+    } finally { button.disabled = false; }
+});
+
 // FIX-122: persisted per-evaluation evidence, escaped before HTML insertion.
 function renderFix122(result) {
     const panel=document.getElementById('fix122-panel');
@@ -1696,4 +1740,5 @@ function renderFix122(result) {
         <td><details><summary>${escapeHtml(p.status||'Details')} · ${(p.excluded||[]).length} exclusions</summary><pre>${escapeHtml(exclusions||'No observations excluded.')}</pre><p>${escapeHtml(p.explanation||'')}</p><small>Evaluation result; wallet execution is recorded separately.</small></details></td></tr>`;
     }).join('') || '<tr><td colspan="6">No FIX-122 evaluations recorded for this window.</td></tr>';
 }
+
 

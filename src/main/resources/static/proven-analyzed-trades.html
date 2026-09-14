@@ -183,6 +183,12 @@
 <div class="table-responsive"><table><thead><tr><th>Symbol</th><th>Candle open (UTC)</th><th>Observed (UTC)</th><th>Price</th><th>Attempts</th><th>Outcome</th><th>Error</th></tr></thead><tbody id="fix124-body"></tbody></table></div>
 </section>
 <!-- FIX-127: operational Production state, not simulated historical executions. -->
+<!-- FIX-129: Production wall-time observations alongside local-history review. -->
+<section id="fix129-panel" class="regression-detail hidden">
+<h3>Ingestion timing · FIX-129</h3>
+<p id="fix129-summary"></p>
+<div class="table-responsive"><table><thead><tr><th>Symbol</th><th>Interval</th><th>Candle open (UTC)</th><th>Prior block (UTC)</th><th>Stage</th><th>Started (UTC)</th><th>Finished (UTC)</th><th>Elapsed ms</th><th>Outcome</th><th>Thread</th><th>Correlation</th></tr></thead><tbody id="fix129-body"></tbody></table></div>
+</section>
 <section id="fix127-panel" class="regression-detail hidden">
 <h3>FIX-127 · Signal processing</h3>
 <p id="fix127-summary"></p>
