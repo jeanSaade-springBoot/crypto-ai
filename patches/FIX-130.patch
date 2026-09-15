@@ -1,0 +1,772 @@
+--- a/md/FIX-130.md
++++ b/md/FIX-130.md
+@@ -0,0 +1,99 @@
++# FIX-130 — Durable background price-move block finalization
++
++Candidate built on FIX-129. User authorized moving retrospective finalization off the ingestion thread. No deployment or measured improvement is claimed. Java 21/Maven and MySQL gates remain pending.
++
++## Measured finding
++
++FIX-129 captured 68 finalizations across four rollovers (17 symbols each). Summed BLOCK_FINALIZATION durations were 34m51s, 26m22s, 40m39s and 57m44s. ENA took 421,304 ms inside an observer transaction taking 421,337 ms. This establishes the blocking operation; individual internal query cost remains unmeasured. Those totals exclude the enclosing observer measurements to avoid double counting.
++
++## Contract 1: actual shared tables and mapping check
++
++The finalization call chain is finalizeBlock -> finalizeCatch -> syncLiveCatch/applyBlame -> resolveBestSignalForMove/resolveExecutionOpportunity.
++
++| Table | Finalization access | Mapping / lock detail |
++|---|---|---|
++| price_move_event | Read and write previous block's event | Scalar fields; no mapped relationships. Hardcoded crypto_ai schema retained. |
++| wallet_trade | Read latest 100 executed trades for the symbol | LAZY signal and positionAnalysis relationships; this path reads only side, execution time and ID. No relationship is dereferenced. |
++| trade_signal | Read by candle time and existing generated-at compatibility query | No entity associations found in this entity. Existing retrospective selectors preserved. |
++| execution_opportunity | Read latest-signal and lifecycle-overlap candidates | LAZY latestSignal mapping; this path reads scalar direction and explanation fields. |
++| price_move_finalization_work | New snapshot/state ledger | No FK to trading rows. |
++| price_move_finalization_gate | New singleton execution gate | Short coordination transaction only; not held while historical queries run. |
++
++No wallet_managed_position or signal_processing_work reference is reached by this finalization path. CandleRepository is used elsewhere by chart endpoints, not this finalization call chain. No repository query in the historical path requests FOR UPDATE or an EntityGraph. Shared tables still mean shared database load and possible contention: absence of an explicit locking query is not a claim of zero contention.
++
++## Contract 2: exact concurrency, ownership and failures
++
++Exactly ONE active finalization job across all instances sharing the new tables. Each process has one dedicated fix130-finalizer scheduled thread, polling every five seconds after completion of its previous poll. A singleton database gate serializes claims across instances. Historical queries run after the claim transaction commits. Their transaction uses READ_COMMITTED ordinary reads, writes diagnostic explanations only, and atomically commits FINALIZED plus gate release with those explanations.
++
++One is deliberate: observed calls already take minutes on shared tables. Raising concurrency could increase pressure on wallet processing. This patch isolates the work, not optimizes its queries. The historical transaction has no new execution deadline; a JDBC timeout alone would not prove a stopped server-side query or justify takeover.
++
++This implements conservative ownership, not an automatically expiring execution lease. A claim older than 30 minutes is marked REVIEW_REQUIRED when another poll observes it; the gate stays occupied. In a single process, its busy worker cannot simultaneously poll, so a hung call may remain FINALIZING with increasing visible age. A second instance or restarted process detects stale ownership. No elapsed time alone starts a replacement.
++
++Automatic retry is limited to the exact MySQL deadlock rollback condition (1213 / 40001). Up to three attempts; backoff after attempts 1 and 2 is 60 and 120 seconds. A proven rollback releases the gate, including at exhaustion, so later jobs proceed. Unknown exceptions/commit outcomes retain the gate and mark REVIEW_REQUIRED. Failure to record the outcome is logged and does not release ownership. Invalid snapshot JSON is quarantined before finalization starts and releases the gate.
++
++No code automatically abandons or overwrites an uncertain owner. See recovery procedure below.
++
++## Contract 3: explicit live and completed-block states
++
++Completed-block work uses FINALIZATION_PENDING, FINALIZING, FINALIZED, RETRYABLE_FAILURE and REVIEW_REQUIRED. New-block tracker state is COLLECTING. Live code does not read the previous job's unfinished explanation; the background worker never touches a live BlockTracker. This adds no entry rejection or wallet execution condition.
++
++During enqueue failure, the active tracker stays on the prior block with ROLLOVER_PERSIST_FAILED, retaining incoming observer points. The existing coordinator catches the observer failure after input/protection, so close-event dispatch still follows the existing failure-isolation path. This failure may still delay ingestion up to existing connection acquisition / bounded enqueue query timing; zero database delay is not promised.
++
++The retry buffer is explicitly bounded at 4,096 points per symbol. At exhaustion, the incoming observer point is not retained; REVIEW_REQUIRED, unrecordedPoints and [OBSERVER_POINT_UNRECORDED] make the gap explicit. Existing buffered points are still retried, so buffer exhaustion does not permanently prevent recovery. It never drops a market-input write or suppresses protection. The unrecorded-point count remains visible for that tracker session. A finalization status reports workflow completion, not proof that every observer point was captured.
++
++Active tracker state is returned by the existing activeTracker endpoint. Completed-work status, queue age, global held job and pending count are available in Proven / Analyze Trades for runs, archives and saved trades. Queue age is measured from enqueue to the latest attempt start (or now if never started). These are current Production diagnostics, not simulated Replay output or a frozen archive.
++
++## Contract 4: exact snapshot/reset/arrival order
++
++Under the existing per-symbol Java monitor:
++
++1. Retain the current point in the observer retry buffer.
++2. Create an immutable record of the prior block identity and UP/DOWN candidate facts (start/end UTC time, prices, change, level, window).
++3. Commit snapshot and FINALIZATION_PENDING work in an independent REQUIRES_NEW transaction (two-second transaction/query limit; DataSource connection acquisition follows existing configuration).
++4. Only after successful commit, reset the live tracker.
++5. Apply retained points in order, evaluate each once, and remove each applied point from the buffer. A buffered later block creates its own snapshot before another reset.
++6. Persist the current live catches through the unchanged observer transaction.
++
++Another same-symbol callback cannot enter between snapshot and reset. Snapshot contains no live references or JPA entity. Failed handoff leaves both prior tracker and triggering point intact for a later callback. Enqueue has a unique (symbol, block_start) key, exact-payload duplicate acceptance and conflict rejection. A crash after successful handoff does not lose the queued completed block. Multiple instances presenting different facts for the same block are rejected, not silently merged.
++
++The guarantee is completed-block handoff, not total observer crash durability: uncommitted tracker data and retained points remain in memory and can be lost at process termination. Existing settings updates clear trackers as before. Observer point semantics continue to use the supplied observation time; no candle identity is invented for block work.
++
++## Contract 5: lease contention, queueing and head-of-line delay
++
++Enqueue inserts into the durable work table and NEVER acquires the singleton gate. Whether a worker is slow, busy, or awaiting review, a successfully enqueued symbol begins collecting its next block. There is no in-memory finalization task queue and no CallerRuns fallback.
++
++A poll finding an occupied gate returns; it does not busy-wait. Pending rows remain in the database. When free, the worker chooses the oldest eligible next_attempt_at then ID. A backed-off retry does not block ready jobs from other symbols. Failed/poison work is not retried indefinitely. Jobs without caught moves still finalize as a no-op, maintaining explicit block accounting.
++
++ONE worker necessarily means a slow active job delays other retrospective explanations. This is accepted diagnostic queue latency, exposed as pending count and age, not claimed eliminated. Ambiguous ownership can suspend the whole finalization queue; that is the explicit cost of forbidding concurrent takeover. It does not stop live collection, input persistence, protection or snapshot enqueue. No finite finalization latency guarantee is made. There is no automatic queue deletion or retention purge.
++
++## Retrospective evidence timing limitation
++
++Only price-move facts are frozen at handoff. Historical wallet/signal/opportunity reads happen later, in the worker. Existing selectors are deliberately unchanged, including the latest-100 wallet limit and retrospective generated-at compatibility path. Later database changes or enough newer trades can change the explanation relative to synchronous rollover evaluation. This patch is not historical database time travel and does not claim identical diagnostic labels. Trading formulas and Replay business services are unchanged. Immutable rollover-time evidence capture would be a separate design, not a hidden query change here.
++
++## Failure recovery procedure
++
++Pending and retryable rows resume automatically after startup. Interrupted FINALIZING work is not automatically replayed. For a held gate / REVIEW_REQUIRED owner:
++
++1. Inspect the job, error and FIX-129/FIX-130 logs.
++2. Stop every application instance that could own the worker and establish that its database transactions have ended. Do not rely only on a lease age or missing heartbeat.
++3. In one DBA transaction, lock the singleton gate and its exact active job. Confirm the intended job and owner. Mark that job FINALIZATION_PENDING (or leave it quarantined after explicit review), clear owner_token, set next_attempt_at to current time, and clear that exact gate owner. Do not clear a different owner's gate or alter a FINALIZED job.
++4. Restart one application and verify work state/output. No automatic administrative reset endpoint is introduced.
++
++Diagnostic explanation writes and work completion are one transaction. A failure before commit rolls them back together. Unknown commit outcomes remain reviewable; no automatic wallet action is involved. Gate and work locks are acquired in the same order for claim/completion/failure state transitions.
++
++## Validation actually performed / required
++
++- Maven attempted: mvn -f fix130/pom.xml test. Exit 127: mvn not found. Installed Java is 17; project requires 21. No JUnit pass claimed.
++- Ten new JUnit tests authored: enqueue durability/idempotence; two-instance exclusion; enqueue while gate locked; retry fairness; uncertain-owner blocking; expiry without takeover; explanation/state atomicity; retained rollover point; concurrent same-symbol arrival; exact deadlock classifier. H2 tests remove engine/collation suffixes solely for H2 compatibility and do not validate MySQL DDL semantics.
++- Node: 21 tests passed, zero failed (three new finalization UI tests). Existing FIX-129 text assertion updated for off-thread finalization.
++- Java syntax parsing: 349 files, zero syntax errors; not dependency/type compilation.
++- Before deployment: run full Maven tests on Java 21, validate V88 on MySQL, exercise contention with two instances, crash/unknown-owner recovery, and a complete live rollover. Verify observer latency and no skipped candle events on actual measurements.
++- No live speedup, complete ingestion coverage or Replay parity run claimed. FIX-129 is retained for before/after measurement. Background BLOCK_FINALIZATION now has thread fix130-finalizer and is no longer nested inside the live observer measurement.
++
++From Windows CMD, capture measurements after a validated deployment:
++
++```bat
++powershell -NoProfile -Command "Select-String -LiteralPath 'C:\apps\crypto-ai\crypto-ai.log' -Pattern '\[FIX-129\]|\[FIX-130\]' -Context 2,4 | Out-File -Encoding utf8 -Width 4096 'C:\apps\crypto-ai\trader-fix130-review.txt'"
++```
++
++FIX-125 wallet commit coordination and sizing remain separate. Restoring FIX-129 would restore synchronous finalization; first stop background workers and account for pending work. Retain applied Flyway migrations and diagnostic rows.
+--- a/src/main/java/com/crypto/debug/monitor/service/PriceMoveBlockSnapshot.java
++++ b/src/main/java/com/crypto/debug/monitor/service/PriceMoveBlockSnapshot.java
+@@ -0,0 +1,10 @@
++package com.crypto.debug.monitor.service;
++
++import java.math.BigDecimal;
++
++/** FIX-130: immutable completed-block facts only. String times are ISO UTC;
++ * neither the tracker nor a managed entity escapes onto the background thread. */
++public record PriceMoveBlockSnapshot(String symbol, String blockStart, Move up, Move down) {
++    public record Move(String start, String end, BigDecimal startPrice, BigDecimal endPrice,
++                       BigDecimal change, String level, String window) {}
++}
+--- a/src/main/java/com/crypto/debug/monitor/service/PriceMoveFinalizationStore.java
++++ b/src/main/java/com/crypto/debug/monitor/service/PriceMoveFinalizationStore.java
+@@ -0,0 +1,99 @@
++package com.crypto.debug.monitor.service;
++
++import com.fasterxml.jackson.databind.ObjectMapper;
++import org.springframework.stereotype.Service;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.transaction.PlatformTransactionManager;
++import org.springframework.transaction.TransactionDefinition;
++import org.springframework.transaction.support.TransactionTemplate;
++import javax.sql.DataSource;
++import java.sql.Timestamp;
++import java.time.Instant;
++import java.util.UUID;
++
++/** FIX-130: enqueue never acquires the global execution gate. A busy worker
++ * delays retrospective results only, never snapshot handoff or new-block collection.
++ * The gate does NOT expire into automatic takeover: uncertain ownership needs review.
++ */
++@Service
++public class PriceMoveFinalizationStore {
++    private final JdbcTemplate jdbc;
++    private final TransactionTemplate shortTx;
++    private final ObjectMapper json = new ObjectMapper();
++    public record Job(long id, String owner, int attempts, PriceMoveBlockSnapshot snapshot) {}
++    public PriceMoveFinalizationStore(DataSource source, PlatformTransactionManager manager) {
++        jdbc = new JdbcTemplate(source); jdbc.setQueryTimeout(2);
++        shortTx = new TransactionTemplate(manager);
++        shortTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
++        shortTx.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
++        shortTx.setTimeout(2);
++    }
++    public void enqueue(PriceMoveBlockSnapshot snapshot) {
++        final String payload;
++        try { payload = json.writeValueAsString(snapshot); }
++        catch (Exception ex) { throw new IllegalArgumentException("Snapshot serialization failed", ex); }
++        // REQUIRES_NEW completes commit before the caller resets its tracker.
++        shortTx.executeWithoutResult(tx -> {
++            jdbc.update("""
++                INSERT INTO price_move_finalization_work
++                (symbol,block_start,snapshot_json,status,attempts,next_attempt_at,created_at,updated_at)
++                VALUES (?,?,?,'FINALIZATION_PENDING',0,CURRENT_TIMESTAMP(6),CURRENT_TIMESTAMP(6),CURRENT_TIMESTAMP(6))
++                ON DUPLICATE KEY UPDATE id=id
++                """, snapshot.symbol(),Timestamp.from(Instant.parse(snapshot.blockStart())),payload);
++            String saved = jdbc.queryForObject("SELECT snapshot_json FROM price_move_finalization_work WHERE symbol=? AND block_start=?",
++                    String.class,snapshot.symbol(),Timestamp.from(Instant.parse(snapshot.blockStart())));
++            // Exact idempotence only: conflicting snapshots cannot silently replace committed facts.
++            if (!payload.equals(saved)) throw new IllegalStateException("Conflicting completed-block snapshot");
++        });
++    }
++    public Job claim() {
++        return shortTx.execute(tx -> {
++            var gate = jdbc.queryForMap("SELECT active_job_id FROM price_move_finalization_gate WHERE id=1 FOR UPDATE");
++            if (gate.get("active_job_id") != null) {
++                // Mark stale ownership visibly, but retain the gate to prevent overlapping queries.
++                jdbc.update("""
++                    UPDATE price_move_finalization_work SET status='REVIEW_REQUIRED',
++                    last_error='Ownership exceeded 30 minutes; stop all finalizers before recovery',updated_at=CURRENT_TIMESTAMP(6)
++                    WHERE id=? AND status='FINALIZING' AND started_at < ?
++                    """,gate.get("active_job_id"),Timestamp.from(Instant.now().minusSeconds(1800)));
++                return null;
++            }
++            var ids = jdbc.queryForList("""
++                SELECT id FROM price_move_finalization_work
++                WHERE status IN ('FINALIZATION_PENDING','RETRYABLE_FAILURE') AND next_attempt_at<=CURRENT_TIMESTAMP(6)
++                ORDER BY next_attempt_at,id LIMIT 1
++                """,Long.class);
++            if (ids.isEmpty()) return null;
++            long id=ids.get(0); String owner=UUID.randomUUID().toString();
++            jdbc.update("UPDATE price_move_finalization_work SET status='FINALIZING',owner_token=?,attempts=attempts+1,started_at=CURRENT_TIMESTAMP(6),updated_at=CURRENT_TIMESTAMP(6) WHERE id=?",owner,id);
++            jdbc.update("UPDATE price_move_finalization_gate SET active_job_id=?,owner_token=? WHERE id=1",id,owner);
++            var row=jdbc.queryForMap("SELECT snapshot_json,attempts FROM price_move_finalization_work WHERE id=?",id);
++            try { return new Job(id,owner,((Number)row.get("attempts")).intValue(),json.readValue((String)row.get("snapshot_json"),PriceMoveBlockSnapshot.class)); }
++            catch (Exception ex) {
++                jdbc.update("UPDATE price_move_finalization_work SET status='REVIEW_REQUIRED',last_error='Invalid snapshot JSON',updated_at=CURRENT_TIMESTAMP(6) WHERE id=?",id);
++                jdbc.update("UPDATE price_move_finalization_gate SET active_job_id=NULL,owner_token=NULL WHERE id=1");
++                return null; // No finalization started; malformed work must not poison other symbols.
++            }
++        });
++    }
++    // Called INSIDE the same transaction that writes final explanations. A failed
++    // ownership check rolls back explanations too; a later worker cannot be overwritten.
++    public void complete(Job job) {
++        jdbc.queryForMap("SELECT active_job_id FROM price_move_finalization_gate WHERE id=1 FOR UPDATE");
++        if (jdbc.update("UPDATE price_move_finalization_work SET status='FINALIZED',finished_at=CURRENT_TIMESTAMP(6),updated_at=CURRENT_TIMESTAMP(6),last_error=NULL WHERE id=? AND owner_token=? AND status='FINALIZING'",job.id(),job.owner()) != 1)
++            throw new IllegalStateException("Finalization ownership changed");
++        if (jdbc.update("UPDATE price_move_finalization_gate SET active_job_id=NULL,owner_token=NULL WHERE id=1 AND active_job_id=? AND owner_token=?",job.id(),job.owner()) != 1)
++            throw new IllegalStateException("Finalization gate ownership changed");
++    }
++    public void failed(Job job, boolean rollbackProven, String error) {
++        shortTx.executeWithoutResult(tx -> {
++            jdbc.queryForMap("SELECT active_job_id FROM price_move_finalization_gate WHERE id=1 FOR UPDATE");
++            // Only a proven rollback can automatically retry and release the global gate.
++            String status=rollbackProven && job.attempts()<3 ? "RETRYABLE_FAILURE" : "REVIEW_REQUIRED";
++            int changed=jdbc.update("UPDATE price_move_finalization_work SET status=?,next_attempt_at=?,last_error=?,updated_at=CURRENT_TIMESTAMP(6) WHERE id=? AND owner_token=? AND status='FINALIZING'",
++                    status,Timestamp.from(Instant.now().plusSeconds(60L*job.attempts())),error.substring(0,Math.min(1000,error.length())),job.id(),job.owner());
++            if (changed==1 && rollbackProven)
++                jdbc.update("UPDATE price_move_finalization_gate SET active_job_id=NULL,owner_token=NULL WHERE id=1 AND active_job_id=? AND owner_token=?",job.id(),job.owner());
++        });
++    }
++}
+--- a/src/main/java/com/crypto/debug/monitor/service/PriceMoveFinalizationWorker.java
++++ b/src/main/java/com/crypto/debug/monitor/service/PriceMoveFinalizationWorker.java
+@@ -0,0 +1,63 @@
++package com.crypto.debug.monitor.service;
++
++import jakarta.annotation.PreDestroy;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.boot.context.event.ApplicationReadyEvent;
++import org.springframework.context.event.EventListener;
++import org.springframework.stereotype.Component;
++import org.springframework.transaction.PlatformTransactionManager;
++import org.springframework.transaction.TransactionDefinition;
++import org.springframework.transaction.support.TransactionTemplate;
++import java.sql.SQLException;
++import java.util.concurrent.*;
++import java.util.concurrent.atomic.AtomicBoolean;
++
++/** FIX-130: one local worker plus a durable database-global gate. No trading
++ * executor, scheduler thread or WebSocket thread performs historical finalization. */
++@Component
++public class PriceMoveFinalizationWorker {
++    private static final Logger log=LoggerFactory.getLogger(PriceMoveFinalizationWorker.class);
++    private final PriceMoveFinalizationStore store;
++    private final PriceMoveMonitorService monitor;
++    private final TransactionTemplate transaction;
++    private final AtomicBoolean started=new AtomicBoolean();
++    private final ScheduledExecutorService executor=Executors.newSingleThreadScheduledExecutor(task -> {
++        Thread t=new Thread(task,"fix130-finalizer");t.setDaemon(true);return t;
++    });
++    public PriceMoveFinalizationWorker(PriceMoveFinalizationStore store,PriceMoveMonitorService monitor,PlatformTransactionManager manager) {
++        this.store=store;this.monitor=monitor;
++        transaction=new TransactionTemplate(manager);
++        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
++        // Ordinary consistent reads do not request shared row locks as SERIALIZABLE could.
++        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
++    }
++    @EventListener(ApplicationReadyEvent.class)
++    public void start() { if(started.compareAndSet(false,true))executor.scheduleWithFixedDelay(this::poll,5,5,TimeUnit.SECONDS); }
++    void poll() {
++        PriceMoveFinalizationStore.Job job=null;
++        try {
++            job=store.claim(); if(job==null)return;
++            var claimed=job;
++            log.info("[FIX-130][FINALIZING] jobId={}, symbol={}, attempt={}",job.id(),job.snapshot().symbol(),job.attempts());
++            transaction.executeWithoutResult(tx -> { monitor.finalizeSnapshot(claimed.snapshot());store.complete(claimed); });
++            log.info("[FIX-130][FINALIZED] jobId={}, symbol={}",job.id(),job.snapshot().symbol());
++        } catch(RuntimeException ex) {
++            if(job!=null) {
++                try { store.failed(job,rollbackProven(ex),ex.toString()); }
++                catch(RuntimeException recordFailure) { log.error("[FIX-130][FAILURE_RECORD_FAILED] jobId={}; gate remains held",job.id(),recordFailure); }
++            }
++            log.error("[FIX-130][WORKER_FAILED] jobId={}; inspect durable state",job==null?null:job.id(),ex);
++        }
++    }
++    static boolean rollbackProven(Throwable failure) {
++        for(Throwable ex=failure;ex!=null;ex=ex.getCause())
++            if(ex instanceof SQLException sql && sql.getErrorCode()==1213 && "40001".equals(sql.getSQLState()))return true;
++        return false;
++    }
++    @PreDestroy public void stop() {
++        // Never release ownership simply because shutdown/lease time elapsed.
++        // Pending work survives. An interrupted active job requires review on restart.
++        executor.shutdown();
++    }
++}
+--- a/src/main/java/com/crypto/debug/monitor/service/PriceMoveMonitorService.java
++++ b/src/main/java/com/crypto/debug/monitor/service/PriceMoveMonitorService.java
+@@ -47,6 +47,10 @@
+     private com.crypto.infrastructure.transaction.KlineTiming timing = com.crypto.infrastructure.transaction.KlineTiming.loggingOnly();
+     @org.springframework.beans.factory.annotation.Autowired
+     public void setTiming(com.crypto.infrastructure.transaction.KlineTiming timing) { this.timing = timing; }
++    private PriceMoveFinalizationStore finalizationStore;
++    @org.springframework.beans.factory.annotation.Autowired
++    public void setFinalizationStore(PriceMoveFinalizationStore store) { this.finalizationStore=store; }
++    private static final org.slf4j.Logger FINALIZATION_LOG=org.slf4j.LoggerFactory.getLogger(PriceMoveMonitorService.class);
+     private static final long SETTINGS_CACHE_MILLIS = 10_000L;
+     private static final int BLOCK_HOURS = 8;
+     private static final int HISTORY_DAYS = 3650; // caught moves are evidence; keep them long-term.
+@@ -82,20 +86,65 @@
+         Instant blockStart = blockStart(observedAt);
+         BlockTracker tracker = trackers.computeIfAbsent(symbol, ignored -> new BlockTracker(blockStart));
+         synchronized (tracker) {
+-            if (!tracker.blockStart.equals(blockStart)) {
+-                // Block identity is the prior UTC block, not an invented candle identity.
+-                var timingContext = timing.context(symbol, null, null, observedAt, tracker.blockStart);
+-                timing.measure(timingContext, "BLOCK_FINALIZATION", true, () -> finalizeBlock(symbol, tracker));
+-                tracker.reset(blockStart);
++            // FIX-130: retain arrivals while a completed-block handoff is unavailable.
++            // The queue is observer-only; exhaustion is visible and never blocks wallet protection.
++            if (tracker.pendingPoints.size() >= 4096) {
++                tracker.phase="REVIEW_REQUIRED";
++                tracker.unrecordedPoints++;
++                FINALIZATION_LOG.error("[FIX-130][OBSERVER_POINT_UNRECORDED] symbol={}, count={}; pending buffer full",symbol,tracker.unrecordedPoints);
++            } else {
++                tracker.pendingPoints.addLast(new PricePoint(observedAt,price));
++            }
++            while (!tracker.pendingPoints.isEmpty()) {
++                PricePoint point=tracker.pendingPoints.peekFirst();
++                Instant nextBlock=blockStart(point.time);
++                if (!tracker.blockStart.equals(nextBlock)) {
++                    var snapshot=snapshot(symbol,tracker);
++                    try {
++                        // Independent short transaction commits BEFORE reset, under this monitor.
++                        // Finalization lease is never acquired here.
++                        finalizationStore.enqueue(snapshot);
++                    } catch(RuntimeException failure) {
++                        tracker.phase="ROLLOVER_PERSIST_FAILED";
++                        FINALIZATION_LOG.error("[FIX-130][ROLLOVER_PERSIST_FAILED] symbol={}, block={}, retainedPoints={}",symbol,tracker.blockStart,tracker.pendingPoints.size(),failure);
++                        throw failure;
++                    }
++                    FINALIZATION_LOG.info("[FIX-130][FINALIZATION_PENDING] symbol={}, block={}; new block collecting",symbol,tracker.blockStart);
++                    tracker.reset(nextBlock);
++                }
++                // Each retained point enters the tracker exactly once after a committed handoff.
++                tracker.observe(point.price,point.time);
++                evaluateWindows(tracker);
++                tracker.pendingPoints.removeFirst();
++                tracker.phase=tracker.unrecordedPoints==0 ? "COLLECTING" : "REVIEW_REQUIRED";
+             }
+-            tracker.observe(price, observedAt);
+-            evaluateWindows(tracker);
+-            // Persist/update the same row as the move grows. Blame stays PENDING until the block closes.
+             syncLiveCatch(symbol, tracker, "UP", tracker.up);
+             syncLiveCatch(symbol, tracker, "DOWN", tracker.down);
+         }
+     }
+ 
++    private PriceMoveBlockSnapshot snapshot(String symbol,BlockTracker tracker) {
++        return new PriceMoveBlockSnapshot(symbol,tracker.blockStart.toString(),snapshot(tracker.up),snapshot(tracker.down));
++    }
++    private PriceMoveBlockSnapshot.Move snapshot(Candidate c) {
++        return !c.caught()?null:new PriceMoveBlockSnapshot.Move(c.start.time.toString(),c.end.time.toString(),
++                c.start.price,c.end.price,c.change,c.level,c.window);
++    }
++    private void restore(Candidate c,PriceMoveBlockSnapshot.Move move) {
++        if(move==null)return;
++        c.start=new PricePoint(Instant.parse(move.start()),move.startPrice());
++        c.end=new PricePoint(Instant.parse(move.end()),move.endPrice());
++        c.change=move.change();c.level=move.level();c.window=move.window();
++    }
++    /** FIX-130: only the worker invokes this with a detached immutable snapshot.
++     * Work/result commit is controlled by the worker transaction; no live tracker is accessed. */
++    public void finalizeSnapshot(PriceMoveBlockSnapshot snapshot) {
++        BlockTracker completed=new BlockTracker(Instant.parse(snapshot.blockStart()));
++        restore(completed.up,snapshot.up());restore(completed.down,snapshot.down());
++        var context=timing.context(snapshot.symbol(),null,null,Instant.now(),completed.blockStart);
++        timing.measure(context,"BLOCK_FINALIZATION",true,() -> finalizeBlock(snapshot.symbol(),completed));
++    }
++
+     private void evaluateWindows(BlockTracker tracker) {
+         if (tracker.points.isEmpty()) return;
+         PricePoint now = tracker.points.peekLast();
+@@ -586,7 +635,7 @@
+         if (t == null) return Map.of("symbol", symbol, "phase", "WAITING_FOR_PRICE", "tracking", false);
+         synchronized (t) {
+             Map<String,Object> m = new LinkedHashMap<>();
+-            m.put("symbol",symbol); m.put("phase","8H_BLOCK"); m.put("tracking",true); m.put("blockStart",t.blockStart); m.put("blockEnd",t.blockStart.plus(8,ChronoUnit.HOURS));
++            m.put("symbol",symbol); m.put("phase",t.phase); m.put("retainedPoints",t.pendingPoints.size()); m.put("unrecordedPoints",t.unrecordedPoints); m.put("tracking",true); m.put("blockStart",t.blockStart); m.put("blockEnd",t.blockStart.plus(8,ChronoUnit.HOURS));
+             m.put("lastPrice",t.points.isEmpty()?null:t.points.peekLast().price); m.put("up",t.up.asMap()); m.put("down",t.down.asMap()); return m;
+         }
+     }
+@@ -612,5 +661,5 @@
+     private record WindowRule(String name,int minutes,BigDecimal normal,BigDecimal high,BigDecimal extreme){ String level(BigDecimal abs){return abs.compareTo(extreme)>=0?"EXTREME":abs.compareTo(high)>=0?"HIGH":abs.compareTo(normal)>=0?"NORMAL":null;} }
+     private record PricePoint(Instant time,BigDecimal price){}
+     private static final class Candidate { PricePoint start,end; BigDecimal change=BigDecimal.ZERO; String level,window; boolean caught(){return level!=null;} void consider(PricePoint s,PricePoint e,BigDecimal c,WindowRule r){String l=r.level(c.abs());if(l==null)return;if(!caught()||rank(l)>rank(level)||c.abs().compareTo(change.abs())>0){start=s;end=e;change=c;level=l;window=r.name;}} Map<String,Object> asMap(){Map<String,Object>m=new LinkedHashMap<>();m.put("caught",caught());m.put("level",level);m.put("window",window);m.put("changePercent",change);m.put("startTime",start==null?null:start.time);m.put("startPrice",start==null?null:start.price);m.put("endTime",end==null?null:end.time);m.put("endPrice",end==null?null:end.price);return m;} static int rank(String x){return "EXTREME".equals(x)?3:"HIGH".equals(x)?2:"NORMAL".equals(x)?1:0;} }
+-    private static final class BlockTracker { Instant blockStart; final Deque<PricePoint> points=new ArrayDeque<>(); final Candidate up=new Candidate(),down=new Candidate(); BlockTracker(Instant s){blockStart=s;} void reset(Instant s){blockStart=s;points.clear();up.start=up.end=down.start=down.end=null;up.level=up.window=down.level=down.window=null;up.change=down.change=BigDecimal.ZERO;} void observe(BigDecimal p,Instant t){ if(!points.isEmpty()&&points.peekLast().time.truncatedTo(ChronoUnit.MINUTES).equals(t.truncatedTo(ChronoUnit.MINUTES))) points.removeLast(); points.addLast(new PricePoint(t,p)); Instant cutoff=t.minus(4,ChronoUnit.HOURS); while(!points.isEmpty()&&points.peekFirst().time.isBefore(cutoff))points.removeFirst(); } }
++    private static final class BlockTracker { String phase="COLLECTING"; long unrecordedPoints; final Deque<PricePoint> pendingPoints=new ArrayDeque<>(); Instant blockStart; final Deque<PricePoint> points=new ArrayDeque<>(); final Candidate up=new Candidate(),down=new Candidate(); BlockTracker(Instant s){blockStart=s;} void reset(Instant s){blockStart=s;points.clear();up.start=up.end=down.start=down.end=null;up.level=up.window=down.level=down.window=null;up.change=down.change=BigDecimal.ZERO;} void observe(BigDecimal p,Instant t){ if(!points.isEmpty()&&points.peekLast().time.truncatedTo(ChronoUnit.MINUTES).equals(t.truncatedTo(ChronoUnit.MINUTES))) points.removeLast(); points.addLast(new PricePoint(t,p)); Instant cutoff=t.minus(4,ChronoUnit.HOURS); while(!points.isEmpty()&&points.peekFirst().time.isBefore(cutoff))points.removeFirst(); } }
+ }
+--- a/src/main/java/com/crypto/regression/controller/Fix130DiagnosticsController.java
++++ b/src/main/java/com/crypto/regression/controller/Fix130DiagnosticsController.java
+@@ -0,0 +1,44 @@
++package com.crypto.regression.controller;
++
++import lombok.RequiredArgsConstructor;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.web.bind.annotation.*;
++import java.util.*;
++
++/** FIX-130: Production incident history for the selected review window. This is
++ * NOT simulated Replay output and must never be consumed by trading services. */
++@RestController
++@RequestMapping("/api/administration/regression-tests")
++@RequiredArgsConstructor
++public class Fix130DiagnosticsController {
++    private final JdbcTemplate jdbc;
++
++    @GetMapping("/runs/{id}/fix130")
++    public Map<String,Object> run(@PathVariable long id) {
++        return rows(jdbc.queryForMap("SELECT symbol,start_time,end_time FROM analysis_test_run WHERE id=?", id));
++    }
++    @GetMapping("/archives/{id}/fix130")
++    public Map<String,Object> archive(@PathVariable long id) {
++        return rows(jdbc.queryForMap("SELECT symbol,start_time,end_time FROM regression_test_archive_batch WHERE id=?", id));
++    }
++    @GetMapping("/proven-trades/{id}/fix130")
++    public Map<String,Object> proven(@PathVariable long id) {
++        // Use the saved trade's own identity/window, never a reused Replay run ID.
++        return rows(jdbc.queryForMap("SELECT symbol,entry_time AS start_time,COALESCE(exit_time,entry_time) AS end_time FROM proven_analyzed_trade WHERE id=?", id));
++    }
++    private Map<String,Object> rows(Map<String,Object> window) {
++        List<Map<String,Object>> rows = jdbc.queryForList("""
++                SELECT id,symbol,block_start,status,attempts,created_at,updated_at,started_at,finished_at,
++                       next_attempt_at,last_error,
++                       TIMESTAMPDIFF(SECOND,created_at,COALESCE(started_at,CURRENT_TIMESTAMP(6))) AS queue_age_seconds
++                FROM price_move_finalization_work
++                WHERE symbol=? AND TIMESTAMPADD(HOUR,8,block_start)>=? AND block_start<=?
++                ORDER BY block_start,id LIMIT 501
++                """, window.get("symbol"), window.get("start_time"), window.get("end_time"));
++        boolean truncated = rows.size() > 500;
++        return Map.of("scope", "PRODUCTION_HISTORY", "truncated", truncated,
++                "gate", jdbc.queryForMap("SELECT active_job_id,owner_token FROM price_move_finalization_gate WHERE id=1"),
++                "pendingCount", jdbc.queryForObject("SELECT COUNT(*) FROM price_move_finalization_work WHERE status IN ('FINALIZATION_PENDING','RETRYABLE_FAILURE')",Long.class),
++                "rows", truncated ? rows.subList(0,500) : rows);
++    }
++}
+--- a/src/main/resources/db/migration/V88__fix_130_price_move_finalization.sql
++++ b/src/main/resources/db/migration/V88__fix_130_price_move_finalization.sql
+@@ -0,0 +1,24 @@
++-- FIX-130: reporting-only queue. Enqueue never locks the global worker gate.
++CREATE TABLE price_move_finalization_work (
++ id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
++ symbol VARCHAR(30) NOT NULL,
++ block_start TIMESTAMP(6) NOT NULL,
++ snapshot_json LONGTEXT NOT NULL,
++ status VARCHAR(40) NOT NULL,
++ attempts INT NOT NULL DEFAULT 0,
++ owner_token VARCHAR(36) NULL,
++ next_attempt_at TIMESTAMP(6) NOT NULL,
++ created_at TIMESTAMP(6) NOT NULL,
++ updated_at TIMESTAMP(6) NOT NULL,
++ started_at TIMESTAMP(6) NULL,
++ finished_at TIMESTAMP(6) NULL,
++ last_error VARCHAR(1000) NULL,
++ UNIQUE KEY uk_fix130_block(symbol,block_start),
++ KEY idx_fix130_pending(status,next_attempt_at,id)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
++CREATE TABLE price_move_finalization_gate (
++ id INT NOT NULL PRIMARY KEY,
++ active_job_id BIGINT NULL,
++ owner_token VARCHAR(36) NULL
++) ENGINE=InnoDB;
++INSERT INTO price_move_finalization_gate(id) VALUES(1);
+--- a/src/main/resources/static/js/fix-registry.js
++++ b/src/main/resources/static/js/fix-registry.js
+@@ -1,5 +1,6 @@
+ (() => {
+     const FIXES = [
++        {"id": "FIX-130", "title": "Durable background price-move block finalization", "status": "CANDIDATE \u2014 MAVEN / MYSQL VALIDATION PENDING", "scenario": "FIX-129 measured 26\u201358 minutes of synchronous finalization per eight-hour rollover across 17 symbols.", "cause": "Retrospective finalization executes in the WebSocket observer before close-event dispatch.", "solution": "Commit immutable completed-block snapshots before tracker reset; enqueue without acquiring the global worker gate. One worker per database runs unchanged retrospective classification off-thread. Expose queue age, pending/finalizing/finalized/retry/review states.", "behavior": "Observer execution and diagnostic read timing change. Live protection ordering, wallet authority, decisions and Replay business code unchanged. Explanations use worker-time evidence; identical rollover-time explanations are not claimed. Active in-memory observations remain non-durable until snapshot commit.", "regression": "10 new JUnit tests authored, unrun: Maven unavailable. 21 Node tests passed; 349 Java files syntax-parsed only. MySQL contention, crash and live rollover verification pending.", "symbol": "ALL SELECTED MONITOR SYMBOLS", "entry": "UNCHANGED RULES", "exit": "UNCHANGED RULES", "entryTime": "Ingestion delays may improve; unmeasured", "exitTime": "Existing live authority preserved", "replayWindow": "Production observer work history only; no simulated execution changes.", "location": "Price-move observer / background worker / Proven review", "classes": ["PriceMoveMonitorService", "PriceMoveBlockSnapshot", "PriceMoveFinalizationStore", "PriceMoveFinalizationWorker", "Fix130DiagnosticsController", "V88__fix_130_price_move_finalization.sql", "md/FIX-130.md"]},
+         {"id": "FIX-129", "title": "Ingestion and eight-hour block timing diagnostics", "status": "CANDIDATE \u2014 MAVEN VALIDATION PENDING", "scenario": "Old candle events dispatched up to nearly 16 minutes late around 02:00 and 10:00 +02:00.", "cause": "Synchronous eight-hour PriceMoveMonitor finalization is a candidate; elapsed stage measurements are needed. No proven root cause.", "solution": "Measure input, protection, observer and dispatch transactions plus block finalization. Log slow/failed stages and all rollovers; persist asynchronously through a bounded reporting-only writer. Show Production history in Proven / Analyze Trades.", "behavior": "Instrumentation only. Existing transactions, retries, ordering, block processing, wallet authority and Replay decisions unchanged. Diagnostics incur overhead.", "regression": "JUnit tests added; Maven execution pending. No live performance or parity result claimed.", "symbol": "ALL", "entry": "UNCHANGED", "exit": "UNCHANGED", "entryTime": "UNCHANGED RULES", "exitTime": "UNCHANGED RULES", "replayWindow": "Production timing overlay; never consumed by Replay decisions.", "location": "Kline ingestion / price monitor / Proven", "classes": ["KlineTiming", "KlineTimingStore", "KlineTransactionCoordinator", "PriceMoveMonitorService", "Fix129DiagnosticsController", "V87__fix_129_stage_timing.sql", "md/FIX-129.md"]},
+         {"id": "FIX-128", "title": "Bounded quarantine transactions and recovery scan isolation", "status": "CANDIDATE \u2014 MAVEN/MYSQL VALIDATION PENDING", "scenario": "FIX-127 recovery scan failed at 2026-09-09 16:45:06 +02:00 during bulk UPDATE signal_processing_work.", "cause": "Quarantine used one range update; its failure also skipped pending recovery. Stack trace identifies the victim operation, not the complete competing lock cycle.", "solution": "Discover at most 50 stale RUNNING candidates without locking; process each under an independent primary-key lock and recheck status, owner and timestamp. Isolate row and discovery failures from pending recovery.", "behavior": "Housekeeping transaction granularity and scan failure isolation change. Review-only semantics, five-minute age, two processing attempts, freshness, wallet rules and Replay decisions unchanged.", "regression": "Seven JUnit tests added; Maven execution pending. MySQL deadlock reproduction remains pending.", "symbol": "ALL", "entry": "UNCHANGED", "exit": "UNCHANGED", "entryTime": "UNCHANGED", "exitTime": "UNCHANGED", "replayWindow": "Production diagnostics overlay only; no simulated rule change.", "location": "Signal processing recovery housekeeping", "classes": ["SignalProcessingStore", "SignalProcessingRecovery", "md/FIX-128.md"]},
+         {"id": "FIX-127", "title": "Signal-path initial lock and durable processing recovery", "status": "CANDIDATE \u2014 MAVEN/MYSQL VALIDATION PENDING", "scenario": "FIX-124 recovered four logged kline incidents; six remaining worker failures reached the managed-position lock through the signal path.", "cause": "Signal processing can write position advice before its locking lookup. Saved signal existence also prevents missing-signal recovery from revisiting an unfinished processing attempt. Exact MySQL competing lock cycle remains unproven.", "solution": "Route worker, eligible scheduled recovery, startup and explicit signal calls through a transaction coordinator. Acquire the initial managed-position lock before the unchanged body; allow at most two total attempts only for initial MySQL 1213/40001. Register work atomically with eligible signal creation and complete it atomically with processing. Recover only fresh automatic work; quarantine interrupted or uncertain attempts.", "behavior": "Production transaction ordering, duplicate handling and failure recovery change. Scoring, sizing and exit formulas are unchanged. Operational trade outcomes can change. Replay business code stays unchanged; Proven displays current Production state as a separate overlay. FIX-124 and FIX-125 remain separate.", "regression": "22 new JUnit/H2 transaction and recovery tests authored; Maven unavailable, tests not run. Fifteen Node tests passed. Java syntax check only; real MySQL contention and historical parity pending.", "symbol": "ALL", "entry": "UNCHANGED RULES; RECOVERY CHANGES", "exit": "UNCHANGED RULES", "entryTime": "Original call or fresh bounded recovery", "exitTime": "Existing authority", "replayWindow": "Identical OLD/NEW windows; no Production ledger used to simulate Replay.", "location": "Shared Production signal entry points / Proven Signal processing", "classes": ["SignalProcessingCoordinator", "SignalProcessingStore", "SignalProcessingRecovery", "SignalProcessingFreshness", "AnalysisService", "PaperTradingService", "Fix127DiagnosticsController", "V86__fix_127_signal_processing.sql", "md/FIX-127.md"]},
+--- a/src/main/resources/static/js/proven-analyzed-trades.js
++++ b/src/main/resources/static/js/proven-analyzed-trades.js
+@@ -155,7 +155,7 @@
+         body.innerHTML = rows.map(a => `<tr>
+             <td>#${a.archive_batch_id}</td><td>#${a.source_test_run_id}</td><td><strong>${escapeHtml(a.test_name)}</strong></td>
+             <td>${escapeHtml(a.symbol)}</td><td>${formatMoveTime(a.start_time)} → ${formatMoveTime(a.end_time)}</td>
+-            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button> <button type="button" class="secondary-button" data-fix124-proven-id="${trade.id}">Protection incidents</button> <button type="button" class="secondary-button" data-fix127-proven-id="${trade.id}">Signal processing</button> <button type="button" class="secondary-button" data-fix129-proven-id="${trade.id}">Ingestion timing</button></td>
++            <td>${formatMoveTime(a.archived_at)}</td><td><button type="button" class="secondary-button" data-regression-archive-view="${a.archive_batch_id}" data-proven-id="${trade.id}">View All BUY / SELL Points</button> <button type="button" class="secondary-button" data-fix122-proven-id="${trade.id}">FIX-122 evidence</button> <button type="button" class="secondary-button" data-fix124-proven-id="${trade.id}">Protection incidents</button> <button type="button" class="secondary-button" data-fix127-proven-id="${trade.id}">Signal processing</button> <button type="button" class="secondary-button" data-fix129-proven-id="${trade.id}">Ingestion timing</button> <button type="button" class="secondary-button" data-fix130-proven-id="${trade.id}">Block finalization</button></td>
+         </tr>`).join('') || '<tr><td colspan="7">No archived test runs yet.</td></tr>';
+         return rows;
+     } catch (error) { body.innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`; return []; }
+@@ -631,7 +631,8 @@
+             api(`${base}/fix122`),
+             api(`${base}/fix124`),
+             api(`${base}/fix127`),
+-            api(`${base}/fix129`)
++            api(`${base}/fix129`),
++            api(`${base}/fix130`)
+         ]);
+         if (requestToken !== regressionDetailRequestToken) return finished;
+         const signals = detailResults[0].status === 'fulfilled' ? detailResults[0].value : [];
+@@ -642,6 +643,7 @@
+         renderFix124(detailResults[5]);
+         renderFix127(detailResults[6]);
+         renderFix129(detailResults[7]);
++        renderFix130(detailResults[8]);
+         const management = detailResults[3].status === 'fulfilled' ? detailResults[3].value : [];
+ 
+         // FIX-11O: always expose fresh directional Replay signals independently of the BUY-centric
+@@ -722,11 +724,12 @@
+ async function loadRegressionArchiveDetail(archiveBatchId) {
+     const base = `/api/administration/regression-tests/archives/${archiveBatchId}`;
+     const [run, trades] = await Promise.all([api(base), api(`${base}/trades`)]);
+-    const fix122=await Promise.allSettled([api(`${base}/fix122`), api(`${base}/fix124`), api(`${base}/fix127`), api(`${base}/fix129`)]);
++    const fix122=await Promise.allSettled([api(`${base}/fix122`), api(`${base}/fix124`), api(`${base}/fix127`), api(`${base}/fix129`), api(`${base}/fix130`)]);
+     renderFix122(fix122[0]);
+     renderFix124(fix122[1]);
+     renderFix127(fix122[2]);
+     renderFix129(fix122[3]);
++    renderFix130(fix122[4]);
+     const panel = document.getElementById('regression-archive-detail');
+     const body = document.getElementById('regression-archive-trades-body');
+     if (!panel || !body) return;
+@@ -1675,6 +1678,48 @@
+     } finally { button.disabled = false; }
+ });
+ 
++// FIX-130: measured Production processing time, never a simulated Replay result.
++function renderFix130(result) {
++    const panel = document.getElementById('fix130-panel');
++    const summary = document.getElementById('fix130-summary');
++    const body = document.getElementById('fix130-body');
++    if (!panel || !summary || !body) return;
++    panel.classList.remove('hidden');
++    body.replaceChildren();
++    if (!result || result.status !== 'fulfilled') {
++        summary.textContent = 'Block finalization history could not be loaded.';
++        return;
++    }
++    const data = result.value;
++    summary.textContent = 'Production retrospective finalization; not Replay output. New blocks continue COLLECTING while prior blocks wait. '
++        + 'One active job across this database. Pending jobs: ' + String(data.pendingCount ?? '?')
++        + '. Active/held job: ' + String(data.gate?.active_job_id ?? 'none')
++        + '. REVIEW_REQUIRED ownership can halt diagnostic finalization until reviewed; it does not halt live trading. '
++        + 'Historical explanations read evidence at worker time, not a frozen rollover-time database snapshot. '
++        + (data.truncated ? 'Showing first 500 records. ' : '')
++        + 'Empty history does not prove finalization succeeded.';
++    for (const row of data.rows || []) {
++        const tr = document.createElement('tr');
++        for (const value of [row.id,row.symbol,row.block_start,row.status,row.attempts,row.queue_age_seconds,
++            row.created_at,row.started_at,row.finished_at,row.next_attempt_at,row.last_error]) {
++            const td = document.createElement('td');
++            td.textContent = String(value ?? '');
++            tr.appendChild(td);
++        }
++        body.appendChild(tr);
++    }
++}
++document.addEventListener('click', async event => {
++    const button = event.target.closest('[data-fix130-proven-id]');
++    if (!button) return;
++    button.disabled = true;
++    try {
++        const results = await Promise.allSettled([api(`/api/administration/regression-tests/proven-trades/${encodeURIComponent(button.dataset.fix130ProvenId)}/fix130`)]);
++        renderFix130(results[0]);
++        document.getElementById('fix130-panel')?.scrollIntoView({behavior:'smooth'});
++    } finally { button.disabled = false; }
++});
++
+ // FIX-129: measured Production processing time, never a simulated Replay result.
+ function renderFix129(result) {
+     const panel = document.getElementById('fix129-panel');
+@@ -1690,7 +1735,7 @@
+     const data = result.value;
+     summary.textContent = 'Production observations overlapping this review window; not Replay timings or an archived snapshot. '
+         + 'Records include stages lasting at least 1 second, failures, and block finalizations. '
+-        + 'Block finalization is included within observer time: do not add them together. '
++        + 'Before FIX-130, block finalization is nested in observer time. With FIX-130 it runs on fix130-finalizer. Compare thread names; do not double-count nested timings. '
+         + 'RETURNED means the measured call returned, not that a trade executed or async analysis completed. '
+         + 'Recording begins with FIX-129. Background persistence is best effort; an empty list does not prove healthy ingestion. '
+         + (data.truncated ? 'Showing first 500 records.' : '');
+--- a/src/main/resources/static/proven-analyzed-trades.html
++++ b/src/main/resources/static/proven-analyzed-trades.html
+@@ -184,6 +184,10 @@
+ </section>
+ <!-- FIX-127: operational Production state, not simulated historical executions. -->
+ <!-- FIX-129: Production wall-time observations alongside local-history review. -->
++<section id="fix130-panel" class="regression-detail hidden">
++<h3>Block finalization · FIX-130</h3><p id="fix130-summary"></p>
++<div class="table-responsive"><table><thead><tr><th>Job</th><th>Symbol</th><th>Prior block (UTC)</th><th>State</th><th>Attempts</th><th>Queue age (s)</th><th>Enqueued</th><th>Started</th><th>Finished</th><th>Next eligible</th><th>Error</th></tr></thead><tbody id="fix130-body"></tbody></table></div>
++</section>
+ <section id="fix129-panel" class="regression-detail hidden">
+ <h3>Ingestion timing · FIX-129</h3>
+ <p id="fix129-summary"></p>
+--- a/src/test/java/com/crypto/debug/monitor/service/Fix130FinalizationStoreTest.java
++++ b/src/test/java/com/crypto/debug/monitor/service/Fix130FinalizationStoreTest.java
+@@ -0,0 +1,82 @@
++package com.crypto.debug.monitor.service;
++
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.jdbc.datasource.DriverManagerDataSource;
++import org.springframework.jdbc.datasource.DataSourceTransactionManager;
++import org.springframework.transaction.support.TransactionTemplate;
++import java.time.Instant;
++import java.util.UUID;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.util.concurrent.*;
++import static org.junit.jupiter.api.Assertions.*;
++
++class Fix130FinalizationStoreTest {
++    JdbcTemplate jdbc;
++    DataSourceTransactionManager manager;
++    PriceMoveFinalizationStore store,second;
++    PriceMoveBlockSnapshot snapshot(String symbol) { return new PriceMoveBlockSnapshot(symbol,"2026-09-15T00:00:00Z",null,null); }
++    @BeforeEach void setup() throws Exception {
++        var ds=new DriverManagerDataSource("jdbc:h2:mem:"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=1000","sa","");
++        jdbc=new JdbcTemplate(ds);manager=new DataSourceTransactionManager(ds);
++        String sql=Files.readString(Path.of("src/main/resources/db/migration/V88__fix_130_price_move_finalization.sql"));
++        // H2 exercises coordination semantics, not MySQL engine/collation DDL support.
++        sql=sql.replaceAll("ENGINE=InnoDB(?: DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci)?", "");
++        for(String statement:sql.split(";"))if(!statement.isBlank())jdbc.execute(statement);
++        jdbc.execute("CREATE TABLE explanation(id INT PRIMARY KEY)");
++        store=new PriceMoveFinalizationStore(ds,manager);second=new PriceMoveFinalizationStore(ds,manager);
++    }
++    @Test void enqueueSurvivesCallerRollbackAndIsIdempotent() {
++        new TransactionTemplate(manager).executeWithoutResult(tx -> {store.enqueue(snapshot("UNIUSDT"));tx.setRollbackOnly();});
++        second.enqueue(snapshot("UNIUSDT"));
++        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM price_move_finalization_work",Integer.class));
++        assertNotNull(second.claim()); // A fresh store instance discovers durable work.
++    }
++    @Test void twoInstancesCannotClaimTwoJobsAndBusyGateDoesNotPreventEnqueue() {
++        store.enqueue(snapshot("UNIUSDT"));var first=store.claim();assertNotNull(first);
++        second.enqueue(snapshot("BTCUSDT"));assertNull(second.claim());
++        assertEquals("FINALIZATION_PENDING",jdbc.queryForObject("SELECT status FROM price_move_finalization_work WHERE symbol='BTCUSDT'",String.class));
++    }
++    @Test void enqueueDoesNotAcquireContendedGateRow() throws Exception {
++        var locked=new CountDownLatch(1);var release=new CountDownLatch(1);
++        var executor=Executors.newSingleThreadExecutor();
++        var held=executor.submit(() -> new TransactionTemplate(manager).executeWithoutResult(tx -> {
++            jdbc.queryForMap("SELECT * FROM price_move_finalization_gate WHERE id=1 FOR UPDATE");locked.countDown();
++            try {assertTrue(release.await(5,TimeUnit.SECONDS));}catch(InterruptedException ex){throw new RuntimeException(ex);}
++        }));
++        try {assertTrue(locked.await(5,TimeUnit.SECONDS));store.enqueue(snapshot("UNIUSDT"));}
++        finally {release.countDown();held.get(5,TimeUnit.SECONDS);executor.shutdown();}
++    }
++    @Test void retryBackoffLetsOtherSymbolsRun() {
++        store.enqueue(snapshot("UNIUSDT"));var first=store.claim();
++        store.failed(first,true,"proven rollback");
++        store.enqueue(snapshot("BTCUSDT"));var next=second.claim();
++        assertEquals("BTCUSDT",next.snapshot().symbol());
++        assertEquals("RETRYABLE_FAILURE",jdbc.queryForObject("SELECT status FROM price_move_finalization_work WHERE id=?",String.class,first.id()));
++    }
++    @Test void uncertainFailureHoldsGlobalGateAndKeepsOtherJobsDurable() {
++        store.enqueue(snapshot("UNIUSDT"));var first=store.claim();store.failed(first,false,"uncertain commit");
++        second.enqueue(snapshot("BTCUSDT"));assertNull(second.claim());
++        assertEquals("REVIEW_REQUIRED",jdbc.queryForObject("SELECT status FROM price_move_finalization_work WHERE id=?",String.class,first.id()));
++    }
++    @Test void expiredOwnershipIsReviewedNeverStolen() {
++        store.enqueue(snapshot("UNIUSDT"));var first=store.claim();
++        jdbc.update("UPDATE price_move_finalization_work SET started_at=? WHERE id=?",java.sql.Timestamp.from(Instant.now().minusSeconds(1900)),first.id());
++        assertNull(second.claim());
++        assertEquals("REVIEW_REQUIRED",jdbc.queryForObject("SELECT status FROM price_move_finalization_work WHERE id=?",String.class,first.id()));
++        assertThrows(IllegalStateException.class,() -> new TransactionTemplate(manager).executeWithoutResult(tx -> store.complete(first)));
++    }
++    @Test void explanationsAndCompletionCommitOrRollbackTogether() {
++        store.enqueue(snapshot("UNIUSDT"));var job=store.claim();
++        new TransactionTemplate(manager).executeWithoutResult(tx -> {
++            jdbc.update("INSERT INTO explanation VALUES(1)");store.complete(job);tx.setRollbackOnly();
++        });
++        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM explanation",Integer.class));
++        assertEquals("FINALIZING",jdbc.queryForObject("SELECT status FROM price_move_finalization_work WHERE id=?",String.class,job.id()));
++        new TransactionTemplate(manager).executeWithoutResult(tx -> {jdbc.update("INSERT INTO explanation VALUES(1)");store.complete(job);});
++        assertEquals("FINALIZED",jdbc.queryForObject("SELECT status FROM price_move_finalization_work WHERE id=?",String.class,job.id()));
++        assertNull(jdbc.queryForMap("SELECT active_job_id FROM price_move_finalization_gate WHERE id=1").get("active_job_id"));
++    }
++}
+--- a/src/test/java/com/crypto/debug/monitor/service/Fix130RolloverTest.java
++++ b/src/test/java/com/crypto/debug/monitor/service/Fix130RolloverTest.java
+@@ -0,0 +1,65 @@
++package com.crypto.debug.monitor.service;
++
++import com.crypto.debug.monitor.domain.PriceMoveMonitorSettings;
++import com.crypto.debug.monitor.repository.*;
++import com.crypto.repository.*;
++import com.crypto.wallet.repository.WalletTradeRepository;
++import com.crypto.execution.repository.ExecutionOpportunityRepository;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import java.math.BigDecimal;
++import java.time.Instant;
++import java.sql.SQLException;
++import java.util.Optional;
++import java.util.concurrent.*;
++import java.util.concurrent.atomic.AtomicReference;
++import static org.junit.jupiter.api.Assertions.*;
++import static org.mockito.Mockito.*;
++
++class Fix130RolloverTest {
++    PriceMoveMonitorService monitor;
++    PriceMoveFinalizationStore store;
++    WalletTradeRepository trades;
++    final Instant before=Instant.parse("2026-09-15T07:59:00Z"),after=Instant.parse("2026-09-15T08:00:00Z");
++    @BeforeEach void setup() {
++        var settings=mock(PriceMoveMonitorSettingsRepository.class);
++        when(settings.findById(1L)).thenReturn(Optional.of(PriceMoveMonitorSettings.builder().enabled(true).selectedSymbols("UNIUSDT").build()));
++        var events=mock(PriceMoveEventRepository.class);
++        when(events.findBySymbolAndBlockStartTimeAndDirection(any(),any(),any())).thenReturn(Optional.empty());
++        trades=mock(WalletTradeRepository.class);
++        monitor=new PriceMoveMonitorService(settings,events,mock(TradeSignalRepository.class),mock(CandleRepository.class),trades,mock(ExecutionOpportunityRepository.class));
++        store=mock(PriceMoveFinalizationStore.class);monitor.setFinalizationStore(store);
++        monitor.onPrice("UNIUSDT",BigDecimal.ONE,before);
++    }
++    @Test void failedHandoffRetainsTrackerAndTriggeringPointThenRetries() {
++        doThrow(new IllegalStateException("database unavailable")).doNothing().when(store).enqueue(any());
++        assertThrows(IllegalStateException.class,() -> monitor.onPrice("UNIUSDT",new BigDecimal("1.01"),after));
++        assertEquals("ROLLOVER_PERSIST_FAILED",monitor.activeTracker("UNIUSDT").get("phase"));
++        assertEquals(1,monitor.activeTracker("UNIUSDT").get("retainedPoints"));
++        assertEquals(Instant.parse("2026-09-15T00:00:00Z"),monitor.activeTracker("UNIUSDT").get("blockStart"));
++        monitor.onPrice("UNIUSDT",new BigDecimal("1.02"),after.plusSeconds(61));
++        assertEquals(after,monitor.activeTracker("UNIUSDT").get("blockStart"));
++        assertEquals(0,monitor.activeTracker("UNIUSDT").get("retainedPoints"));
++        verifyNoInteractions(trades);
++    }
++    @Test void concurrentArrivalWaitsForHandoffAndEntersNewBlock() throws Exception {
++        var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
++        var saved=new AtomicReference<PriceMoveBlockSnapshot>();
++        doAnswer(call -> {saved.set(call.getArgument(0));entered.countDown();assertTrue(release.await(5,TimeUnit.SECONDS));return null;}).when(store).enqueue(any());
++        var executor=Executors.newFixedThreadPool(2);
++        try {
++            var first=executor.submit(() -> monitor.onPrice("UNIUSDT",new BigDecimal("1.01"),after));
++            assertTrue(entered.await(5,TimeUnit.SECONDS));
++            var second=executor.submit(() -> monitor.onPrice("UNIUSDT",new BigDecimal("1.02"),after.plusSeconds(61)));
++            release.countDown();first.get(5,TimeUnit.SECONDS);second.get(5,TimeUnit.SECONDS);
++            assertEquals("2026-09-15T00:00:00Z",saved.get().blockStart());
++            assertEquals(new BigDecimal("1.02"),monitor.activeTracker("UNIUSDT").get("lastPrice"));
++            verify(store,times(1)).enqueue(any());verifyNoInteractions(trades);
++        } finally {release.countDown();executor.shutdownNow();}
++    }
++    @Test void onlyMysqlDeadlockRollbackQualifiesForAutomaticRetry() {
++        assertTrue(PriceMoveFinalizationWorker.rollbackProven(new RuntimeException(new SQLException("deadlock","40001",1213))));
++        assertFalse(PriceMoveFinalizationWorker.rollbackProven(new SQLException("connection lost","08006",0)));
++        assertFalse(PriceMoveFinalizationWorker.rollbackProven(new IllegalStateException()));
++    }
++}
+--- a/src/test/js/fix129-diagnostics.test.cjs
++++ b/src/test/js/fix129-diagnostics.test.cjs
+@@ -12,7 +12,7 @@
+ test('timing fetch failure remains distinct from empty history',()=>assert.match(render({status:'rejected'})['fix129-summary'].textContent,/could not be loaded/));
+ test('empty timing history discloses sampling, nesting and persistence limitations',()=>{
+  const text=render({status:'fulfilled',value:{rows:[]}})['fix129-summary'].textContent;
+- for(const pattern of [/not Replay timings/,/at least 1 second/,/do not add/,/best effort/,/does not prove/]) assert.match(text,pattern);
++ for(const pattern of [/not Replay timings/,/at least 1 second/,/do not double-count/,/best effort/,/does not prove/]) assert.match(text,pattern);
+ });
+ test('measured timing and exact identity render safely without invented candle',()=>{
+  const nodes=render({status:'fulfilled',value:{rows:[{symbol:'UNIUSDT',candle_open_time:null,block_start:'2026-09-10T00:00:00Z',stage:'BLOCK_FINALIZATION',elapsed_ms:1234,outcome:'RETURNED',thread_name:'<img onerror=alert(1)>'}]}});
+--- a/src/test/js/fix130-diagnostics.test.cjs
++++ b/src/test/js/fix130-diagnostics.test.cjs
+@@ -0,0 +1,22 @@
++const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
++const assert=require('node:assert/strict'),{test}=require('node:test');
++const source=fs.readFileSync(path.resolve(__dirname,'../../main/resources/static/js/proven-analyzed-trades.js'),'utf8');
++function node(){return {textContent:'',children:[],classList:{remove(){}},replaceChildren(){this.children=[]},appendChild(n){this.children.push(n)}};}
++function render(result){
++ const nodes=Object.fromEntries(['fix130-panel','fix130-summary','fix130-body'].map(id=>[id,node()]));
++ const ctx=vm.createContext({document:{getElementById:id=>nodes[id],createElement:()=>node()}});
++ const start=source.indexOf('function renderFix130(');
++ vm.runInContext(source.slice(start,source.indexOf("document.addEventListener('click'",start)),ctx);
++ ctx.renderFix130(result);return nodes;
++}
++test('finalization failure is visible',()=>assert.match(render({status:'rejected'})['fix130-summary'].textContent,/could not be loaded/));
++test('pending work and held global gate do not imply trading is paused',()=>{
++ const text=render({status:'fulfilled',value:{rows:[],pendingCount:17,gate:{active_job_id:9}}})['fix130-summary'].textContent;
++ assert.match(text,/Pending jobs: 17/);assert.match(text,/held job: 9/);assert.match(text,/does not halt live trading/);assert.match(text,/not a frozen rollover-time/);
++});
++test('job error is rendered as text and empty data is not success',()=>{
++ const nodes=render({status:'fulfilled',value:{rows:[{id:7,status:'REVIEW_REQUIRED',last_error:'<script>alert(1)</script>'}]}});
++ assert.equal(nodes['fix130-body'].children[0].children[10].textContent,'<script>alert(1)</script>');
++ assert.equal(nodes['fix130-body'].children[0].children[10].innerHTML,undefined);
++ assert.match(nodes['fix130-summary'].textContent,/does not prove/);
++});

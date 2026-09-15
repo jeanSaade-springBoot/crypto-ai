@@ -12,7 +12,7 @@ function render(result){
 test('timing fetch failure remains distinct from empty history',()=>assert.match(render({status:'rejected'})['fix129-summary'].textContent,/could not be loaded/));
 test('empty timing history discloses sampling, nesting and persistence limitations',()=>{
  const text=render({status:'fulfilled',value:{rows:[]}})['fix129-summary'].textContent;
- for(const pattern of [/not Replay timings/,/at least 1 second/,/do not add/,/best effort/,/does not prove/]) assert.match(text,pattern);
+ for(const pattern of [/not Replay timings/,/at least 1 second/,/do not double-count/,/best effort/,/does not prove/]) assert.match(text,pattern);
 });
 test('measured timing and exact identity render safely without invented candle',()=>{
  const nodes=render({status:'fulfilled',value:{rows:[{symbol:'UNIUSDT',candle_open_time:null,block_start:'2026-09-10T00:00:00Z',stage:'BLOCK_FINALIZATION',elapsed_ms:1234,outcome:'RETURNED',thread_name:'<img onerror=alert(1)>'}]}});

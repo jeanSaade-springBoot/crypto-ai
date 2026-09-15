@@ -47,6 +47,10 @@ public class PriceMoveMonitorService {
     private com.crypto.infrastructure.transaction.KlineTiming timing = com.crypto.infrastructure.transaction.KlineTiming.loggingOnly();
     @org.springframework.beans.factory.annotation.Autowired
     public void setTiming(com.crypto.infrastructure.transaction.KlineTiming timing) { this.timing = timing; }
+    private PriceMoveFinalizationStore finalizationStore;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setFinalizationStore(PriceMoveFinalizationStore store) { this.finalizationStore=store; }
+    private static final org.slf4j.Logger FINALIZATION_LOG=org.slf4j.LoggerFactory.getLogger(PriceMoveMonitorService.class);
     private static final long SETTINGS_CACHE_MILLIS = 10_000L;
     private static final int BLOCK_HOURS = 8;
     private static final int HISTORY_DAYS = 3650; // caught moves are evidence; keep them long-term.
@@ -82,18 +86,63 @@ public class PriceMoveMonitorService {
         Instant blockStart = blockStart(observedAt);
         BlockTracker tracker = trackers.computeIfAbsent(symbol, ignored -> new BlockTracker(blockStart));
         synchronized (tracker) {
-            if (!tracker.blockStart.equals(blockStart)) {
-                // Block identity is the prior UTC block, not an invented candle identity.
-                var timingContext = timing.context(symbol, null, null, observedAt, tracker.blockStart);
-                timing.measure(timingContext, "BLOCK_FINALIZATION", true, () -> finalizeBlock(symbol, tracker));
-                tracker.reset(blockStart);
+            // FIX-130: retain arrivals while a completed-block handoff is unavailable.
+            // The queue is observer-only; exhaustion is visible and never blocks wallet protection.
+            if (tracker.pendingPoints.size() >= 4096) {
+                tracker.phase="REVIEW_REQUIRED";
+                tracker.unrecordedPoints++;
+                FINALIZATION_LOG.error("[FIX-130][OBSERVER_POINT_UNRECORDED] symbol={}, count={}; pending buffer full",symbol,tracker.unrecordedPoints);
+            } else {
+                tracker.pendingPoints.addLast(new PricePoint(observedAt,price));
             }
-            tracker.observe(price, observedAt);
-            evaluateWindows(tracker);
-            // Persist/update the same row as the move grows. Blame stays PENDING until the block closes.
+            while (!tracker.pendingPoints.isEmpty()) {
+                PricePoint point=tracker.pendingPoints.peekFirst();
+                Instant nextBlock=blockStart(point.time);
+                if (!tracker.blockStart.equals(nextBlock)) {
+                    var snapshot=snapshot(symbol,tracker);
+                    try {
+                        // Independent short transaction commits BEFORE reset, under this monitor.
+                        // Finalization lease is never acquired here.
+                        finalizationStore.enqueue(snapshot);
+                    } catch(RuntimeException failure) {
+                        tracker.phase="ROLLOVER_PERSIST_FAILED";
+                        FINALIZATION_LOG.error("[FIX-130][ROLLOVER_PERSIST_FAILED] symbol={}, block={}, retainedPoints={}",symbol,tracker.blockStart,tracker.pendingPoints.size(),failure);
+                        throw failure;
+                    }
+                    FINALIZATION_LOG.info("[FIX-130][FINALIZATION_PENDING] symbol={}, block={}; new block collecting",symbol,tracker.blockStart);
+                    tracker.reset(nextBlock);
+                }
+                // Each retained point enters the tracker exactly once after a committed handoff.
+                tracker.observe(point.price,point.time);
+                evaluateWindows(tracker);
+                tracker.pendingPoints.removeFirst();
+                tracker.phase=tracker.unrecordedPoints==0 ? "COLLECTING" : "REVIEW_REQUIRED";
+            }
             syncLiveCatch(symbol, tracker, "UP", tracker.up);
             syncLiveCatch(symbol, tracker, "DOWN", tracker.down);
         }
+    }
+
+    private PriceMoveBlockSnapshot snapshot(String symbol,BlockTracker tracker) {
+        return new PriceMoveBlockSnapshot(symbol,tracker.blockStart.toString(),snapshot(tracker.up),snapshot(tracker.down));
+    }
+    private PriceMoveBlockSnapshot.Move snapshot(Candidate c) {
+        return !c.caught()?null:new PriceMoveBlockSnapshot.Move(c.start.time.toString(),c.end.time.toString(),
+                c.start.price,c.end.price,c.change,c.level,c.window);
+    }
+    private void restore(Candidate c,PriceMoveBlockSnapshot.Move move) {
+        if(move==null)return;
+        c.start=new PricePoint(Instant.parse(move.start()),move.startPrice());
+        c.end=new PricePoint(Instant.parse(move.end()),move.endPrice());
+        c.change=move.change();c.level=move.level();c.window=move.window();
+    }
+    /** FIX-130: only the worker invokes this with a detached immutable snapshot.
+     * Work/result commit is controlled by the worker transaction; no live tracker is accessed. */
+    public void finalizeSnapshot(PriceMoveBlockSnapshot snapshot) {
+        BlockTracker completed=new BlockTracker(Instant.parse(snapshot.blockStart()));
+        restore(completed.up,snapshot.up());restore(completed.down,snapshot.down());
+        var context=timing.context(snapshot.symbol(),null,null,Instant.now(),completed.blockStart);
+        timing.measure(context,"BLOCK_FINALIZATION",true,() -> finalizeBlock(snapshot.symbol(),completed));
     }
 
     private void evaluateWindows(BlockTracker tracker) {
@@ -586,7 +635,7 @@ public class PriceMoveMonitorService {
         if (t == null) return Map.of("symbol", symbol, "phase", "WAITING_FOR_PRICE", "tracking", false);
         synchronized (t) {
             Map<String,Object> m = new LinkedHashMap<>();
-            m.put("symbol",symbol); m.put("phase","8H_BLOCK"); m.put("tracking",true); m.put("blockStart",t.blockStart); m.put("blockEnd",t.blockStart.plus(8,ChronoUnit.HOURS));
+            m.put("symbol",symbol); m.put("phase",t.phase); m.put("retainedPoints",t.pendingPoints.size()); m.put("unrecordedPoints",t.unrecordedPoints); m.put("tracking",true); m.put("blockStart",t.blockStart); m.put("blockEnd",t.blockStart.plus(8,ChronoUnit.HOURS));
             m.put("lastPrice",t.points.isEmpty()?null:t.points.peekLast().price); m.put("up",t.up.asMap()); m.put("down",t.down.asMap()); return m;
         }
     }
@@ -612,5 +661,5 @@ public class PriceMoveMonitorService {
     private record WindowRule(String name,int minutes,BigDecimal normal,BigDecimal high,BigDecimal extreme){ String level(BigDecimal abs){return abs.compareTo(extreme)>=0?"EXTREME":abs.compareTo(high)>=0?"HIGH":abs.compareTo(normal)>=0?"NORMAL":null;} }
     private record PricePoint(Instant time,BigDecimal price){}
     private static final class Candidate { PricePoint start,end; BigDecimal change=BigDecimal.ZERO; String level,window; boolean caught(){return level!=null;} void consider(PricePoint s,PricePoint e,BigDecimal c,WindowRule r){String l=r.level(c.abs());if(l==null)return;if(!caught()||rank(l)>rank(level)||c.abs().compareTo(change.abs())>0){start=s;end=e;change=c;level=l;window=r.name;}} Map<String,Object> asMap(){Map<String,Object>m=new LinkedHashMap<>();m.put("caught",caught());m.put("level",level);m.put("window",window);m.put("changePercent",change);m.put("startTime",start==null?null:start.time);m.put("startPrice",start==null?null:start.price);m.put("endTime",end==null?null:end.time);m.put("endPrice",end==null?null:end.price);return m;} static int rank(String x){return "EXTREME".equals(x)?3:"HIGH".equals(x)?2:"NORMAL".equals(x)?1:0;} }
-    private static final class BlockTracker { Instant blockStart; final Deque<PricePoint> points=new ArrayDeque<>(); final Candidate up=new Candidate(),down=new Candidate(); BlockTracker(Instant s){blockStart=s;} void reset(Instant s){blockStart=s;points.clear();up.start=up.end=down.start=down.end=null;up.level=up.window=down.level=down.window=null;up.change=down.change=BigDecimal.ZERO;} void observe(BigDecimal p,Instant t){ if(!points.isEmpty()&&points.peekLast().time.truncatedTo(ChronoUnit.MINUTES).equals(t.truncatedTo(ChronoUnit.MINUTES))) points.removeLast(); points.addLast(new PricePoint(t,p)); Instant cutoff=t.minus(4,ChronoUnit.HOURS); while(!points.isEmpty()&&points.peekFirst().time.isBefore(cutoff))points.removeFirst(); } }
+    private static final class BlockTracker { String phase="COLLECTING"; long unrecordedPoints; final Deque<PricePoint> pendingPoints=new ArrayDeque<>(); Instant blockStart; final Deque<PricePoint> points=new ArrayDeque<>(); final Candidate up=new Candidate(),down=new Candidate(); BlockTracker(Instant s){blockStart=s;} void reset(Instant s){blockStart=s;points.clear();up.start=up.end=down.start=down.end=null;up.level=up.window=down.level=down.window=null;up.change=down.change=BigDecimal.ZERO;} void observe(BigDecimal p,Instant t){ if(!points.isEmpty()&&points.peekLast().time.truncatedTo(ChronoUnit.MINUTES).equals(t.truncatedTo(ChronoUnit.MINUTES))) points.removeLast(); points.addLast(new PricePoint(t,p)); Instant cutoff=t.minus(4,ChronoUnit.HOURS); while(!points.isEmpty()&&points.peekFirst().time.isBefore(cutoff))points.removeFirst(); } }
 }
