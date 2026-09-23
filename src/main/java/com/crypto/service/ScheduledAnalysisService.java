@@ -27,6 +27,13 @@ public class ScheduledAnalysisService {
 
     private static final int RECOVERY_BATCH_SIZE = 120;
 
+    /** FIX-131: make the effective operational toggle visible, including external overrides. */
+    @jakarta.annotation.PostConstruct
+    public void logRecoverySetting() {
+        log.warn("[FIX-131][RECOVERY_CONFIGURATION] scheduledAnalysisEnabled={}; false is temporary, restore after diagnostic window", properties.scheduledAnalysisEnabled());
+    }
+
+
     private final TradingProperties properties;
     private final CoinConfigurationService coinConfigurationService;
     private final CandleRepository candleRepository;

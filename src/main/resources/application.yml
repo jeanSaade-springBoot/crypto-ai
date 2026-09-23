@@ -86,7 +86,8 @@ trading:
   max-daily-loss-percent: 2.0
   max-open-positions: 3
   paper-account-balance: 10000
-  scheduled-analysis-enabled: true
+  # FIX-131: TEMPORARY diagnostic window; restore true after collecting gap evidence.
+  scheduled-analysis-enabled: false
   # FIX-043: this is a one-minute recovery scan, NOT the production analysis cadence.
   # Normal closed-candle analysis is asynchronous/event-driven; recovery only fills missing rows.
   analysis-delay-ms: 60000

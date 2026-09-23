@@ -41,6 +41,19 @@ class ScheduledAnalysisServiceTest {
     @Mock TradeSignalRepository tradeSignalRepository;
 
     @Test
+    void fix131DisabledRecoveryDoesNotReadOrAnalyze() {
+        when(properties.scheduledAnalysisEnabled()).thenReturn(false);
+        ScheduledAnalysisService service = new ScheduledAnalysisService(
+                properties, coinConfigurationService, candleRepository, technicalIndicatorRepository,
+                technicalIndicatorService, analysisService, paperTradingService, tradeSignalRepository,
+                new CandleAnalysisExecutionCoordinator());
+        service.analyzeConfiguredSymbols();
+        org.mockito.Mockito.verifyNoInteractions(coinConfigurationService, candleRepository,
+                technicalIndicatorRepository, technicalIndicatorService, analysisService,
+                paperTradingService, tradeSignalRepository);
+    }
+
+    @Test
     void fix043RecoversEveryMissingCandleChronologicallyWithoutExecutingHistoricalPrices() {
         Instant now = Instant.parse("2026-08-22T10:30:00Z");
         Candle c1 = candle("2026-08-22T10:21:00Z", "2026-08-22T10:21:59Z");

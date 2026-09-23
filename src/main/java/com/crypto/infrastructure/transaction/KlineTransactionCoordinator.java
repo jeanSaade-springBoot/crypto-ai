@@ -37,6 +37,9 @@ public class KlineTransactionCoordinator {
         // Candle and exact canonical price observation commit together. A failed
         // input write must not produce an unrecorded protection decision.
         timing.measure(context, "INPUT_TRANSACTION", false, () -> transaction.executeWithoutResult(tx -> persistInput.run()));
+        // FIX-131: executeWithoutResult returned successfully: this is input COMMIT, not callback completion.
+        try { com.crypto.client.binance.websocket.KlineReceipt.inputCommitted(symbol, interval, candleOpenTime, observedAt); }
+        catch (RuntimeException diagnosticFailure) { log.warn("[FIX-131][RECEIPT_DIAGNOSTIC_FAILED] symbol={}", symbol, diagnosticFailure); }
         if (protect != null) {
             int attempts = 0;
             RuntimeException failure = null;
