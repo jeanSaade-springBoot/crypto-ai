@@ -22,7 +22,6 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
-
 server:
   port: ${SERVER_PORT:8080}
   servlet:
@@ -31,17 +30,14 @@ server:
       cookie:
         http-only: true
         same-site: lax
-
 management:
   endpoints:
     web:
       exposure:
         include: health,info,metrics
-
   endpoint:
     health:
-    show-details: when-authorized
-
+      show-details: when-authorized
 binance:
   market-data:
     enabled: true
@@ -69,7 +65,6 @@ collector:
   candle:
     enabled: true
     fixed-delay-ms: 60000
-
 trading:
   symbols:
     - BTCUSDT
@@ -107,7 +102,6 @@ trading:
     overextension-multiplier: ${ATR_OVEREXTENSION_MULTIPLIER:2.50}
     minimum-stop-percent: ${ATR_MINIMUM_STOP_PERCENT:0.50}
     maximum-stop-percent: ${ATR_MAXIMUM_STOP_PERCENT:8.00}
-
     # Strategy-aware entry planning. Trend-following uses these base thresholds.
     # BREAKOUT receives more room; RANGE and DEFENSIVE receive less room.
     reduced-position-multiplier: ${ATR_REDUCED_POSITION_MULTIPLIER:2.00}
@@ -115,22 +109,17 @@ trading:
     wait-for-retracement-multiplier: ${ATR_WAIT_FOR_RETRACEMENT_MULTIPLIER:3.50}
     hard-veto-multiplier: ${ATR_HARD_VETO_MULTIPLIER:4.50}
     reduced-position-percent: ${ATR_REDUCED_POSITION_PERCENT:60}
-
-
 sentiment:
   # Master switch. Keep false until you want sentiment in trade decisions.
   enabled: ${SENTIMENT_ENABLED:true}
   active-window: 24h
-
   health:
     stale-after: ${SENTIMENT_PROVIDER_STALE_AFTER:2h}
     down-after: ${SENTIMENT_PROVIDER_DOWN_AFTER:6h}
-
   scheduler:
     # Scheduler also requires sentiment.enabled=true.
     enabled: ${SENTIMENT_SCHEDULER_ENABLED:true}
     fixed-delay-ms: ${SENTIMENT_SCHEDULER_DELAY_MS:60000}
-
   providers:
     cryptopanic:
       enabled: ${CRYPTOPANIC_ENABLED:false}
@@ -165,23 +154,19 @@ sentiment:
     manual_news:
       enabled: ${MANUAL_SENTIMENT_ENABLED:true}
       weight: 0.03
-
 # Whale monitoring and adaptive wallet weighting.
 # The collector remains inactive unless WHALE_ENABLED=true, WHALE_ALERT_ENABLED=true,
 # and WHALE_ALERT_API_KEY is configured.
 whale:
   enabled: ${WHALE_ENABLED:false}
-
   api:
     base-url: ${WHALE_API_BASE_URL:https://api.whale-alert.io/v1}
     transactions-path: ${WHALE_API_TRANSACTIONS_PATH:/transactions}
     api-key: ${WHALE_ALERT_API_KEY:}
-
   collection:
     fixed-delay-ms: ${WHALE_COLLECTION_DELAY_MS:300000}
     minimum-usd-value: ${WHALE_MINIMUM_USD_VALUE:1000000}
     limit: ${WHALE_COLLECTION_LIMIT:100}
-
   evaluation:
     fixed-delay-ms: ${WHALE_EVALUATION_DELAY_MS:60000}
     price-interval: ${WHALE_PRICE_INTERVAL:1m}
@@ -191,24 +176,20 @@ whale:
       - 24h
     # 0.003 = 0.3%; smaller price movements are considered inconclusive.
     inconclusive-move-percent: ${WHALE_INCONCLUSIVE_MOVE_PERCENT:0.003}
-
   learning:
     initial-weight: ${WHALE_INITIAL_WEIGHT:0.15}
     minimum-weight: ${WHALE_MINIMUM_WEIGHT:0.05}
     maximum-weight: ${WHALE_MAXIMUM_WEIGHT:1.00}
     smoothing-factor: ${WHALE_SMOOTHING_FACTOR:0.20}
     prior-sample-size: ${WHALE_PRIOR_SAMPLE_SIZE:20}
-
   aggregation:
     fixed-delay-ms: ${WHALE_AGGREGATION_DELAY_MS:300000}
     active-window: ${WHALE_ACTIVE_WINDOW:2h}
     horizon: ${WHALE_AGGREGATION_HORIZON:4h}
     provider-confidence-floor: ${WHALE_PROVIDER_CONFIDENCE_FLOOR:0.20}
-
 dashboard:
   # Browser-side dashboard refresh cadence. This value is also displayed in the schedule panel.
   refresh-ms: ${DASHBOARD_REFRESH_MS:10000}
-
 # Scoring parameters are explicit and configurable so they can later be calibrated
 # by strategy and market regime without changing Java code.
 analysis:
@@ -232,7 +213,6 @@ analysis:
     wall-size-multiplier: ${ORDER_BOOK_WALL_SIZE_MULTIPLIER:4.0}
     wall-price-tolerance-percent: ${ORDER_BOOK_WALL_PRICE_TOLERANCE_PERCENT:0.15}
     veto-strong-conflict: ${ORDER_BOOK_VETO_STRONG_CONFLICT:true}
-
     # A shared collector is used, but each signal interval evaluates a different
     # rolling depth window, wall persistence, influence, and veto policy.
     intervals:
@@ -272,7 +252,6 @@ analysis:
         minimum-wall-persistence-seconds: ${ORDER_BOOK_1D_WALL_PERSISTENCE_SECONDS:3600}
         influence: ${ORDER_BOOK_1D_INFLUENCE:0.00}
         allow-veto: ${ORDER_BOOK_1D_ALLOW_VETO:false}
-
   # Dynamic BTC relationship/context layer. Every configured altcoin is measured
   # against BTC using aligned closed-candle returns; no symbol-specific Java code is needed.
   btc-context:
@@ -320,7 +299,6 @@ analysis:
       minimum-candles: 210
       maximum-missing-candles: 0
       block-on-invalid-ohlc: true
-
   # Market-driven strategy selection. The system first classifies the current
   # regime, then applies one transparent/versioned profile. Scores are always
   # normalized against the active profile maximum.
@@ -328,7 +306,6 @@ analysis:
     enabled: ${DYNAMIC_STRATEGY_ENABLED:true}
     version: ${DYNAMIC_STRATEGY_VERSION:1.0}
     minimum-regime-confidence: ${DYNAMIC_STRATEGY_MINIMUM_CONFIDENCE:55}
-
     trend-following:
       trend-maximum: 30
       volume-maximum: 20
@@ -340,7 +317,6 @@ analysis:
       watch-threshold: 60
       neutral-threshold: 45
       sell-threshold: 30
-
     range-mean-reversion:
       trend-maximum: 15
       volume-maximum: 18
@@ -352,7 +328,6 @@ analysis:
       watch-threshold: 65
       neutral-threshold: 45
       sell-threshold: 30
-
     breakout:
       trend-maximum: 20
       volume-maximum: 30
@@ -364,7 +339,6 @@ analysis:
       watch-threshold: 65
       neutral-threshold: 45
       sell-threshold: 30
-
     defensive:
       trend-maximum: 25
       volume-maximum: 20
@@ -376,7 +350,6 @@ analysis:
       watch-threshold: 68
       neutral-threshold: 50
       sell-threshold: 35
-
   # Binance USDⓈ-M futures positioning context. Funding and open interest do not
   # add points to the /85 score; they influence strategy, confidence and safety.
   derivatives-positioning:
@@ -390,8 +363,6 @@ analysis:
     open-interest-change-threshold: ${OPEN_INTEREST_CHANGE_THRESHOLD:2.0}
     strong-open-interest-change-threshold: ${OPEN_INTEREST_STRONG_CHANGE_THRESHOLD:5.0}
     veto-extreme-crowding: ${DERIVATIVES_VETO_EXTREME_CROWDING:true}
-
-
 # Automatic market-fundamental collection. Coin IDs stay configuration-only,
 # so adding another trading symbol requires YAML changes rather than Java code.
 fundamentals:
@@ -406,22 +377,22 @@ fundamentals:
       ETHUSDT: ethereum
       BNBUSDT: binancecoin
       XRPUSDT: ripple
-
 # FIX-031: master key for encrypting per-user exchange credentials.
 # Generate a 32-byte random value, Base64 encode it, and provide it through the environment.
 # Example generation: openssl rand -base64 32
 crypto:
   account:
     master-key: ${CRYPTO_ACCOUNT_MASTER_KEY:}
-
 # FIX-116: short read-only cache for the expensive System Health daily/baseline diagnostics.
 # This protects the DB pool from duplicate global-health polling; it does not affect trading logic.
 system-health:
   daily-cache-ms: ${SYSTEM_HEALTH_DAILY_CACHE_MS:45000}
+# FIX-132: OBSERVE reads collector events without collector-driven trading.
+# Set SHARED_MARKET_USERNAME and SHARED_MARKET_PASSWORD in the service/Jenkins environment.
+# Deploy-Trader.ps1 must also use --shared-market.mode=OBSERVE; CLI overrides this YAML.
 shared-market:
-  mode: ${SHARED_MARKET_MODE:OFF}
+  mode: ${SHARED_MARKET_MODE:OBSERVE}
   activation-approved: ${SHARED_MARKET_ACTIVATION_APPROVED:false}
-  jdbc-url: ${SHARED_MARKET_JDBC_URL:}
-  username: ${SHARED_MARKET_USERNAME:}
-  password: ${SHARED_MARKET_PASSWORD:}
-
+  jdbc-url: ${SHARED_MARKET_JDBC_URL:jdbc:mysql://localhost:3307/crypto_ai_v2?serverTimezone=UTC}
+  username: ${SHARED_MARKET_USERNAME:root}
+  password: ${SHARED_MARKET_PASSWORD:root}
