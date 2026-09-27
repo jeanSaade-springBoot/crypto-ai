@@ -91,7 +91,7 @@ try {
     # Working directory preserves existing external application.yml resolution.
     # Explicit command-line flags win over accidental external LIVE settings.
     $arguments = @('-jar', ('"' + $releaseJar + '"'), "--server.port=$Port",
-        '--shared-market.mode=OFF', '--shared-market.activation-approved=false')
+        '--shared-market.mode=OBSERVE', '--shared-market.activation-approved=false')
     $child = Start-Process -FilePath $JavaExe -ArgumentList $arguments -WorkingDirectory $DeployDirectory `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
     $record = [ordered]@{ processId=$child.Id; startTimeUtc=$child.StartTime.ToUniversalTime().ToString('o');
