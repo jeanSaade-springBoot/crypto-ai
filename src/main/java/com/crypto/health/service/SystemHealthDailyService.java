@@ -30,6 +30,12 @@ import java.util.Set;
 @RequiredArgsConstructor
 @Slf4j
 public class SystemHealthDailyService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.crypto.shared.SharedMarketSource sharedCandleSource;
+    private org.springframework.jdbc.core.JdbcTemplate candleReader(org.springframework.jdbc.core.JdbcTemplate legacy) {
+        return sharedCandleSource == null ? legacy : sharedCandleSource.reader();
+    }
+
 
     private static final ZoneId DISPLAY_ZONE = ZoneId.of("Asia/Riyadh");
     private static final int BASELINE_DAYS = 7;
@@ -223,7 +229,7 @@ public class SystemHealthDailyService {
                 """;
         Map<String, Instant> latest = new LinkedHashMap<>();
         Instant cutoff = now.minus(Duration.ofHours(4));
-        jdbc.query(sql, ps -> ps.setTimestamp(1, Timestamp.from(cutoff)), rs -> {
+        candleReader(jdbc).query(sql, ps -> ps.setTimestamp(1, Timestamp.from(cutoff)), rs -> {
             // FIX-071A: keep the callback void-returning so RowCallbackHandler is selected explicitly.
             latest.put(rs.getString("symbol") + "|" + rs.getString("interval_code"),
                     rs.getTimestamp("last_candle").toInstant());

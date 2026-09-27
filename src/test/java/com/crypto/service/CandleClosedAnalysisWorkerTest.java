@@ -96,4 +96,18 @@ class CandleClosedAnalysisWorkerTest {
         verify(analysisService, never()).analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER);
         verify(paperTradingService, never()).processSignal(org.mockito.ArgumentMatchers.any());
     }
+
+    @Test
+    void staleSharedClosePersistsHistoricalEvidenceWithoutWalletOrRecoveryRegistration() {
+        Instant open=Instant.parse("2020-01-01T00:00:00Z");
+        TechnicalIndicator indicator=new TechnicalIndicator();indicator.setSymbol("BTCUSDT");
+        indicator.setIntervalCode("1m");indicator.setCandleOpenTime(open);
+        when(candleDataQualityService.validate("BTCUSDT","1m")).thenReturn(new CandleDataQualityResult(true,210,210,0,0,List.of()));
+        when(technicalIndicatorService.calculateAndPersist("BTCUSDT","1m",open)).thenReturn(Optional.of(indicator));
+        String outcome=worker.processShared(new CandleClosedEvent("BTCUSDT","1m",open),open.plusSeconds(60),true);
+        org.junit.jupiter.api.Assertions.assertEquals("HISTORICAL_ONLY",outcome);
+        verify(analysisService).analyzeRecovered(indicator,open.plusSeconds(60));
+        verify(analysisService,never()).analyzeForProcessing(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verifyNoInteractions(paperTradingService);
+    }
 }

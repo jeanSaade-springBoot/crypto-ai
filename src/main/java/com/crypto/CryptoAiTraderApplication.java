@@ -23,7 +23,11 @@ import org.springframework.scheduling.annotation.EnableAsync;
 public class CryptoAiTraderApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(CryptoAiTraderApplication.class, args);
+        // FIX-132: explicit maintenance process, not a runtime toggle. The isolated
+        // context has no component scan, wallet, WebSocket, scheduler or consumer.
+        Class<?> application=java.util.Arrays.asList(args).contains("--fix132-approval-console=true")
+            ? com.fix132.approval.CutoverApprovalApplication.class : CryptoAiTraderApplication.class;
+        SpringApplication.run(application, args);
         
     }
 }

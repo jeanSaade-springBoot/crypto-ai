@@ -39,6 +39,9 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 @Slf4j
 public class RegressionTestWorker {
+    @org.springframework.beans.factory.annotation.Value("#{'${shared-market.mode:OFF}' == 'LIVE'}")
+    private boolean sharedMarketEnabled;
+
 
     /**
      * Replay warm-up is context-only. It gives the production analysis/execution services
@@ -108,7 +111,7 @@ public class RegressionTestWorker {
         Long generateFreshSignalsNs = null;
         Long shadowExecutionNs = null;
         Long parityComparisonNs = null;
-        try {
+        try (var inputAudit = sharedMarketEnabled ? com.crypto.shared.CandleInputAudit.open(jdbcTemplate,"REPLAY:"+runId) : null) {
             long stageStartedNs = System.nanoTime();
             Map<String, Object> run = jdbcTemplate.queryForMap(
                     "SELECT symbol, start_time, end_time FROM analysis_test_run WHERE id = ?", runId);
@@ -185,6 +188,7 @@ public class RegressionTestWorker {
             // price observations that Production consumed. Historical windows before
             // V64 was deployed naturally have no events and are explicitly degraded to
             // signal/candle-close protection inside ShadowProductionReplayService.
+            marketPriceEventService.assertReplayEvidence(symbol,start,end);
             List<MarketPriceEventService.PriceEvent> productionPriceEvents =
                     marketPriceEventService.find(symbol, contextStart, end);
             ShadowProductionReplayService.ReplayStats shadow = shadowReplayService.replay(

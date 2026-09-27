@@ -1,0 +1,95 @@
+FIX-125 + FIX-132 integrated Trader review — executed validation
+Date: 2026-09-27 (runner log timezone -04:00; UTC times four hours later)
+Runtime: OpenJDK 21.0.12.1, Maven 3.9.11, isolated MySQL Community 8.0.44.
+Baseline: pom(20260926-180106).zip, with prior FIX-132 review changes.
+
+FINAL RESULTS
+Maven package: BUILD SUCCESS.
+Standard Maven tests: 377, failures 0, errors 0, skipped 0.
+Isolated MySQL profile: 40, failures 0, errors 0, skipped 0.
+  SharedMarketConsumerMySqlIT: 29 (real two-schema delivery transactions;
+    protection/observer collaborators controlled; new concurrency cases use real
+    CandleClosedAnalysisWorker and SignalProcessingStore with separate JVM locks).
+  WalletCoordinationMySqlIT: 11 (real JPA/InnoDB wallet operations and Spring
+    wallet proxy, controlled latches, actual data_lock_waits observation).
+JavaScript tests: 21 passed, 0 failed/skipped.
+node --check: fix132-delivery.js and fix-registry.js passed.
+Prior migrations V1-V90: unchanged against previous FIX-132 candidate.
+Shared policy/Replay file comparison: see FIX-125-FIX-132-policy-preservation.md.
+
+MYSql WALLET CASES EXECUTED
+- Flat-symbol two allowed adds wait through commit; one managed position,
+  two BUY trades, correct quantities, cost and cash.
+- Rollback releases locks; no rolled-back debit/trade survives.
+- Different-symbol buys preserve both cash debits.
+- Two existing-position exits cannot sell twice.
+- LivePositionProtectionService versus signal exit shares commit coordination.
+- PaperTradingService processSignal body via SignalProcessingCoordinator:
+  real work completion and wallet/paper persistence; frozen mocked decision/price
+  collaborators. This is not a whole-strategy real-market test.
+- Manual versus automatic BUY retains both asset updates and cash debits.
+- Duplicate signal BUY uses committed idempotency evidence after waiting.
+- Two-second guard statement cancellation rolls back and returns Hikari
+  connections; a later transaction can acquire the guard. No network-partition
+  or ambiguous-commit fault injection is claimed.
+
+CUTOVER/DELIVERY COVERAGE
+OBSERVE auto-seeding advances without approval. Status READY alone and absent/
+mismatched approval audit are rejected. Approved startup fixture has required
+history. Unattributed work and orphan event ownership block activation.
+Historical repair defers within grace and yields only to same-candle live close;
+expiry is historical-only. Existing sequence, quarantine, rollback, initial-lock
+retry, forming-price and phase-order tests remain. H2 migration setup verifies
+old READY demotion and preservation of REVIEW_REQUIRED. MySQL executes the new
+approval DDL and wallet coordination migration against isolated test schemas.
+Atomic explicit source registration/reassignment/bypass tests run in standard
+suite. Standard suite includes existing shared Production/Replay policy tests.
+
+COMMANDS
+mvn package -B -ntp -DargLine=-javaagent:<local-m2>/org/mockito/mockito-core/5.23.0/mockito-core-5.23.0.jar
+FIX132_TEST_MYSQL_URL=jdbc:mysql://127.0.0.1:<isolated-port>/fix132_test_<name>?allowPublicKeyRetrieval=true&useSSL=false
+mvn -Pfix132-mysql test -B -ntp -DargLine=-javaagent:<same-agent-path>
+node --test src/test/js/*.test.cjs
+node --check src/main/resources/static/js/fix132-delivery.js
+node --check src/main/resources/static/js/fix-registry.js
+
+The MySQL profile refuses non-loopback/non-test-schema URLs, creates and drops
+random test schemas, and requires a dedicated test instance/user with schema
+creation and lock-observation privileges. Never point it at production.
+Offline packaging first lacked the Maven jar plugin; dependencies were fetched
+through the configured build proxy and the final package succeeded. Earlier test
+fixture failures were corrected. Current evidence is in test-evidence/revision-20260927/.
+The old test-evidence/integrated/ directory is the PRIOR candidate, not current results.
+The current Maven console logs and actual MySQL/standard JUnit XML/TXT reports
+are included. Preliminary fixture/build failures are superseded by these final runs.
+Expected error logs from deliberate failure/rollback tests are not test failures.
+
+NOT CLAIMED / STILL REQUIRED BEFORE LIVE OR RENAME
+- Full Flyway/JPA application startup on a representative deployed-schema copy.
+- Real-window OLD/NEW parity with identical ordered inputs, balances and policy
+  configuration; protected winning/losing examples supplied by the operator.
+- Collector FIX-133 correction and both-arrival-order validation.
+- Live Binance soak, throughput/p95/p99/worst lag and other-consumer impact.
+- Recovery-query cost at actual symbol/interval windows and pool contention.
+- Retention agreement, complete required history and external candle dependencies.
+- Network/ambiguous-commit crash reconciliation and operator cutover rehearsal.
+No server deployment, LIVE enablement, recovery toggle or candle rename performed.
+
+REVIEW-CORRECTION COVERAGE (2026-09-27)
+- Real repository decorator rejects unguarded wallet operations; named inventory
+  test guards shared-resource ranks/raw SQL; REQUIRES_NEW cannot inherit guard.
+- Approval authentication, dedicated role and CSRF are independently tested.
+  Actual isolated Boot context starts with no wallet/consumer/scheduled/JPA beans.
+- Reviewed boundary, source progress, stale/different-principal/expired/consumed
+  proposal, quarantine/unfinished work, audit rollback and boundary-preserving
+  re-approval tested with H2 and real MySQL.
+- Two consumer instances use separate actual workers and stripe coordinators.
+  Latches pause after real registration; persisted source_event_id and COMPLETED
+  work plus one controlled business effect are asserted for both arrival orders.
+  Historical expiry registers no wallet work. This is not full scoring/wallet parity.
+- Snapshot test uses the production managed-position lookup index, isolating the
+  global mutation wait from position-scan/empty-range contention. Real lock table
+  identity is asserted, and wait/hold timers are measured through commit.
+
+LATEST CONTROLLED MEASUREMENT (NOT PRODUCTION CAPACITY)
+[FIX-125][CONTROLLED_CONTENTION_MEASUREMENT] mutations=2 maxWaitMs=3.518 maxHoldMs=20.254; latch-controlled snapshot, not Production throughput

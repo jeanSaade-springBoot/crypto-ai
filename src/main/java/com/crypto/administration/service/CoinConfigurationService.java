@@ -15,6 +15,10 @@ import java.util.regex.Pattern;
 @Service
 @RequiredArgsConstructor
 public class CoinConfigurationService {
+    // FIX-125 mandatory in Spring; null only in existing constructor-only policy tests.
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.crypto.wallet.service.WalletTransactionCoordination walletCoordination;
+
 
     private static final Pattern SYMBOL_PATTERN = Pattern.compile("^[A-Z0-9]{2,15}USDT$");
 
@@ -46,6 +50,7 @@ public class CoinConfigurationService {
         // A small public kline request verifies that Binance Spot recognizes the pair.
         marketDataClient.getKlines(symbol, "1m", 1);
 
+        if(walletCoordination!=null)walletCoordination.provision(symbol);
         CoinConfiguration saved = repository.save(CoinConfiguration.builder()
                 .symbol(symbol)
                 .enabled(true)
@@ -57,6 +62,7 @@ public class CoinConfigurationService {
     @Transactional
     public CoinConfigurationView setEnabled(Long id, boolean enabled) {
         CoinConfiguration coin = findRequired(id);
+        if(enabled && walletCoordination!=null)walletCoordination.provision(coin.getSymbol());
         coin.setEnabled(enabled);
         return toView(repository.save(coin));
     }

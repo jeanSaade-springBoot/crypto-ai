@@ -28,6 +28,9 @@ import java.util.Set;
 @RequiredArgsConstructor
 @Slf4j
 public class MarketDataBootstrapService implements ApplicationRunner {
+    @org.springframework.beans.factory.annotation.Value("#{'${shared-market.mode:OFF}' == 'LIVE'}")
+    private boolean sharedMarketEnabled;
+
 
     private static final int REQUIRED_CANDLES = 300;
 
@@ -42,6 +45,7 @@ public class MarketDataBootstrapService implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        if (sharedMarketEnabled) { return; }
         if (!marketDataProperties.isEnabled()
                 || !marketDataProperties.getHistorical().isEnabled()) {
             log.info("Historical candle bootstrap is disabled");
@@ -64,6 +68,7 @@ public class MarketDataBootstrapService implements ApplicationRunner {
 
 
     public void bootstrapSymbol(String rawSymbol) {
+        if (sharedMarketEnabled) { return; }
         if (!marketDataProperties.isEnabled()
                 || !marketDataProperties.getHistorical().isEnabled()) {
             log.info("Historical candle bootstrap skipped for {} because historical loading is disabled", rawSymbol);

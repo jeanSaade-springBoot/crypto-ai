@@ -96,6 +96,12 @@ public class PaperTradingService {
         return processingCoordinator.process(signalId, true, this::processSignalBody);
     }
 
+    /** FIX-132: explicit delivery ownership, never a natural-key inference. */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NEVER)
+    public Optional<PaperPosition> processSharedSignal(TradeSignal signal, long sourceEventId) {
+        return processingCoordinator.process(signal.getId(),false,this::processSignalBody,sourceEventId);
+    }
+
     /** FIX-127: existing decision order; invoked inside the coordinator's transaction. */
     private Optional<PaperPosition> processSignalBody(TradeSignal signal) {
         if (signal == null) {

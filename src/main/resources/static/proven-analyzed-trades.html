@@ -42,6 +42,15 @@
 <div class="connection"><span class="online"></span><div class="sidebar-label"><strong>Administration</strong><small>Configuration &amp; replay lab</small></div></div>
 </aside>
 <main class="content administration-content">
+<details class="card" id="fix132-delivery">
+<summary>Collector delivery history — FIX-132</summary>
+<p>Production observations and processing outcomes. These are not simulated Replay results. Times below are UTC.</p>
+<label>Symbol <input id="fix132-symbol" placeholder="BTCUSDT" maxlength="30"></label>
+<label>From (UTC) <input id="fix132-from" type="datetime-local"></label>
+<label>To (UTC) <input id="fix132-to" type="datetime-local"></label>
+<button type="button" id="fix132-load">Load delivery history</button>
+<p id="fix132-connection" style="white-space:pre-line"></p><p id="fix132-status"></p><div style="overflow:auto"><table><thead><tr><th>Sequence</th><th>Candle (UTC)</th><th>Source</th><th>Price outcome</th><th>Analysis</th><th>Owned signal</th><th>Processing</th><th>Failure stage</th><th>Deferred until (UTC)</th><th>Price eligibility</th><th>Observer</th><th>Diagnostic</th><th>Row-to-protection ms</th><th>Row-to-analysis ms</th></tr></thead><tbody id="fix132-rows"></tbody></table></div>
+</details>
 <div class="hidden" id="message"></div>
 <section class="panel regression-test-panel" id="ai-regression-tests">
 <div class="section-heading">
@@ -286,5 +295,6 @@
 <script src="/js/chart-crosshair.js"></script>
 <script src="/js/proven-analyzed-trades.js"></script>
 <script src="/js/catching-market-badge.js"></script><script src="/js/global-system-health.js"></script>
+<script src="/js/fix132-delivery.js"></script>
 </body>
 </html>

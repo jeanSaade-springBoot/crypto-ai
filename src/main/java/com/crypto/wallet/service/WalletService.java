@@ -23,6 +23,21 @@ import java.util.*;
 @Service
 @RequiredArgsConstructor
 public class WalletService {
+    // FIX-125 mandatory in Spring; null only in existing constructor-only policy tests.
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.crypto.wallet.service.WalletTransactionCoordination walletCoordination;
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager walletEntityManager;
+
+    // FIX-134: locking current read bypasses a pre-existing repeatable-read snapshot;
+    // refresh also prevents a previously managed asset from supplying stale values.
+    private java.util.Optional<WalletAsset> currentAsset(String symbol) {
+        if(walletCoordination==null)return assetRepository.findBySymbol(symbol);
+        var found=assetRepository.findCurrentForUpdate(symbol);
+        found.ifPresent(asset->walletEntityManager.refresh(asset,jakarta.persistence.LockModeType.PESSIMISTIC_WRITE));
+        return found;
+    }
+
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final int SCALE = 12;
     private final WalletAssetRepository assetRepository;
@@ -144,7 +159,8 @@ public class WalletService {
     @Transactional
     public void setAsset(WalletAssetRequest request) {
         String symbol = normalizeAsset(request.symbol());
-        WalletAsset asset = assetRepository.findBySymbol(symbol).orElseGet(() -> WalletAsset.builder().symbol(symbol).enabled(true).build());
+        if(walletCoordination!=null) { if(!"USDT".equals(symbol))walletCoordination.symbol(symbol+"USDT"); walletCoordination.mutation(); }
+        WalletAsset asset = currentAsset(symbol).orElseGet(() -> WalletAsset.builder().symbol(symbol).enabled(true).build());
         asset.setQuantity(nonNegative(request.quantity(), "Quantity"));
         asset.setAverageBuyPriceUsdt("USDT".equals(symbol) ? BigDecimal.ONE : nonNegativeNullable(request.averageBuyPriceUsdt(), "Average price"));
         assetRepository.save(asset); captureSnapshot();
@@ -152,6 +168,7 @@ public class WalletService {
 
     @Transactional
     public void addCashFlow(WalletCashFlowRequest request) {
+        if(walletCoordination!=null)walletCoordination.mutation();
         String type = requireOne(request.flowType(), Set.of("DEPOSIT","WITHDRAWAL"), "flow type");
         BigDecimal amount = positive(request.amountUsdt(), "Amount");
         getOrCreate("USDT");
@@ -169,6 +186,7 @@ public class WalletService {
 
     @Transactional
     public void updateSettings(WalletSettingsRequest request) {
+        if(walletCoordination!=null)walletCoordination.mutation();
         if (request.minimumUsdtReserve() == null || request.minimumUsdtReserve().signum() < 0)
             throw new IllegalArgumentException("Minimum reserve cannot be negative");
         if (request.baseTradeAmountUsdt() == null || request.baseTradeAmountUsdt().signum() <= 0)
@@ -529,13 +547,14 @@ public class WalletService {
         String side = requireOne(request.side(), Set.of("BUY","SELL"), "side");
         String pair = request.symbol().trim().toUpperCase(Locale.ROOT);
         if (!pair.endsWith("USDT") || pair.length() <= 4) throw new IllegalArgumentException("Symbol must be a USDT pair, for example BNBUSDT");
+        if(walletCoordination!=null) { walletCoordination.symbol(pair); walletCoordination.mutation(); }
         String assetSymbol = pair.substring(0, pair.length()-4);
         BigDecimal qty = positive(request.quantity(), "Quantity");
         BigDecimal price = positive(request.priceUsdt(), "Price");
         BigDecimal fee = nvl(request.feeUsdt());
         if (fee.signum() < 0) throw new IllegalArgumentException("Fee cannot be negative");
         BigDecimal gross = qty.multiply(price);
-        WalletAsset coin = getOrCreate(assetSymbol); WalletAsset usdt = getOrCreate("USDT");
+        WalletAsset usdt = getOrCreate("USDT"); WalletAsset coin = getOrCreate(assetSymbol);
         TradeSignal signal = request.signalId() == null ? null : signalRepository.findById(request.signalId()).orElseThrow(() -> new IllegalArgumentException("Signal not found"));
         BigDecimal costBasis = null, realized = null, realizedPct = null, net;
         if ("BUY".equals(side)) {
@@ -586,7 +605,7 @@ public class WalletService {
     }
     private BigDecimal netInvested() { return nvl(cashFlowRepository.netInvestedUsdt()); }
     private BigDecimal currentPrice(String asset) { if ("USDT".equals(asset)) return BigDecimal.ONE; return candleRepository.findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByCloseTimeDesc(asset+"USDT","1m").map(Candle::getClosePrice).orElse(ZERO); }
-    private WalletAsset getOrCreate(String symbol) { return assetRepository.findBySymbol(symbol).orElseGet(() -> assetRepository.save(WalletAsset.builder().symbol(symbol).quantity(ZERO).averageBuyPriceUsdt("USDT".equals(symbol)?BigDecimal.ONE:null).enabled(true).build())); }
+    private WalletAsset getOrCreate(String symbol) { return currentAsset(symbol).orElseGet(() -> assetRepository.save(WalletAsset.builder().symbol(symbol).quantity(ZERO).averageBuyPriceUsdt("USDT".equals(symbol)?BigDecimal.ONE:null).enabled(true).build())); }
     private Map<String,Object> tradeDto(WalletTrade t) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id",t.getId()); m.put("signalId",t.getSignal()==null?null:t.getSignal().getId()); m.put("positionAnalysisId",t.getPositionAnalysis()==null?null:t.getPositionAnalysis().getId()); m.put("symbol",t.getSymbol()); m.put("side",t.getSide()); m.put("quantity",t.getQuantity()); m.put("priceUsdt",t.getPriceUsdt()); m.put("grossAmountUsdt",t.getGrossAmountUsdt()); m.put("feeUsdt",t.getFeeUsdt()); m.put("netAmountUsdt",t.getNetAmountUsdt()); m.put("realizedPnlUsdt",t.getRealizedPnlUsdt()); m.put("realizedPnlPercent",t.getRealizedPnlPercent()); m.put("executionReason",t.getExecutionReason()); m.put("executionMessage",t.getExecutionMessage()); m.put("executedAt",t.getExecutedAt()); return m; }
     private BigDecimal percent(BigDecimal value, BigDecimal base) { return base==null||base.signum()==0?ZERO:value.divide(base,8,RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100)); }
     private BigDecimal nvl(BigDecimal v){return v==null?ZERO:v;} private BigDecimal positive(BigDecimal v,String n){if(v==null||v.signum()<=0)throw new IllegalArgumentException(n+" must be greater than zero");return v;} private BigDecimal nonNegative(BigDecimal v,String n){if(v==null||v.signum()<0)throw new IllegalArgumentException(n+" cannot be negative");return v;} private BigDecimal nonNegativeNullable(BigDecimal v,String n){if(v==null)return null;return nonNegative(v,n);} private String normalizeAsset(String v){if(v==null||v.isBlank())throw new IllegalArgumentException("Symbol is required");String s=v.trim().toUpperCase(Locale.ROOT);return s.endsWith("USDT")&&s.length()>4?s.substring(0,s.length()-4):s;} private String requireOne(String v,Set<String>a,String n){if(v==null||!a.contains(v.trim().toUpperCase(Locale.ROOT)))throw new IllegalArgumentException("Invalid "+n);return v.trim().toUpperCase(Locale.ROOT);}

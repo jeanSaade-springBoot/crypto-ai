@@ -11,6 +11,9 @@ import java.time.Instant;
 import java.util.List;
 
 public interface WalletTradeRepository extends JpaRepository<WalletTrade, Long> {
+    /** FIX-125: a locking current read avoids pre-guard repeatable-read snapshots. */
+    @Query(value="SELECT id FROM wallet_trade WHERE execution_key=:key FOR UPDATE",nativeQuery=true)
+    List<Long> findExecutionIdsForUpdate(@Param("key") String key);
     List<WalletTrade> findTop100ByOrderByExecutedAtDesc();
 
     List<WalletTrade> findTop100BySymbolAndStatusOrderByExecutedAtDesc(String symbol, String status);

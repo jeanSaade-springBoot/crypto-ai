@@ -29,20 +29,47 @@ public class SignalProcessingStore {
     public record Work(long signalId, String symbol, String interval, Instant candleOpenTime,
                        ProcessingOrigin origin, String status, int attempts, String owner) {}
     public void register(TradeSignal signal, ProcessingOrigin origin) {
+        register(signal,origin,null);
+    }
+    /** FIX-132: explicit source ownership is committed with registration, never
+     * reconstructed from a candle match or the age of a work row. */
+    public void register(TradeSignal signal, ProcessingOrigin origin, Long sourceEventId) {
         requireTransaction();
         if (signal == null || signal.getId() == null || signal.getCandleOpenTime() == null
                 || signal.getSymbol() == null || signal.getInterval() == null) {
             throw new IllegalArgumentException("FIX-127 requires persisted exact signal lineage");
         }
+        if(sourceEventId!=null) {
+            var delivery=jdbc.queryForList("SELECT symbol,interval_code,candle_open_time,closed FROM shared_market_event_delivery WHERE source_event_id=?",sourceEventId);
+            if(delivery.size()!=1)throw new IllegalStateException("FIX-132 missing delivery ownership");
+            var d=delivery.getFirst();
+            if(!signal.getSymbol().equals(d.get("symbol")) || !signal.getInterval().equals(d.get("interval_code"))
+                || !signal.getCandleOpenTime().equals(((Timestamp)d.get("candle_open_time")).toInstant())
+                || !(Boolean.TRUE.equals(d.get("closed")) || "1".equals(String.valueOf(d.get("closed")))))
+                throw new IllegalStateException("FIX-132 processing ownership lineage mismatch");
+        }
         Instant now = Instant.now();
         // Duplicate callers must not reset status, origin, attempts or ownership.
         jdbc.update("""
                 INSERT INTO signal_processing_work
-                (signal_id,symbol,interval_code,candle_open_time,origin,status,attempts,next_attempt_at,updated_at)
-                VALUES (?,?,?,?,?,'PENDING',0,?,?)
+                (signal_id,symbol,interval_code,candle_open_time,origin,status,attempts,next_attempt_at,updated_at,source_event_id)
+                VALUES (?,?,?,?,?,'PENDING',0,?,?,?)
                 ON DUPLICATE KEY UPDATE signal_id=signal_id
                 """, signal.getId(), signal.getSymbol(), signal.getInterval(), Timestamp.from(signal.getCandleOpenTime()),
-                origin.name(), Timestamp.from(now.plusSeconds(30)), Timestamp.from(now));
+                origin.name(), Timestamp.from(now.plusSeconds(30)), Timestamp.from(now),sourceEventId);
+        Long registered=jdbc.queryForObject("SELECT source_event_id FROM signal_processing_work WHERE signal_id=?",Long.class,signal.getId());
+        if(!java.util.Objects.equals(registered,sourceEventId))throw new IllegalStateException("FIX-132 refuses processing ownership reassignment");
+        if(sourceEventId!=null)log.info("[FIX-132][PROCESSING_OWNER] event={}, signal={}",sourceEventId,signal.getId());
+    }
+    public boolean exists(long id) { return jdbc.queryForObject("SELECT COUNT(*) FROM signal_processing_work WHERE signal_id=?",Integer.class,id)>0; }
+    public void requireSourceOwner(long id, Long expected) {
+        Long actual=jdbc.queryForObject("SELECT source_event_id FROM signal_processing_work WHERE signal_id=?",Long.class,id);
+        if(!java.util.Objects.equals(actual,expected))throw new IllegalStateException("[FIX-132][OWNER_MISMATCH] signal="+id);
+        if(expected!=null) {
+            var rows=jdbc.queryForList("SELECT s.* FROM shared_market_event_delivery d JOIN shared_market_consumer_state s ON s.symbol=d.symbol WHERE d.source_event_id=? AND d.analysis_status='RUNNING'",expected);
+            if(rows.size()!=1 || !com.crypto.shared.SharedCutoverPolicy.approved(rows.getFirst()))
+                throw new IllegalStateException("[FIX-132][OWNER_NOT_READY] signal="+id);
+        }
     }
     public Work claim(long id, boolean background) {
         return independent.execute(tx -> {

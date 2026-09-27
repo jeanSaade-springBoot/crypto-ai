@@ -1,0 +1,29 @@
+✔ Inspector preserves every acquired-quantity decimal and labels weighted price (28.264656ms)
+✔ Replay preserves decimal quantity without inserting commas in its fraction (0.352441ms)
+✔ Unavailable Replay investment never appears as a zero price or zero investment (0.165148ms)
+✔ Unavailable Inspector history is escaped and does not fabricate zero investment (0.159701ms)
+✔ Closed and open cards retain separate sold/remaining quantity labels (0.884593ms)
+✔ missing diagnostics never render as a passed rule (2.338854ms)
+✔ old runs say not recorded; explicit OLD remains clearly distinguished (1.292878ms)
+✔ blocked evaluations and origin exclusions are visible and escaped (1.360259ms)
+✔ failed fetch is visible (2.706527ms)
+✔ empty history does not claim successful protection or Replay parity (0.807787ms)
+✔ outcomes and exact lineage render as text, never executable HTML (0.899986ms)
+✔ processing fetch failure is visible (2.452655ms)
+✔ empty processing history is not a Replay pass or successful trade (0.812624ms)
+✔ processing review status, attempts, exact lineage and error render as text (0.899415ms)
+✔ truncation and saved-entry context are disclosed (0.800796ms)
+✔ timing fetch failure remains distinct from empty history (2.544854ms)
+✔ empty timing history discloses sampling, nesting and persistence limitations (0.843731ms)
+✔ measured timing and exact identity render safely without invented candle (0.930782ms)
+✔ finalization failure is visible (2.202159ms)
+✔ pending work and held global gate do not imply trading is paused (0.656249ms)
+✔ job error is rendered as text and empty data is not success (0.773315ms)
+ℹ tests 21
+ℹ suites 0
+ℹ pass 21
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 122.707399

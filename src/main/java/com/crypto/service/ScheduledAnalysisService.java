@@ -25,6 +25,10 @@ import java.util.List;
 @Slf4j
 public class ScheduledAnalysisService {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.crypto.shared.SharedRecoveryAuthority sharedRecoveryAuthority;
+
+
     private static final int RECOVERY_BATCH_SIZE = 120;
 
     /** FIX-131: make the effective operational toggle visible, including external overrides. */
@@ -136,6 +140,13 @@ public class ScheduledAnalysisService {
         // for the lock we re-check trade_signal so only one producer performs analysis.
         try (CandleAnalysisExecutionCoordinator.LockHandle ignored = executionCoordinator.lock(
                 symbol, interval, candle.getOpenTime())) {
+            // FIX-132: never compete with durable collector delivery, including
+            // undiscovered post-cutover closes and review-required attempts.
+            if (sharedRecoveryAuthority != null && sharedRecoveryAuthority.deferCandle(
+                    symbol, interval, candle.getOpenTime(), candle.getCloseTime())) {
+                log.debug("[FIX-132][RECOVERY_DEFERRED_TO_DELIVERY] symbol={}, interval={}, open={}",symbol,interval,candle.getOpenTime());
+                return false;
+            }
             var signalAfterLock = tradeSignalRepository
                     .findBySymbolAndIntervalAndCandleOpenTime(symbol, interval, candle.getOpenTime());
             if (signalAfterLock.isPresent()) {
@@ -176,7 +187,8 @@ public class ScheduledAnalysisService {
             // evidence/context that Replay already has, but remain non-executing in live recovery.
             boolean latest = latestClosed != null
                     && latestClosed.getOpenTime().equals(candle.getOpenTime());
-            boolean fresh = isFreshEnoughForExecution(candle, interval, now);
+            boolean fresh = isFreshEnoughForExecution(candle, interval, now)
+                    && (sharedRecoveryAuthority == null || !sharedRecoveryAuthority.ownsLiveExecution());
             // FIX-127: only the already-eligible fresh latest recovery signal creates
             // execution work. Historical backfill remains non-executing.
             TradeSignal signal = existingSignal.orElseGet(() -> latest && fresh

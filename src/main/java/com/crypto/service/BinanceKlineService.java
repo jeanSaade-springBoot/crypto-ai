@@ -19,6 +19,9 @@ import java.util.Locale;
 
 @Service
 public class BinanceKlineService {
+    @org.springframework.beans.factory.annotation.Value("#{'${shared-market.mode:OFF}' == 'LIVE'}")
+    private boolean sharedMarketEnabled;
+
     private final KlineTransactionCoordinator transactions;
     private final CandleRepository candleRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -45,6 +48,7 @@ public class BinanceKlineService {
     // FIX-124: no suspended caller transaction may retain market-data locks.
     @Transactional(propagation = Propagation.NEVER)
     public boolean processKline(JsonNode root) {
+        if (sharedMarketEnabled) { throw new IllegalStateException("FIX-132: Trader kline ingestion is disabled"); }
 
         JsonNode data = root.has("data")
                 ? root.path("data")

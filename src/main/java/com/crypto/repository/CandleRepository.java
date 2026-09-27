@@ -1,32 +1,107 @@
 package com.crypto.repository;
 
-import java.math.BigDecimal;
-import java.time.Instant;
-import java.util.List;
-import java.util.Optional;
-
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Modifying;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-
 import com.crypto.domain.Candle;
+import com.crypto.shared.SharedMarketSource;
+import org.springframework.stereotype.Repository;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.data.domain.Pageable;
+import java.math.BigDecimal;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.*;
 
-public interface CandleRepository extends JpaRepository<Candle, Long> {
-
-    Optional<Candle> findBySymbolAndIntervalCodeAndOpenTime(
-            String symbol,
-            String intervalCode,
-            Instant openTime);
-
-    List<Candle> findTop500BySymbolAndIntervalCodeOrderByOpenTimeDesc(
-            String symbol,
-            String intervalCode);
-
-    @Modifying
-    @Query(
-        value = """
+/** FIX-132 read facade. Exact predicates and ordering of the original JPA queries
+ * are retained. Candle is a read DTO, so local JPA validation no longer requires
+ * the retired table. No IDs are translated between the two schemas. */
+@Repository
+public class CandleRepository {
+    private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(CandleRepository.class);
+    private final SharedMarketSource source;
+    private final JdbcTemplate local;
+    public CandleRepository(SharedMarketSource source, JdbcTemplate local) { this.source=source; this.local=local; }
+    public static final RowMapper<Candle> MAPPER = (r,n) -> Candle.builder()
+        .id(r.getLong("id")).symbol(r.getString("symbol")).intervalCode(r.getString("interval_code"))
+        .openTime(r.getTimestamp("open_time").toInstant()).closeTime(r.getTimestamp("close_time").toInstant())
+        .openPrice(r.getBigDecimal("open_price")).highPrice(r.getBigDecimal("high_price"))
+        .lowPrice(r.getBigDecimal("low_price")).closePrice(r.getBigDecimal("close_price"))
+        .volume(r.getBigDecimal("volume")).quoteAssetVolume(r.getBigDecimal("quote_asset_volume"))
+        .numberOfTrades(r.getObject("number_of_trades",Long.class))
+        .takerBuyBaseVolume(r.getBigDecimal("taker_buy_base_volume"))
+        .takerBuyQuoteVolume(r.getBigDecimal("taker_buy_quote_volume")).closed(r.getBoolean("closed")).build();
+    private List<Candle> read(String tail,Object... args) {
+        Object[] converted=Arrays.stream(args).map(v->v instanceof Instant i ? Timestamp.from(i) : v).toArray();
+        List<Candle> rows=source.reader().query("SELECT * FROM candle WHERE "+tail,MAPPER,converted);
+        com.crypto.shared.CandleInputAudit.capture(tail,rows);
+        return rows;
+    }
+    private String page(Pageable p) { return p.isUnpaged()? "" : " LIMIT "+p.getPageSize()+" OFFSET "+p.getOffset(); }
+    public Optional<Candle> findBySymbolAndIntervalCodeAndOpenTime(String s,String i,Instant t) {
+        return read("symbol=? AND interval_code=? AND open_time=?",s,i,t).stream().findFirst();
+    }
+    public List<Candle> findTop500BySymbolAndIntervalCodeOrderByOpenTimeDesc(String s,String i) {
+        return read("symbol=? AND interval_code=? ORDER BY open_time DESC LIMIT 500",s,i);
+    }
+    public List<Candle> findTop200BySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeDesc(String s,String i) {
+        return read("symbol=? AND interval_code=? AND closed=1 ORDER BY open_time DESC LIMIT 200",s,i);
+    }
+    public List<Candle> findClosedCandles(String s,String i,Pageable p) {
+        return read("symbol=? AND interval_code=? AND closed=1 ORDER BY open_time DESC"+page(p),s,i);
+    }
+    public List<Candle> findClosedCandlesAtOrBefore(String s,String i,Instant t,Pageable p) {
+        return read("symbol=? AND interval_code=? AND closed=1 AND open_time<=? ORDER BY open_time DESC"+page(p),s,i,t);
+    }
+    public List<Candle> findClosedCandlesClosedAtOrBefore(String s,String i,Instant t,Pageable p) {
+        return read("symbol=? AND interval_code=? AND closed=1 AND close_time<=? ORDER BY open_time DESC"+page(p),s,i,t);
+    }
+    public List<Candle> findBySymbolAndIntervalCodeAndClosedTrueAndOpenTimeBetweenOrderByOpenTimeAsc(String s,String i,Instant a,Instant b) {
+        return read("symbol=? AND interval_code=? AND closed=1 AND open_time BETWEEN ? AND ? ORDER BY open_time ASC",s,i,a,b);
+    }
+    public List<Candle> findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(String s,String i,Instant a,Instant b) {
+        return read("symbol=? AND interval_code=? AND open_time BETWEEN ? AND ? ORDER BY open_time ASC",s,i,a,b);
+    }
+    public List<Candle> findBySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeAsc(String s,String i) {
+        return read("symbol=? AND interval_code=? AND closed=1 ORDER BY open_time ASC",s,i);
+    }
+    public Optional<Candle> findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByCloseTimeDesc(String s,String i) {
+        return read("symbol=? AND interval_code=? AND closed=1 ORDER BY close_time DESC LIMIT 1",s,i).stream().findFirst();
+    }
+    public Optional<Candle> findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeAsc(String s,String i) {
+        return read("symbol=? AND interval_code=? AND closed=1 ORDER BY open_time ASC LIMIT 1",s,i).stream().findFirst();
+    }
+    public List<String> findDistinctSymbols() { return source.reader().queryForList("SELECT DISTINCT symbol FROM candle ORDER BY symbol",String.class); }
+    public long countBySymbolAndIntervalCodeAndClosedTrue(String s,String i) {
+        return source.reader().queryForObject("SELECT COUNT(*) FROM candle WHERE symbol=? AND interval_code=? AND closed=1",Long.class,s,i);
+    }
+    public List<Candle> findClosedCandlesMissingAnalysisThrough(String s,String i,Instant a,Instant b,Pageable p) {
+        // Shared credentials never need access to Trader's indicators/signals. Fetch
+        // local identities separately, then paginate AFTER applying the missing test.
+        Set<Instant> indicators=new HashSet<>(local.query("SELECT candle_open_time FROM technical_indicator WHERE symbol=? AND interval_code=? AND candle_open_time BETWEEN ? AND ?",
+            (r,n)->r.getTimestamp(1).toInstant(),s,i,Timestamp.from(a),Timestamp.from(b)));
+        Set<Instant> signals=new HashSet<>(local.query("SELECT candle_open_time FROM trade_signal WHERE symbol=? AND interval_code=? AND candle_open_time BETWEEN ? AND ?",
+            (r,n)->r.getTimestamp(1).toInstant(),s,i,Timestamp.from(a),Timestamp.from(b)));
+        long started=System.nanoTime();
+        var candles=findBySymbolAndIntervalCodeAndClosedTrueAndOpenTimeBetweenOrderByOpenTimeAsc(s,i,a,b);
+        long fetchMs=(System.nanoTime()-started)/1_000_000;
+        var result=candles.stream()
+            .filter(c->!indicators.contains(c.getOpenTime()) || !signals.contains(c.getOpenTime()))
+            .skip(p.isUnpaged()?0:p.getOffset()).limit(p.isUnpaged()?Long.MAX_VALUE:p.getPageSize()).toList();
+        // Measurement only. Fetch includes pool acquisition, transfer and mapping;
+        // it is not labelled database execution or commit time. Filtering unchanged.
+        if(source.enabled()) {
+            String detail="fetched="+candles.size()+", returned="+result.size()+", fetchIncludingPoolMs="+fetchMs+", pool="+source.poolPressure();
+            log.info("[FIX-132][RECOVERY_SCAN] symbol={}, interval={}, from={}, through={}, {}",s,i,a,b,detail);
+            try { local.update("INSERT INTO shared_market_health(component,status,detail) VALUES(?,'MEASURED',?) ON DUPLICATE KEY UPDATE status=VALUES(status),detail=VALUES(detail)","RECOVERY:"+s+":"+i,detail); }
+            catch(RuntimeException unavailable) {log.warn("[FIX-132][RECOVERY_METRIC_NOT_PERSISTED] symbol={}, interval={}",s,i,unavailable);}
+        }
+        return result;
+    }
+    public int upsert(String symbol,String intervalCode,Instant openTime,Instant closeTime,
+        BigDecimal openPrice,BigDecimal highPrice,BigDecimal lowPrice,BigDecimal closePrice,
+        BigDecimal volume,BigDecimal quoteAssetVolume,Long numberOfTrades,BigDecimal takerBuyBaseVolume,
+        BigDecimal takerBuyQuoteVolume,boolean closed) {
+        source.requireLocalWriter();
+        return local.update("""
             INSERT INTO crypto_ai.candle (
                 symbol,
                 interval_code,
@@ -46,20 +121,20 @@ public interface CandleRepository extends JpaRepository<Candle, Long> {
                 updated_at
             )
             VALUES (
-                :symbol,
-                :intervalCode,
-                :openTime,
-                :closeTime,
-                :openPrice,
-                :highPrice,
-                :lowPrice,
-                :closePrice,
-                :volume,
-                :quoteAssetVolume,
-                :numberOfTrades,
-                :takerBuyBaseVolume,
-                :takerBuyQuoteVolume,
-                :closed,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
                 CURRENT_TIMESTAMP(6),
                 CURRENT_TIMESTAMP(6)
             )
@@ -76,182 +151,7 @@ public interface CandleRepository extends JpaRepository<Candle, Long> {
                 taker_buy_quote_volume = VALUES(taker_buy_quote_volume),
                 closed = VALUES(closed),
                 updated_at = CURRENT_TIMESTAMP(6)
-            """,
-        nativeQuery = true
-    )
-    int upsert(
-            @Param("symbol")
-            String symbol,
 
-            @Param("intervalCode")
-            String intervalCode,
-
-            @Param("openTime")
-            Instant openTime,
-
-            @Param("closeTime")
-            Instant closeTime,
-
-            @Param("openPrice")
-            BigDecimal openPrice,
-
-            @Param("highPrice")
-            BigDecimal highPrice,
-
-            @Param("lowPrice")
-            BigDecimal lowPrice,
-
-            @Param("closePrice")
-            BigDecimal closePrice,
-
-            @Param("volume")
-            BigDecimal volume,
-
-            @Param("quoteAssetVolume")
-            BigDecimal quoteAssetVolume,
-
-            @Param("numberOfTrades")
-            Long numberOfTrades,
-
-            @Param("takerBuyBaseVolume")
-            BigDecimal takerBuyBaseVolume,
-
-            @Param("takerBuyQuoteVolume")
-            BigDecimal takerBuyQuoteVolume,
-
-            @Param("closed")
-            boolean closed
-    );
-    
-    
-    List<Candle> findTop200BySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeDesc(
-            String symbol,
-            String intervalCode
-    );
-    
-    @Query("""
-            SELECT c
-            FROM Candle c
-            WHERE c.symbol = :symbol
-              AND c.intervalCode = :intervalCode
-              AND c.closed = true
-            ORDER BY c.openTime DESC
-            """)
-    List<Candle> findClosedCandles(
-            @Param("symbol") String symbol,
-            @Param("intervalCode") String intervalCode,
-            Pageable pageable
-    );
-
-    @Query("""
-            SELECT c
-            FROM Candle c
-            WHERE c.symbol = :symbol
-              AND c.intervalCode = :intervalCode
-              AND c.closed = true
-              AND c.openTime <= :maxOpenTime
-            ORDER BY c.openTime DESC
-            """)
-    List<Candle> findClosedCandlesAtOrBefore(
-            @Param("symbol") String symbol,
-            @Param("intervalCode") String intervalCode,
-            @Param("maxOpenTime") Instant maxOpenTime,
-            Pageable pageable
-    );
-    // FIX-11H: replay-only bulk load. Explicit closed=true preserves the exact historical
-    // eligibility semantics of findClosedCandlesAtOrBefore while loading a whole window once.
-    List<Candle> findBySymbolAndIntervalCodeAndClosedTrueAndOpenTimeBetweenOrderByOpenTimeAsc(
-            String symbol, String intervalCode, Instant from, Instant to);
-
-    @Query("""
-            SELECT c
-            FROM Candle c
-            WHERE c.symbol = :symbol
-              AND c.intervalCode = :intervalCode
-              AND c.closed = true
-              AND c.closeTime <= :maxCloseTime
-            ORDER BY c.openTime DESC
-            """)
-    List<Candle> findClosedCandlesClosedAtOrBefore(
-            @Param("symbol") String symbol,
-            @Param("intervalCode") String intervalCode,
-            @Param("maxCloseTime") Instant maxCloseTime,
-            Pageable pageable
-    );
-
-
-    /**
-     * FIX-043 production recovery source. Returns CLOSED candles whose analysis chain is incomplete
-     * (missing technical_indicator and/or trade_signal), oldest first.
-     *
-     * This query intentionally works from candle persistence rather than from the latest signal.
-     * Production incident ACEUSDT 22 Aug 2026 proved candle coverage was ~97-100% while 1m
-     * technical/signal coverage was only ~17-20%; the old five-minute recovery job jumped to the
-     * newest candle and permanently skipped the intervening closed candles.
-     */
-    @Query(
-            value = """
-                    SELECT c.*
-                    FROM candle c
-                    WHERE c.symbol = :symbol
-                      AND c.interval_code = :intervalCode
-                      AND c.closed = 1
-                      AND c.open_time BETWEEN :fromOpenTime AND :throughOpenTime
-                      AND (
-                            NOT EXISTS (
-                                SELECT 1 FROM technical_indicator ti
-                                WHERE ti.symbol = c.symbol
-                                  AND ti.interval_code = c.interval_code
-                                  AND ti.candle_open_time = c.open_time
-                            )
-                            OR NOT EXISTS (
-                                SELECT 1 FROM trade_signal ts
-                                WHERE ts.symbol = c.symbol
-                                  AND ts.interval_code = c.interval_code
-                                  AND ts.candle_open_time = c.open_time
-                            )
-                          )
-                    ORDER BY c.open_time ASC
-                    """,
-            nativeQuery = true
-    )
-    List<Candle> findClosedCandlesMissingAnalysisThrough(
-            @Param("symbol") String symbol,
-            @Param("intervalCode") String intervalCode,
-            @Param("fromOpenTime") Instant fromOpenTime,
-            @Param("throughOpenTime") Instant throughOpenTime,
-            Pageable pageable
-    );
-
-    @Query("select distinct c.symbol from Candle c order by c.symbol")
-    List<String> findDistinctSymbols();
-
-    Optional<Candle> findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByCloseTimeDesc(
-            String symbol,
-            String intervalCode
-    );
-
-    Optional<Candle> findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeAsc(
-            String symbol,
-            String intervalCode
-    );
-
-    List<Candle> findBySymbolAndIntervalCodeAndOpenTimeBetweenOrderByOpenTimeAsc(
-            String symbol, String intervalCode, Instant from, Instant to
-    );
-
-    /**
-     * Trade Inspector full-history source. This remains read-only and returns only
-     * real closed candles; the UI decides which visible window to focus initially.
-     */
-    List<Candle> findBySymbolAndIntervalCodeAndClosedTrueOrderByOpenTimeAsc(
-            String symbol, String intervalCode
-    );
-
-    long countBySymbolAndIntervalCodeAndClosedTrue(
-            String symbol,
-            String intervalCode
-    );
-
+            """, symbol, intervalCode, Timestamp.from(openTime), Timestamp.from(closeTime), openPrice, highPrice, lowPrice, closePrice, volume, quoteAssetVolume, numberOfTrades, takerBuyBaseVolume, takerBuyQuoteVolume, closed);
+    }
 }
-

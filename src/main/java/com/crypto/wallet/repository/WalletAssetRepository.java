@@ -11,6 +11,9 @@ import java.util.*;
 
 public interface WalletAssetRepository extends JpaRepository<WalletAsset, Long> {
     Optional<WalletAsset> findBySymbol(String symbol);
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("select a from WalletAsset a where a.symbol=:symbol")
+    Optional<WalletAsset> findCurrentForUpdate(@Param("symbol") String symbol);
     List<WalletAsset> findAllByOrderBySymbolAsc();
 
     /**

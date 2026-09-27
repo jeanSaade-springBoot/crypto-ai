@@ -46,7 +46,7 @@ class SignalProcessingCoordinatorTest {
             CREATE TABLE signal_processing_work(signal_id BIGINT PRIMARY KEY,symbol VARCHAR(30),
             interval_code VARCHAR(10),candle_open_time TIMESTAMP(6),origin VARCHAR(20),status VARCHAR(30),
             attempts INT,owner_token VARCHAR(36),next_attempt_at TIMESTAMP(6),updated_at TIMESTAMP(6),
-            completed_at TIMESTAMP(6),paper_position_id BIGINT,failure_stage VARCHAR(40),error_message CLOB)
+            completed_at TIMESTAMP(6),paper_position_id BIGINT,failure_stage VARCHAR(40),error_message CLOB,source_event_id BIGINT)
             """);
         jdbc.execute("CREATE TABLE writes(id INT PRIMARY KEY,label VARCHAR(40))");
         jdbc.execute("CREATE TABLE candle(symbol VARCHAR(30),interval_code VARCHAR(10),open_time TIMESTAMP(6),close_time TIMESTAMP(6),closed INT)");
@@ -287,6 +287,18 @@ class SignalProcessingCoordinatorTest {
             jdbc.update("INSERT INTO writes VALUES(1,'unrelated')");throw new IllegalStateException("rollback");
         }));
         assertEquals("REVIEW_REQUIRED",status());assertEquals(0,countWrites());assertNull(store.claim(127,true));
+    }
+
+    @Test void sharedRegistrationOwnershipIsAtomicAndCannotBeReassigned() {
+        jdbc.execute("CREATE TABLE shared_market_event_delivery(source_event_id BIGINT,symbol VARCHAR(30),interval_code VARCHAR(10),candle_open_time TIMESTAMP(6),closed BOOLEAN)");
+        jdbc.update("INSERT INTO shared_market_event_delivery VALUES(132,'PEPEUSDT','1m',?,true)",Timestamp.from(open));
+        assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(t->{store.register(signal,ProcessingOrigin.WORKER,132L);throw new IllegalStateException("rollback");}));
+        assertFalse(store.exists(127));
+        tx.executeWithoutResult(t->store.register(signal,ProcessingOrigin.WORKER,132L));
+        assertEquals(132L,jdbc.queryForObject("SELECT source_event_id FROM signal_processing_work",Long.class));
+        assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(t->store.register(signal,ProcessingOrigin.EXPLICIT)));
+        assertEquals(132L,jdbc.queryForObject("SELECT source_event_id FROM signal_processing_work",Long.class));
+        assertThrows(IllegalStateException.class,()->coordinator.process(127,false,sig->Optional.empty()));
     }
 
 }

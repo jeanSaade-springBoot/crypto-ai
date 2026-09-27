@@ -25,6 +25,9 @@ import org.springframework.web.socket.client.standard.StandardWebSocketClient;
  * Availability is deliberately sacrificed until old work AND transport have terminated. */
 @Component
 public class BinanceWebSocketManager {
+    @org.springframework.beans.factory.annotation.Value("#{'${shared-market.mode:OFF}' == 'LIVE'}")
+    private boolean sharedMarketEnabled;
+
     private static final Logger log = LoggerFactory.getLogger(BinanceWebSocketManager.class);
     static final long SCAN_NANOS = TimeUnit.MILLISECONDS.toNanos(500);
     static final long DEADLINE_NANOS = TimeUnit.SECONDS.toNanos(15);
@@ -90,6 +93,7 @@ public class BinanceWebSocketManager {
     }
     @EventListener(ApplicationReadyEvent.class)
     public void start() {
+        if (sharedMarketEnabled) { return; }
         synchronized (lifecycle) {
             if (actor != null || stopRequested || !properties.getWebsocket().isEnabled()) return;
             replacement = true;
@@ -119,6 +123,7 @@ public class BinanceWebSocketManager {
         return request;
     }
     public void reload() {
+        if (sharedMarketEnabled) { return; }
         var request = requestReload();
         try { request.get(30, TimeUnit.SECONDS); }
         catch (TimeoutException ex) { throw failure(WebSocketReconnectException.Reason.WAIT_TIMEOUT); }

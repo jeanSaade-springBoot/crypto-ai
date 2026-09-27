@@ -16,6 +16,12 @@ import javax.sql.DataSource;
  * A missing closed row is a DB coverage fact, not proof of a WebSocket root cause. */
 @Component
 public class CandleGapDiagnostics {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.crypto.shared.SharedMarketSource sharedCandleSource;
+    private org.springframework.jdbc.core.JdbcTemplate candleReader(org.springframework.jdbc.core.JdbcTemplate legacy) {
+        return sharedCandleSource == null ? legacy : sharedCandleSource.reader();
+    }
+
     private static final Logger log = LoggerFactory.getLogger(CandleGapDiagnostics.class);
     record Stream(String symbol, String interval) {}
     record Window(Instant since, long seconds) {}
@@ -105,7 +111,7 @@ public class CandleGapDiagnostics {
             try {
                 var stream = entry.getKey(); var window = entry.getValue(); Instant now = Instant.now();
                 Instant from = window.since().isAfter(now.minusSeconds(72 * 3600)) ? window.since() : now.minusSeconds(72 * 3600 + window.seconds());
-                Set<Instant> closed = new HashSet<>(jdbc.query("SELECT open_time FROM crypto_ai.candle WHERE symbol=? AND interval_code=? AND closed=1 AND open_time>=? AND open_time<=? ORDER BY open_time",
+                Set<Instant> closed = new HashSet<>(candleReader(jdbc).query("SELECT open_time FROM candle WHERE symbol=? AND interval_code=? AND closed=1 AND open_time>=? AND open_time<=? ORDER BY open_time",
                         ps -> {
                             var utc = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
                             ps.setString(1, stream.symbol()); ps.setString(2, stream.interval());

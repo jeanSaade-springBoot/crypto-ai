@@ -27,6 +27,12 @@ import java.util.Map;
 @Service
 @RequiredArgsConstructor
 public class RegressionTestService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.crypto.shared.SharedMarketSource sharedCandleSource;
+    private org.springframework.jdbc.core.JdbcTemplate candleReader(org.springframework.jdbc.core.JdbcTemplate legacy) {
+        return sharedCandleSource == null ? legacy : sharedCandleSource.reader();
+    }
+
 
     private final JdbcTemplate jdbcTemplate;
     private final RegressionTestWorker worker;
@@ -522,7 +528,7 @@ public class RegressionTestService {
             default -> "5m";
         };
 
-        List<Map<String, Object>> candles = jdbcTemplate.queryForList("""
+        List<Map<String, Object>> candles = candleReader(jdbcTemplate).queryForList("""
                 SELECT open_time, open_price, high_price, low_price, close_price, volume
                 FROM candle
                 WHERE symbol=? AND interval_code=? AND closed=1 AND open_time BETWEEN ? AND ?
@@ -724,7 +730,7 @@ public class RegressionTestService {
             // detect late entries and premature exits instead of judging only the replay window.
             Instant from = entry.toInstant().minus(java.time.Duration.ofHours(7));
             Instant to = (exit == null ? entry.toInstant() : exit.toInstant()).plus(java.time.Duration.ofHours(7));
-            List<Map<String, Object>> segment = jdbcTemplate.queryForList("""
+            List<Map<String, Object>> segment = candleReader(jdbcTemplate).queryForList("""
                     SELECT open_time, open_price, high_price, low_price, close_price, volume
                     FROM candle
                     WHERE symbol=? AND interval_code=? AND closed=1 AND open_time BETWEEN ? AND ?
@@ -760,7 +766,7 @@ public class RegressionTestService {
         if (normalized.isBlank() || from == null || to == null || !to.isAfter(from)) {
             throw new IllegalArgumentException("Symbol and a valid chart window are required.");
         }
-        List<Map<String, Object>> candles = jdbcTemplate.queryForList("""
+        List<Map<String, Object>> candles = candleReader(jdbcTemplate).queryForList("""
                 SELECT open_time, open_price, high_price, low_price, close_price, volume
                 FROM candle
                 WHERE symbol=? AND interval_code=? AND closed=1 AND open_time BETWEEN ? AND ?

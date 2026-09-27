@@ -17,12 +17,16 @@ import lombok.RequiredArgsConstructor;
 @Service
 @RequiredArgsConstructor
 public class MarketDataService {
+    @org.springframework.beans.factory.annotation.Value("#{'${shared-market.mode:OFF}' == 'LIVE'}")
+    private boolean sharedMarketEnabled;
+
 
     private final BinanceMarketDataClient client;
     private final CandleRepository candleRepository;
 
     @Transactional
     public int importCandles(String symbol, String interval, int limit) {
+        if (sharedMarketEnabled) { throw new IllegalStateException("FIX-132: collector owns candle imports"); }
         String normalizedSymbol = symbol.trim().toUpperCase(Locale.ROOT);
         List<BinanceKline> klines = client.getKlines(normalizedSymbol, interval, limit);
         int upserted = 0;

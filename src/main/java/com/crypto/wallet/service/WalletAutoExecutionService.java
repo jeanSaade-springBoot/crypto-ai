@@ -23,6 +23,21 @@ import java.util.Locale;
 @RequiredArgsConstructor
 @Slf4j
 public class WalletAutoExecutionService {
+    // FIX-125 mandatory in Spring; null only in existing constructor-only policy tests.
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.crypto.wallet.service.WalletTransactionCoordination walletCoordination;
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager walletEntityManager;
+
+    // FIX-134: locking current read bypasses a pre-existing repeatable-read snapshot;
+    // refresh also prevents a previously managed asset from supplying stale values.
+    private java.util.Optional<WalletAsset> currentAsset(String symbol) {
+        if(walletCoordination==null)return assetRepository.findBySymbol(symbol);
+        var found=assetRepository.findCurrentForUpdate(symbol);
+        found.ifPresent(asset->walletEntityManager.refresh(asset,jakarta.persistence.LockModeType.PESSIMISTIC_WRITE));
+        return found;
+    }
+
     // FIX-11T: shared decimal context for Near-TP partial-harvest arithmetic.
     private static final MathContext MC = MathContext.DECIMAL64;
     private static final BigDecimal ZERO = BigDecimal.ZERO;
@@ -39,17 +54,17 @@ public class WalletAutoExecutionService {
     private final ObjectMapper objectMapper;
 
     @Transactional
-    public synchronized boolean executeBuy(TradeSignal signal) {
+    public boolean executeBuy(TradeSignal signal) {
         return executeBuy(signal, 100, "Full-size execution");
     }
 
     @Transactional
-    public synchronized boolean executeBuy(TradeSignal signal, int positionPercent, String executionExplanation) {
+    public boolean executeBuy(TradeSignal signal, int positionPercent, String executionExplanation) {
         return executeBuy(signal, positionPercent, executionExplanation, "ENTRY_BUY", 0);
     }
 
     @Transactional
-    public synchronized boolean executeBuy(TradeSignal signal, int positionPercent, String executionExplanation,
+    public boolean executeBuy(TradeSignal signal, int positionPercent, String executionExplanation,
                                            String entryStage, int entryQualityScore) {
         // FIX-056 compatibility overload. Normal Production/Replay paths MUST call the
         // explicit-price overload below; retaining this overload avoids breaking admin/tests.
@@ -62,20 +77,25 @@ public class WalletAutoExecutionService {
      * is the immutable decision snapshot and must not be reused as the wallet fill.
      */
     @Transactional
-    public synchronized boolean executeBuy(TradeSignal signal, BigDecimal executionPrice, Instant executionPriceObservedAt, int positionPercent,
+    public boolean executeBuy(TradeSignal signal, BigDecimal executionPrice, Instant executionPriceObservedAt, int positionPercent,
                                            String executionExplanation, String entryStage, int entryQualityScore) {
         if (signal == null || signal.getId() == null) return false;
-        WalletSettings settings = settings();
         int requestedPositionPercent = Math.max(1, Math.min(100, positionPercent));
 
         String pair = normalizePair(signal.getSymbol());
+        if(walletCoordination!=null) { walletCoordination.symbol(pair); }
         WalletManagedPosition existingPosition = managedPositionRepository
-                .findTopBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
+                .findFirstBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
                 .orElse(null);
+        if(walletCoordination!=null)walletCoordination.mutation();
+        // FIX-125: position precedes mutation; statistics precede cash on every exit.
+        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneOffset.UTC));
+
+        WalletSettings settings = settings();
         int currentAllocatedPercent = existingPosition == null ? 0 : Math.max(0, existingPosition.getAllocatedPositionPercent());
 
         String key = signal.getId() + ":BUY";
-        if (tradeRepository.existsByExecutionKey(key)) return true;
+        if (executionExists(key)) return true;
 
         String assetSymbol = pair.substring(0, pair.length() - 4);
         BigDecimal price = positive(executionPrice);
@@ -95,6 +115,7 @@ public class WalletAutoExecutionService {
         // FIX-037: debit USDT atomically before mutating the purchased asset. A stale
         // Java-side WalletAsset instance must never overwrite a concurrent SELL credit.
         if (assetRepository.debitQuantityIfSufficient("USDT", spend) != 1) return false;
+        if(walletCoordination!=null)getOrCreate("USDT");
         WalletAsset coin = getOrCreate(assetSymbol);
         BigDecimal oldCost = coin.getQuantity().multiply(nvl(coin.getAverageBuyPriceUsdt()));
         BigDecimal newQuantity = coin.getQuantity().add(quantity);
@@ -188,16 +209,21 @@ public class WalletAutoExecutionService {
      * legacy executeSell path; only audit metadata is corrected.
      */
     @Transactional
-    public synchronized void executeSignalLinkedExit(TradeSignal signal, String executionReason, String executionMessage) {
+    public void executeSignalLinkedExit(TradeSignal signal, String executionReason, String executionMessage) {
         if (signal == null || signal.getId() == null) return;
         String key = signal.getId() + ":SELL";
-        if (tradeRepository.existsByExecutionKey(key)) return;
-
         String pair = normalizePair(signal.getSymbol());
-        WalletManagedPosition position = managedPositionRepository.findTopBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN").orElse(null);
+        if(walletCoordination!=null) { walletCoordination.symbol(pair); }
+        WalletManagedPosition position = managedPositionRepository.findFirstBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN").orElse(null);
+        if(walletCoordination!=null)walletCoordination.mutation();
+        // FIX-125: position precedes mutation; statistics precede cash on every exit.
+        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneOffset.UTC));
+        if (executionExists(key)) return;
+
         if (position == null || position.getQuantity().signum() <= 0) return;
 
         String assetSymbol = pair.substring(0, pair.length() - 4);
+        if(walletCoordination!=null)getOrCreate("USDT");
         WalletAsset coin = getOrCreate(assetSymbol);
         BigDecimal quantity = position.getQuantity().min(coin.getQuantity());
         if (quantity.signum() <= 0) return;
@@ -257,25 +283,30 @@ public class WalletAutoExecutionService {
      * Other position recommendations remain advisory-only until separately validated.
      */
     @Transactional
-    public synchronized boolean executePositionStopLoss(PositionAnalysis analysis) {
+    public boolean executePositionStopLoss(PositionAnalysis analysis) {
         if (analysis == null || analysis.getId() == null
                 || analysis.getRecommendation() != PositionRecommendation.STOP_LOSS) {
             return false;
         }
 
         String key = "POSITION_ANALYSIS:" + analysis.getId() + ":STOP_LOSS";
-        if (tradeRepository.existsByExecutionKey(key)) return true;
-
         String pair = normalizePair(analysis.getSymbol());
+        if(walletCoordination!=null) { walletCoordination.symbol(pair); }
         WalletManagedPosition position = managedPositionRepository
-                .findTopBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
+                .findFirstBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
                 .orElse(null);
+        if(walletCoordination!=null)walletCoordination.mutation();
+        // FIX-125: position precedes mutation; statistics precede cash on every exit.
+        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneOffset.UTC));
+        if (executionExists(key)) return true;
+
         if (position == null || position.getQuantity() == null
                 || position.getQuantity().signum() <= 0) {
             return false;
         }
 
         String assetSymbol = pair.substring(0, pair.length() - 4);
+        if(walletCoordination!=null)getOrCreate("USDT");
         WalletAsset coin = getOrCreate(assetSymbol);
         BigDecimal quantity = position.getQuantity().min(coin.getQuantity());
         if (quantity.signum() <= 0) return false;
@@ -348,24 +379,30 @@ public class WalletAutoExecutionService {
      * The source signal is used only for traceability; it does not need to be a SELL signal.
      */
     @Transactional
-    public synchronized boolean executeProfitLock(TradeSignal sourceSignal, BigDecimal executionPrice, BigDecimal protectedPrice) {
+    public boolean executeProfitLock(TradeSignal sourceSignal, BigDecimal executionPrice, BigDecimal protectedPrice) {
         if (sourceSignal == null || sourceSignal.getId() == null || executionPrice == null || executionPrice.signum() <= 0) {
             return false;
         }
 
         String pair = normalizePair(sourceSignal.getSymbol());
+        if(walletCoordination!=null) { walletCoordination.symbol(pair); }
         WalletManagedPosition position = managedPositionRepository
-                .findTopBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
+                .findFirstBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
                 .orElse(null);
+        if(walletCoordination!=null)walletCoordination.mutation();
+        // FIX-125: position precedes mutation; statistics precede cash on every exit.
+        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneOffset.UTC));
+
         if (position == null || position.getId() == null || position.getQuantity() == null
                 || position.getQuantity().signum() <= 0) {
             return false;
         }
 
         String key = "PROFIT_LOCK:" + position.getId();
-        if (tradeRepository.existsByExecutionKey(key)) return true;
+        if (executionExists(key)) return true;
 
         String assetSymbol = pair.substring(0, pair.length() - 4);
+        if(walletCoordination!=null)getOrCreate("USDT");
         WalletAsset coin = getOrCreate(assetSymbol);
         BigDecimal quantity = position.getQuantity().min(coin.getQuantity());
         if (quantity.signum() <= 0) return false;
@@ -436,16 +473,21 @@ public class WalletAutoExecutionService {
      * a newly generated trade signal. The open wallet position is the source of truth.
      */
     @Transactional
-    public synchronized boolean executeMechanicalExit(
+    public boolean executeMechanicalExit(
             String symbol,
             BigDecimal executionPrice,
             String executionReason,
             String executionMessage
     ) {
         String pair = normalizePair(symbol);
+        if(walletCoordination!=null) { walletCoordination.symbol(pair); }
         WalletManagedPosition position = managedPositionRepository
                 .findFirstBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
                 .orElse(null);
+        if(walletCoordination!=null)walletCoordination.mutation();
+        // FIX-125: position precedes mutation; statistics precede cash on every exit.
+        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneOffset.UTC));
+
         if (position == null || position.getId() == null || position.getQuantity() == null
                 || position.getQuantity().signum() <= 0) {
             return false;
@@ -455,9 +497,10 @@ public class WalletAutoExecutionService {
                 ? "MECHANICAL_EXIT"
                 : executionReason.trim().toUpperCase(Locale.ROOT);
         String key = "POSITION:" + position.getId() + ":" + reason;
-        if (tradeRepository.existsByExecutionKey(key)) return true;
+        if (executionExists(key)) return true;
 
         String assetSymbol = pair.substring(0, pair.length() - 4);
+        if(walletCoordination!=null)getOrCreate("USDT");
         WalletAsset coin = getOrCreate(assetSymbol);
         BigDecimal quantity = position.getQuantity().min(coin.getQuantity());
         if (quantity.signum() <= 0) return false;
@@ -529,19 +572,24 @@ public class WalletAutoExecutionService {
      * permanently reserves the harvested allocation gap instead of buying it straight back.
      */
     @Transactional
-    public synchronized PartialHarvestResult executeNearTpPartialHarvest(
+    public PartialHarvestResult executeNearTpPartialHarvest(
             String symbol, BigDecimal executionPrice, String executionMessage) {
         String pair = normalizePair(symbol);
+        if(walletCoordination!=null) { walletCoordination.symbol(pair); }
         WalletManagedPosition position = managedPositionRepository
                 .findFirstBySymbolAndStatusOrderByOpenedAtDesc(pair, "OPEN")
                 .orElse(null);
+        if(walletCoordination!=null)walletCoordination.mutation();
+        // FIX-125: position precedes mutation; statistics precede cash on every exit.
+        dailyStatisticsRepository.findForUpdateByTradeDate(LocalDate.now(ZoneOffset.UTC));
+
         if (position == null || position.getId() == null || position.getQuantity() == null
                 || position.getQuantity().signum() <= 0) {
             return PartialHarvestResult.notExecuted("NO_OPEN_POSITION");
         }
 
         String key = "POSITION:" + position.getId() + ":NEAR_TP_PARTIAL_HARVEST";
-        if (tradeRepository.existsByExecutionKey(key)) {
+        if (executionExists(key)) {
             return PartialHarvestResult.notExecuted("ALREADY_EXECUTED");
         }
         if (position.isNearTpHarvestUsed()) {
@@ -549,6 +597,7 @@ public class WalletAutoExecutionService {
         }
 
         String assetSymbol = pair.substring(0, pair.length() - 4);
+        if(walletCoordination!=null)getOrCreate("USDT");
         WalletAsset coin = getOrCreate(assetSymbol);
         BigDecimal requested = position.getQuantity().multiply(BigDecimal.valueOf(0.50), MC);
         BigDecimal quantity = requested.min(position.getQuantity()).min(coin.getQuantity());
@@ -667,7 +716,9 @@ public class WalletAutoExecutionService {
     }
 
     private WalletSettings settings() {
-        return settingsRepository.findById(1L).orElseGet(() -> settingsRepository.save(
+        var current=walletCoordination==null ? settingsRepository.findById(1L) : settingsRepository.findCurrentForUpdate();
+        if(walletCoordination!=null)current.ifPresent(value->walletEntityManager.refresh(value,jakarta.persistence.LockModeType.PESSIMISTIC_WRITE));
+        return current.orElseGet(() -> settingsRepository.save(
                 WalletSettings.builder().id(1L).baseTradeAmountUsdt(BigDecimal.valueOf(100))
                         .minimumUsdtReserve(ZERO).maximumDailyNewPositions(0)
                         .performanceWindowType("LAST_TRADES").performanceTradeCount(20).performancePeriodDays(1)
@@ -681,8 +732,12 @@ public class WalletAutoExecutionService {
                         .updatedAt(Instant.now()).build()));
     }
 
+    private boolean executionExists(String key) {
+        return walletCoordination==null ? tradeRepository.existsByExecutionKey(key)
+            : !tradeRepository.findExecutionIdsForUpdate(key).isEmpty();
+    }
     private WalletAsset getOrCreate(String symbol) {
-        return assetRepository.findBySymbol(symbol).orElseGet(() -> assetRepository.save(
+        return currentAsset(symbol).orElseGet(() -> assetRepository.save(
                 WalletAsset.builder().symbol(symbol).quantity(ZERO)
                         .averageBuyPriceUsdt("USDT".equals(symbol) ? BigDecimal.ONE : null)
                         .enabled(true).build()));

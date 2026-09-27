@@ -20,6 +20,10 @@ import java.util.function.Function;
  * existing body after it has begun; only the new initial lock is retry-marked. */
 @Service
 public class SignalProcessingCoordinator {
+    // FIX-125 mandatory in Spring; null only in existing constructor-only policy tests.
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.crypto.wallet.service.WalletTransactionCoordination walletCoordination;
+
     private static final Logger log=LoggerFactory.getLogger(SignalProcessingCoordinator.class);
     private final SignalProcessingStore store;
     private final TradeSignalRepository signals;
@@ -34,14 +38,19 @@ public class SignalProcessingCoordinator {
     }
     public Optional<PaperPosition> process(long signalId, boolean background,
             Function<TradeSignal,Optional<PaperPosition>> business) {
+        return process(signalId,background,business,null);
+    }
+    public Optional<PaperPosition> process(long signalId, boolean background,
+            Function<TradeSignal,Optional<PaperPosition>> business, Long sourceEventId) {
         if(TransactionSynchronizationManager.isActualTransactionActive())
             throw new IllegalStateException("FIX-127 caller must be outside the processing transaction");
-        if(!background) {
+        if(!background && !store.exists(signalId)) {
             // Automatic callers have already registered atomically with creation.
             // Explicit existing-signal calls register only at the user's request.
             transaction.executeWithoutResult(tx->store.register(signals.findById(signalId)
                     .orElseThrow(()->new IllegalArgumentException("Signal not found: "+signalId)),ProcessingOrigin.EXPLICIT));
         }
+        store.requireSourceOwner(signalId,sourceEventId);
         for(int localAttempt=0;localAttempt<2;localAttempt++) {
             var work=store.claim(signalId,background);
             if(work==null) {
@@ -52,6 +61,7 @@ public class SignalProcessingCoordinator {
                     signalId,work.symbol(),work.interval(),work.candleOpenTime(),work.origin(),work.attempts(),background);
             try {
                 Optional<PaperPosition> result=transaction.execute(tx->{
+                    if(walletCoordination!=null)walletCoordination.symbol(work.symbol());
                     var owned=store.locked(signalId);
                     if(owned==null || !"RUNNING".equals(owned.status()) || !work.owner().equals(owned.owner()))
                         throw new IllegalStateException("FIX-127 processing ownership changed");
@@ -63,6 +73,7 @@ public class SignalProcessingCoordinator {
                         if(InitialPositionLockDeadlock.isMysqlDeadlock(ex))throw new InitialLockFailure(ex);
                         throw ex;
                     }
+                    store.requireSourceOwner(signalId,sourceEventId);
                     // Read signal/freshness after lock acquisition: lock wait must not
                     // consume the recovery grace before it is checked, or establish an
                     // ordinary repeatable-read snapshot before the position is locked.

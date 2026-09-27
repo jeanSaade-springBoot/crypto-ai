@@ -30,6 +30,10 @@ import java.util.Locale;
 @RequiredArgsConstructor
 @Slf4j
 public class LivePositionProtectionService {
+    // FIX-125 mandatory in Spring; null only in existing constructor-only policy tests.
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.crypto.wallet.service.WalletTransactionCoordination walletCoordination;
+
     private static final MathContext MC = MathContext.DECIMAL64;
 
     private final WalletManagedPositionRepository managedPositionRepository;
@@ -50,6 +54,7 @@ public class LivePositionProtectionService {
 
         // FIX-124: classify ONLY the first lock failure. The caller may retry after
         // rollback in a fresh transaction; failures after evaluation are not retried.
+        if(walletCoordination!=null)walletCoordination.symbol(symbol);
         WalletManagedPosition managed;
         try {
             managed = managedPositionRepository

@@ -1,0 +1,822 @@
+--- prior-integrated/src/main/java/com/crypto/CryptoAiTraderApplication.java
++++ candidate/src/main/java/com/crypto/CryptoAiTraderApplication.java
+@@ -23,7 +23,11 @@
+ public class CryptoAiTraderApplication {
+ 
+     public static void main(String[] args) {
+-        SpringApplication.run(CryptoAiTraderApplication.class, args);
++        // FIX-132: explicit maintenance process, not a runtime toggle. The isolated
++        // context has no component scan, wallet, WebSocket, scheduler or consumer.
++        Class<?> application=java.util.Arrays.asList(args).contains("--fix132-approval-console=true")
++            ? com.fix132.approval.CutoverApprovalApplication.class : CryptoAiTraderApplication.class;
++        SpringApplication.run(application, args);
+         
+     }
+ }
+--- prior-integrated/src/main/java/com/crypto/shared/SharedMarketConsumer.java
++++ candidate/src/main/java/com/crypto/shared/SharedMarketConsumer.java
+@@ -331,6 +331,28 @@
+                     // protection has already quarantined this symbol.
+                     var state=lockSymbol(str(e,"symbol"));
+                     if(!SharedCutoverPolicy.admitted(state,source.enabled()))return 0;
++                    // FIX-132: recheck with CURRENT locking reads, not a repeatable-read
++                    // discovery snapshot. The symbol row serializes admissions across JVMs.
++                    var candidate=jdbc.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=? FOR UPDATE",id);
++                    if(!Set.of("PENDING","HISTORICAL_DEFERRED").contains(str(candidate,"analysis_status"))
++                        || num(candidate,"phase")!=4)return 0;
++                    var eligible=jdbc.queryForList("SELECT source_event_id FROM shared_market_event_delivery WHERE source_event_id=? AND (analysis_not_before IS NULL OR analysis_not_before<CURRENT_TIMESTAMP(6)) FOR UPDATE",id);
++                    if(eligible.isEmpty())return 0;
++                    var blockers=jdbc.queryForList("""
++                        SELECT source_event_id,analysis_status,candle_open_time,symbol_sequence FROM shared_market_event_delivery
++                        WHERE symbol=? AND interval_code=? AND source_event_id<>?
++                        AND analysis_status IN ('PENDING','RUNNING','REVIEW_REQUIRED','HISTORICAL_DEFERRED') FOR UPDATE
++                        """,str(e,"symbol"),str(e,"interval_code"),id);
++                    boolean blocked=blockers.stream().anyMatch(p -> {
++                        String status=str(p,"analysis_status");
++                        // Even a higher sequence already RUNNING blocks an older deferred row.
++                        if(Set.of("RUNNING","REVIEW_REQUIRED").contains(status))return true;
++                        if(num(p,"symbol_sequence")>=num(candidate,"symbol_sequence"))return false;
++                        return !("HISTORICAL_DEFERRED".equals(status)
++                            && Objects.equals(p.get("candle_open_time"),candidate.get("candle_open_time"))
++                            && "COMPLETED".equals(candidate.get("status")));
++                    });
++                    if(blocked)return 0;
+                     return jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='RUNNING',owner_token=?,analysis_started_at=CURRENT_TIMESTAMP(6) WHERE source_event_id=? AND analysis_status IN ('PENDING','HISTORICAL_DEFERRED')",owner,id);
+                 });
+                 } catch(RuntimeException claimFailure) {
+@@ -350,9 +372,13 @@
+                         outcome=analysis.processShared(new CandleClosedEvent(str(e,"symbol"),str(e,"interval_code"),time(e,"candle_open_time")),time(e,"candle_close_time"),live,id);
+                     } catch(Exception ex) { log.error("[FIX-132][ANALYSIS_FAILED] event={}",id,ex); }
+                     finally {
+-                        try { jdbc.update("UPDATE shared_market_event_delivery SET analysis_status=?,analysis_completed_at=CURRENT_TIMESTAMP(6) WHERE source_event_id=? AND owner_token=? AND analysis_status IN ('RUNNING','REVIEW_REQUIRED')",outcome,id,owner);
+-                            if("COMPLETED".equals(outcome) || "ALREADY_COMPLETED".equals(outcome))
++                        final String completedOutcome=outcome;
++                        try { transaction.executeWithoutResult(tx->{
++                            lockSymbol(str(e,"symbol"));
++                            int updated=jdbc.update("UPDATE shared_market_event_delivery SET analysis_status=?,analysis_completed_at=CURRENT_TIMESTAMP(6) WHERE source_event_id=? AND owner_token=? AND analysis_status IN ('RUNNING','REVIEW_REQUIRED')",completedOutcome,id,owner);
++                            if(updated==1 && ("COMPLETED".equals(completedOutcome) || "ALREADY_COMPLETED".equals(completedOutcome)))
+                                 jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='COVERED_BY_LIVE',analysis_completed_at=CURRENT_TIMESTAMP(6) WHERE symbol=? AND interval_code=? AND candle_open_time=? AND analysis_status='HISTORICAL_DEFERRED'",str(e,"symbol"),str(e,"interval_code"),e.get("candle_open_time"));
++                        });
+                             log.info("[FIX-132][ANALYSIS_COMPLETED] event={}, outcome={}",id,outcome);
+                         } finally { activeAnalysis.remove(lane); }
+                     }
+--- prior-integrated/src/main/java/com/crypto/wallet/service/WalletMutationRepositoryGuard.java
++++ candidate/src/main/java/com/crypto/wallet/service/WalletMutationRepositoryGuard.java
+@@ -0,0 +1,31 @@
++package com.crypto.wallet.service;
++
++import org.aopalliance.intercept.MethodInterceptor;
++import org.springframework.aop.framework.ProxyFactory;
++import org.springframework.beans.factory.config.BeanPostProcessor;
++import org.springframework.stereotype.Component;
++import java.util.Set;
++
++/** FIX-125: fail before a shared-wallet write/locking read if the caller skipped
++ * the global guard. This wraps Spring Data interfaces, including inherited save
++ * methods. It is not authorization for arbitrary raw SQL or EntityManager use;
++ * the named source-inventory test prohibits adding such wallet writers silently. */
++@Component
++public class WalletMutationRepositoryGuard implements BeanPostProcessor {
++    private static final Set<String> GUARDED=Set.of("walletAssetRepository","walletDailyStatisticsRepository",
++        "walletSettingsRepository","walletTradeRepository","walletCashFlowRepository","walletSnapshotRepository");
++    public static void check(String repository,String method) {
++        if(GUARDED.contains(repository) && (method.startsWith("save") || method.startsWith("delete") || method.equals("flush")
++            || method.contains("ForUpdate") || method.equals("creditQuantity") || method.equals("debitQuantityIfSufficient")))
++            WalletTransactionCoordination.requireMutation();
++    }
++    @Override public Object postProcessAfterInitialization(Object bean,String name) {
++        if(!GUARDED.contains(name))return bean;
++        ProxyFactory proxy=new ProxyFactory(bean);
++        proxy.addAdvice((MethodInterceptor) call->{
++            check(name,call.getMethod().getName());
++            return call.proceed();
++        });
++        return proxy.getProxy();
++    }
++}
+--- prior-integrated/src/main/java/com/crypto/wallet/service/WalletTransactionCoordination.java
++++ candidate/src/main/java/com/crypto/wallet/service/WalletTransactionCoordination.java
+@@ -18,6 +18,8 @@
+ @Service
+ public class WalletTransactionCoordination {
+     private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(WalletTransactionCoordination.class);
++    @org.springframework.beans.factory.annotation.Autowired(required=false)
++    private io.micrometer.core.instrument.MeterRegistry meters;
+     private final JdbcTemplate jdbc;
+     private final TransactionTemplate provisioning;
+     public WalletTransactionCoordination(JdbcTemplate jdbc, PlatformTransactionManager manager) {
+@@ -34,32 +36,63 @@
+     // No pooled SESSION variables are changed. Cancellation propagates to the owner,
+     // which rolls back the whole transaction; uncertain business work is never retried.
+     public void symbol(String symbol) {
+-        requireTransaction();String key=normalize(symbol);long start=System.nanoTime();
++        requireTransaction();String key=normalize(symbol);
++        if(TransactionSynchronizationManager.getSynchronizations().stream().anyMatch(s->s instanceof SymbolOwnership owned && owned.symbol.equals(key)))return;
++        if(mutationHeld())throw new IllegalStateException("[FIX-125][LOCK_ORDER] cannot acquire new symbol after wallet mutation guard");
++        long start=System.nanoTime();
+         var rows=jdbc.query(connection->{
+             var statement=connection.prepareStatement("SELECT symbol FROM wallet_symbol_coordination WHERE symbol=? FOR UPDATE");
+             statement.setQueryTimeout(2);statement.setString(1,key);return statement;
+         },(rs,n)->rs.getString(1));
+         if(rows.size()!=1)throw new IllegalStateException("[FIX-125][UNPROVISIONED_SYMBOL] "+key);
++        TransactionSynchronizationManager.registerSynchronization(new SymbolOwnership(key));
+         timing("SYMBOL",key,start);
+     }
+     public void mutation() {
+-        requireTransaction();long start=System.nanoTime();
++        requireTransaction();
++        if(mutationHeld())return; // Re-entrant within this transaction only, never across REQUIRES_NEW.
++        long start=System.nanoTime();
+         var ids=jdbc.query(connection->{
+             var statement=connection.prepareStatement("SELECT id FROM wallet_mutation_coordination WHERE id=1 FOR UPDATE");
+             statement.setQueryTimeout(2);return statement;
+         },(rs,n)->rs.getInt(1));
+         if(ids.size()!=1)throw new IllegalStateException("FIX-125 mutation guard missing");
++        TransactionSynchronizationManager.registerSynchronization(new MutationOwnership());
+         timing("MUTATION","WALLET",start);
+     }
++    /** Synchronizations are suspended by Spring with their owning transaction.
++     * A plain ThreadLocal would incorrectly authorize a nested REQUIRES_NEW writer. */
++    private static final class SymbolOwnership implements TransactionSynchronization {
++        private final String symbol;
++        private SymbolOwnership(String symbol){this.symbol=symbol;}
++    }
++    private static final class MutationOwnership implements TransactionSynchronization {}
++    public static boolean mutationHeld() {
++        return TransactionSynchronizationManager.isActualTransactionActive()
++            && TransactionSynchronizationManager.isSynchronizationActive()
++            && TransactionSynchronizationManager.getSynchronizations().stream().anyMatch(MutationOwnership.class::isInstance);
++    }
++    public static void requireMutation() {
++        if(!mutationHeld())throw new IllegalStateException("[FIX-125][MUTATION_REQUIRED] wallet repository access without transaction-owned guard");
++    }
+     private void timing(String stage,String symbol,long start) {
+-        long wait=(System.nanoTime()-start)/1_000_000;
++        long acquired=System.nanoTime();
++        long wait=(acquired-start)/1_000_000;
++        if(meters!=null)io.micrometer.core.instrument.Timer.builder("wallet.coordination.wait")
++            .tag("stage",stage).publishPercentileHistogram().register(meters)
++            .record(acquired-start,java.util.concurrent.TimeUnit.NANOSECONDS);
+         if(wait>=100)log.warn("[FIX-125][LOCK_WAIT] stage={}, symbol={}, waitMs={}",stage,symbol,wait);
+         else log.debug("[FIX-125][LOCK_ACQUIRED] stage={}, symbol={}, waitMs={}",stage,symbol,wait);
+         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization(){
+             @Override public void afterCompletion(int status) {
+-                long elapsed=(System.nanoTime()-start)/1_000_000;
++                long completed=System.nanoTime();
++                long elapsed=(completed-start)/1_000_000;
++                if(meters!=null)io.micrometer.core.instrument.Timer.builder("wallet.coordination.hold")
++                    .tag("stage",stage).tag("outcome",status==STATUS_COMMITTED?"COMMITTED":"ROLLED_BACK")
++                    .publishPercentileHistogram().register(meters)
++                    .record(completed-acquired,java.util.concurrent.TimeUnit.NANOSECONDS);
+                 if(status!=STATUS_COMMITTED || wait>=100 || elapsed>=1000)
+-                    log.info("[FIX-125][TX_COMPLETED] stage={}, symbol={}, outcome={}, elapsedMs={}",stage,symbol,status==STATUS_COMMITTED?"COMMITTED":"ROLLED_BACK",elapsed);
++                    log.info("[FIX-125][TX_COMPLETED] stage={}, symbol={}, outcome={}, waitMs={}, holdMs={}, elapsedMs={}",stage,symbol,status==STATUS_COMMITTED?"COMMITTED":"ROLLED_BACK",wait,(System.nanoTime()-acquired)/1_000_000,elapsed);
+                 else log.debug("[FIX-125][TX_COMPLETED] stage={}, symbol={}, outcome=COMMITTED, elapsedMs={}",stage,symbol,elapsed);
+             }
+         });
+--- prior-integrated/src/main/java/com/fix132/approval/CutoverApprovalApplication.java
++++ candidate/src/main/java/com/fix132/approval/CutoverApprovalApplication.java
+@@ -0,0 +1,25 @@
++package com.fix132.approval;
++
++import com.crypto.shared.SharedMarketSource;
++import org.springframework.context.annotation.*;
++import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
++import org.springframework.core.env.Environment;
++import org.springframework.security.config.annotation.web.builders.HttpSecurity;
++import org.springframework.security.web.SecurityFilterChain;
++import org.springframework.security.provisioning.JdbcUserDetailsManager;
++import javax.sql.DataSource;
++
++/** Deliberately outside com.crypto's component scan. Launch with the explicit
++ * --fix132-approval-console=true argument after stopping ALL Trader instances.
++ * No @EnableScheduling / application component scan / business services. */
++@Configuration(proxyBeanMethods=false)
++@EnableAutoConfiguration(excludeName={"org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration",
++    "org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration"})
++@Import({SharedMarketSource.class,CutoverApprovalService.class,CutoverApprovalController.class,CutoverApprovalSecurity.class})
++public class CutoverApprovalApplication {
++    @Bean Object requireObservationMode(Environment env) {
++        if(!"OBSERVE".equals(env.getProperty("shared-market.mode","OFF")))
++            throw new IllegalStateException("FIX-132 approval console requires OBSERVE; never LIVE");
++        return new Object();
++    }
++}
+--- prior-integrated/src/main/java/com/fix132/approval/CutoverApprovalController.java
++++ candidate/src/main/java/com/fix132/approval/CutoverApprovalController.java
+@@ -0,0 +1,31 @@
++package com.fix132.approval;
++
++import org.springframework.web.bind.annotation.*;
++import org.springframework.security.core.Authentication;
++import org.springframework.security.web.csrf.CsrfToken;
++import java.util.Map;
++
++@RestController
++@RequestMapping("/api/fix132/cutover")
++public class CutoverApprovalController {
++    private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(CutoverApprovalController.class);
++    private final CutoverApprovalService service;
++    public CutoverApprovalController(CutoverApprovalService service){this.service=service;}
++    @GetMapping("/csrf") public Map<String,String> csrf(CsrfToken token) {
++        return Map.of("headerName",token.getHeaderName(),"token",token.getToken());
++    }
++    public record Preview(String symbol,String operation) {}
++    public record Approval(String proposalId,String reference) {}
++    @PostMapping("/preview") public Map<String,Object> preview(@RequestBody Preview request,Authentication auth) {
++        return service.preview(request.symbol(),request.operation(),auth);
++    }
++    @PostMapping("/approve") public Map<String,Object> approve(@RequestBody Approval request,Authentication auth) {
++        return service.approve(request.proposalId(),request.reference(),auth);
++    }
++    @ExceptionHandler(IllegalStateException.class)
++    @ResponseStatus(org.springframework.http.HttpStatus.CONFLICT)
++    public Map<String,String> conflict(IllegalStateException e){log.warn("[FIX-132][CUTOVER_REJECTED] {}",e.getMessage());return Map.of("error",e.getMessage());}
++    @ExceptionHandler(IllegalArgumentException.class)
++    @ResponseStatus(org.springframework.http.HttpStatus.BAD_REQUEST)
++    public Map<String,String> invalid(IllegalArgumentException e){return Map.of("error",e.getMessage());}
++}
+--- prior-integrated/src/main/java/com/fix132/approval/CutoverApprovalSecurity.java
++++ candidate/src/main/java/com/fix132/approval/CutoverApprovalSecurity.java
+@@ -0,0 +1,23 @@
++package com.fix132.approval;
++
++import org.springframework.context.annotation.*;
++import org.springframework.security.config.annotation.web.builders.HttpSecurity;
++import org.springframework.security.web.SecurityFilterChain;
++import org.springframework.security.provisioning.JdbcUserDetailsManager;
++import javax.sql.DataSource;
++
++@Configuration(proxyBeanMethods=false)
++public class CutoverApprovalSecurity {
++    @Bean SecurityFilterChain approvalSecurity(HttpSecurity http) throws Exception {
++        // CSRF remains ENABLED. Authentication and permission are separate gates.
++        return http.authorizeHttpRequests(a->a.requestMatchers("/api/fix132/cutover/**").hasRole("CUTOVER_APPROVER")
++            .anyRequest().denyAll()).httpBasic(org.springframework.security.config.Customizer.withDefaults())
++            .build();
++    }
++    @Bean JdbcUserDetailsManager approvalUsers(DataSource dataSource) {
++        var users=new JdbcUserDetailsManager(dataSource);
++        users.setUsersByUsernameQuery("SELECT username,password,enabled FROM app_user WHERE username=?");
++        users.setAuthoritiesByUsernameQuery("SELECT username,CONCAT('ROLE_',role_name) FROM app_user WHERE username=? AND enabled=TRUE");
++        return users;
++    }
++}
+--- prior-integrated/src/main/java/com/fix132/approval/CutoverApprovalService.java
++++ candidate/src/main/java/com/fix132/approval/CutoverApprovalService.java
+@@ -0,0 +1,114 @@
++package com.fix132.approval;
++
++import com.crypto.shared.SharedMarketSource;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.transaction.PlatformTransactionManager;
++import org.springframework.transaction.support.TransactionTemplate;
++import org.springframework.security.core.Authentication;
++import org.springframework.security.access.AccessDeniedException;
++import org.slf4j.*;
++import java.util.*;
++import java.sql.Timestamp;
++import java.time.Instant;
++import java.nio.charset.StandardCharsets;
++import java.security.MessageDigest;
++
++/** FIX-132: isolated maintenance approval. Source reads finish before local
++ * locking begins: there is no cross-datasource atomicity or XA claim. Advancing
++ * source cursors do not change the reviewed boundary. Freshness is still required
++ * later by the LIVE consumer. All old Trader processes MUST be stopped first. */
++public class CutoverApprovalService {
++    private static final Logger log=LoggerFactory.getLogger(CutoverApprovalService.class);
++    private final JdbcTemplate jdbc;
++    private final SharedMarketSource source;
++    private final TransactionTemplate tx;
++    public CutoverApprovalService(JdbcTemplate jdbc,SharedMarketSource source,PlatformTransactionManager manager) {
++        this.jdbc=jdbc;this.source=source;tx=new TransactionTemplate(manager);tx.setTimeout(5);
++        tx.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
++    }
++    private String authorize(Authentication auth) {
++        if(auth==null || !auth.isAuthenticated() || auth.getAuthorities().stream().noneMatch(a->"ROLE_CUTOVER_APPROVER".equals(a.getAuthority())))
++            throw new AccessDeniedException("FIX-132 CUTOVER_APPROVER permission required");
++        if(!"OBSERVE".equals(source.mode()))throw new IllegalStateException("FIX-132 approval requires isolated OBSERVE console");
++        if(auth.getName()==null || auth.getName().isBlank() || auth.getName().length()>160)throw new AccessDeniedException("Invalid approval identity");
++        return auth.getName();
++    }
++    public Map<String,Object> preview(String symbol,String operation,Authentication auth) {
++        String actor=authorize(auth);
++        if(symbol==null || !symbol.matches("[A-Z0-9]{1,26}USDT") || !Set.of("FIRST_CUTOVER","REAPPROVAL").contains(operation==null?"":operation))
++            throw new IllegalArgumentException("Exact symbol and FIRST_CUTOVER or REAPPROVAL required");
++        // One source statement captures committed cursor plus explicit UTC time.
++        // SharedMarketSource forces this connection session and JDBC mapping to UTC.
++        var boundary=source.feedReader().queryForObject("SELECT last_sequence,CURRENT_TIMESTAMP(6) AS cutover_at FROM market_data_stream_cursor WHERE symbol=?",(rs,n)->Map.<String,Object>of("last_sequence",rs.getLong("last_sequence"),"cutover_at",rs.getTimestamp("cutover_at")),symbol);
++        return tx.execute(t->{
++            var state=state(symbol);check(state,symbol,operation);
++            long latest=((Number)boundary.get("last_sequence")).longValue();
++            if(latest<((Number)state.get("discovered_sequence")).longValue())throw new IllegalStateException("Source sequence regressed");
++            // Re-approval preserves the original boundary and progress. It is NOT
++            // permission to skip history by moving an already-live cutover forward.
++            long sequence=((Number)("REAPPROVAL".equals(operation)?state.get("cutover_sequence"):boundary.get("last_sequence"))).longValue();
++            String id=UUID.randomUUID().toString();Timestamp at=(Timestamp)("REAPPROVAL".equals(operation)?state.get("cutover_at"):boundary.get("cutover_at"));
++            Timestamp expires=Timestamp.from(Instant.now().plusSeconds(300));
++            jdbc.update("INSERT INTO shared_market_cutover_proposal(id,symbol,operation,requested_by,base_state_hash,cutover_sequence,cutover_at,expires_at) VALUES(?,?,?,?,?,?,?,?)",
++                id,symbol,operation,actor,hash(state),sequence,at,expires);
++            log.info("[FIX-132][CUTOVER_PREVIEW] proposal={}, symbol={}, operation={}, actor={}, sequence={}, cutoverUtc={}",id,symbol,operation,actor,sequence,at.toInstant());
++            return Map.<String,Object>of("proposalId",id,"symbol",symbol,"operation",operation,"cutoverSequence",sequence,"cutoverUtc",at.toInstant(),"expiresUtc",expires.toInstant());
++        });
++    }
++    public Map<String,Object> approve(String id,String reference,Authentication auth) {
++        String actor=authorize(auth);
++        if(id==null || !id.matches("[a-f0-9-]{36}") || reference==null || reference.isBlank() || reference.length()>255 || reference.chars().anyMatch(Character::isISOControl))
++            throw new IllegalArgumentException("Reviewed proposalId and nonblank approval reference required");
++        var proposal=jdbc.queryForMap("SELECT * FROM shared_market_cutover_proposal WHERE id=?",id);
++        String symbol=(String)proposal.get("symbol");
++        Long latest=source.feedReader().queryForObject("SELECT last_sequence FROM market_data_stream_cursor WHERE symbol=?",Long.class,symbol);
++        var result=tx.execute(t->{
++            // Same symbol serialization as consumer phase/claim transactions.
++            var state=state(symbol);
++            var p=jdbc.queryForMap("SELECT * FROM shared_market_cutover_proposal WHERE id=? FOR UPDATE",id);
++            if(p.get("consumed_at")!=null || ((Timestamp)p.get("expires_at")).toInstant().isBefore(Instant.now())
++                || !actor.equals(p.get("requested_by")) || !hash(state).equals(p.get("base_state_hash")))
++                throw new IllegalStateException("FIX-132 consumed, expired, changed or differently-owned proposal; preview again");
++            check(state,symbol,(String)p.get("operation"));
++            long sequence=((Number)p.get("cutover_sequence")).longValue();
++            if(latest==null || latest<Math.max(sequence,((Number)state.get("discovered_sequence")).longValue()))throw new IllegalStateException("Source sequence regressed");
++            Timestamp at=(Timestamp)p.get("cutover_at"),approved=Timestamp.from(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS));
++            jdbc.update("INSERT INTO shared_market_cutover_approval(symbol,cutover_sequence,cutover_at,approved_by,approved_at,approval_reference) VALUES(?,?,?,?,?,?)",symbol,sequence,at,actor,approved,reference);
++            if("FIRST_CUTOVER".equals(p.get("operation")))
++                jdbc.update("UPDATE shared_market_consumer_state SET cutover_sequence=?,cutover_at=?,discovered_sequence=?,last_observed_at=NULL,last_price=NULL WHERE symbol=?",sequence,at,sequence,symbol);
++            jdbc.update("""
++                UPDATE shared_market_consumer_state SET status='READY',cutover_source='OPERATOR_APPROVED',
++                approved_sequence=?,approved_cutover_at=?,approved_by=?,approved_at=?,approval_reference=? WHERE symbol=?
++                """,sequence,at,actor,approved,reference,symbol);
++            jdbc.update("UPDATE shared_market_cutover_proposal SET consumed_at=? WHERE id=?",approved,id);
++            return Map.<String,Object>of("symbol",symbol,"cutoverSequence",sequence,"cutoverUtc",at.toInstant(),"approvedBy",actor,"approvalReference",reference,"liveEnabled",false);
++        });
++        log.info("[FIX-132][CUTOVER_APPROVED] proposal={}, symbol={}, actor={}, reference={}; activation remains separate",id,symbol,actor,reference);
++        return result;
++    }
++    private Map<String,Object> state(String symbol) {
++        var rows=jdbc.queryForList("SELECT * FROM shared_market_consumer_state WHERE symbol=? FOR UPDATE",symbol);
++        if(rows.size()!=1)throw new IllegalStateException("Observe symbol first; missing state");return rows.getFirst();
++    }
++    private void check(Map<String,Object> state,String symbol,String operation) {
++        if(!Set.of("PENDING_CUTOVER","READY").contains(state.get("status")))throw new IllegalStateException("Quarantined symbol requires separate reconciliation");
++        int prior=jdbc.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_approval WHERE symbol=?",Integer.class,symbol);
++        int history=jdbc.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_history WHERE symbol=?",Integer.class,symbol);
++        if((prior==0 && history==0)!=operation.equals("FIRST_CUTOVER"))throw new IllegalStateException("Use explicit FIRST_CUTOVER or REAPPROVAL for this symbol");
++        var work=jdbc.queryForList("SELECT signal_id,status,source_event_id FROM signal_processing_work WHERE symbol=? AND status NOT IN ('COMPLETED','EXPIRED') LIMIT 25",symbol);
++        if(!work.isEmpty())throw new IllegalStateException("Unfinished processing work: "+work);
++        var delivery=jdbc.queryForList("""
++            SELECT source_event_id,status,analysis_status FROM shared_market_event_delivery WHERE symbol=?
++            AND (phase<4 OR status='REVIEW_REQUIRED' OR analysis_status IN ('PENDING','RUNNING','REVIEW_REQUIRED','HISTORICAL_DEFERRED')) LIMIT 25
++            """,symbol);
++        if(!delivery.isEmpty())throw new IllegalStateException("Unfinished delivery work: "+delivery);
++    }
++    private static String hash(Map<String,Object> state) {
++        try {
++            // Includes approval provenance and discovery position: no stale preview may
++            // overwrite a concurrently progressed, approved or quarantined symbol.
++            String value=new TreeMap<>(state).toString();
++            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
++        } catch(java.security.NoSuchAlgorithmException e){throw new IllegalStateException(e);}
++    }
++}
+--- prior-integrated/src/main/resources/db/migration/V94__fix_132_reviewed_cutover_proposal.sql
++++ candidate/src/main/resources/db/migration/V94__fix_132_reviewed_cutover_proposal.sql
+@@ -0,0 +1,8 @@
++-- FIX-132: short-lived, operator-reviewed proposals. No approvals are inferred.
++CREATE TABLE shared_market_cutover_proposal (
++ id VARCHAR(36) PRIMARY KEY, symbol VARCHAR(30) NOT NULL,
++ operation VARCHAR(20) NOT NULL, requested_by VARCHAR(160) NOT NULL,
++ base_state_hash VARCHAR(64) NOT NULL,
++ cutover_sequence BIGINT NOT NULL, cutover_at TIMESTAMP(6) NOT NULL,
++ expires_at TIMESTAMP(6) NOT NULL, consumed_at TIMESTAMP(6) NULL
++) ENGINE=InnoDB;
+--- prior-integrated/src/main/resources/static/js/fix-registry.js
++++ candidate/src/main/resources/static/js/fix-registry.js
+@@ -2,14 +2,14 @@
+     const FIXES = [
+         {"id": "FIX-133", "title": "Collector historical/live ordering timestamp provenance", "status": "PLANNED — TO BE DONE; LIVE BLOCKER", "scenario": "Collector historical/live ordering timestamp provenance", "cause": "See md/FIX-133.md for source evidence and limitations.", "solution": "Separate recovery wall-clock observations from live Binance ordering authority; test both arrival orders. Trader does not relabel OUT_OF_ORDER events.", "behavior": "Separate tracked causal surface; no scoring or sizing changes.", "regression": "See md/FIX-132-test-results.txt for Trader evidence; collector FIX-133 has no implementation/test claim here.", "symbol": "ALL", "entry": "UNCHANGED RULES", "exit": "UNCHANGED RULES", "entryTime": "UNCHANGED POLICY", "exitTime": "UNCHANGED POLICY", "replayWindow": "No future Production authority imported into Replay.", "location": "md/FIX-133.md", "classes": ["md/FIX-133.md"]},
+         {"id": "FIX-134", "title": "Shared wallet asset writer coordination", "status": "IMPLEMENTED REVIEW CANDIDATE", "scenario": "Shared wallet asset writer coordination", "cause": "See md/FIX-134.md for source evidence and limitations.", "solution": "Manual/automatic coin updates and cash/settings writers share transaction-lifetime mutation guard and current reads; no manual-position lifecycle redesign.", "behavior": "Separate tracked causal surface; no scoring or sizing changes.", "regression": "See md/FIX-132-test-results.txt for Trader evidence; collector FIX-133 has no implementation/test claim here.", "symbol": "ALL", "entry": "UNCHANGED RULES", "exit": "UNCHANGED RULES", "entryTime": "UNCHANGED POLICY", "exitTime": "UNCHANGED POLICY", "replayWindow": "No future Production authority imported into Replay.", "location": "md/FIX-134.md", "classes": ["md/FIX-134.md"]},
+-        {"id": "FIX-132", "title": "Collector sole-source migration — integrated approval/ownership correction", "status": "IMPLEMENTED REVIEW CANDIDATE — LIVE OFF", "scenario": "Move all Trader candle and live-price inputs to the standalone collector without changing other consumers.", "cause": "Collector permits late timed-out handshakes to escape ownership; complete migration also requires independent event delivery and full candle-read routing.", "solution": "Explicit audited cutover; OBSERVE stays pending; event-owned processing; historical-close deferral; independent delivery phases, source reads and persisted Proven diagnostics.", "behavior": "OFF default. V89–V93 still migrate local schema. LIVE requires acceptance. FIX-125 database coordination included; no automatic candle rename. Collector FIX-133 remains separate.", "regression": "366 standard Maven tests, 32 isolated MySQL tests and 21 JavaScript tests passed; Maven package succeeded. See md/FIX-132-test-results.txt for exact scope. Real-window parity/load acceptance pending.", "symbol": "ALL COLLECTOR KLINE STREAMS", "entry": "UNCHANGED TRADER RULES", "exit": "UNCHANGED TRADER RULES", "entryTime": "Approved source/order/cutover and 15s live protection gate; interval-specific close grace", "exitTime": "Unknown protection outcome stops symbol for review; no automatic crash retry", "replayWindow": "OLD/NEW shared candle reads and applied price evidence; fingerprints detect changed inputs, not historical snapshots. Real-window parity pending.", "location": "SharedMarketConsumer / SharedMarketSource / collector StreamPublisher / md/FIX-132-cutover.md", "classes": ["SharedMarketConsumer", "SharedCutoverPolicy", "SignalProcessingStore", "CandleClosedAnalysisWorker", "SharedMarketSource", "Fix132DiagnosticsController"]},
++        {"id": "FIX-132", "title": "Collector sole-source migration — integrated approval/ownership correction", "status": "IMPLEMENTED REVIEW CANDIDATE — LIVE OFF", "scenario": "Move all Trader candle and live-price inputs to the standalone collector without changing other consumers.", "cause": "Collector permits late timed-out handshakes to escape ownership; complete migration also requires independent event delivery and full candle-read routing.", "solution": "Isolated role/CSRF-protected proposal approval; durable cross-instance analysis admission; explicit audited cutover; OBSERVE stays pending; event-owned processing; historical-close deferral; independent delivery phases, source reads and persisted Proven diagnostics.", "behavior": "OFF default. V89–V94 still migrate local schema. LIVE requires acceptance. FIX-125 database coordination included; no automatic candle rename. Collector FIX-133 remains separate.", "regression": "377 standard Maven tests, 40 isolated MySQL tests and 21 JavaScript tests passed; Maven package succeeded. See md/FIX-132-test-results.txt for exact scope. Real-window parity/load acceptance pending.", "symbol": "ALL COLLECTOR KLINE STREAMS", "entry": "UNCHANGED TRADER RULES", "exit": "UNCHANGED TRADER RULES", "entryTime": "Approved source/order/cutover and 15s live protection gate; interval-specific close grace", "exitTime": "Unknown protection outcome stops symbol for review; no automatic crash retry", "replayWindow": "OLD/NEW shared candle reads and applied price evidence; fingerprints detect changed inputs, not historical snapshots. Real-window parity pending.", "location": "SharedMarketConsumer / SharedMarketSource / collector StreamPublisher / md/FIX-132-cutover.md", "classes": ["SharedMarketConsumer", "SharedCutoverPolicy", "SignalProcessingStore", "CandleClosedAnalysisWorker", "SharedMarketSource", "Fix132DiagnosticsController"]},
+         {"id": "FIX-131", "title": "Managed Binance WebSocket ownership and candle-gap diagnostics", "status": "IMPLEMENTED \u2014 MAVEN PASSED; LIVE VERIFICATION PENDING", "scenario": "Repeated combined-stream disconnections and delayed/missing candles across symbols.", "cause": "Confirmed ownership races in reload/health/late handshake cleanup. Root cause of all observed Pong timeouts and gaps remains unproven.", "solution": "One lifecycle owner, irreversible admission gates, drain and confirmed transport close before reconnect; receipt/commit logs and independent read-only exact-candle gap scans. Temporarily pause FIX-043.", "behavior": "Connection lifecycle and recovery availability change. Hung drain/close can block reconnect. No scoring, sizing, wallet, protection thresholds, Replay business logic, or candle repair changes.", "regression": "327 Maven/JUnit tests passed, 0 failures/errors/skips, including 21 added tests. Mockito supplied as startup agent in this environment. Real Binance/MySQL soak pending.", "symbol": "ALL CONFIGURED KLINE STREAMS", "entry": "UNCHANGED RULES", "exit": "UNCHANGED RULES", "entryTime": "Live availability can change during reconnect/recovery pause", "exitTime": "Live price observations can be unavailable during interruption", "replayWindow": "Replay business code unchanged; Production infrastructure diagnostics only.", "location": "Binance ingestion / application log / read-only candle coverage", "classes": ["BinanceWebSocketManager", "BinanceWebSocketHandler", "GenerationGate", "CandleGapDiagnostics", "KlineReceipt", "KlineTransactionCoordinator", "md/FIX-131.md"]},
+         {"id": "FIX-130", "title": "Durable background price-move block finalization", "status": "CANDIDATE \u2014 MAVEN / MYSQL VALIDATION PENDING", "scenario": "FIX-129 measured 26\u201358 minutes of synchronous finalization per eight-hour rollover across 17 symbols.", "cause": "Retrospective finalization executes in the WebSocket observer before close-event dispatch.", "solution": "Commit immutable completed-block snapshots before tracker reset; enqueue without acquiring the global worker gate. One worker per database runs unchanged retrospective classification off-thread. Expose queue age, pending/finalizing/finalized/retry/review states.", "behavior": "Observer execution and diagnostic read timing change. Live protection ordering, wallet authority, decisions and Replay business code unchanged. Explanations use worker-time evidence; identical rollover-time explanations are not claimed. Active in-memory observations remain non-durable until snapshot commit.", "regression": "10 new JUnit tests authored, unrun: Maven unavailable. 21 Node tests passed; 349 Java files syntax-parsed only. MySQL contention, crash and live rollover verification pending.", "symbol": "ALL SELECTED MONITOR SYMBOLS", "entry": "UNCHANGED RULES", "exit": "UNCHANGED RULES", "entryTime": "Ingestion delays may improve; unmeasured", "exitTime": "Existing live authority preserved", "replayWindow": "Production observer work history only; no simulated execution changes.", "location": "Price-move observer / background worker / Proven review", "classes": ["PriceMoveMonitorService", "PriceMoveBlockSnapshot", "PriceMoveFinalizationStore", "PriceMoveFinalizationWorker", "Fix130DiagnosticsController", "V88__fix_130_price_move_finalization.sql", "md/FIX-130.md"]},
+         {"id": "FIX-129", "title": "Ingestion and eight-hour block timing diagnostics", "status": "CANDIDATE \u2014 MAVEN VALIDATION PENDING", "scenario": "Old candle events dispatched up to nearly 16 minutes late around 02:00 and 10:00 +02:00.", "cause": "Synchronous eight-hour PriceMoveMonitor finalization is a candidate; elapsed stage measurements are needed. No proven root cause.", "solution": "Measure input, protection, observer and dispatch transactions plus block finalization. Log slow/failed stages and all rollovers; persist asynchronously through a bounded reporting-only writer. Show Production history in Proven / Analyze Trades.", "behavior": "Instrumentation only. Existing transactions, retries, ordering, block processing, wallet authority and Replay decisions unchanged. Diagnostics incur overhead.", "regression": "JUnit tests added; Maven execution pending. No live performance or parity result claimed.", "symbol": "ALL", "entry": "UNCHANGED", "exit": "UNCHANGED", "entryTime": "UNCHANGED RULES", "exitTime": "UNCHANGED RULES", "replayWindow": "Production timing overlay; never consumed by Replay decisions.", "location": "Kline ingestion / price monitor / Proven", "classes": ["KlineTiming", "KlineTimingStore", "KlineTransactionCoordinator", "PriceMoveMonitorService", "Fix129DiagnosticsController", "V87__fix_129_stage_timing.sql", "md/FIX-129.md"]},
+         {"id": "FIX-128", "title": "Bounded quarantine transactions and recovery scan isolation", "status": "CANDIDATE \u2014 MAVEN/MYSQL VALIDATION PENDING", "scenario": "FIX-127 recovery scan failed at 2026-09-09 16:45:06 +02:00 during bulk UPDATE signal_processing_work.", "cause": "Quarantine used one range update; its failure also skipped pending recovery. Stack trace identifies the victim operation, not the complete competing lock cycle.", "solution": "Discover at most 50 stale RUNNING candidates without locking; process each under an independent primary-key lock and recheck status, owner and timestamp. Isolate row and discovery failures from pending recovery.", "behavior": "Housekeeping transaction granularity and scan failure isolation change. Review-only semantics, five-minute age, two processing attempts, freshness, wallet rules and Replay decisions unchanged.", "regression": "Seven JUnit tests added; Maven execution pending. MySQL deadlock reproduction remains pending.", "symbol": "ALL", "entry": "UNCHANGED", "exit": "UNCHANGED", "entryTime": "UNCHANGED", "exitTime": "UNCHANGED", "replayWindow": "Production diagnostics overlay only; no simulated rule change.", "location": "Signal processing recovery housekeeping", "classes": ["SignalProcessingStore", "SignalProcessingRecovery", "md/FIX-128.md"]},
+         {"id": "FIX-127", "title": "Signal-path initial lock and durable processing recovery", "status": "CANDIDATE \u2014 MAVEN/MYSQL VALIDATION PENDING", "scenario": "FIX-124 recovered four logged kline incidents; six remaining worker failures reached the managed-position lock through the signal path.", "cause": "Signal processing can write position advice before its locking lookup. Saved signal existence also prevents missing-signal recovery from revisiting an unfinished processing attempt. Exact MySQL competing lock cycle remains unproven.", "solution": "Route worker, eligible scheduled recovery, startup and explicit signal calls through a transaction coordinator. Acquire the initial managed-position lock before the unchanged body; allow at most two total attempts only for initial MySQL 1213/40001. Register work atomically with eligible signal creation and complete it atomically with processing. Recover only fresh automatic work; quarantine interrupted or uncertain attempts.", "behavior": "Production transaction ordering, duplicate handling and failure recovery change. Scoring, sizing and exit formulas are unchanged. Operational trade outcomes can change. Replay business code stays unchanged; Proven displays current Production state as a separate overlay. FIX-124 and FIX-125 remain separate.", "regression": "22 new JUnit/H2 transaction and recovery tests authored; Maven unavailable, tests not run. Fifteen Node tests passed. Java syntax check only; real MySQL contention and historical parity pending.", "symbol": "ALL", "entry": "UNCHANGED RULES; RECOVERY CHANGES", "exit": "UNCHANGED RULES", "entryTime": "Original call or fresh bounded recovery", "exitTime": "Existing authority", "replayWindow": "Identical OLD/NEW windows; no Production ledger used to simulate Replay.", "location": "Shared Production signal entry points / Proven Signal processing", "classes": ["SignalProcessingCoordinator", "SignalProcessingStore", "SignalProcessingRecovery", "SignalProcessingFreshness", "AnalysisService", "PaperTradingService", "Fix127DiagnosticsController", "V86__fix_127_signal_processing.sql", "md/FIX-127.md"]},
+         {"id": "FIX-126", "title": "Preserve complete wallet execution explanations", "status": "CANDIDATE — MAVEN/MYSQL VALIDATION PENDING", "scenario": "BUY signal #634982 failed to persist because execution_message exceeded VARCHAR(1000).", "cause": "Execution explanation plus wallet/price metadata exceeds the schema capacity.", "solution": "V85 widens the nullable audit column to MEDIUMTEXT and matches WalletTrade mapping; preserve complete Unicode messages.", "behavior": "Already-approved BUY/SELL persistence no longer has the 1000-character audit limit. No scoring, sizing, exit rule or historical backfill change.", "regression": "Long BUY/SELL migration round-trip JUnit test added; Maven could not start. MySQL migration/ORM validation pending.", "symbol": "ALL", "entry": "UNCHANGED RULES", "exit": "UNCHANGED RULES", "entryTime": "UNCHANGED", "exitTime": "UNCHANGED", "replayWindow": "No Replay decision changes; compare existing windows.", "location": "Wallet audit persistence", "classes": ["WalletTrade", "V85__fix_126_wallet_execution_message.sql", "md/FIX-126.md"]},
+-        {"id": "FIX-125", "title": "Wallet transaction coordination through commit", "status": "IMPLEMENTED REVIEW CANDIDATE", "scenario": "A synchronized wallet method can release its monitor before the surrounding Spring transaction commits.", "cause": "Method monitor ended before the owning transaction. Flat symbols lack a managed-position row; shared wallet mutation needs commit-lifetime coordination. Earlier direct-caller inversion claim withdrawn.", "solution": "Durable symbol and wallet-wide mutation guards held through outer commit/rollback; current asset/settings/idempotency reads; statistics before cash on exits. Replace body-only monitor, without new business retries.", "behavior": "Transaction concurrency changes; scoring/sizing/exit formulas unchanged. Manual/cash/settings writers join guard under FIX-134. No external exactly-once claim.", "regression": "Deterministic MySQL/JPA transaction tests with real lock-wait observation and wallet-state assertions. See md/FIX-132-test-results.txt; market-strategy and real-window parity are not inferred.", "symbol": "ALL", "entry": "UNCHANGED RULES; TRANSACTION COORDINATION", "exit": "UNCHANGED", "entryTime": "OUTER TRANSACTION COMMIT", "exitTime": "UNCHANGED", "replayWindow": "Shared policy code unchanged; Replay uses historical clocks and no Production locks. Real-window acceptance pending.", "location": "Wallet transaction coordination — separate from FIX-124", "classes": ["WalletTransactionCoordination", "WalletAutoExecutionService", "SignalProcessingCoordinator", "LivePositionProtectionService", "WalletCoordinationMySqlIT", "md/FIX-125.md"]},
++        {"id": "FIX-125", "title": "Wallet transaction coordination through commit", "status": "IMPLEMENTED REVIEW CANDIDATE", "scenario": "A synchronized wallet method can release its monitor before the surrounding Spring transaction commits.", "cause": "Method monitor ended before the owning transaction. Flat symbols lack a managed-position row; shared wallet mutation needs commit-lifetime coordination. Earlier direct-caller inversion claim withdrawn.", "solution": "Durable symbol and wallet-wide mutation guards held through outer commit/rollback; current asset/settings/idempotency reads; statistics before cash on exits. Approved replacement of body-only monitor, without new business retries. Repository assertions enforce mutation ownership, including REQUIRES_NEW isolation; wait/hold histograms expose wallet-wide serialization cost.", "behavior": "Transaction concurrency changes; scoring/sizing/exit formulas unchanged. Manual/cash/settings writers join guard under FIX-134. No external exactly-once claim.", "regression": "Deterministic MySQL/JPA transaction tests with real lock-wait observation and wallet-state assertions. See md/FIX-132-test-results.txt; market-strategy and real-window parity are not inferred.", "symbol": "ALL", "entry": "UNCHANGED RULES; TRANSACTION COORDINATION", "exit": "UNCHANGED", "entryTime": "OUTER TRANSACTION COMMIT", "exitTime": "UNCHANGED", "replayWindow": "Shared policy code unchanged; Replay uses historical clocks and no Production locks. Real-window acceptance pending.", "location": "Wallet transaction coordination — separate from FIX-124", "classes": ["WalletTransactionCoordination", "WalletAutoExecutionService", "SignalProcessingCoordinator", "LivePositionProtectionService", "WalletCoordinationMySqlIT", "md/FIX-125.md"]},
+         {"id": "FIX-124", "title": "Live protection deadlock recovery and input isolation", "status": "CANDIDATE — MAVEN/MYSQL VALIDATION PENDING", "scenario": "Trader logs confirm four deadlocks; UNI live protection failed at its initial managed-position lock and rolled back the shared kline transaction.", "cause": "Shared transaction spreads protection rollback into input persistence. Exact trader competing lock cycle remains unproven.", "solution": "Commit candle/exact price before protection; retry only initial MySQL 1213/40001 once after rollback; persist incident outcomes and show Production history in Proven review.", "behavior": "Transaction boundaries and failure recovery change. Business formulas unchanged. Other analysis/recovery deadlocks and FIX-125 commit coordination remain open.", "regression": "H2 transaction and first-lock tests added but Maven unavailable. Node checks passed; MySQL reproduction and historical parity pending.", "symbol": "ALL", "entry": "UNCHANGED RULES", "exit": "UNCHANGED", "entryTime": "LIVE PRICE", "exitTime": "UNCHANGED", "replayWindow": "Identical OLD/NEW windows with complete preceding stop and winning/losing controls.", "location": "Kline transaction boundary / Proven incident history", "classes": ["KlineTransactionCoordinator", "InitialPositionLockDeadlock", "Fix124ProtectionStore", "BinanceKlineService", "Fix124DiagnosticsController", "md/FIX-124.md"]},
+         {"id": "FIX-123", "title": "ATR-overextended ACCUMULATED_EVIDENCE sizing review", "status": "PLANNED — TO BE DONE", "scenario": "Team proposes larger already-qualified accumulated-evidence entries when ATR-overextended.", "cause": "Population totals, initial-entry/add attribution, winners-only validation and scope mismatch remain unresolved.", "solution": "Reconstruct full positions with wins and losses, confirm exact cohort and existing caps, then define and evaluate a precise sizing change on the accepted baseline.", "behavior": "Planning only. No sizing change. No proposed amount or multiplier is approved.", "regression": "Pending corrected analysis, separate approval and Production/Replay sizing tests.", "symbol": "ALL", "entry": "PLANNED", "exit": "UNCHANGED", "entryTime": "NOT IMPLEMENTED", "exitTime": "UNCHANGED", "replayWindow": "Identical OLD/NEW windows with complete preceding stop and winning/losing controls.", "location": "Separate planned work", "classes": ["md/FIX-123.md"]},
+         {"id": "FIX-122", "title": "Fresh entry evidence after a completed stop-loss", "status": "IMPLEMENTED — ENABLED BY DEFAULT — MAVEN VALIDATION PENDING", "scenario": "BICO #1814/#1817, ALLO #1826 and ICP #1811 can reuse pre-stop BUY evidence; ONG #1832 also has a pre-stop deferred origin.", "cause": "Opportunity completion does not restrict the rolling historical signal evidence or deferred-origin selectors.", "solution": "Use committed STOP_LOSS wallet history and run-local Replay stops to filter initial-entry evidence and deferred origins by exact 1m candle close. Recheck stamped approvals at execution-price validation. Persist blocked/allowed evaluations and show them in Proven / Analyze Trades.", "behavior": "Production and Replay enabled by default. Entry eligibility and derived evidence/allocation can change. No cooldown or new scoring/sizing formula. Additions and exits remain on the existing path. Lookup errors defer new entries. No wallet concurrency/deadlock repair included.", "regression": "New Maven/JUnit policy, service, evidence integration and database tests added; Maven unavailable in authoring environment. Standalone policy and UI checks reported in md/FIX-122.md; historical OLD/NEW P/L comparison pending.", "symbol": "ALL", "entry": "INITIAL ENTRY", "exit": "UNCHANGED", "entryTime": "Post-stop evaluation", "exitTime": "UNCHANGED", "replayWindow": "Identical OLD/NEW windows with complete preceding stop and winning/losing controls.", "location": "Production and Replay execution / Proven analysis", "classes": ["StopLossEvidencePolicy", "StopLossEvidenceStore", "StopLossEvidenceService", "ExecutionIntelligenceService", "ExecutionReplayScope", "ShadowProductionReplayService", "Fix122DiagnosticsController", "V83__fix_122_stop_evidence_diagnostics.sql", "md/FIX-122.md"]},
+--- prior-integrated/src/test/java/com/crypto/shared/SharedMarketConsumerMySqlIT.java
++++ candidate/src/test/java/com/crypto/shared/SharedMarketConsumerMySqlIT.java
+@@ -43,13 +43,14 @@
+         local.execute("CREATE TABLE signal_processing_work(signal_id BIGINT PRIMARY KEY,status VARCHAR(30),symbol VARCHAR(30),interval_code VARCHAR(10),candle_open_time TIMESTAMP(6))");
+         String approvalDdl=Files.readString(Path.of("src/main/resources/db/migration/V91__fix_132_explicit_cutover_ownership.sql")).replaceAll("(?m)^\\s*--.*$", "");
+         for(String sql:approvalDdl.split(";"))if(!sql.isBlank())local.execute(sql);
++        for(String sql:Files.readString(Path.of("src/main/resources/db/migration/V94__fix_132_reviewed_cutover_proposal.sql")).replaceAll("(?m)^\\s*--.*$", "").split(";"))if(!sql.isBlank())local.execute(sql);
+         local.execute("CREATE TABLE effects(id BIGINT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDB");
+         feed.execute("CREATE TABLE market_data_stream_event(id BIGINT,symbol VARCHAR(30),symbol_sequence BIGINT,interval_code VARCHAR(10),candle_open_time TIMESTAMP(6),candle_close_time TIMESTAMP(6),closed BOOLEAN,observed_at TIMESTAMP(6),received_at TIMESTAMP(6),created_at TIMESTAMP(6),price DECIMAL(30,12),source VARCHAR(30),classification VARCHAR(40)) ENGINE=InnoDB");
+         source=mock(SharedMarketSource.class);when(source.enabled()).thenReturn(true);when(source.mode()).thenReturn("LIVE");when(source.feedReader()).thenReturn(feed);
+         coins=mock(CoinConfigurationService.class);when(coins.enabledSymbols()).thenReturn(List.of("BTCUSDT"));
+         protect=mock(LivePositionProtectionService.class);observer=mock(PriceMoveMonitorService.class);
+         worker=mock(CandleClosedAnalysisWorker.class);when(worker.processShared(any(),any(),anyBoolean(),anyLong())).thenReturn("COMPLETED");
+-        now=Instant.now();
++        now=Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+         local.update("INSERT INTO shared_market_consumer_state(symbol,cutover_sequence,cutover_at,discovered_sequence) VALUES('BTCUSDT',0,?,0)",Timestamp.from(now.minusSeconds(60)));
+         local.update("UPDATE shared_market_consumer_state SET status='READY',cutover_source='OPERATOR_APPROVED',approved_by='test',approved_at=CURRENT_TIMESTAMP(6),approval_reference='controlled-test',approved_sequence=cutover_sequence,approved_cutover_at=cutover_at");
+         local.update("INSERT INTO shared_market_cutover_approval(symbol,cutover_sequence,cutover_at,approved_by,approved_at,approval_reference) SELECT symbol,cutover_sequence,cutover_at,approved_by,approved_at,approval_reference FROM shared_market_consumer_state");
+--- prior-integrated/src/test/java/com/crypto/shared/SharedMarketConsumerTest.java
++++ candidate/src/test/java/com/crypto/shared/SharedMarketConsumerTest.java
+@@ -46,12 +46,13 @@
+         assertEquals("UNKNOWN_LEGACY",local.queryForObject("SELECT cutover_source FROM shared_market_consumer_state WHERE symbol='AMBIGUSDT'",String.class));
+         assertEquals("REVIEW_REQUIRED",local.queryForObject("SELECT status FROM shared_market_consumer_state WHERE symbol='REVIEWUSDT'",String.class));
+         local.execute("DELETE FROM shared_market_consumer_state");
++        for(String sql:Files.readString(Path.of("src/main/resources/db/migration/V94__fix_132_reviewed_cutover_proposal.sql")).replaceAll("(?m)^\\s*--.*$", "").split(";"))if(!sql.isBlank())local.execute(sql);
+         local.execute("CREATE TABLE effects(id BIGINT AUTO_INCREMENT PRIMARY KEY)");
+         feed.execute("CREATE TABLE market_data_stream_event(id BIGINT,symbol VARCHAR(30),symbol_sequence BIGINT,interval_code VARCHAR(10),candle_open_time TIMESTAMP(6),candle_close_time TIMESTAMP(6),closed BOOLEAN,observed_at TIMESTAMP(6),received_at TIMESTAMP(6),created_at TIMESTAMP(6),price DECIMAL(30,12),source VARCHAR(30),classification VARCHAR(40))");
+         source=mock(SharedMarketSource.class);when(source.enabled()).thenReturn(true);when(source.mode()).thenReturn("LIVE");when(source.feedReader()).thenReturn(feed);
+         coins=mock(CoinConfigurationService.class);when(coins.enabledSymbols()).thenReturn(List.of("BTCUSDT"));
+         protect=mock(LivePositionProtectionService.class);observer=mock(PriceMoveMonitorService.class);
+-        now=Instant.now();
++        now=Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+         local.update("INSERT INTO shared_market_consumer_state(symbol,cutover_sequence,cutover_at,discovered_sequence) VALUES('BTCUSDT',0,?,0)",Timestamp.from(now.minusSeconds(60)));
+         worker=mock(CandleClosedAnalysisWorker.class);
+         when(worker.processShared(any(),any(),anyBoolean(),anyLong())).thenReturn("COMPLETED");
+@@ -275,4 +276,148 @@
+         consumer.dispatchAnalysis();verify(worker).processShared(any(),any(),eq(false),eq(1L));verifyNoInteractions(protect,observer);
+     }
+ 
++    org.springframework.security.core.Authentication approver(String name,String role) {
++        return new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(name,"unused",
++            List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_"+role)));
++    }
++    com.fix132.approval.CutoverApprovalService approvals() {
++        when(source.enabled()).thenReturn(false);when(source.mode()).thenReturn("OBSERVE");
++        feed.execute("CREATE TABLE market_data_stream_cursor(symbol VARCHAR(30) PRIMARY KEY,last_sequence BIGINT)");
++        feed.update("INSERT INTO market_data_stream_cursor VALUES('BTCUSDT',10)");
++        return new com.fix132.approval.CutoverApprovalService(local,source,manager);
++    }
++    @Test void reviewedApprovalHasAuthenticatedProvenanceAndAtomicAudit() {
++        var service=approvals();var actor=approver("jean","CUTOVER_APPROVER");
++        local.update("DELETE FROM shared_market_cutover_approval");
++        local.update("UPDATE shared_market_consumer_state SET status='PENDING_CUTOVER',cutover_source='AUTO_OBSERVED'");
++        var proposal=service.preview("BTCUSDT","FIRST_CUTOVER",actor);
++        // Collector may continue publishing; approval must retain the REVIEWED boundary.
++        feed.update("UPDATE market_data_stream_cursor SET last_sequence=15");
++        service.approve((String)proposal.get("proposalId"),"review-132",actor);
++        assertEquals(10L,local.queryForObject("SELECT cutover_sequence FROM shared_market_consumer_state",Long.class));
++        assertEquals("jean",local.queryForObject("SELECT approved_by FROM shared_market_cutover_approval",String.class));
++        assertTrue(SharedCutoverPolicy.approved(local.queryForMap("SELECT * FROM shared_market_consumer_state")));
++        assertThrows(IllegalStateException.class,()->service.approve((String)proposal.get("proposalId"),"again",actor));
++        assertThrows(IllegalStateException.class,()->service.preview("BTCUSDT","FIRST_CUTOVER",actor));
++        local.update("UPDATE shared_market_consumer_state SET discovered_sequence=14,last_price=10,last_observed_at=?",Timestamp.from(now));
++        var again=service.preview("BTCUSDT","REAPPROVAL",actor);
++        assertEquals(10L,again.get("cutoverSequence"));
++        service.approve((String)again.get("proposalId"),"reapproval-preserves-history",actor);
++        assertEquals(14L,local.queryForObject("SELECT discovered_sequence FROM shared_market_consumer_state",Long.class));
++        assertEquals(now,local.queryForObject("SELECT last_observed_at FROM shared_market_consumer_state",Timestamp.class).toInstant());
++        var regressed=service.preview("BTCUSDT","REAPPROVAL",actor);
++        feed.update("UPDATE market_data_stream_cursor SET last_sequence=12"); // above cutover 10, below checkpoint 14
++        assertThrows(IllegalStateException.class,()->service.approve((String)regressed.get("proposalId"),"regressed",actor));
++        assertEquals(2,local.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_approval",Integer.class));
++        assertEquals("OBSERVE",source.mode());
++    }
++    @Test void approvalRejectsUnprivilegedChangedQuarantinedAndUnfinishedState() {
++        var service=approvals();var actor=approver("jean","CUTOVER_APPROVER");
++        assertThrows(org.springframework.security.access.AccessDeniedException.class,()->service.preview("BTCUSDT","REAPPROVAL",approver("user","USER")));
++        var proposal=service.preview("BTCUSDT","REAPPROVAL",actor);
++        assertThrows(IllegalStateException.class,()->service.approve((String)proposal.get("proposalId"),"review",approver("other","CUTOVER_APPROVER")));
++        local.update("UPDATE shared_market_cutover_proposal SET expires_at=?",Timestamp.from(now.minusSeconds(1)));
++        assertThrows(IllegalStateException.class,()->service.approve((String)proposal.get("proposalId"),"review",actor));
++        var changed=service.preview("BTCUSDT","REAPPROVAL",actor);
++        local.update("UPDATE shared_market_consumer_state SET discovered_sequence=1");
++        assertThrows(IllegalStateException.class,()->service.approve((String)changed.get("proposalId"),"review",actor));
++        local.update("UPDATE shared_market_consumer_state SET status='REVIEW_REQUIRED'");
++        assertThrows(IllegalStateException.class,()->service.preview("BTCUSDT","REAPPROVAL",actor));
++        local.update("UPDATE shared_market_consumer_state SET status='READY'");
++        local.update("INSERT INTO signal_processing_work(signal_id,status,symbol) VALUES(123,'RUNNING','BTCUSDT')");
++        assertThrows(IllegalStateException.class,()->service.preview("BTCUSDT","REAPPROVAL",actor));
++        assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_approval",Integer.class));
++    }
++    @Test void approvalFailureRollsBackStateAndAuditTogether() {
++        var service=approvals();var actor=approver("jean","CUTOVER_APPROVER");
++        var proposal=service.preview("BTCUSDT","REAPPROVAL",actor);
++        // Force proposal consumption to fail AFTER audit AND state writes; both must roll back.
++        local.execute("ALTER TABLE shared_market_cutover_proposal ADD CONSTRAINT test_reject_consumption CHECK(consumed_at IS NULL)");
++        assertThrows(RuntimeException.class,()->service.approve((String)proposal.get("proposalId"),"forced-failure",actor));
++        assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_approval",Integer.class));
++        assertEquals(0L,local.queryForObject("SELECT cutover_sequence FROM shared_market_consumer_state",Long.class));
++        assertNull(local.queryForObject("SELECT consumed_at FROM shared_market_cutover_proposal",Timestamp.class));
++    }
++
++    /** Real worker + real registration store; only indicator/scoring and wallet
++     * collaborators are controlled. Each instance has its OWN JVM stripe locks. */
++    CandleClosedAnalysisWorker realWorker(CountDownLatch registered,CountDownLatch release) {
++        var indicator=new com.crypto.domain.TechnicalIndicator();
++        indicator.setSymbol("BTCUSDT");indicator.setIntervalCode("1m");indicator.setCandleOpenTime(now.minusSeconds(10));
++        var technical=mock(com.crypto.indicator.service.TechnicalIndicatorService.class);
++        when(technical.calculateAndPersist(any(),any(),any())).thenReturn(Optional.of(indicator));
++        var quality=mock(com.crypto.service.CandleDataQualityService.class);
++        when(quality.validate(any(),any())).thenReturn(new com.crypto.dto.CandleDataQualityResult(true,300,300,0,0,List.of()));
++        var signals=mock(com.crypto.repository.TradeSignalRepository.class);
++        when(signals.existsBySymbolAndIntervalAndCandleOpenTime(any(),any(),any())).thenAnswer(i->local.queryForObject("SELECT COUNT(*) FROM test_signal",Integer.class)>0);
++        var scoring=mock(com.crypto.service.AnalysisService.class);
++        var paper=mock(com.crypto.service.PaperTradingService.class);
++        var store=new com.crypto.execution.processing.SignalProcessingStore(local,manager);
++        var transaction=new org.springframework.transaction.support.TransactionTemplate(manager);
++        when(scoring.analyzeForProcessing(any(),any(),anyLong())).thenAnswer(i->{
++            long event=i.getArgument(2);var signal=new com.crypto.domain.TradeSignal();
++            signal.setId(700L);signal.setSymbol("BTCUSDT");signal.setInterval("1m");signal.setCandleOpenTime(indicator.getCandleOpenTime());
++            transaction.executeWithoutResult(t->{local.update("INSERT INTO test_signal(id) VALUES(700)");store.register(signal,com.crypto.execution.processing.ProcessingOrigin.WORKER,event);});
++            registered.countDown();assertTrue(release.await(8,TimeUnit.SECONDS));return signal;
++        });
++        when(scoring.analyzeRecovered(any(),any())).thenAnswer(i->{local.update("INSERT INTO test_signal(id) VALUES(700)");return new com.crypto.domain.TradeSignal();});
++        when(paper.processSharedSignal(any(),anyLong())).thenAnswer(i->{
++            long event=i.getArgument(1);store.requireSourceOwner(700,event);
++            var claim=store.claim(700,false);assertNotNull(claim);
++            transaction.executeWithoutResult(t->{store.requireSourceOwner(700,event);local.update("INSERT INTO effects(id) VALUES(DEFAULT)");store.complete(claim,null);});
++            return Optional.empty();
++        });
++        var actual=new CandleClosedAnalysisWorker(technical,scoring,paper,quality,signals,new com.crypto.indicator.event.CandleAnalysisExecutionCoordinator());
++        org.springframework.test.util.ReflectionTestUtils.setField(actual,"sharedWorkEvidence",local);return actual;
++    }
++    void realWorkSchema() throws Exception {
++        local.execute("DROP TABLE signal_processing_work");
++        for(String sql:Files.readString(Path.of("src/main/resources/db/migration/V86__fix_127_signal_processing.sql")).replaceAll("(?m)^\\s*--.*$", "").split(";"))if(!sql.isBlank())local.execute(sql);
++        local.execute("ALTER TABLE signal_processing_work ADD source_event_id BIGINT NULL");
++        local.execute("CREATE TABLE test_signal(id BIGINT PRIMARY KEY)");
++    }
++    void closed(long seq,boolean live) {
++        event(seq,now);feed.update("UPDATE market_data_stream_event SET closed=true,candle_close_time=?,source=?,classification=? WHERE id=?",
++            Timestamp.from(now.minusSeconds(1)),live?"LIVE_WEBSOCKET":"STARTUP_RECOVERY",live?"LIVE":"HISTORICAL_ONLY",seq);
++        consumer.discover();consumer.processNext("BTCUSDT");
++    }
++    void concurrentRealWorkers(boolean recoveryFirst) throws Exception {
++        realWorkSchema();closed(1,!recoveryFirst);closed(2,recoveryFirst);
++        var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
++        var first=new SharedMarketConsumer(source,local,coins,protect,observer,realWorker(entered,release),Runnable::run,manager);
++        // Separate consumer AND coordinator objects: no shared JVM lane or candle lock.
++        var second=new SharedMarketConsumer(source,local,coins,protect,observer,realWorker(new CountDownLatch(1),new CountDownLatch(0)),Runnable::run,manager);
++        var threads=Executors.newSingleThreadExecutor();
++        long liveId=recoveryFirst?2:1, historicalId=recoveryFirst?1:2;
++        try {
++            Future<?> running=threads.submit(first::dispatchAnalysis);
++            assertTrue(entered.await(8,TimeUnit.SECONDS),"actual worker must commit owned registration before contender");
++            // Force the exact prior bug: an older historical candidate becomes due
++            // while the HIGHER sequence live close still owns persisted RUNNING work.
++            local.update("UPDATE shared_market_event_delivery SET analysis_not_before=? WHERE source_event_id=?",Timestamp.from(now.minusSeconds(1)),historicalId);
++            second.dispatchAnalysis();
++            assertEquals(liveId,local.queryForObject("SELECT source_event_id FROM signal_processing_work WHERE signal_id=700",Long.class));
++            assertEquals("HISTORICAL_DEFERRED",local.queryForObject("SELECT analysis_status FROM shared_market_event_delivery WHERE source_event_id=?",String.class,historicalId));
++            assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM effects",Integer.class));
++            release.countDown();running.get(8,TimeUnit.SECONDS);second.dispatchAnalysis();
++            assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM effects",Integer.class));
++            assertEquals("COMPLETED",local.queryForObject("SELECT status FROM signal_processing_work WHERE signal_id=700",String.class));
++            assertEquals(liveId,local.queryForObject("SELECT source_event_id FROM signal_processing_work WHERE signal_id=700",Long.class));
++            assertEquals("COVERED_BY_LIVE",local.queryForObject("SELECT analysis_status FROM shared_market_event_delivery WHERE source_event_id=?",String.class,historicalId));
++        } finally {release.countDown();threads.shutdownNow();first.stop();second.stop();}
++    }
++    @Test void twoInstancesRecoveryFirstPersistOnlyLiveWorkOwner() throws Exception {concurrentRealWorkers(true);}
++    @Test void twoInstancesLiveFirstPersistOnlyLiveWorkOwner() throws Exception {concurrentRealWorkers(false);}
++    @Test void realWorkerExpiredHistoricalCloseNeverRegistersWalletWork() throws Exception {
++        realWorkSchema();closed(1,false);
++        local.update("UPDATE shared_market_event_delivery SET analysis_not_before=?",Timestamp.from(now.minusSeconds(1)));
++        var actual=new SharedMarketConsumer(source,local,coins,protect,observer,realWorker(new CountDownLatch(1),new CountDownLatch(0)),Runnable::run,manager);
++        try {actual.dispatchAnalysis();
++            assertEquals("HISTORICAL_ONLY",local.queryForObject("SELECT analysis_status FROM shared_market_event_delivery",String.class));
++            assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM test_signal",Integer.class));
++            assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM signal_processing_work",Integer.class));
++            assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM effects",Integer.class));
++        } finally {actual.stop();}
++    }
++
+ }
+--- prior-integrated/src/test/java/com/crypto/wallet/service/WalletCoordinationMySqlIT.java
++++ candidate/src/test/java/com/crypto/wallet/service/WalletCoordinationMySqlIT.java
+@@ -50,9 +50,19 @@
+         factory.setJpaPropertyMap(Map.of("hibernate.hbm2ddl.auto","create-only","hibernate.show_sql","false","hibernate.jdbc.time_zone","UTC"));factory.afterPropertiesSet();
+         // Hibernate-generated schema needs the database-managed defaults from V28.
+         jdbc.execute("ALTER TABLE wallet_asset MODIFY created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), MODIFY updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)");
++        // Match the production lookup index; Hibernate's entity-only DDL omits
++        // this migration index and otherwise turns the lock probe into a table scan.
++        jdbc.execute("CREATE INDEX idx_wallet_managed_symbol_status_opened ON wallet_managed_position(symbol,status,opened_at)");
+         manager=new JpaTransactionManager(factory.getObject());manager.setDataSource(pool);tx=new TransactionTemplate(manager);
+         em=SharedEntityManagerCreator.createSharedEntityManager(factory.getObject());
+-        repos=new JpaRepositoryFactory(em);assets=repos.getRepository(WalletAssetRepository.class);positions=repos.getRepository(WalletManagedPositionRepository.class);trades=repos.getRepository(WalletTradeRepository.class);
++        repos=new JpaRepositoryFactory(em);
++        repos.addRepositoryProxyPostProcessor((proxy,info)->{
++            String simple=info.getRepositoryInterface().getSimpleName();
++            String bean=Character.toLowerCase(simple.charAt(0))+simple.substring(1);
++            proxy.addAdvice((org.aopalliance.intercept.MethodInterceptor) call->{
++                WalletMutationRepositoryGuard.check(bean,call.getMethod().getName());return call.proceed();
++            });
++        });assets=repos.getRepository(WalletAssetRepository.class);positions=repos.getRepository(WalletManagedPositionRepository.class);trades=repos.getRepository(WalletTradeRepository.class);
+         var settings=repos.getRepository(WalletSettingsRepository.class);var daily=repos.getRepository(WalletDailyStatisticsRepository.class);
+         var portfolio=mock(WalletService.class);when(portfolio.currentPortfolioValue()).thenReturn(new BigDecimal("1000"));
+         wallet=new WalletAutoExecutionService(assets,trades,positions,settings,new WalletExecutionSizingPolicy(),mock(BinanceMinimumExecutionPolicy.class),daily,portfolio,new ObjectMapper().findAndRegisterModules());
+@@ -65,8 +75,50 @@
+         proxy.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(manager,new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()));
+         wallet=(WalletAutoExecutionService)proxy.getProxy();
+         tx.executeWithoutResult(t->{
++            guard.mutation();
+             assets.save(WalletAsset.builder().symbol("USDT").quantity(new BigDecimal("1000")).averageBuyPriceUsdt(BigDecimal.ONE).enabled(true).build());
+         });
++    }
++    @Test void repositoryMutationCannotBypassGuardOrInheritItAcrossRequiresNew() {
++        assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(t->assets.creditQuantity("USDT",BigDecimal.ONE)));
++        tx.executeWithoutResult(t->{
++            guard.mutation();
++            assertDoesNotThrow(()->WalletTransactionCoordination.requireMutation());
++            var inner=new TransactionTemplate(manager);inner.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
++            assertThrows(IllegalStateException.class,()->inner.executeWithoutResult(i->assets.creditQuantity("USDT",BigDecimal.ONE)));
++            assertDoesNotThrow(()->assets.creditQuantity("USDT",BigDecimal.ONE));
++        });
++        assertFalse(WalletTransactionCoordination.mutationHeld());
++        assertMoney("1001",jdbc.queryForObject("SELECT quantity FROM wallet_asset WHERE symbol='USDT'",BigDecimal.class));
++    }
++    @Test void slowSnapshotHoldsGlobalGuardAndBlocksUnrelatedSymbolUntilCommit() throws Exception {
++        // Existing positions isolate MUTATION contention from InnoDB empty-range
++        // locks on the first-position lookup (covered separately by flat tests).
++        assertTrue(buy(signal("BTCUSDT")));assertTrue(buy(signal("ETHUSDT")));
++        var meter=new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
++        ReflectionTestUtils.setField(guard,"meters",meter);
++        WalletAutoExecutionService target=org.springframework.test.util.AopTestUtils.getTargetObject(wallet);
++        var portfolio=(WalletService)ReflectionTestUtils.getField(target,"walletService");
++        var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
++        java.util.concurrent.atomic.AtomicBoolean first=new java.util.concurrent.atomic.AtomicBoolean(true);
++        doAnswer(i->{if(first.getAndSet(false)){entered.countDown();assertTrue(release.await(10,TimeUnit.SECONDS));}return null;}).when(portfolio).captureSnapshot();
++        var a=signal("BTCUSDT");var b=signal("ETHUSDT");var threads=Executors.newFixedThreadPool(2);
++        try {
++            Future<?> f=threads.submit(()->assertTrue(buy(a)));assertTrue(entered.await(5,TimeUnit.SECONDS));
++            Future<?> g=threads.submit(()->assertTrue(buy(b)));
++            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);boolean waiting=false;
++            while(System.nanoTime()<deadline){
++                int locks=admin.queryForObject("SELECT COUNT(*) FROM performance_schema.data_lock_waits w JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID WHERE l.OBJECT_SCHEMA=? AND l.OBJECT_NAME='wallet_mutation_coordination'",Integer.class,schema);
++                if(locks>0){waiting=true;break;}Thread.onSpinWait();
++            }
++            if(!waiting)System.out.println("[FIX-125][LOCK_PROBE] "+admin.queryForList("SELECT l.OBJECT_NAME,l.INDEX_NAME,l.LOCK_TYPE,l.LOCK_MODE,l.LOCK_DATA FROM performance_schema.data_lock_waits w JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID WHERE l.OBJECT_SCHEMA=?",schema));
++            assertTrue(waiting,"ETH must block specifically on wallet-wide mutation guard during BTC snapshot");
++            assertFalse(g.isDone());release.countDown();f.get(10,TimeUnit.SECONDS);g.get(10,TimeUnit.SECONDS);
++            var hold=meter.get("wallet.coordination.hold").tag("stage","MUTATION").timer();
++            var wait=meter.get("wallet.coordination.wait").tag("stage","MUTATION").timer();
++            assertEquals(2,hold.count());assertEquals(2,wait.count());
++            System.out.printf("[FIX-125][CONTROLLED_CONTENTION_MEASUREMENT] mutations=%d maxWaitMs=%.3f maxHoldMs=%.3f; latch-controlled snapshot, not Production throughput%n",hold.count(),wait.max(TimeUnit.MILLISECONDS),hold.max(TimeUnit.MILLISECONDS));
++        } finally {release.countDown();threads.shutdown();assertTrue(threads.awaitTermination(10,TimeUnit.SECONDS));meter.close();}
+     }
+     TradeSignal signal(String symbol) {
+         return tx.execute(t->{var s=new TradeSignal();s.setSymbol(symbol);s.setInterval("1m");s.setCandleOpenTime(Instant.now());s.setGeneratedAt(Instant.now());s.setLatestPrice(new BigDecimal("10"));s.setStopLoss(new BigDecimal("9"));s.setTakeProfit(new BigDecimal("12"));s.setDecision(com.crypto.domain.SignalDecision.BUY);s.setConfidenceScore(80);s.setTotalScore(80);// Populate required descriptive fields; no decision policy is mocked by this fixture.
+--- prior-integrated/src/test/java/com/crypto/wallet/service/WalletMutationRepositoryGuardTest.java
++++ candidate/src/test/java/com/crypto/wallet/service/WalletMutationRepositoryGuardTest.java
+@@ -0,0 +1,42 @@
++package com.crypto.wallet.service;
++
++import com.crypto.wallet.repository.*;
++import org.junit.jupiter.api.Test;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.jdbc.datasource.*;
++import org.springframework.transaction.support.TransactionTemplate;
++import java.nio.file.*;
++import java.math.BigDecimal;
++import java.util.*;
++import static org.mockito.Mockito.*;
++import static org.junit.jupiter.api.Assertions.*;
++
++class WalletMutationRepositoryGuardTest {
++    @Test void productionRepositoryDecoratorRejectsSkippedGuardBeforeAnyWrite() {
++        var raw=mock(WalletAssetRepository.class);
++        var guarded=(WalletAssetRepository)new WalletMutationRepositoryGuard().postProcessAfterInitialization(raw,"walletAssetRepository");
++        var ds=new DriverManagerDataSource("jdbc:h2:mem:"+UUID.randomUUID()+";DB_CLOSE_DELAY=-1","sa","");
++        var jdbc=new JdbcTemplate(ds);jdbc.execute("CREATE TABLE wallet_mutation_coordination(id INT PRIMARY KEY)");jdbc.update("INSERT INTO wallet_mutation_coordination VALUES(1)");
++        var manager=new DataSourceTransactionManager(ds);var tx=new TransactionTemplate(manager);var guard=new WalletTransactionCoordination(jdbc,manager);
++        assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(t->guarded.creditQuantity("USDT",BigDecimal.ONE)));
++        verifyNoInteractions(raw);
++        tx.executeWithoutResult(t->{guard.mutation();guarded.creditQuantity("USDT",BigDecimal.ONE);
++            assertThrows(IllegalStateException.class,()->guard.symbol("ETHUSDT"));});
++        verify(raw).creditQuantity("USDT",BigDecimal.ONE);
++        assertThrows(IllegalStateException.class,()->guarded.debitQuantityIfSufficient("USDT",BigDecimal.ONE));
++        assertFalse(WalletTransactionCoordination.mutationHeld());
++    }
++    @Test void everySharedWalletRankHasAnEnforcedRepositoryBoundary() {
++        for(String repository:List.of("walletAssetRepository","walletSettingsRepository","walletDailyStatisticsRepository","walletTradeRepository","walletCashFlowRepository","walletSnapshotRepository"))
++            for(String method:List.of("save","saveAll","saveAndFlush","deleteAll","flush","findCurrentForUpdate"))
++                assertThrows(IllegalStateException.class,()->WalletMutationRepositoryGuard.check(repository,method),repository+"."+method);
++        assertThrows(IllegalStateException.class,()->WalletMutationRepositoryGuard.check("walletDailyStatisticsRepository","findForUpdateByTradeDate"));
++    }
++    @Test void rawSqlMustNotBypassTheReviewedWalletRepositoryBoundary() throws Exception {
++        var sql=java.util.regex.Pattern.compile("(?i)(?:UPDATE|INSERT\\s+INTO|DELETE\\s+FROM)\\s+wallet_(?:asset|daily_statistics|settings|trade|cash_flow|snapshot)\\b");
++        try(var files=Files.walk(Path.of("src/main/java"))) {
++            for(Path file:files.filter(f->f.toString().endsWith(".java")).toList())
++                assertFalse(sql.matcher(Files.readString(file)).find(),"Unreviewed raw wallet writer: "+file);
++        }
++    }
++}
+--- prior-integrated/src/test/java/com/fix132/approval/CutoverApprovalIsolationTest.java
++++ candidate/src/test/java/com/fix132/approval/CutoverApprovalIsolationTest.java
+@@ -0,0 +1,38 @@
++package com.fix132.approval;
++
++import com.crypto.shared.SharedMarketSource;
++import org.junit.jupiter.api.Test;
++import org.springframework.boot.SpringApplication;
++import org.springframework.beans.factory.support.BeanDefinitionRegistry;
++import org.springframework.beans.factory.support.RootBeanDefinition;
++import static org.mockito.Mockito.*;
++import static org.junit.jupiter.api.Assertions.*;
++
++/** Boot the actual isolated entry point; substitute ONLY the remote reader and
++ * local test datasource. No normal Trader application component scan is allowed. */
++class CutoverApprovalIsolationTest {
++    @Test void consoleHasSecurityButNoTradingOrScheduledWorkers() {
++        var source=mock(SharedMarketSource.class);when(source.mode()).thenReturn("OBSERVE");
++        var app=new SpringApplication(CutoverApprovalApplication.class);
++        app.addInitializers(context->context.addBeanFactoryPostProcessor(factory->{
++            var registry=(BeanDefinitionRegistry)factory;
++            for(String name:registry.getBeanDefinitionNames()) {
++                if(SharedMarketSource.class.getName().equals(registry.getBeanDefinition(name).getBeanClassName())) {
++                    registry.removeBeanDefinition(name);
++                    registry.registerBeanDefinition(name,new RootBeanDefinition(SharedMarketSource.class,()->source));
++                }
++            }
++        }));
++        try(var context=app.run("--server.address=127.0.0.1","--server.port=0","--shared-market.mode=OBSERVE",
++            "--spring.datasource.url=jdbc:h2:mem:approval-isolation;DB_CLOSE_DELAY=-1",
++            "--spring.datasource.driver-class-name=org.h2.Driver","--spring.datasource.username=sa","--spring.datasource.password=",
++            "--spring.flyway.enabled=false","--spring.jmx.enabled=false")) {
++            assertNotNull(context.getBean(CutoverApprovalService.class));
++            assertNotNull(context.getBean(org.springframework.security.web.SecurityFilterChain.class));
++            assertTrue(context.getBeansOfType(com.crypto.shared.SharedMarketConsumer.class).isEmpty());
++            assertTrue(context.getBeansOfType(com.crypto.wallet.service.WalletAutoExecutionService.class).isEmpty());
++            assertTrue(context.getBeansOfType(org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor.class).isEmpty());
++            assertTrue(context.getBeansOfType(jakarta.persistence.EntityManagerFactory.class).isEmpty());
++        }
++    }
++}
+--- prior-integrated/src/test/java/com/fix132/approval/CutoverApprovalSecurityTest.java
++++ candidate/src/test/java/com/fix132/approval/CutoverApprovalSecurityTest.java
+@@ -0,0 +1,64 @@
++package com.fix132.approval;
++
++import org.junit.jupiter.api.*;
++import org.springframework.context.annotation.*;
++import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
++import org.springframework.web.servlet.config.annotation.EnableWebMvc;
++import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
++import org.springframework.jdbc.datasource.DriverManagerDataSource;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.mock.web.*;
++import org.springframework.test.web.servlet.*;
++import org.springframework.test.web.servlet.setup.MockMvcBuilders;
++import javax.sql.DataSource;
++import java.util.*;
++import static org.mockito.Mockito.*;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
++
++class CutoverApprovalSecurityTest {
++    @Configuration @EnableWebMvc @EnableWebSecurity
++    @Import({CutoverApprovalSecurity.class,CutoverApprovalController.class})
++    static class Config {
++        @Bean DataSource dataSource(){
++            var ds=new DriverManagerDataSource("jdbc:h2:mem:"+UUID.randomUUID()+";DB_CLOSE_DELAY=-1","sa","");
++            var jdbc=new JdbcTemplate(ds);
++            jdbc.execute("CREATE TABLE app_user(username VARCHAR(160),password VARCHAR(100),enabled BOOLEAN,role_name VARCHAR(50))");
++            jdbc.update("INSERT INTO app_user VALUES('approver','{noop}test',TRUE,'CUTOVER_APPROVER'),('ordinary','{noop}test',TRUE,'USER')");
++            return ds;
++        }
++        @Bean CutoverApprovalService service(){return mock(CutoverApprovalService.class);}
++    }
++    AnnotationConfigWebApplicationContext context;MockMvc mvc;
++    @BeforeEach void setup(){
++        context=new AnnotationConfigWebApplicationContext();context.setServletContext(new MockServletContext());
++        context.register(Config.class);context.refresh();
++        mvc=MockMvcBuilders.webAppContextSetup(context).addFilters(context.getBean("springSecurityFilterChain",jakarta.servlet.Filter.class)).build();
++    }
++    @AfterEach void close(){context.close();}
++    String basic(String user){return "Basic "+Base64.getEncoder().encodeToString((user+":test").getBytes(java.nio.charset.StandardCharsets.UTF_8));}
++    @Test void authenticationPermissionAndCsrfAreIndependentGates() throws Exception {
++        mvc.perform(get("/api/fix132/cutover/csrf")).andExpect(status().isUnauthorized());
++        mvc.perform(get("/api/fix132/cutover/csrf").header("Authorization",basic("ordinary"))).andExpect(status().isForbidden());
++        mvc.perform(post("/api/fix132/cutover/preview").header("Authorization",basic("approver"))
++            .contentType("application/json").content("{\"symbol\":\"BTCUSDT\",\"operation\":\"FIRST_CUTOVER\"}"))
++            .andExpect(status().isForbidden());
++        verifyNoInteractions(context.getBean(CutoverApprovalService.class));
++        var token=mvc.perform(get("/api/fix132/cutover/csrf").header("Authorization",basic("approver")))
++            .andExpect(status().isOk()).andReturn();
++        var json=new com.fasterxml.jackson.databind.ObjectMapper().readTree(token.getResponse().getContentAsString());
++        mvc.perform(post("/api/fix132/cutover/preview").header("Authorization",basic("approver"))
++            .session((MockHttpSession)token.getRequest().getSession(false))
++            .header(json.get("headerName").asText(),json.get("token").asText())
++            .contentType("application/json").content("{\"symbol\":\"BTCUSDT\",\"operation\":\"FIRST_CUTOVER\"}"))
++            .andExpect(status().isOk());
++        verify(context.getBean(CutoverApprovalService.class)).preview(eq("BTCUSDT"),eq("FIRST_CUTOVER"),argThat(a->a.getName().equals("approver")));
++        mvc.perform(post("/api/fix132/cutover/preview").header("Authorization",basic("ordinary"))
++            .session((MockHttpSession)token.getRequest().getSession(false))
++            .header(json.get("headerName").asText(),json.get("token").asText())
++            .contentType("application/json").content("{\"symbol\":\"BTCUSDT\",\"operation\":\"FIRST_CUTOVER\"}"))
++            .andExpect(status().isForbidden());
++        verifyNoMoreInteractions(context.getBean(CutoverApprovalService.class));
++        mvc.perform(get("/api/wallet").header("Authorization",basic("approver"))).andExpect(status().isForbidden());
++    }
++}

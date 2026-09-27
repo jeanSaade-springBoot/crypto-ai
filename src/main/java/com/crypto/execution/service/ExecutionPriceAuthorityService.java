@@ -45,7 +45,7 @@ public class ExecutionPriceAuthorityService {
 
         return marketPriceEventService.findLatestAtOrBefore(symbol, reference)
                 .filter(p -> Duration.between(p.observedAt(), reference).compareTo(MAX_EXECUTION_PRICE_AGE) <= 0)
-                .map(p -> new ExecutionPrice(p.price(), p.observedAt(), "BINANCE_KLINE_LIVE_CLOSE"));
+                .map(p -> new ExecutionPrice(p.price(), p.observedAt(), p.source()));
     }
 
     public record ExecutionPrice(BigDecimal price, Instant observedAt, String source) {}

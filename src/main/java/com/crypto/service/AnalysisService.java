@@ -103,8 +103,14 @@ public class AnalysisService {
     @Transactional
     public TradeSignal analyzeForProcessing(TechnicalIndicator indicator,
             com.crypto.execution.processing.ProcessingOrigin origin) {
+        return analyzeForProcessing(indicator,origin,null);
+    }
+
+    @Transactional
+    public TradeSignal analyzeForProcessing(TechnicalIndicator indicator,
+            com.crypto.execution.processing.ProcessingOrigin origin, Long sourceEventId) {
         TradeSignal signal = analyze(indicator);
-        processingStore.register(signal, origin);
+        processingStore.register(signal, origin,sourceEventId);
         return signal;
     }
 

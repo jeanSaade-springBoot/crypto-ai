@@ -19,6 +19,12 @@ import java.util.*;
  */
 @Service
 public class TradeActivityService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.crypto.shared.SharedMarketSource sharedCandleSource;
+    private org.springframework.jdbc.core.JdbcTemplate candleReader(org.springframework.jdbc.core.JdbcTemplate legacy) {
+        return sharedCandleSource == null ? legacy : sharedCandleSource.reader();
+    }
+
     private static final Set<Integer> ALLOWED_HOURS = Set.of(1, 2, 4, 24);
     private static final Set<String> ALLOWED_FILTERS = Set.of(
             "BUY", "SELL", "COUPLE", "BLOCKED", "EXECUTED", "WIN", "LOST");
@@ -245,7 +251,7 @@ public class TradeActivityService {
             }
         }
 
-        List<Map<String, Object>> candles = jdbc.queryForList("""
+        List<Map<String, Object>> candles = candleReader(jdbc).queryForList("""
                 SELECT open_time, close_time, open_price, high_price, low_price, close_price, volume
                 FROM candle
                 WHERE symbol = ?

@@ -10,10 +10,16 @@ import java.time.Instant;
  * or a nearest candle. Grace periods match FIX-043's existing recovery contract. */
 @Service
 public class SignalProcessingFreshness {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.crypto.shared.SharedMarketSource sharedCandleSource;
+    private org.springframework.jdbc.core.JdbcTemplate candleReader(org.springframework.jdbc.core.JdbcTemplate legacy) {
+        return sharedCandleSource == null ? legacy : sharedCandleSource.reader();
+    }
+
     private final JdbcTemplate jdbc;
     public SignalProcessingFreshness(JdbcTemplate jdbc) { this.jdbc=jdbc; }
     public boolean eligible(SignalProcessingStore.Work work, Instant now) {
-        var candles=jdbc.query("""
+        var candles=candleReader(jdbc).query("""
                 SELECT open_time,close_time FROM candle WHERE symbol=? AND interval_code=?
                 AND closed=1 AND close_time<=? ORDER BY open_time DESC LIMIT 1
                 """,(rs,n)->new Instant[]{rs.getTimestamp(1).toInstant(),rs.getTimestamp(2).toInstant()},

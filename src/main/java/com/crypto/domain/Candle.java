@@ -21,7 +21,7 @@ import lombok.Setter;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Entity
+// FIX-132: read DTO; no local candle table is required by Hibernate validation.
 @Table(
     name = "candle",
     uniqueConstraints = {

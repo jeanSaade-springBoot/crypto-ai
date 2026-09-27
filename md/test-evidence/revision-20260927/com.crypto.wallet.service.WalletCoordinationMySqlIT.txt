@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.crypto.wallet.service.WalletCoordinationMySqlIT
+-------------------------------------------------------------------------------
+Tests run: 11, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 10.59 s -- in com.crypto.wallet.service.WalletCoordinationMySqlIT

@@ -38,13 +38,13 @@ public class MarketPriceEventService {
     public List<PriceEvent> find(String rawSymbol, Instant startInclusive, Instant endInclusive) {
         String symbol = rawSymbol == null ? "" : rawSymbol.trim().toUpperCase(Locale.ROOT);
         return jdbcTemplate.query("""
-                SELECT observed_at, price
+                SELECT observed_at, price, source
                 FROM market_price_event
-                WHERE symbol = ? AND observed_at >= ? AND observed_at <= ?
+                WHERE delivery_status IN ('LEGACY','APPLIED') AND symbol = ? AND observed_at >= ? AND observed_at <= ?
                 ORDER BY observed_at ASC, id ASC
                 """, (rs, rowNum) -> new PriceEvent(
                         rs.getTimestamp("observed_at").toInstant(),
-                        rs.getBigDecimal("price")),
+                        rs.getBigDecimal("price"), rs.getString("source")),
                 symbol, Timestamp.from(startInclusive), Timestamp.from(endInclusive));
     }
 
@@ -53,17 +53,34 @@ public class MarketPriceEventService {
     public java.util.Optional<PriceEvent> findLatestAtOrBefore(String rawSymbol, Instant reference) {
         String symbol = rawSymbol == null ? "" : rawSymbol.trim().toUpperCase(Locale.ROOT);
         List<PriceEvent> rows = jdbcTemplate.query("""
-                SELECT observed_at, price
+                SELECT observed_at, price, source
                 FROM market_price_event
-                WHERE symbol = ? AND observed_at <= ?
+                WHERE delivery_status IN ('LEGACY','APPLIED') AND symbol = ? AND observed_at <= ?
                 ORDER BY observed_at DESC, id DESC
                 LIMIT 1
                 """, (rs, rowNum) -> new PriceEvent(
                         rs.getTimestamp("observed_at").toInstant(),
-                        rs.getBigDecimal("price")),
+                        rs.getBigDecimal("price"), rs.getString("source")),
                 symbol, Timestamp.from(reference));
         return rows.stream().findFirst();
     }
 
-    public record PriceEvent(Instant observedAt, BigDecimal price) {}
+    /** FIX-132: known skipped/unconfirmed collector delivery must not silently
+     * become legacy candle-price fallback. Historical pre-collector windows retain
+     * their established fallback. This reads immutable evidence, never live claims. */
+    public void assertReplayEvidence(String symbol,Instant from,Instant to) {
+        Long pending=jdbcTemplate.queryForObject("SELECT COUNT(*) FROM market_price_event WHERE symbol=? AND observed_at BETWEEN ? AND ? AND source_event_id IS NOT NULL AND delivery_status='PENDING'",
+            Long.class,symbol,Timestamp.from(from),Timestamp.from(to));
+        if(pending!=null && pending>0)throw new IllegalStateException("FIX-132 Replay contains unconfirmed Production price outcomes; reconcile before claiming parity");
+        Long cutovers=jdbcTemplate.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_history WHERE symbol=? AND cutover_at<=?",Long.class,symbol,Timestamp.from(to));
+        if(cutovers!=null && cutovers>0) {
+            Long applied=jdbcTemplate.queryForObject("SELECT COUNT(*) FROM market_price_event WHERE symbol=? AND observed_at BETWEEN ? AND ? AND delivery_status IN ('LEGACY','APPLIED')",
+                Long.class,symbol,Timestamp.from(from),Timestamp.from(to));
+            if(applied==null || applied==0)throw new IllegalStateException("FIX-132 no applied price evidence in collector-era Replay window; signal-price fallback is not Production reproduction");
+        }
+    }
+
+    public record PriceEvent(Instant observedAt, BigDecimal price, String source) {
+        public PriceEvent(Instant observedAt,BigDecimal price) { this(observedAt,price,"BINANCE_KLINE_LIVE_CLOSE"); }
+    }
 }
