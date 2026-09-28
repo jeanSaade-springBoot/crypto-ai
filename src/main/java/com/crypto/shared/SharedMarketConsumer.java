@@ -40,6 +40,8 @@ public class SharedMarketConsumer {
     private final ScheduledExecutorService analysisClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix132-analysis-dispatch"));
     private volatile boolean stopped;
     private int nextSymbol;
+    // FIX-137: bounded-rate dispatcher liveness; no additional database scans.
+    private long lastAnalysisHeartbeat;
     private volatile String lastSourceStatus="";
     private volatile long lastSourceLog;
     private void sourceStatus(String status,String detail) {
@@ -126,6 +128,8 @@ public class SharedMarketConsumer {
                 if(pending>=200) { log.warn("[FIX-132][CONSUMER_LAG] symbol={}, pending={}; discovery paused",symbol,pending); continue; }
                 long after=((Number)state.getFirst().get("discovered_sequence")).longValue();
                 var rows=source.feedReader().queryForList("SELECT * FROM market_data_stream_event WHERE symbol=? AND symbol_sequence>? ORDER BY symbol_sequence LIMIT ?",symbol,after,Math.min(100,200-pending));
+                log.debug("[FIX-137][DISCOVERY_BATCH] symbol={}, afterSequence={}, pending={}, fetched={}",
+                    symbol,after,pending,rows.size());
                 // Shared connection is returned before any local transaction starts.
                 transaction.executeWithoutResult(tx->{
                     var locked=lockSymbol(symbol);
@@ -207,6 +211,7 @@ public class SharedMarketConsumer {
             var candidates=jdbc.queryForList("SELECT source_event_id FROM shared_market_event_delivery WHERE symbol=? AND phase<4 ORDER BY symbol_sequence LIMIT 1",symbol);
             if(candidates.isEmpty())return;
             id=num(candidates.getFirst(),"source_event_id");
+            log.debug("[FIX-137][DELIVERY_START] event={}, symbol={}",id,symbol);
             final long eventId=id;
             final String attemptToken=UUID.randomUUID().toString();
             // Small bounded turn: one event, four independently committed phases.
@@ -272,6 +277,7 @@ public class SharedMarketConsumer {
                     }
                     jdbc.update("UPDATE shared_market_event_delivery SET phase=? WHERE source_event_id=?",expected+1,eventId);
                 });
+                log.debug("[FIX-137][DELIVERY_STAGE_RETURNED] event={}, symbol={}, expectedPhase={}; transaction returned, may have been a guarded no-op",eventId,symbol,expected);
                 break;
                 } catch(com.crypto.infrastructure.transaction.InitialPositionLockDeadlock initial) {
                     // FIX-124's one safe retry is retained AFTER rollback. This marker
@@ -305,6 +311,12 @@ public class SharedMarketConsumer {
     }
     public void dispatchAnalysis() {
         if(stopped || !source.enabled())return;
+        long dispatchStarted=System.nanoTime();
+        boolean heartbeat=dispatchStarted-lastAnalysisHeartbeat>=TimeUnit.SECONDS.toNanos(30);
+        if(heartbeat) {
+            lastAnalysisHeartbeat=dispatchStarted;
+            log.info("[FIX-137][DISPATCH_START] activeLanes={}",activeAnalysis.size());
+        }
         try {
             // Monitoring threshold only: retain the SAME owner; never reassign or
             // retry a started analysis. A still-running owner may report completion.
@@ -319,9 +331,13 @@ public class SharedMarketConsumer {
                 AND NOT(p.analysis_status='HISTORICAL_DEFERRED' AND p.candle_open_time=d.candle_open_time AND d.status='COMPLETED'))
                 ORDER BY d.source_event_id LIMIT 16
                 """);
+            if(heartbeat) log.info("[FIX-137][DISPATCH_CANDIDATES] count={}, activeLanes={}",rows.size(),activeAnalysis.size());
             for(var e:rows) {
                 String lane=str(e,"symbol")+"|"+str(e,"interval_code");
-                if(activeAnalysis.size()>=16 || !activeAnalysis.add(lane)) continue;
+                if(activeAnalysis.size()>=16 || !activeAnalysis.add(lane)) {
+                    log.debug("[FIX-137][ANALYSIS_WAIT] event={}, lane={}, reason=ACTIVE_OR_CAPACITY",e.get("source_event_id"),lane);
+                    continue;
+                }
                 // Claim is durable BEFORE enqueue. A crash after this point requires
                 // review, never an automatic second call into the trading worker.
                 long id=num(e,"source_event_id");
@@ -352,7 +368,10 @@ public class SharedMarketConsumer {
                             && Objects.equals(p.get("candle_open_time"),candidate.get("candle_open_time"))
                             && "COMPLETED".equals(candidate.get("status")));
                     });
-                    if(blocked)return 0;
+                    if(blocked) {
+                        log.debug("[FIX-137][ANALYSIS_WAIT] event={}, lane={}, reason=DURABLE_LANE_BLOCKER",id,lane);
+                        return 0;
+                    }
                     return jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='RUNNING',owner_token=?,analysis_started_at=CURRENT_TIMESTAMP(6) WHERE source_event_id=? AND analysis_status IN ('PENDING','HISTORICAL_DEFERRED')",owner,id);
                 });
                 } catch(RuntimeException claimFailure) {
@@ -360,34 +379,58 @@ public class SharedMarketConsumer {
                     activeAnalysis.remove(lane);
                     throw claimFailure;
                 }
-                if(claimed==0) { activeAnalysis.remove(lane);continue; }
+                if(claimed==0) {
+                    log.debug("[FIX-137][ANALYSIS_NOT_CLAIMED] event={}, lane={}; eligibility or ownership changed",id,lane);
+                    activeAnalysis.remove(lane);continue;
+                }
+                long enqueuedAt=System.nanoTime();
+                log.info("[FIX-137][ANALYSIS_CLAIMED] event={}, lane={}, deliveryStatus={}",id,lane,e.get("status"));
                 try { analysisExecutor.execute(()->{
+                    log.info("[FIX-137][ANALYSIS_TASK_START] event={}, lane={}, queueWaitMs={}",
+                        id,lane,(System.nanoTime()-enqueuedAt)/1_000_000);
                     String outcome="REVIEW_REQUIRED";
                     try(var audit=CandleInputAudit.open(jdbc,transaction.getTransactionManager(),"LIVE:"+id)) {
                         // A symbol may enter review while this task waits in the executor.
                         // This pre-start check is not a claim to solve FIX-125 wallet races.
                         var current=jdbc.queryForMap("SELECT * FROM shared_market_consumer_state WHERE symbol=?",str(e,"symbol"));
-                        if(!SharedCutoverPolicy.approved(current))return;
+                        if(!SharedCutoverPolicy.approved(current)) {
+                            log.warn("[FIX-137][ANALYSIS_ABORTED] event={}, lane={}, reason=CUTOVER_NOT_APPROVED",id,lane);
+                            return;
+                        }
                         boolean live="COMPLETED".equals(e.get("status"));
                         outcome=analysis.processShared(new CandleClosedEvent(str(e,"symbol"),str(e,"interval_code"),time(e,"candle_open_time")),time(e,"candle_close_time"),live,id);
                     } catch(Exception ex) { log.error("[FIX-132][ANALYSIS_FAILED] event={}",id,ex); }
                     finally {
                         final String completedOutcome=outcome;
+                        final boolean[] matchedOutcome={false};
                         try { transaction.executeWithoutResult(tx->{
                             lockSymbol(str(e,"symbol"));
                             int updated=jdbc.update("UPDATE shared_market_event_delivery SET analysis_status=?,analysis_completed_at=CURRENT_TIMESTAMP(6) WHERE source_event_id=? AND owner_token=? AND analysis_status IN ('RUNNING','REVIEW_REQUIRED')",completedOutcome,id,owner);
+                            matchedOutcome[0]=updated==1;
+                            if(updated==0) log.warn("[FIX-137][OUTCOME_NOT_PERSISTED] event={}, outcome={}, reason=OWNER_OR_STATUS_MISMATCH",id,completedOutcome);
                             if(updated==1 && ("COMPLETED".equals(completedOutcome) || "ALREADY_COMPLETED".equals(completedOutcome)))
                                 jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='COVERED_BY_LIVE',analysis_completed_at=CURRENT_TIMESTAMP(6) WHERE symbol=? AND interval_code=? AND candle_open_time=? AND analysis_status='HISTORICAL_DEFERRED'",str(e,"symbol"),str(e,"interval_code"),e.get("candle_open_time"));
                         });
+                            log.info("[FIX-137][ANALYSIS_TASK_END] event={}, lane={}, outcome={}, outcomeCommitted={}, elapsedIncludingQueueMs={}",
+                                id,lane,outcome,matchedOutcome[0],(System.nanoTime()-enqueuedAt)/1_000_000);
                             log.info("[FIX-132][ANALYSIS_COMPLETED] event={}, outcome={}",id,outcome);
+                        } catch(RuntimeException persistenceFailure) {
+                            log.error("[FIX-137][OUTCOME_COMMIT_UNCONFIRMED] event={}, lane={}, outcome={}",id,lane,outcome,persistenceFailure);
+                            throw persistenceFailure;
                         } finally { activeAnalysis.remove(lane); }
                     }
                 }); } catch(RuntimeException rejected) {
+                    log.error("[FIX-137][ANALYSIS_SUBMISSION_FAILED] event={}, lane={}",id,lane,rejected);
                     activeAnalysis.remove(lane);
                     jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='REVIEW_REQUIRED',last_error=? WHERE source_event_id=?",shortError(rejected),id);
                 }
             }
         } catch(Exception e) { log.error("[FIX-132][ANALYSIS_DISPATCH_FAILED]",e); }
+        finally {
+            long elapsedMs=(System.nanoTime()-dispatchStarted)/1_000_000;
+            if(heartbeat || elapsedMs>=5000)
+                log.info("[FIX-137][DISPATCH_END] activeLanes={}, elapsedMs={}",activeAnalysis.size(),elapsedMs);
+        }
     }
     static long num(Map<String,Object> row,String key) { return ((Number)row.get(key)).longValue(); }
     static String str(Map<String,Object> row,String key) { return String.valueOf(row.get(key)); }
