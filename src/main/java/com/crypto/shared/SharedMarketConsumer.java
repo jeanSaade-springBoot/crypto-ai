@@ -363,7 +363,7 @@ public class SharedMarketConsumer {
                 if(claimed==0) { activeAnalysis.remove(lane);continue; }
                 try { analysisExecutor.execute(()->{
                     String outcome="REVIEW_REQUIRED";
-                    try(var audit=CandleInputAudit.open(jdbc,"LIVE:"+id)) {
+                    try(var audit=CandleInputAudit.open(jdbc,transaction.getTransactionManager(),"LIVE:"+id)) {
                         // A symbol may enter review while this task waits in the executor.
                         // This pre-start check is not a claim to solve FIX-125 wallet races.
                         var current=jdbc.queryForMap("SELECT * FROM shared_market_consumer_state WHERE symbol=?",str(e,"symbol"));

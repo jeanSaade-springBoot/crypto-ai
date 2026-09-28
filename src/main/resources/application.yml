@@ -9,6 +9,13 @@ spring:
       maximum-pool-size: 15
       minimum-idle: 3
       connection-timeout: 30000
+      # Keep JDBC timestamp conversion and the MySQL session on the same UTC clock.
+      # serverTimezone alone does not set the server session timezone.
+      connection-init-sql: "SET time_zone = '+00:00'"
+      data-source-properties:
+        connectionTimeZone: UTC
+        forceConnectionTimeZoneToSession: true
+        preserveInstants: true
   jpa:
     open-in-view: false
     hibernate:

@@ -1,0 +1,20 @@
+MySQL 8.0.44
+14:41:18.459 [main] INFO org.hibernate.orm.core -- HHH000001: Hibernate ORM core version 7.4.1.Final
+14:41:18.762 [main] INFO org.hibernate.orm.connections.pooling -- HHH10001005: Database info:
+	Database JDBC URL [jdbc:mysql://127.0.0.1:33318/fix136_test?useSSL=false&allowPublicKeyRetrieval=true&connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true]
+	Database driver: MySQL Connector/J
+	Database dialect: MySQLDialect
+	Database version: 8.0.44
+	Default catalog/schema: fix136_test/undefined
+	Autocommit mode: undefined/unknown
+	Isolation level: REPEATABLE_READ [default REPEATABLE_READ]
+	JDBC fetch size: none
+	Pool: DataSourceConnectionProvider
+	Minimum pool size: undefined/unknown
+	Maximum pool size: undefined/unknown
+14:41:19.241 [main] INFO org.hibernate.validator.internal.util.Version -- HV000001: Hibernate Validator 9.1.0.Final
+14:41:19.851 [main] INFO org.hibernate.orm.core -- HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+PASS read-only JPA audit isolation LIVE:100
+PASS read-only JPA audit isolation REPLAY:100
+PASS audit failure propagates and context is cleaned up
+RESULT: 3 scenarios passed

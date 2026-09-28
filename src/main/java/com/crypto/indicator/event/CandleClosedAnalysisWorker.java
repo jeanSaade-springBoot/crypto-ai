@@ -124,6 +124,15 @@ public class CandleClosedAnalysisWorker {
             // recovery must not independently execute an uncertain shared outcome.
             log.error("Automatic candle flow failed for {} {} at {}",
                     event.symbol(), event.intervalCode(), event.openTime(), exception);
+            if(sourceEventId != null) {
+                try {
+                    String detail=exception.getClass().getName()+": "+exception.getMessage();
+                    sharedWorkEvidence.update("UPDATE shared_market_event_delivery SET last_error=? WHERE source_event_id=? AND analysis_status IN ('RUNNING','REVIEW_REQUIRED')",
+                            detail.substring(0,Math.min(1000,detail.length())),sourceEventId);
+                } catch(Exception recordingFailure) {
+                    log.error("[FIX-136][ANALYSIS_ERROR_RECORD_FAILED] event={}",sourceEventId,recordingFailure);
+                }
+            }
             return "REVIEW_REQUIRED";
         }
     }

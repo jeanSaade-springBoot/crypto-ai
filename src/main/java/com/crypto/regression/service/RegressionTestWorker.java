@@ -51,6 +51,9 @@ public class RegressionTestWorker {
     private static final Duration REPLAY_CONTEXT_WARMUP = Duration.ofHours(3);
 
     private final JdbcTemplate jdbcTemplate;
+    // FIX-136: field injection preserves the existing constructor used by Replay tests.
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.transaction.PlatformTransactionManager auditTransactionManager;
     private final CandleRepository candleRepository;
     private final TradeSignalRepository signalRepository;
     private final TechnicalIndicatorService technicalIndicatorService;
@@ -111,7 +114,7 @@ public class RegressionTestWorker {
         Long generateFreshSignalsNs = null;
         Long shadowExecutionNs = null;
         Long parityComparisonNs = null;
-        try (var inputAudit = sharedMarketEnabled ? com.crypto.shared.CandleInputAudit.open(jdbcTemplate,"REPLAY:"+runId) : null) {
+        try (var inputAudit = sharedMarketEnabled ? com.crypto.shared.CandleInputAudit.open(jdbcTemplate,auditTransactionManager,"REPLAY:"+runId) : null) {
             long stageStartedNs = System.nanoTime();
             Map<String, Object> run = jdbcTemplate.queryForMap(
                     "SELECT symbol, start_time, end_time FROM analysis_test_run WHERE id = ?", runId);
