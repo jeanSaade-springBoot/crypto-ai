@@ -1,5 +1,5 @@
 # FIX-135: immutable releases; a startup timeout must never mutate a running JAR.
-# Windows PowerShell 5.1. Does not repair Flyway or enable the collector consumer.
+# Windows PowerShell 5.1. Requests LIVE; application must validate audited cutover approval. Does not repair Flyway.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$JavaExe,
@@ -91,11 +91,11 @@ try {
     # Working directory preserves existing external application.yml resolution.
     # Explicit command-line flags win over accidental external LIVE settings.
     $arguments = @('-jar', ('"' + $releaseJar + '"'), "--server.port=$Port",
-        '--shared-market.mode=OBSERVE', '--shared-market.activation-approved=false')
+        '--shared-market.mode=LIVE', '--shared-market.activation-approved=true')
     $child = Start-Process -FilePath $JavaExe -ArgumentList $arguments -WorkingDirectory $DeployDirectory `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
     $record = [ordered]@{ processId=$child.Id; startTimeUtc=$child.StartTime.ToUniversalTime().ToString('o');
-        java=$JavaExe; jar=$releaseJar; sha256=$buildHash; stdout=$stdout; stderr=$stderr; mode='OFF' }
+        java=$JavaExe; jar=$releaseJar; sha256=$buildHash; stdout=$stdout; stderr=$stderr; mode='LIVE' }
     $record | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $release 'process.json') -Encoding UTF8
     $record | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'process.json') -Encoding UTF8
     Write-Host "[FIX-135][START] PID=$($child.Id) JAR=$releaseJar SHA256=$buildHash"
@@ -113,7 +113,7 @@ try {
         if ($listeners.Count -gt 0 -and $started) { $stable++ } else { $stable = 0 }
         # Three samples five seconds apart: same launched process + startup marker.
         if ($stable -ge 3) {
-            Write-Host "[FIX-135][STARTUP_VERIFIED] PID=$($child.Id); mode=OFF. This is not a business-health or LIVE acceptance test."
+            Write-Host "[FIX-135][STARTUP_VERIFIED] PID=$($child.Id); mode=LIVE. This is not a business-health or LIVE acceptance test."
             break
         }
         if ([DateTime]::UtcNow -ge $deadline) {

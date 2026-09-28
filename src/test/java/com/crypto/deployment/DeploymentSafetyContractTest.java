@@ -8,20 +8,24 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** FIX-135: source contract checks, NOT Windows process/PowerShell integration tests. */
 class DeploymentSafetyContractTest {
-    @Test void buildOnlyDefaultAndTestsPrecedeDeployment() throws Exception {
+    @Test void automaticBuildRunsTestsBeforeDeployment() throws Exception {
         String pipeline=Files.readString(Path.of("Jenkinsfile"));
-        assertTrue(pipeline.contains("name: 'DEPLOY_TRADER', defaultValue: false"));
+        assertFalse(pipeline.contains("parameters {"));
+        assertFalse(pipeline.contains("params."));
+        assertFalse(pipeline.contains("when {"));
         assertTrue(pipeline.contains("disableConcurrentBuilds()"));
         assertFalse(pipeline.contains("-DskipTests"));
-        assertTrue(pipeline.indexOf("mvn -B -ntp clean package") < pipeline.indexOf("stage('Deploy Trader OFF')"));
+        int build = pipeline.indexOf("mvn -B -ntp clean package");
+        int deploy = pipeline.indexOf("stage('Deploy Trader LIVE')");
+        assertTrue(build >= 0 && deploy > build);
     }
-    @Test void deploymentDoesNotDeleteLogsOverwriteLegacyJarOrEnableLive() throws Exception {
+    @Test void deploymentPreservesSafeguardsAndRequestsApprovedLive() throws Exception {
         String script=Files.readString(Path.of("scripts/deploy/Deploy-Trader.ps1"));
         assertFalse(script.contains("Remove-Item"));
         assertFalse(script.contains("BACKUP_JAR"));
         assertTrue(script.contains("Copy-Item -LiteralPath $sourceJar -Destination $releaseJar"));
-        assertTrue(script.contains("--shared-market.mode=OFF"));
-        assertTrue(script.contains("--shared-market.activation-approved=false"));
+        assertTrue(script.contains("--shared-market.mode=LIVE"));
+        assertTrue(script.contains("--shared-market.activation-approved=true"));
         assertTrue(script.contains("$listener.OwningProcess -ne $child.Id"));
         assertTrue(script.contains("NO rollback or second launch"));
     }

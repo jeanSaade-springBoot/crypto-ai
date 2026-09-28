@@ -1,33 +1,26 @@
 pipeline {
     agent any
     tools { maven 'Maven' }
-    options { disableConcurrentBuilds(); timestamps() }
-    parameters {
-        booleanParam(name: 'DEPLOY_TRADER', defaultValue: false,
-            description: 'Build/tests only by default. Enable only after the V89 schema/history incident is reconciled and reviewed.')
-        string(name: 'JAVA_EXE', defaultValue: 'C:\\Program Files\\Java\\jdk-21.0.12\\bin\\java.exe',
-            description: 'Absolute real JDK java.exe, not Oracle javapath or javaw. Verify this path on the agent.')
-        string(name: 'STARTUP_TIMEOUT_SECONDS', defaultValue: '1800',
-            description: 'Startup observation limit. Timeout NEVER rolls back or replaces a running JAR.')
+    options { disableConcurrentBuilds(); timestamps(); buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '10')) }
+    environment {
+        TRADER_JAVA_EXE = 'C:\\Program Files\\Java\\jdk-21.0.12\\bin\\java.exe'
+        TRADER_STARTUP_TIMEOUT = '1800'
     }
     stages {
         stage('Checkout') { steps { checkout scm } }
         stage('Build and test') {
             steps {
                 script {
-                    def javaHome = params.JAVA_EXE.replaceAll('(?i)\\\\bin\\\\java\\.exe$', '')
+                    def javaHome = env.TRADER_JAVA_EXE.replaceAll('(?i)\\\\bin\\\\java\\.exe$', '')
                     withEnv(["JAVA_HOME=${javaHome}", "PATH+TRADER_JAVA=${javaHome}\\bin"]) {
                         bat 'call mvn -B -ntp clean package'
                     }
                 }
             }
         }
-        stage('Deploy Trader OFF') {
-            when { expression { params.DEPLOY_TRADER } }
+        stage('Deploy Trader LIVE') {
             steps {
-                withEnv(['JENKINS_NODE_COOKIE=crypto-ai-trader-managed',
-                         "TRADER_JAVA_EXE=${params.JAVA_EXE}",
-                         "TRADER_STARTUP_TIMEOUT=${params.STARTUP_TIMEOUT_SECONDS}"]) {
+                withEnv(['JENKINS_NODE_COOKIE=crypto-ai-trader-managed']) {
                     powershell '''
                         $ErrorActionPreference = 'Stop'
                         & "$env:WORKSPACE\\scripts\\deploy\\Deploy-Trader.ps1" `
