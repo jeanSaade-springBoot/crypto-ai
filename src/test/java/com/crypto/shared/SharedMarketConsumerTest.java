@@ -58,9 +58,12 @@ class SharedMarketConsumerTest {
         when(worker.processShared(any(),any(),anyBoolean(),anyLong())).thenReturn("COMPLETED");
         local.update("UPDATE shared_market_consumer_state SET status='READY',cutover_source='OPERATOR_APPROVED',approved_by='test',approved_at=CURRENT_TIMESTAMP(6),approval_reference='controlled-test',approved_sequence=cutover_sequence,approved_cutover_at=cutover_at");
         local.update("INSERT INTO shared_market_cutover_approval(symbol,cutover_sequence,cutover_at,approved_by,approved_at,approval_reference) SELECT symbol,cutover_sequence,cutover_at,approved_by,approved_at,approval_reference FROM shared_market_consumer_state");
+        local.execute("CREATE TABLE trade_signal(id BIGINT PRIMARY KEY,symbol VARCHAR(30),interval_code VARCHAR(10),candle_open_time TIMESTAMP(6),UNIQUE(symbol,interval_code,candle_open_time))");
+        local.execute("CREATE TABLE wallet_trade(id BIGINT PRIMARY KEY,signal_id BIGINT)");
+        for(String sql:Files.readString(Path.of("src/main/resources/db/migration/V95__fix_138_analysis_dispatch_ranges.sql")).replaceAll("(?m)^\\s*--.*$", "").split(";"))if(!sql.isBlank())local.execute(sql);
         consumer=newConsumer();
     }
-    SharedMarketConsumer newConsumer() { return new SharedMarketConsumer(source,local,coins,protect,observer,worker,Runnable::run,manager); }
+    SharedMarketConsumer newConsumer() { return new SharedMarketConsumer(source,local,coins,protect,observer,worker,Runnable::run,Runnable::run,manager); }
     void event(long seq,Instant observed) {
         feed.update("INSERT INTO market_data_stream_event VALUES(?,'BTCUSDT',?,'1m',?,?,false,?,?,?,10,'LIVE_WEBSOCKET','LIVE')",seq,seq,
             Timestamp.from(now.minusSeconds(10)),Timestamp.from(now.plusSeconds(50)),Timestamp.from(observed),Timestamp.from(now),Timestamp.from(now));
@@ -163,7 +166,7 @@ class SharedMarketConsumerTest {
     @Test void historicalRepairWithHigherSequenceNeverProtectsOrAnalyzesLive() {
         event(1,now);
         feed.update("UPDATE market_data_stream_event SET closed=true,source='STARTUP_RECOVERY',classification='HISTORICAL_ONLY',candle_close_time=?",Timestamp.from(now.minusSeconds(100)));
-        consumer.discover();consumer.processNext("BTCUSDT");consumer.dispatchAnalysis();
+        consumer.discover();consumer.processNext("BTCUSDT");consumer.dispatchHistoricalAnalysis();
         verifyNoInteractions(protect,observer);
         verify(worker).processShared(any(),any(),eq(false),eq(1L));
         assertEquals("NON_LIVE_SOURCE",local.queryForObject("SELECT eligibility_reason FROM shared_market_event_delivery",String.class));
@@ -200,7 +203,7 @@ class SharedMarketConsumerTest {
     @Test void symbolQuarantinedAfterClaimCannotRunWaitingTask() {
         var waiting=new java.util.concurrent.atomic.AtomicReference<Runnable>();
         consumer.stop();
-        consumer=new SharedMarketConsumer(source,local,coins,protect,observer,worker,waiting::set,manager);
+        consumer=new SharedMarketConsumer(source,local,coins,protect,observer,worker,waiting::set,Runnable::run,manager);
         event(1,now);feed.update("UPDATE market_data_stream_event SET closed=true,candle_close_time=?",Timestamp.from(now.minusSeconds(1)));
         consumer.discover();consumer.processNext("BTCUSDT");consumer.dispatchAnalysis();
         assertNotNull(waiting.get());
@@ -273,7 +276,8 @@ class SharedMarketConsumerTest {
         event(1,now);feed.update("UPDATE market_data_stream_event SET closed=true,source='STARTUP_RECOVERY',classification='HISTORICAL_ONLY',candle_close_time=?",Timestamp.from(now.minusSeconds(1)));
         consumer.discover();consumer.processNext("BTCUSDT");consumer.dispatchAnalysis();verifyNoInteractions(worker);
         local.update("UPDATE shared_market_event_delivery SET analysis_not_before=?",Timestamp.from(now.minusSeconds(1)));
-        consumer.dispatchAnalysis();verify(worker).processShared(any(),any(),eq(false),eq(1L));verifyNoInteractions(protect,observer);
+        local.update("UPDATE shared_market_event_delivery SET candle_close_time=?",Timestamp.from(now.minusSeconds(100)));
+        consumer.dispatchHistoricalAnalysis();verify(worker).processShared(any(),any(),eq(false),eq(1L));verifyNoInteractions(protect,observer);
     }
 
     org.springframework.security.core.Authentication approver(String name,String role) {
@@ -384,9 +388,9 @@ class SharedMarketConsumerTest {
     void concurrentRealWorkers(boolean recoveryFirst) throws Exception {
         realWorkSchema();closed(1,!recoveryFirst);closed(2,recoveryFirst);
         var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
-        var first=new SharedMarketConsumer(source,local,coins,protect,observer,realWorker(entered,release),Runnable::run,manager);
+        var first=new SharedMarketConsumer(source,local,coins,protect,observer,realWorker(entered,release),Runnable::run,Runnable::run,manager);
         // Separate consumer AND coordinator objects: no shared JVM lane or candle lock.
-        var second=new SharedMarketConsumer(source,local,coins,protect,observer,realWorker(new CountDownLatch(1),new CountDownLatch(0)),Runnable::run,manager);
+        var second=new SharedMarketConsumer(source,local,coins,protect,observer,realWorker(new CountDownLatch(1),new CountDownLatch(0)),Runnable::run,Runnable::run,manager);
         var threads=Executors.newSingleThreadExecutor();
         long liveId=recoveryFirst?2:1, historicalId=recoveryFirst?1:2;
         try {
@@ -411,8 +415,9 @@ class SharedMarketConsumerTest {
     @Test void realWorkerExpiredHistoricalCloseNeverRegistersWalletWork() throws Exception {
         realWorkSchema();closed(1,false);
         local.update("UPDATE shared_market_event_delivery SET analysis_not_before=?",Timestamp.from(now.minusSeconds(1)));
-        var actual=new SharedMarketConsumer(source,local,coins,protect,observer,realWorker(new CountDownLatch(1),new CountDownLatch(0)),Runnable::run,manager);
-        try {actual.dispatchAnalysis();
+        var actual=new SharedMarketConsumer(source,local,coins,protect,observer,realWorker(new CountDownLatch(1),new CountDownLatch(0)),Runnable::run,Runnable::run,manager);
+        local.update("UPDATE shared_market_event_delivery SET candle_close_time=?",Timestamp.from(now.minusSeconds(100)));
+        try {actual.dispatchHistoricalAnalysis();
             assertEquals("HISTORICAL_ONLY",local.queryForObject("SELECT analysis_status FROM shared_market_event_delivery",String.class));
             assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM test_signal",Integer.class));
             assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM signal_processing_work",Integer.class));
@@ -420,4 +425,112 @@ class SharedMarketConsumerTest {
         } finally {actual.stop();}
     }
 
+    // FIX-138 regression cases: scheduling changes must not weaken execution ownership.
+    void queued(long id,String interval,Instant close,String delivery,String analysisStatus) {
+        local.update("""
+            INSERT INTO shared_market_event_delivery(source_event_id,symbol,symbol_sequence,interval_code,
+              candle_open_time,candle_close_time,closed,received_at,source_created_at,price,source,classification,
+              phase,status,analysis_status)
+            VALUES(?,'BTCUSDT',?,?,?, ?,true,?,?,10,'LIVE_WEBSOCKET','LIVE',4,?,?)
+            """,id,id,interval,Timestamp.from(close.minusSeconds(60)),Timestamp.from(close),Timestamp.from(now),Timestamp.from(now),delivery,analysisStatus);
+    }
+    String analysisStatus(long id) {
+        return local.queryForObject("SELECT analysis_status FROM shared_market_event_delivery WHERE source_event_id=?",String.class,id);
+    }
+    @Test void fix138FreshCloseBypassesOldPendingWithoutExecutingOldWork() {
+        queued(1,"1m",now.minusSeconds(3600),"COMPLETED","PENDING");
+        queued(2,"1m",now.minusSeconds(1),"COMPLETED","PENDING");
+        consumer.dispatchAnalysis();
+        verify(worker).processShared(any(),any(),eq(true),eq(2L));
+        verify(worker,never()).processShared(any(),any(),anyBoolean(),eq(1L));
+        assertEquals("PENDING",analysisStatus(1));
+        assertEquals("COMPLETED",analysisStatus(2));
+    }
+    @Test void fix138ExpiredOriginallyLiveCloseIsForcedHistorical() {
+        queued(1,"1m",now.minusSeconds(3600),"COMPLETED","PENDING");
+        consumer.dispatchAnalysis();verifyNoInteractions(worker);
+        consumer.dispatchHistoricalAnalysis();
+        verify(worker).processShared(any(),any(),eq(false),eq(1L));
+    }
+    @Test void fix138HistoricalClockYieldsToFreshSameLane() {
+        queued(1,"1m",now.minusSeconds(3600),"HISTORICAL_ONLY","HISTORICAL_DEFERRED");
+        queued(2,"1m",now.minusSeconds(1),"COMPLETED","PENDING");
+        consumer.dispatchHistoricalAnalysis();verifyNoInteractions(worker);
+        assertEquals("HISTORICAL_DEFERRED",analysisStatus(1));
+        consumer.dispatchAnalysis();verify(worker).processShared(any(),any(),eq(true),eq(2L));
+    }
+    @Test void fix138CompletedAnalysisOnlyReviewIsRetainedWithoutBlockingFreshCandle() {
+        queued(1,"1m",now.minusSeconds(3600),"COMPLETED","REVIEW_REQUIRED");
+        queued(2,"1m",now.minusSeconds(1),"COMPLETED","PENDING");
+        local.update("UPDATE shared_market_event_delivery SET analysis_completed_at=?,last_error='original failure' WHERE source_event_id=1",Timestamp.from(now));
+        consumer.dispatchAnalysis();
+        assertEquals("ANALYSIS_ONLY_REVIEW",analysisStatus(1));
+        assertEquals("original failure",local.queryForObject("SELECT last_error FROM shared_market_event_delivery WHERE source_event_id=1",String.class));
+        verify(worker).processShared(any(),any(),eq(true),eq(2L));
+        verify(worker,never()).processShared(any(),any(),anyBoolean(),eq(1L));
+    }
+    @Test void fix138ReviewWithProcessingWorkStillBlocks() {
+        queued(1,"1m",now.minusSeconds(3600),"COMPLETED","REVIEW_REQUIRED");
+        queued(2,"1m",now.minusSeconds(1),"COMPLETED","PENDING");
+        local.update("UPDATE shared_market_event_delivery SET analysis_completed_at=? WHERE source_event_id=1",Timestamp.from(now));
+        local.update("INSERT INTO signal_processing_work(signal_id,status,source_event_id) VALUES(99,'PENDING',1)");
+        consumer.dispatchAnalysis();verifyNoInteractions(worker);
+        assertEquals("REVIEW_REQUIRED",analysisStatus(1));
+        assertEquals("PENDING",analysisStatus(2));
+    }
+    @Test void fix138ReviewWithWalletEvidenceStillBlocksWithoutWorkRow() {
+        queued(1,"1m",now.minusSeconds(3600),"COMPLETED","REVIEW_REQUIRED");
+        queued(2,"1m",now.minusSeconds(1),"COMPLETED","PENDING");
+        local.update("UPDATE shared_market_event_delivery SET analysis_completed_at=? WHERE source_event_id=1",Timestamp.from(now));
+        local.update("INSERT INTO trade_signal SELECT 99,symbol,interval_code,candle_open_time FROM shared_market_event_delivery WHERE source_event_id=1");
+        local.update("INSERT INTO wallet_trade VALUES(10,99)");
+        consumer.dispatchAnalysis();verifyNoInteractions(worker);
+        assertEquals("REVIEW_REQUIRED",analysisStatus(1));
+    }
+    @Test void fix138ReviewWithoutCompletionMarkerIsNeverBypassed() {
+        queued(1,"1m",now.minusSeconds(3600),"COMPLETED","REVIEW_REQUIRED");
+        queued(2,"1m",now.minusSeconds(1),"COMPLETED","PENDING");
+        consumer.dispatchAnalysis();consumer.dispatchHistoricalAnalysis();verifyNoInteractions(worker);
+        assertEquals("REVIEW_REQUIRED",analysisStatus(1));
+    }
+    @Test void fix138HigherSequenceRunningOwnerBlocksOldHistoricalAcrossInstances() {
+        queued(1,"1m",now.minusSeconds(3600),"COMPLETED","PENDING");
+        queued(2,"1m",now.minusSeconds(1),"COMPLETED","RUNNING");
+        var second=newConsumer();
+        try {second.dispatchHistoricalAnalysis();verifyNoInteractions(worker);
+            assertEquals("PENDING",analysisStatus(1));
+        } finally {second.stop();}
+    }
+    @Test void fix138BusyHistoricalPoolDoesNotOccupyLiveExecutorOrDuplicateLane() {
+        var historicalTask=new java.util.concurrent.atomic.AtomicReference<Runnable>();
+        var periodConfig=new com.crypto.client.config.binance.BinanceMarketDataProperties();
+        periodConfig.setIntervals(List.of("1m","5m"));
+        consumer.stop();
+        consumer=new SharedMarketConsumer(source,local,coins,protect,observer,worker,Runnable::run,historicalTask::set,manager);
+        org.springframework.test.util.ReflectionTestUtils.setField(consumer,"intervals",periodConfig);
+        queued(1,"1m",now.minusSeconds(3600),"COMPLETED","PENDING");
+        consumer.dispatchHistoricalAnalysis();assertNotNull(historicalTask.get());
+        queued(2,"1m",now.minusSeconds(1),"COMPLETED","PENDING");
+        queued(3,"5m",now.minusSeconds(1),"COMPLETED","PENDING");
+        consumer.dispatchAnalysis();
+        verify(worker).processShared(any(),any(),eq(true),eq(3L));
+        verify(worker,never()).processShared(any(),any(),anyBoolean(),eq(2L));
+        historicalTask.get().run();
+        consumer.dispatchAnalysis();verify(worker).processShared(any(),any(),eq(true),eq(2L));
+    }
+    @Test void fix138RejectedUnstartedTaskReleasesOnlyItsOwnClaim() {
+        consumer.stop();
+        consumer=new SharedMarketConsumer(source,local,coins,protect,observer,worker,
+            r->{throw new RejectedExecutionException("pool full");},Runnable::run,manager);
+        queued(1,"1m",now.minusSeconds(1),"COMPLETED","PENDING");
+        consumer.dispatchAnalysis();verifyNoInteractions(worker);
+        assertEquals("PENDING",analysisStatus(1));
+        assertNull(local.queryForObject("SELECT analysis_started_at FROM shared_market_event_delivery WHERE source_event_id=1",Timestamp.class));
+    }
+    @Test void fix138HistoricalSelectionRespectsNotBeforeAndCannotTakeFreshRecovery() {
+        queued(1,"1m",now.minusSeconds(1),"HISTORICAL_ONLY","HISTORICAL_DEFERRED");
+        queued(2,"1m",now.minusSeconds(3600),"HISTORICAL_ONLY","HISTORICAL_DEFERRED");
+        local.update("UPDATE shared_market_event_delivery SET analysis_not_before=? WHERE source_event_id=2",Timestamp.from(now.plusSeconds(300)));
+        consumer.dispatchHistoricalAnalysis();consumer.dispatchAnalysis();verifyNoInteractions(worker);
+    }
 }

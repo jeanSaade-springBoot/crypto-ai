@@ -30,18 +30,19 @@ public class SharedMarketConsumer {
     private final LivePositionProtectionService protection;
     private final PriceMoveMonitorService observer;
     private final CandleClosedAnalysisWorker analysis;
-    private final Executor analysisExecutor;
+    private final SharedAnalysisDispatcher analysisDispatch;
     private final TransactionTemplate transaction;
     private final ExecutorService prices=Executors.newFixedThreadPool(2);
-    private final Set<String> activePrices=ConcurrentHashMap.newKeySet(), activeAnalysis=ConcurrentHashMap.newKeySet();
+    private final Set<String> activePrices=ConcurrentHashMap.newKeySet();
     private final String owner=UUID.randomUUID().toString();
     private final ScheduledExecutorService discoveryClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix132-discovery"));
     private final ScheduledExecutorService priceClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix132-price-dispatch"));
     private final ScheduledExecutorService analysisClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix132-analysis-dispatch"));
     private volatile boolean stopped;
     private int nextSymbol;
-    // FIX-137: bounded-rate dispatcher liveness; no additional database scans.
-    private long lastAnalysisHeartbeat;
+    private final ScheduledExecutorService historyClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix138-history-dispatch"));
+    private final ScheduledExecutorService monitorClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix138-analysis-monitor"));
+    private final Map<String,Long> discoveryLogTimes=new HashMap<>();
     private volatile String lastSourceStatus="";
     private volatile long lastSourceLog;
     private void sourceStatus(String status,String detail) {
@@ -51,9 +52,12 @@ public class SharedMarketConsumer {
     }
     public SharedMarketConsumer(SharedMarketSource source,JdbcTemplate jdbc,CoinConfigurationService coins,
             LivePositionProtectionService protection,PriceMoveMonitorService observer,CandleClosedAnalysisWorker analysis,
-            @Qualifier("candleAnalysisExecutor") Executor executor,PlatformTransactionManager manager) {
+            @Qualifier("sharedLiveAnalysisExecutor") Executor executor,
+            @Qualifier("sharedHistoricalAnalysisExecutor") Executor historicalExecutor,PlatformTransactionManager manager) {
         this.source=source;this.jdbc=jdbc;this.coins=coins;this.protection=protection;this.observer=observer;
-        this.analysis=analysis;analysisExecutor=executor;transaction=new TransactionTemplate(manager);
+        this.analysis=analysis;transaction=new TransactionTemplate(manager);
+        analysisDispatch=new SharedAnalysisDispatcher(source,jdbc,coins,
+            ()->intervals==null?List.of("1m"):intervals.getIntervals(),analysis,executor,historicalExecutor,manager);
         transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
     @org.springframework.beans.factory.annotation.Value("${shared-market.activation-approved:false}")
@@ -74,6 +78,9 @@ public class SharedMarketConsumer {
         discoveryClock.scheduleWithFixedDelay(this::discover,0,100,TimeUnit.MILLISECONDS);
         priceClock.scheduleWithFixedDelay(this::dispatchPrices,0,50,TimeUnit.MILLISECONDS);
         analysisClock.scheduleWithFixedDelay(this::dispatchAnalysis,0,100,TimeUnit.MILLISECONDS);
+        historyClock.scheduleWithFixedDelay(this::dispatchHistoricalAnalysis,1000,1000,TimeUnit.MILLISECONDS);
+        monitorClock.scheduleWithFixedDelay(analysisDispatch::monitor,30,30,TimeUnit.SECONDS);
+        log.info("[FIX-138][ANALYSIS_CONFIGURATION] liveThreads=8, historyThreads=1, independentClocks=true, livePriority=true, historicalWalletExecution=false");
     }
     public void validateCutover() {
         log.info("[FIX-132][SOURCE_CONFIGURATION] mode={}, readPool=3, priceWorkers=2, pendingPerSymbol=200, publicationSource=collector",source.mode());
@@ -125,11 +132,18 @@ public class SharedMarketConsumer {
                 }
                 if(!SharedCutoverPolicy.admitted(state.getFirst(),source.enabled())) continue;
                 int pending=jdbc.queryForObject("SELECT COUNT(*) FROM shared_market_event_delivery WHERE symbol=? AND phase<4",Integer.class,symbol);
-                if(pending>=200) { log.warn("[FIX-132][CONSUMER_LAG] symbol={}, pending={}; discovery paused",symbol,pending); continue; }
+                boolean discoveryHeartbeat=System.nanoTime()-discoveryLogTimes.getOrDefault(symbol,0L)>=TimeUnit.SECONDS.toNanos(30);
+                if(discoveryHeartbeat)discoveryLogTimes.put(symbol,System.nanoTime());
+                if(pending>=200) {
+                    if(discoveryHeartbeat)log.warn("[FIX-132][CONSUMER_LAG] symbol={}, pending={}; discovery paused before analysis admission",symbol,pending);
+                    continue;
+                }
                 long after=((Number)state.getFirst().get("discovered_sequence")).longValue();
                 var rows=source.feedReader().queryForList("SELECT * FROM market_data_stream_event WHERE symbol=? AND symbol_sequence>? ORDER BY symbol_sequence LIMIT ?",symbol,after,Math.min(100,200-pending));
                 log.debug("[FIX-137][DISCOVERY_BATCH] symbol={}, afterSequence={}, pending={}, fetched={}",
                     symbol,after,pending,rows.size());
+                if(discoveryHeartbeat)log.info("[FIX-138][DISCOVERY_PROGRESS] symbol={}, afterSequence={}, pendingPricePhases={}, fetched={}, lastFetchedObservationUtc={}",
+                    symbol,after,pending,rows.size(),rows.isEmpty()?null:time(rows.getLast(),"observed_at"));
                 // Shared connection is returned before any local transaction starts.
                 transaction.executeWithoutResult(tx->{
                     var locked=lockSymbol(symbol);
@@ -309,141 +323,22 @@ public class SharedMarketConsumer {
             log.error("[FIX-132][REVIEW_REQUIRED] symbol={}, event={}; no automatic wallet retry",symbol,id,failure);
         }
     }
-    public void dispatchAnalysis() {
-        if(stopped || !source.enabled())return;
-        long dispatchStarted=System.nanoTime();
-        boolean heartbeat=dispatchStarted-lastAnalysisHeartbeat>=TimeUnit.SECONDS.toNanos(30);
-        if(heartbeat) {
-            lastAnalysisHeartbeat=dispatchStarted;
-            log.info("[FIX-137][DISPATCH_START] activeLanes={}",activeAnalysis.size());
-        }
-        try {
-            // Monitoring threshold only: retain the SAME owner; never reassign or
-            // retry a started analysis. A still-running owner may report completion.
-            jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='REVIEW_REQUIRED',last_error='Analysis completion unconfirmed after five minutes; no automatic retry' WHERE analysis_status='RUNNING' AND analysis_started_at<TIMESTAMPADD(MINUTE,-5,CURRENT_TIMESTAMP(6))");
-            var rows=jdbc.queryForList("""
-                SELECT d.* FROM shared_market_event_delivery d
-                WHERE d.analysis_status IN ('PENDING','HISTORICAL_DEFERRED') AND d.phase=4
-                AND (d.analysis_not_before IS NULL OR d.analysis_not_before<CURRENT_TIMESTAMP(6))
-                AND EXISTS(SELECT 1 FROM shared_market_consumer_state s WHERE s.symbol=d.symbol AND s.status='READY')
-                AND NOT EXISTS(SELECT 1 FROM shared_market_event_delivery p WHERE p.symbol=d.symbol AND p.interval_code=d.interval_code
-                AND p.symbol_sequence<d.symbol_sequence AND p.analysis_status IN ('PENDING','RUNNING','REVIEW_REQUIRED','HISTORICAL_DEFERRED')
-                AND NOT(p.analysis_status='HISTORICAL_DEFERRED' AND p.candle_open_time=d.candle_open_time AND d.status='COMPLETED'))
-                ORDER BY d.source_event_id LIMIT 16
-                """);
-            if(heartbeat) log.info("[FIX-137][DISPATCH_CANDIDATES] count={}, activeLanes={}",rows.size(),activeAnalysis.size());
-            for(var e:rows) {
-                String lane=str(e,"symbol")+"|"+str(e,"interval_code");
-                if(activeAnalysis.size()>=16 || !activeAnalysis.add(lane)) {
-                    log.debug("[FIX-137][ANALYSIS_WAIT] event={}, lane={}, reason=ACTIVE_OR_CAPACITY",e.get("source_event_id"),lane);
-                    continue;
-                }
-                // Claim is durable BEFORE enqueue. A crash after this point requires
-                // review, never an automatic second call into the trading worker.
-                long id=num(e,"source_event_id");
-                int claimed;
-                try { claimed=transaction.execute(tx->{
-                    // Same lock order as price phases. Do not claim queued analysis after
-                    // protection has already quarantined this symbol.
-                    var state=lockSymbol(str(e,"symbol"));
-                    if(!SharedCutoverPolicy.admitted(state,source.enabled()))return 0;
-                    // FIX-132: recheck with CURRENT locking reads, not a repeatable-read
-                    // discovery snapshot. The symbol row serializes admissions across JVMs.
-                    var candidate=jdbc.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=? FOR UPDATE",id);
-                    if(!Set.of("PENDING","HISTORICAL_DEFERRED").contains(str(candidate,"analysis_status"))
-                        || num(candidate,"phase")!=4)return 0;
-                    var eligible=jdbc.queryForList("SELECT source_event_id FROM shared_market_event_delivery WHERE source_event_id=? AND (analysis_not_before IS NULL OR analysis_not_before<CURRENT_TIMESTAMP(6)) FOR UPDATE",id);
-                    if(eligible.isEmpty())return 0;
-                    var blockers=jdbc.queryForList("""
-                        SELECT source_event_id,analysis_status,candle_open_time,symbol_sequence FROM shared_market_event_delivery
-                        WHERE symbol=? AND interval_code=? AND source_event_id<>?
-                        AND analysis_status IN ('PENDING','RUNNING','REVIEW_REQUIRED','HISTORICAL_DEFERRED') FOR UPDATE
-                        """,str(e,"symbol"),str(e,"interval_code"),id);
-                    boolean blocked=blockers.stream().anyMatch(p -> {
-                        String status=str(p,"analysis_status");
-                        // Even a higher sequence already RUNNING blocks an older deferred row.
-                        if(Set.of("RUNNING","REVIEW_REQUIRED").contains(status))return true;
-                        if(num(p,"symbol_sequence")>=num(candidate,"symbol_sequence"))return false;
-                        return !("HISTORICAL_DEFERRED".equals(status)
-                            && Objects.equals(p.get("candle_open_time"),candidate.get("candle_open_time"))
-                            && "COMPLETED".equals(candidate.get("status")));
-                    });
-                    if(blocked) {
-                        log.debug("[FIX-137][ANALYSIS_WAIT] event={}, lane={}, reason=DURABLE_LANE_BLOCKER",id,lane);
-                        return 0;
-                    }
-                    return jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='RUNNING',owner_token=?,analysis_started_at=CURRENT_TIMESTAMP(6) WHERE source_event_id=? AND analysis_status IN ('PENDING','HISTORICAL_DEFERRED')",owner,id);
-                });
-                } catch(RuntimeException claimFailure) {
-                    // A failed claim must not strand this lane in the local admission set.
-                    activeAnalysis.remove(lane);
-                    throw claimFailure;
-                }
-                if(claimed==0) {
-                    log.debug("[FIX-137][ANALYSIS_NOT_CLAIMED] event={}, lane={}; eligibility or ownership changed",id,lane);
-                    activeAnalysis.remove(lane);continue;
-                }
-                long enqueuedAt=System.nanoTime();
-                log.info("[FIX-137][ANALYSIS_CLAIMED] event={}, lane={}, deliveryStatus={}",id,lane,e.get("status"));
-                try { analysisExecutor.execute(()->{
-                    log.info("[FIX-137][ANALYSIS_TASK_START] event={}, lane={}, queueWaitMs={}",
-                        id,lane,(System.nanoTime()-enqueuedAt)/1_000_000);
-                    String outcome="REVIEW_REQUIRED";
-                    try(var audit=CandleInputAudit.open(jdbc,transaction.getTransactionManager(),"LIVE:"+id)) {
-                        // A symbol may enter review while this task waits in the executor.
-                        // This pre-start check is not a claim to solve FIX-125 wallet races.
-                        var current=jdbc.queryForMap("SELECT * FROM shared_market_consumer_state WHERE symbol=?",str(e,"symbol"));
-                        if(!SharedCutoverPolicy.approved(current)) {
-                            log.warn("[FIX-137][ANALYSIS_ABORTED] event={}, lane={}, reason=CUTOVER_NOT_APPROVED",id,lane);
-                            return;
-                        }
-                        boolean live="COMPLETED".equals(e.get("status"));
-                        outcome=analysis.processShared(new CandleClosedEvent(str(e,"symbol"),str(e,"interval_code"),time(e,"candle_open_time")),time(e,"candle_close_time"),live,id);
-                    } catch(Exception ex) { log.error("[FIX-132][ANALYSIS_FAILED] event={}",id,ex); }
-                    finally {
-                        final String completedOutcome=outcome;
-                        final boolean[] matchedOutcome={false};
-                        try { transaction.executeWithoutResult(tx->{
-                            lockSymbol(str(e,"symbol"));
-                            int updated=jdbc.update("UPDATE shared_market_event_delivery SET analysis_status=?,analysis_completed_at=CURRENT_TIMESTAMP(6) WHERE source_event_id=? AND owner_token=? AND analysis_status IN ('RUNNING','REVIEW_REQUIRED')",completedOutcome,id,owner);
-                            matchedOutcome[0]=updated==1;
-                            if(updated==0) log.warn("[FIX-137][OUTCOME_NOT_PERSISTED] event={}, outcome={}, reason=OWNER_OR_STATUS_MISMATCH",id,completedOutcome);
-                            if(updated==1 && ("COMPLETED".equals(completedOutcome) || "ALREADY_COMPLETED".equals(completedOutcome)))
-                                jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='COVERED_BY_LIVE',analysis_completed_at=CURRENT_TIMESTAMP(6) WHERE symbol=? AND interval_code=? AND candle_open_time=? AND analysis_status='HISTORICAL_DEFERRED'",str(e,"symbol"),str(e,"interval_code"),e.get("candle_open_time"));
-                        });
-                            log.info("[FIX-137][ANALYSIS_TASK_END] event={}, lane={}, outcome={}, outcomeCommitted={}, elapsedIncludingQueueMs={}",
-                                id,lane,outcome,matchedOutcome[0],(System.nanoTime()-enqueuedAt)/1_000_000);
-                            log.info("[FIX-132][ANALYSIS_COMPLETED] event={}, outcome={}",id,outcome);
-                        } catch(RuntimeException persistenceFailure) {
-                            log.error("[FIX-137][OUTCOME_COMMIT_UNCONFIRMED] event={}, lane={}, outcome={}",id,lane,outcome,persistenceFailure);
-                            throw persistenceFailure;
-                        } finally { activeAnalysis.remove(lane); }
-                    }
-                }); } catch(RuntimeException rejected) {
-                    log.error("[FIX-137][ANALYSIS_SUBMISSION_FAILED] event={}, lane={}",id,lane,rejected);
-                    activeAnalysis.remove(lane);
-                    jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='REVIEW_REQUIRED',last_error=? WHERE source_event_id=?",shortError(rejected),id);
-                }
-            }
-        } catch(Exception e) { log.error("[FIX-132][ANALYSIS_DISPATCH_FAILED]",e); }
-        finally {
-            long elapsedMs=(System.nanoTime()-dispatchStarted)/1_000_000;
-            if(heartbeat || elapsedMs>=5000)
-                log.info("[FIX-137][DISPATCH_END] activeLanes={}, elapsedMs={}",activeAnalysis.size(),elapsedMs);
-        }
-    }
+    public void dispatchAnalysis() { analysisDispatch.live(); }
+    public void dispatchHistoricalAnalysis() { analysisDispatch.historical(); }
     static long num(Map<String,Object> row,String key) { return ((Number)row.get(key)).longValue(); }
     static String str(Map<String,Object> row,String key) { return String.valueOf(row.get(key)); }
     static Instant time(Map<String,Object> row,String key) { return row.get(key)==null?null:((Timestamp)row.get(key)).toInstant(); }
     static boolean truth(Object value) { return Boolean.TRUE.equals(value)||"1".equals(String.valueOf(value)); }
     static String shortError(Exception e) { String s=e.toString();return s.substring(0,Math.min(1000,s.length())); }
     @PreDestroy public void stop() {
-        stopped=true;discoveryClock.shutdownNow();priceClock.shutdownNow();analysisClock.shutdown();prices.shutdown();
+        stopped=true;analysisDispatch.stop();historyClock.shutdown();monitorClock.shutdown();discoveryClock.shutdownNow();priceClock.shutdownNow();analysisClock.shutdown();prices.shutdown();
         long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(30);
         try {
             boolean priceDone=prices.awaitTermination(30,TimeUnit.SECONDS);
             boolean analysisDone=analysisClock.awaitTermination(Math.max(0,deadline-System.nanoTime()),TimeUnit.NANOSECONDS);
-            if(!priceDone || !analysisDone)log.error("[FIX-132][SHUTDOWN_REVIEW_REQUIRED] worker did not drain within 30 seconds; reconcile durable phases before restarting execution");
+            boolean historyDone=historyClock.awaitTermination(Math.max(0,deadline-System.nanoTime()),TimeUnit.NANOSECONDS);
+            boolean monitorDone=monitorClock.awaitTermination(Math.max(0,deadline-System.nanoTime()),TimeUnit.NANOSECONDS);
+            if(!priceDone || !analysisDone || !historyDone || !monitorDone)log.error("[FIX-132][SHUTDOWN_REVIEW_REQUIRED] worker did not drain within 30 seconds; reconcile durable phases before restarting execution");
         } catch(InterruptedException e) {Thread.currentThread().interrupt();log.error("[FIX-132][SHUTDOWN_REVIEW_REQUIRED] drain interrupted",e);}
     }
 }

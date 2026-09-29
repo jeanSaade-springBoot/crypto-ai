@@ -121,7 +121,10 @@ public class CandleClosedAnalysisWorker {
                         "Automatic analysis skipped: signal already exists for symbol={}, interval={}, candleOpenTime={}",
                         indicator.getSymbol(), indicator.getIntervalCode(), indicator.getCandleOpenTime());
                 if(sourceEventId==null)return "ALREADY_EXISTS";
-                if(!liveSource)return "HISTORICAL_ALREADY_EXISTS";
+                // FIX-138: an expired source is historical even when originally LIVE.
+                // Never register/replay work for an already existing historical signal.
+                if(!liveSource || (closeTime!=null && !com.crypto.shared.SharedEventPolicy.closeEligible(
+                        event.intervalCode(),closeTime,java.time.Instant.now())))return "HISTORICAL_ALREADY_EXISTS";
                 // Existing signal is NOT processing completion. Only an attributed,
                 // completed work row establishes a prior shared business outcome.
                 Integer completed=sharedWorkEvidence.queryForObject("SELECT COUNT(*) FROM signal_processing_work w JOIN shared_market_event_delivery d ON d.source_event_id=w.source_event_id WHERE w.symbol=? AND w.interval_code=? AND w.candle_open_time=? AND w.status='COMPLETED' AND d.symbol=w.symbol AND d.interval_code=w.interval_code AND d.candle_open_time=w.candle_open_time",Integer.class,event.symbol(),event.intervalCode(),java.sql.Timestamp.from(event.openTime()));
@@ -133,7 +136,8 @@ public class CandleClosedAnalysisWorker {
             if (closeTime != null && (!liveSource || !com.crypto.shared.SharedEventPolicy.closeEligible(event.intervalCode(),closeTime,java.time.Instant.now()))) {
                 stage = "HISTORICAL_SIGNAL";
                 traceStage(sourceEventId,event,stage,started);
-                analysisService.analyzeRecovered(indicator,closeTime);
+                TradeSignal historical = analysisService.analyzeRecovered(indicator,closeTime);
+                logSaved(sourceEventId,event,historical,"HISTORY");
                 return "HISTORICAL_ONLY";
             }
             stage = "LIVE_SIGNAL_AND_REGISTRATION";
@@ -141,6 +145,7 @@ public class CandleClosedAnalysisWorker {
             TradeSignal signal = sourceEventId == null
                 ? analysisService.analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER)
                 : analysisService.analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER,sourceEventId);
+            logSaved(sourceEventId,event,signal,"LIVE");
             stage = "SIGNAL_PROCESSING";
             traceStage(sourceEventId,event,stage,started);
             Optional<PaperPosition> position = sourceEventId == null ? paperTradingService.processSignal(signal)
@@ -172,8 +177,19 @@ public class CandleClosedAnalysisWorker {
             return "REVIEW_REQUIRED";
         }
     }
+    /** FIX-138: emitted only after the transactional service proxy returned.
+     * Signal persistence is distinct from wallet processing and delivery completion. */
+    private static void logSaved(Long eventId,CandleClosedEvent event,TradeSignal signal,String mode) {
+        if(signal==null || signal.getId()==null) {
+            log.warn("[FIX-138][SIGNAL_SAVE_UNCONFIRMED] mode={}, event={}, symbol={}, interval={}; service returned no persisted signal identity",
+                mode,eventId,event.symbol(),event.intervalCode());
+            return;
+        }
+        log.info("[FIX-138][SIGNAL_SAVED] mode={}, event={}, signal={}, symbol={}, interval={}, candleOpenUtc={}, generatedAt={}",
+            mode,eventId,signal.getId(),event.symbol(),event.intervalCode(),event.openTime(),signal.getGeneratedAt());
+    }
     private static void traceStage(Long id, CandleClosedEvent event, String stage, long started) {
-        log.debug("[FIX-137][WORKER_STAGE] event={}, symbol={}, interval={}, open={}, stage={}, elapsedMs={}",
+        log.info("[FIX-138][WORKER_STAGE] event={}, symbol={}, interval={}, open={}, stage={}, elapsedMs={}",
                 id,event.symbol(),event.intervalCode(),event.openTime(),stage,
                 (System.nanoTime()-started)/1_000_000);
     }

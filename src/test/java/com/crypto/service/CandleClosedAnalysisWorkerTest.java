@@ -110,4 +110,17 @@ class CandleClosedAnalysisWorkerTest {
         verify(analysisService,never()).analyzeForProcessing(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any());
         org.mockito.Mockito.verifyNoInteractions(paperTradingService);
     }
+    @Test
+    void fix138ExistingExpiredLiveSourceDoesNotRequireLiveExecutionEvidenceOrReplay() {
+        Instant open=Instant.parse("2020-01-01T00:00:00Z");
+        TechnicalIndicator indicator=new TechnicalIndicator();
+        indicator.setSymbol("BTCUSDT");indicator.setIntervalCode("1m");indicator.setCandleOpenTime(open);
+        when(candleDataQualityService.validate("BTCUSDT","1m"))
+            .thenReturn(new CandleDataQualityResult(true,210,210,0,0,List.of()));
+        when(technicalIndicatorService.calculateAndPersist("BTCUSDT","1m",open)).thenReturn(Optional.of(indicator));
+        when(tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime("BTCUSDT","1m",open)).thenReturn(true);
+        String outcome=worker.processShared(new CandleClosedEvent("BTCUSDT","1m",open),open.plusSeconds(60),true,42L);
+        org.junit.jupiter.api.Assertions.assertEquals("HISTORICAL_ALREADY_EXISTS",outcome);
+        org.mockito.Mockito.verifyNoInteractions(analysisService,paperTradingService);
+    }
 }
