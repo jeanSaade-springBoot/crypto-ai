@@ -1,7 +1,12 @@
 pipeline {
     agent any
     tools { maven 'Maven' }
-    options { disableConcurrentBuilds(); timestamps(); buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '10')) }
+    options { disableConcurrentBuilds(abortPrevious: true)
+    timestamps()
+    buildDiscarder(logRotator(
+        numToKeepStr: '10',
+        artifactNumToKeepStr: '10'
+    ))}
     environment {
         TRADER_JAVA_EXE = 'C:\\Program Files\\Java\\jdk-21.0.12\\bin\\java.exe'
         TRADER_STARTUP_TIMEOUT = '1800'
