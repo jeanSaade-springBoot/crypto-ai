@@ -1,5 +1,7 @@
 # FIX-135: immutable releases; a startup timeout must never mutate a running JAR.
-# Windows PowerShell 5.1. Requests LIVE; application must validate audited cutover approval. Does not repair Flyway.
+# Windows PowerShell 5.1. Requests LIVE; application validates audited cutover approval.
+# Jenkins completion: redirect stdin, archive bounded log tails, and explicitly exit.
+# Does not repair Flyway or automatically roll back a failed deployment.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$JavaExe,
@@ -18,8 +20,8 @@ $stderr = $null
 $child = $null
 
 function Get-TraderProcesses {
-    # Exact jar argument, not substring matching crypto-ai-next or other Java apps.
-    # Bare crypto-ai.jar supports the legacy launcher; absolute paths must be ours.
+    # Exact JAR argument; absolute paths must be inside this deployment root.
+    # Bare crypto-ai.jar supports the legacy launcher.
     @(Get-CimInstance Win32_Process | Where-Object {
         if ($_.Name -notmatch '^javaw?\.exe$' -or -not $_.CommandLine) { return $false }
         $match = [regex]::Match($_.CommandLine, '(?i)(?:^|\s)-jar\s+(?:"(?<jar>[^"]+)"|(?<jar>\S+))')
@@ -35,7 +37,7 @@ function Get-TraderProcesses {
 }
 
 try {
-    # Host-wide, cross-job exclusion in addition to Jenkins disableConcurrentBuilds.
+    # Host-wide exclusion in addition to Jenkins disableConcurrentBuilds.
     $mutex = New-Object System.Threading.Mutex($false, 'Global\CryptoAiTraderDeployment')
     try { $ownsMutex = $mutex.WaitOne(0) }
     catch [System.Threading.AbandonedMutexException] { $ownsMutex = $true }
@@ -53,7 +55,7 @@ try {
     $buildHash = (Get-FileHash -LiteralPath $sourceJar -Algorithm SHA256).Hash
     New-Item -ItemType Directory -Force -Path $DeployDirectory,$evidence | Out-Null
     $release = Join-Path $DeployDirectory ('releases\' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ') + '-' + [guid]::NewGuid().ToString('N'))
-    # No -Force: collision must fail, never overwrite any previous release.
+    # No -Force: never overwrite an existing release.
     New-Item -ItemType Directory -Path $release | Out-Null
     $releaseJar = Join-Path $release 'crypto-ai.jar'
     Copy-Item -LiteralPath $sourceJar -Destination $releaseJar
@@ -61,7 +63,7 @@ try {
         throw 'Staged JAR checksum mismatch; existing Trader has not been stopped.'
     }
 
-    # Port alone cannot find a JVM blocked in Flyway. Stop exact Trader JVMs first.
+    # Stop exact Trader JVMs, including a JVM that has not opened its port yet.
     $existing = @(Get-TraderProcesses)
     $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
     foreach ($listener in $listeners) {
@@ -88,12 +90,14 @@ try {
 
     $stdout = Join-Path $release 'crypto-ai.log'
     $stderr = Join-Path $release 'crypto-ai-error.log'
-    # Working directory preserves existing external application.yml resolution.
-    # Explicit command-line flags win over accidental external LIVE settings.
+    # Preserve existing external application.yml resolution and explicit LIVE flags.
     $arguments = @('-jar', ('"' + $releaseJar + '"'), "--server.port=$Port",
         '--shared-market.mode=LIVE', '--shared-market.activation-approved=true')
+    # Give the background JVM its own empty stdin instead of Jenkins input.
+    $stdinFile = Join-Path $release 'stdin.empty'
+    [IO.File]::WriteAllText($stdinFile, '')
     $child = Start-Process -FilePath $JavaExe -ArgumentList $arguments -WorkingDirectory $DeployDirectory `
-        -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+        -RedirectStandardInput $stdinFile -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
     $record = [ordered]@{ processId=$child.Id; startTimeUtc=$child.StartTime.ToUniversalTime().ToString('o');
         java=$JavaExe; jar=$releaseJar; sha256=$buildHash; stdout=$stdout; stderr=$stderr; mode='LIVE' }
     $record | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $release 'process.json') -Encoding UTF8
@@ -128,13 +132,27 @@ try {
     }
     exit 1
 } finally {
-    # Archive a snapshot, retaining the original open files in the release directory.
-    foreach ($log in @($stdout,$stderr)) {
-        if ($log -and (Test-Path -LiteralPath $log)) {
-            try { Copy-Item -LiteralPath $log -Destination $evidence -Force }
-            catch { Write-Warning "Could not archive log snapshot: $($_.Exception.Message)" }
+    Write-Host '[DEPLOY][CLEANUP_START]'
+    try {
+        # Keep full logs in the immutable release; archive only bounded tails.
+        foreach ($log in @($stdout,$stderr)) {
+            if ($log -and (Test-Path -LiteralPath $log)) {
+                try {
+                    $snapshot = Join-Path $evidence ([IO.Path]::GetFileName($log))
+                    Get-Content -LiteralPath $log -Tail 200 |
+                        Set-Content -LiteralPath $snapshot -Encoding UTF8
+                } catch {
+                    Write-Warning "Could not archive log tail: $($_.Exception.Message)"
+                }
+            }
         }
+    } finally {
+        if ($ownsMutex) { $mutex.ReleaseMutex() }
+        if ($null -ne $mutex) { $mutex.Dispose() }
     }
-    if ($ownsMutex) { $mutex.ReleaseMutex() }
-    if ($null -ne $mutex) { $mutex.Dispose() }
+    Write-Host '[DEPLOY][CLEANUP_END]'
 }
+
+# Reached only after successful startup and cleanup; catch exits with code 1.
+Write-Host '[DEPLOY][SCRIPT_COMPLETE] Startup verified; returning success to Jenkins.'
+exit 0

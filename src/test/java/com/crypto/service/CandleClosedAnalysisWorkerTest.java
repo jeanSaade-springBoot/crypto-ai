@@ -31,6 +31,7 @@ class CandleClosedAnalysisWorkerTest {
     @Mock private PaperTradingService paperTradingService;
     @Mock private CandleDataQualityService candleDataQualityService;
     @Mock private TradeSignalRepository tradeSignalRepository;
+    @Mock private org.springframework.jdbc.core.JdbcTemplate sharedWorkEvidence;
 
     private CandleClosedAnalysisWorker worker;
 
@@ -42,7 +43,8 @@ class CandleClosedAnalysisWorkerTest {
                 paperTradingService,
                 candleDataQualityService,
                 tradeSignalRepository,
-                new CandleAnalysisExecutionCoordinator());
+                new CandleAnalysisExecutionCoordinator(),
+                sharedWorkEvidence);
     }
 
     @Test
@@ -121,6 +123,44 @@ class CandleClosedAnalysisWorkerTest {
         when(tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime("BTCUSDT","1m",open)).thenReturn(true);
         String outcome=worker.processShared(new CandleClosedEvent("BTCUSDT","1m",open),open.plusSeconds(60),true,42L);
         org.junit.jupiter.api.Assertions.assertEquals("HISTORICAL_ALREADY_EXISTS",outcome);
-        org.mockito.Mockito.verifyNoInteractions(analysisService,paperTradingService);
+        org.mockito.Mockito.verifyNoInteractions(analysisService,paperTradingService,sharedWorkEvidence);
+    }
+
+    @Test
+    void fix138FreshRedeliveryWithCompletedOwnedWorkReturnsAlreadyCompletedWithoutReplay() {
+        assertFreshRedeliveryEvidence(1, "ALREADY_COMPLETED");
+    }
+
+    @Test
+    void fix138FreshRedeliveryWithoutCompletedOwnedWorkRequiresReviewWithoutReplay() {
+        assertFreshRedeliveryEvidence(0, "REVIEW_REQUIRED");
+    }
+
+    /** Exercise the fresh existing-signal branch, including exact evidence lookup
+     * parameters. Neither outcome may rescore, register new work, or execute a wallet. */
+    private void assertFreshRedeliveryEvidence(int completed, String expectedOutcome) {
+        Instant close = Instant.now().minusSeconds(1);
+        Instant open = close.minusSeconds(60);
+        TechnicalIndicator indicator = new TechnicalIndicator();
+        indicator.setSymbol("BTCUSDT");
+        indicator.setIntervalCode("1m");
+        indicator.setCandleOpenTime(open);
+        when(candleDataQualityService.validate("BTCUSDT", "1m"))
+                .thenReturn(new CandleDataQualityResult(true, 210, 210, 0, 0, List.of()));
+        when(technicalIndicatorService.calculateAndPersist("BTCUSDT", "1m", open))
+                .thenReturn(Optional.of(indicator));
+        when(tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime("BTCUSDT", "1m", open))
+                .thenReturn(true);
+        String evidenceSql = "SELECT COUNT(*) FROM signal_processing_work w JOIN shared_market_event_delivery d ON d.source_event_id=w.source_event_id WHERE w.symbol=? AND w.interval_code=? AND w.candle_open_time=? AND w.status='COMPLETED' AND d.symbol=w.symbol AND d.interval_code=w.interval_code AND d.candle_open_time=w.candle_open_time";
+        java.sql.Timestamp candleOpen = java.sql.Timestamp.from(open);
+        when(sharedWorkEvidence.queryForObject(evidenceSql, Integer.class, "BTCUSDT", "1m", candleOpen))
+                .thenReturn(completed);
+
+        String outcome = worker.processShared(new CandleClosedEvent("BTCUSDT", "1m", open), close, true, 42L);
+
+        org.junit.jupiter.api.Assertions.assertEquals(expectedOutcome, outcome);
+        verify(sharedWorkEvidence).queryForObject(evidenceSql, Integer.class, "BTCUSDT", "1m", candleOpen);
+        org.mockito.Mockito.verifyNoMoreInteractions(sharedWorkEvidence);
+        org.mockito.Mockito.verifyNoInteractions(analysisService, paperTradingService);
     }
 }

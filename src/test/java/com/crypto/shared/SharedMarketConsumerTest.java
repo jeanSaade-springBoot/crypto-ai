@@ -346,39 +346,49 @@ class SharedMarketConsumerTest {
     /** Real worker + real registration store; only indicator/scoring and wallet
      * collaborators are controlled. Each instance has its OWN JVM stripe locks. */
     CandleClosedAnalysisWorker realWorker(CountDownLatch registered,CountDownLatch release) {
-        var indicator=new com.crypto.domain.TechnicalIndicator();
-        indicator.setSymbol("BTCUSDT");indicator.setIntervalCode("1m");indicator.setCandleOpenTime(now.minusSeconds(10));
         var technical=mock(com.crypto.indicator.service.TechnicalIndicatorService.class);
-        when(technical.calculateAndPersist(any(),any(),any())).thenReturn(Optional.of(indicator));
+        when(technical.calculateAndPersist(any(),any(),any())).thenAnswer(i->{
+            var indicator=new com.crypto.domain.TechnicalIndicator();
+            indicator.setSymbol(i.getArgument(0));indicator.setIntervalCode(i.getArgument(1));
+            indicator.setCandleOpenTime(i.getArgument(2));return Optional.of(indicator);
+        });
         var quality=mock(com.crypto.service.CandleDataQualityService.class);
         when(quality.validate(any(),any())).thenReturn(new com.crypto.dto.CandleDataQualityResult(true,300,300,0,0,List.of()));
         var signals=mock(com.crypto.repository.TradeSignalRepository.class);
-        when(signals.existsBySymbolAndIntervalAndCandleOpenTime(any(),any(),any())).thenAnswer(i->local.queryForObject("SELECT COUNT(*) FROM test_signal",Integer.class)>0);
+        when(signals.existsBySymbolAndIntervalAndCandleOpenTime(any(),any(),any())).thenAnswer(i->local.queryForObject("SELECT COUNT(*) FROM test_signal WHERE candle_open_time=?",Integer.class,Timestamp.from((Instant)i.getArgument(2)))>0);
         var scoring=mock(com.crypto.service.AnalysisService.class);
         var paper=mock(com.crypto.service.PaperTradingService.class);
         var store=new com.crypto.execution.processing.SignalProcessingStore(local,manager);
         var transaction=new org.springframework.transaction.support.TransactionTemplate(manager);
         when(scoring.analyzeForProcessing(any(),any(),anyLong())).thenAnswer(i->{
+            com.crypto.domain.TechnicalIndicator indicator=i.getArgument(0);
             long event=i.getArgument(2);var signal=new com.crypto.domain.TradeSignal();
             signal.setId(700L);signal.setSymbol("BTCUSDT");signal.setInterval("1m");signal.setCandleOpenTime(indicator.getCandleOpenTime());
-            transaction.executeWithoutResult(t->{local.update("INSERT INTO test_signal(id) VALUES(700)");store.register(signal,com.crypto.execution.processing.ProcessingOrigin.WORKER,event);});
+            transaction.executeWithoutResult(t->{local.update("INSERT INTO test_signal(id,candle_open_time) VALUES(700,?)",Timestamp.from(indicator.getCandleOpenTime()));store.register(signal,com.crypto.execution.processing.ProcessingOrigin.WORKER,event);});
             registered.countDown();assertTrue(release.await(8,TimeUnit.SECONDS));return signal;
         });
-        when(scoring.analyzeRecovered(any(),any())).thenAnswer(i->{local.update("INSERT INTO test_signal(id) VALUES(700)");return new com.crypto.domain.TradeSignal();});
+        when(scoring.analyzeRecovered(any(),any())).thenAnswer(i->{
+            com.crypto.domain.TechnicalIndicator indicator=i.getArgument(0);
+            var signal=new com.crypto.domain.TradeSignal();signal.setId(701L);
+            signal.setSymbol(indicator.getSymbol());signal.setInterval(indicator.getIntervalCode());
+            signal.setCandleOpenTime(indicator.getCandleOpenTime());
+            local.update("INSERT INTO test_signal(id,candle_open_time) VALUES(701,?)",Timestamp.from(indicator.getCandleOpenTime()));
+            return signal;
+        });
         when(paper.processSharedSignal(any(),anyLong())).thenAnswer(i->{
             long event=i.getArgument(1);store.requireSourceOwner(700,event);
             var claim=store.claim(700,false);assertNotNull(claim);
             transaction.executeWithoutResult(t->{store.requireSourceOwner(700,event);local.update("INSERT INTO effects(id) VALUES(DEFAULT)");store.complete(claim,null);});
             return Optional.empty();
         });
-        var actual=new CandleClosedAnalysisWorker(technical,scoring,paper,quality,signals,new com.crypto.indicator.event.CandleAnalysisExecutionCoordinator());
-        org.springframework.test.util.ReflectionTestUtils.setField(actual,"sharedWorkEvidence",local);return actual;
+        var actual=new CandleClosedAnalysisWorker(technical,scoring,paper,quality,signals,new com.crypto.indicator.event.CandleAnalysisExecutionCoordinator(),local);
+        return actual;
     }
     void realWorkSchema() throws Exception {
         local.execute("DROP TABLE signal_processing_work");
         for(String sql:Files.readString(Path.of("src/main/resources/db/migration/V86__fix_127_signal_processing.sql")).replaceAll("(?m)^\\s*--.*$", "").split(";"))if(!sql.isBlank())local.execute(sql);
         local.execute("ALTER TABLE signal_processing_work ADD source_event_id BIGINT NULL");
-        local.execute("CREATE TABLE test_signal(id BIGINT PRIMARY KEY)");
+        local.execute("CREATE TABLE test_signal(id BIGINT PRIMARY KEY,candle_open_time TIMESTAMP(6) UNIQUE)");
     }
     void closed(long seq,boolean live) {
         event(seq,now);feed.update("UPDATE market_data_stream_event SET closed=true,candle_close_time=?,source=?,classification=? WHERE id=?",
@@ -387,23 +397,43 @@ class SharedMarketConsumerTest {
     }
     void concurrentRealWorkers(boolean recoveryFirst) throws Exception {
         realWorkSchema();closed(1,!recoveryFirst);closed(2,recoveryFirst);
+        // Keep the same-candle duplicate coverage, plus a DISTINCT expired candle.
+        // Merely making the fresh duplicate due cannot exercise historical selection.
+        closed(3,false);
+        Instant expiredOpen=now.minusSeconds(240), expiredClose=now.minusSeconds(181);
+        local.update("UPDATE shared_market_event_delivery SET candle_open_time=?,candle_close_time=?,analysis_not_before=? WHERE source_event_id=3",
+            Timestamp.from(expiredOpen),Timestamp.from(expiredClose),Timestamp.from(now.minusSeconds(1)));
+        String historicalOwnerBefore=local.queryForObject("SELECT owner_token FROM shared_market_event_delivery WHERE source_event_id=3",String.class);
         var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
         var first=new SharedMarketConsumer(source,local,coins,protect,observer,realWorker(entered,release),Runnable::run,Runnable::run,manager);
         // Separate consumer AND coordinator objects: no shared JVM lane or candle lock.
-        var second=new SharedMarketConsumer(source,local,coins,protect,observer,realWorker(new CountDownLatch(1),new CountDownLatch(0)),Runnable::run,Runnable::run,manager);
+        var contender=spy(realWorker(new CountDownLatch(1),new CountDownLatch(0)));
+        var second=new SharedMarketConsumer(source,local,coins,protect,observer,contender,Runnable::run,Runnable::run,manager);
         var threads=Executors.newSingleThreadExecutor();
         long liveId=recoveryFirst?2:1, historicalId=recoveryFirst?1:2;
         try {
             Future<?> running=threads.submit(first::dispatchAnalysis);
             assertTrue(entered.await(8,TimeUnit.SECONDS),"actual worker must commit owned registration before contender");
-            // Force the exact prior bug: an older historical candidate becomes due
-            // while the HIGHER sequence live close still owns persisted RUNNING work.
+            // The duplicate remains due; the distinct expired candle is also eligible.
+            // The historical dispatcher must respect the other instance's live owner.
             local.update("UPDATE shared_market_event_delivery SET analysis_not_before=? WHERE source_event_id=?",Timestamp.from(now.minusSeconds(1)),historicalId);
-            second.dispatchAnalysis();
+            assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM shared_market_event_delivery WHERE source_event_id=3 AND phase=4 AND closed=1 AND analysis_status='HISTORICAL_DEFERRED' AND candle_close_time<? AND analysis_not_before<?",Integer.class,
+                Timestamp.from(Instant.now().minusSeconds(SharedEventPolicy.closeGraceSeconds("1m"))),Timestamp.from(Instant.now())));
+            second.dispatchHistoricalAnalysis();
+            verify(contender,never()).processShared(any(),any(),anyBoolean(),anyLong());
+            assertEquals("HISTORICAL_DEFERRED",local.queryForObject("SELECT analysis_status FROM shared_market_event_delivery WHERE source_event_id=3",String.class));
+            assertEquals(historicalOwnerBefore,local.queryForObject("SELECT owner_token FROM shared_market_event_delivery WHERE source_event_id=3",String.class));
             assertEquals(liveId,local.queryForObject("SELECT source_event_id FROM signal_processing_work WHERE signal_id=700",Long.class));
             assertEquals("HISTORICAL_DEFERRED",local.queryForObject("SELECT analysis_status FROM shared_market_event_delivery WHERE source_event_id=?",String.class,historicalId));
             assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM effects",Integer.class));
-            release.countDown();running.get(8,TimeUnit.SECONDS);second.dispatchAnalysis();
+            release.countDown();running.get(8,TimeUnit.SECONDS);
+            // Positive control: the SAME due candidate now reaches the real worker.
+            second.dispatchHistoricalAnalysis();
+            verify(contender,times(1)).processShared(argThat(e->expiredOpen.equals(e.openTime())),eq(expiredClose),eq(false),eq(3L));
+            assertEquals("HISTORICAL_ONLY",local.queryForObject("SELECT analysis_status FROM shared_market_event_delivery WHERE source_event_id=3",String.class));
+            assertNotNull(local.queryForObject("SELECT analysis_completed_at FROM shared_market_event_delivery WHERE source_event_id=3",Timestamp.class));
+            assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM test_signal WHERE id=701 AND candle_open_time=?",Integer.class,Timestamp.from(expiredOpen)));
+            assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM signal_processing_work",Integer.class));
             assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM effects",Integer.class));
             assertEquals("COMPLETED",local.queryForObject("SELECT status FROM signal_processing_work WHERE signal_id=700",String.class));
             assertEquals(liveId,local.queryForObject("SELECT source_event_id FROM signal_processing_work WHERE signal_id=700",Long.class));

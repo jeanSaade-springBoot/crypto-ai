@@ -24,8 +24,8 @@ import java.util.Optional;
  */
 @Component
 public class CandleClosedAnalysisWorker {
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.springframework.jdbc.core.JdbcTemplate sharedWorkEvidence;
+    // FIX-138 review: required evidence dependency is explicit in production and tests.
+    private final org.springframework.jdbc.core.JdbcTemplate sharedWorkEvidence;
 
 
     private static final Logger log = LoggerFactory.getLogger(CandleClosedAnalysisWorker.class);
@@ -43,7 +43,8 @@ public class CandleClosedAnalysisWorker {
             PaperTradingService paperTradingService,
             CandleDataQualityService candleDataQualityService,
             TradeSignalRepository tradeSignalRepository,
-            CandleAnalysisExecutionCoordinator executionCoordinator
+            CandleAnalysisExecutionCoordinator executionCoordinator,
+            org.springframework.jdbc.core.JdbcTemplate sharedWorkEvidence
     ) {
         this.technicalIndicatorService = technicalIndicatorService;
         this.analysisService = analysisService;
@@ -51,6 +52,7 @@ public class CandleClosedAnalysisWorker {
         this.candleDataQualityService = candleDataQualityService;
         this.tradeSignalRepository = tradeSignalRepository;
         this.executionCoordinator = executionCoordinator;
+        this.sharedWorkEvidence = java.util.Objects.requireNonNull(sharedWorkEvidence, "sharedWorkEvidence");
     }
 
     public void process(CandleClosedEvent event) { processShared(event,null,true); }
