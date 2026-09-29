@@ -13,7 +13,10 @@ class DeploymentSafetyContractTest {
         assertFalse(pipeline.contains("parameters {"));
         assertFalse(pipeline.contains("params."));
         assertFalse(pipeline.contains("when {"));
-        assertTrue(pipeline.contains("disableConcurrentBuilds()"));
+        // New pushes supersede the prior build; the host mutex serializes deployment.
+        assertTrue(java.util.regex.Pattern.compile(
+                "disableConcurrentBuilds\\s*\\(\\s*abortPrevious\\s*:\\s*true\\s*\\)")
+                .matcher(pipeline).find(), "New builds must abort the previous pipeline");
         assertFalse(pipeline.contains("-DskipTests"));
         int build = pipeline.indexOf("mvn -B -ntp clean package");
         int deploy = pipeline.indexOf("stage('Deploy Trader LIVE')");
