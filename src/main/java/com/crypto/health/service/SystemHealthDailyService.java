@@ -95,7 +95,7 @@ public class SystemHealthDailyService {
         List<Map<String, Object>> diagnosticErrors = new ArrayList<>();
 
         Map<String, Long> candleCounts = safe("Core candle counts", diagnosticErrors,
-                () -> intervalCounts("candle", "open_time", "closed = 1", from, to), new LinkedHashMap<>());
+                () -> candleCounts(from, to), new LinkedHashMap<>());
         Map<String, Long> signalCounts = safe("Core signal counts", diagnosticErrors,
                 () -> intervalCounts("trade_signal", "generated_at", "1 = 1", from, to), new LinkedHashMap<>());
         long buyCount = safe("BUY count", diagnosticErrors,
@@ -220,20 +220,49 @@ public class SystemHealthDailyService {
         return stalenessRows(enabledSymbols, latest, now, true);
     }
 
-    private List<Map<String, Object>> candleStaleness(Instant now, Set<String> enabledSymbols) {
-        String sql = """
-                SELECT interval_code, symbol, MAX(close_time) last_candle
-                FROM candle
-                WHERE open_time >= ? AND closed = 1 AND interval_code IN ('1m','5m','1h')
-                GROUP BY interval_code, symbol
-                """;
+    // FIX-139: use equality prefixes on existing collector indexes; no cross-symbol scan.
+    // Keep reads serial and behind the existing single-flight snapshot cache.
+    Map<String, Long> candleCounts(Instant from, Instant to) {
+        JdbcTemplate reader = candleReader(jdbc);
+        Map<String, Long> counts = new LinkedHashMap<>();
+        Set<String> symbols = new LinkedHashSet<>(coinConfigurationService.enabledSymbols());
+        if (symbols.isEmpty()) throw new IllegalStateException("No enabled symbols available for candle health");
+        for (String interval : List.of("1m", "5m", "1h")) {
+            long total = 0;
+            for (String symbol : symbols) {
+                Long count = reader.queryForObject("""
+                        SELECT COUNT(*) FROM candle
+                        WHERE symbol = ? AND interval_code = ? AND closed = 1
+                          AND open_time >= ? AND open_time < ?
+                        """, Long.class, symbol, interval, Timestamp.from(from), Timestamp.from(to));
+                total += count == null ? 0 : count;
+            }
+            counts.put(interval, total);
+        }
+        return counts;
+    }
+
+    List<Map<String, Object>> candleStaleness(Instant now, Set<String> enabledSymbols) {
+        if (enabledSymbols.isEmpty()) throw new IllegalStateException("No enabled symbols available for candle health");
+        JdbcTemplate reader = candleReader(jdbc);
         Map<String, Instant> latest = new LinkedHashMap<>();
         Instant cutoff = now.minus(Duration.ofHours(4));
-        candleReader(jdbc).query(sql, ps -> ps.setTimestamp(1, Timestamp.from(cutoff)), rs -> {
-            // FIX-071A: keep the callback void-returning so RowCallbackHandler is selected explicitly.
-            latest.put(rs.getString("symbol") + "|" + rs.getString("interval_code"),
-                    rs.getTimestamp("last_candle").toInstant());
-        });
+        for (String symbol : enabledSymbols) {
+            for (String interval : List.of("1m", "5m", "1h")) {
+                // Existing (symbol, interval_code, closed, close_time) index supports
+                // reverse traversal and LIMIT 1; retain the original open-time cutoff.
+                List<Timestamp> times = reader.queryForList("""
+                        SELECT close_time FROM candle
+                        WHERE symbol = ? AND interval_code = ? AND closed = 1
+                          AND close_time >= ? AND open_time >= ?
+                        ORDER BY close_time DESC LIMIT 1
+                        """, Timestamp.class, symbol, interval,
+                        Timestamp.from(cutoff), Timestamp.from(cutoff));
+                if (!times.isEmpty() && times.get(0) != null) {
+                    latest.put(symbol + "|" + interval, times.get(0).toInstant());
+                }
+            }
+        }
         return stalenessRows(enabledSymbols, latest, now, false);
     }
 
@@ -474,12 +503,12 @@ public class SystemHealthDailyService {
         signalRows.stream().filter(row -> !"OK".equals(row.get("status"))).limit(8)
                 .forEach(row -> alerts.add(alert((String) row.get("status"), "Signal staleness",
                         row.get("minutesStale") == null
-                                ? row.get("symbol") + " " + row.get("interval") + " has no signal history."
+                                ? row.get("symbol") + " " + row.get("interval") + " has no signal in the last 4 hours."
                                 : row.get("symbol") + " " + row.get("interval") + " signal is " + row.get("minutesStale") + " min stale.")));
         candleRows.stream().filter(row -> !"OK".equals(row.get("status"))).limit(8)
                 .forEach(row -> alerts.add(alert((String) row.get("status"), "Candle staleness",
                         row.get("minutesStale") == null
-                                ? row.get("symbol") + " " + row.get("interval") + " has no closed candle history."
+                                ? row.get("symbol") + " " + row.get("interval") + " has no closed candle in the last 4 hours."
                                 : row.get("symbol") + " " + row.get("interval") + " candle is " + row.get("minutesStale") + " min stale.")));
         if (!"OK".equals(balanceStatus)) alerts.add(alert(balanceStatus, "BUY/SELL balance", balanceMessage));
         if (!"OK".equals(missingContextStatus)) alerts.add(alert(missingContextStatus, "Missing context",
