@@ -123,7 +123,9 @@ class CandleClosedAnalysisWorkerTest {
         when(tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime("BTCUSDT","1m",open)).thenReturn(true);
         String outcome=worker.processShared(new CandleClosedEvent("BTCUSDT","1m",open),open.plusSeconds(60),true,42L);
         org.junit.jupiter.api.Assertions.assertEquals("HISTORICAL_ALREADY_EXISTS",outcome);
-        org.mockito.Mockito.verifyNoInteractions(analysisService,paperTradingService,sharedWorkEvidence);
+        // FIX-140 performs a bounded attributed-retry lookup even for an expired source;
+        // an ordinary existing historical signal still never reaches wallet processing.
+        org.mockito.Mockito.verifyNoInteractions(analysisService,paperTradingService);
     }
 
     @Test

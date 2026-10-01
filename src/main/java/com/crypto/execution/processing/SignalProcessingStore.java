@@ -74,9 +74,14 @@ public class SignalProcessingStore {
     public Work claim(long id, boolean background) {
         return independent.execute(tx -> {
             Work work = locked(id);
-            if (work == null || !("PENDING".equals(work.status()) || "RETRYABLE_FAILURE".equals(work.status()))) return null;
+            if (work == null || !("PENDING".equals(work.status()) || "RETRYABLE_FAILURE".equals(work.status()) || "SYMBOL_LOCK_RETRY".equals(work.status()))) return null;
             if (background && !work.origin().automaticRecovery()) return null;
-            if (work.attempts() >= 2) return null;
+            // FIX-140: four attempts only for attributed, proven symbol-lock retries.
+            if ("SYMBOL_LOCK_RETRY".equals(work.status())) {
+                if(work.attempts()>=4)return null;
+                Integer due=jdbc.queryForObject("SELECT COUNT(*) FROM signal_processing_work WHERE signal_id=? AND source_event_id IS NOT NULL AND next_attempt_at<=?",Integer.class,id,Timestamp.from(Instant.now()));
+                if(due!=1)return null;
+            } else if (work.attempts() >= 2) return null;
             String owner = UUID.randomUUID().toString();
             jdbc.update("UPDATE signal_processing_work SET status='RUNNING',attempts=attempts+1,owner_token=?,updated_at=? WHERE signal_id=?",
                     owner, Timestamp.from(Instant.now()), id);
@@ -106,6 +111,13 @@ public class SignalProcessingStore {
                 UPDATE signal_processing_work SET status=?,failure_stage=?,error_message=?,owner_token=NULL,
                 updated_at=?,next_attempt_at=? WHERE signal_id=? AND status='RUNNING' AND owner_token=?
                 """,status,stage,error,Timestamp.from(Instant.now()),Timestamp.from(Instant.now().plusSeconds(30)),work.signalId(),work.owner()));
+    }
+    /** FIX-140: retry evidence is persisted after rollback, under the exact attempt owner.
+     * No connection is held during the 1/3/10-second scheduling delay. */
+    public int finishSymbolLockFailure(Work work,String status,String error) {
+        long delay=switch(work.attempts()) {case 1->1;case 2->3;default->10;};
+        return independent.execute(tx->jdbc.update("UPDATE signal_processing_work SET status=?,failure_stage='INITIAL_SYMBOL_LOCK_ROLLED_BACK',error_message=?,owner_token=NULL,updated_at=?,next_attempt_at=? WHERE signal_id=? AND status='RUNNING' AND owner_token=?",
+            status,error,Timestamp.from(Instant.now()),Timestamp.from(Instant.now().plusSeconds(delay)),work.signalId(),work.owner()));
     }
     public List<Long> due() {
         return jdbc.query("""

@@ -40,10 +40,16 @@ public class WalletTransactionCoordination {
         if(TransactionSynchronizationManager.getSynchronizations().stream().anyMatch(s->s instanceof SymbolOwnership owned && owned.symbol.equals(key)))return;
         if(mutationHeld())throw new IllegalStateException("[FIX-125][LOCK_ORDER] cannot acquire new symbol after wallet mutation guard");
         long start=System.nanoTime();
-        var rows=jdbc.query(connection->{
+        java.util.List<String> rows;
+        try { rows=jdbc.query(connection->{
             var statement=connection.prepareStatement("SELECT symbol FROM wallet_symbol_coordination WHERE symbol=? FOR UPDATE");
             statement.setQueryTimeout(2);statement.setString(1,key);return statement;
         },(rs,n)->rs.getString(1));
+        } catch(RuntimeException failure) {
+            // FIX-140: failed acquisition is observable; rollback is reported by the caller.
+            log.warn("[FIX-125][LOCK_ACQUIRE_FAILED] stage=SYMBOL, symbol={}, waitMs={}, errorType={}",key,(System.nanoTime()-start)/1_000_000,failure.getClass().getSimpleName());
+            throw failure;
+        }
         if(rows.size()!=1)throw new IllegalStateException("[FIX-125][UNPROVISIONED_SYMBOL] "+key);
         TransactionSynchronizationManager.registerSynchronization(new SymbolOwnership(key));
         timing("SYMBOL",key,start);
@@ -88,11 +94,11 @@ public class WalletTransactionCoordination {
                 long completed=System.nanoTime();
                 long elapsed=(completed-start)/1_000_000;
                 if(meters!=null)io.micrometer.core.instrument.Timer.builder("wallet.coordination.hold")
-                    .tag("stage",stage).tag("outcome",status==STATUS_COMMITTED?"COMMITTED":"ROLLED_BACK")
+                    .tag("stage",stage).tag("outcome",status==STATUS_COMMITTED?"COMMITTED":status==STATUS_ROLLED_BACK?"ROLLED_BACK":"UNKNOWN")
                     .publishPercentileHistogram().register(meters)
                     .record(completed-acquired,java.util.concurrent.TimeUnit.NANOSECONDS);
                 if(status!=STATUS_COMMITTED || wait>=100 || elapsed>=1000)
-                    log.info("[FIX-125][TX_COMPLETED] stage={}, symbol={}, outcome={}, waitMs={}, holdMs={}, elapsedMs={}",stage,symbol,status==STATUS_COMMITTED?"COMMITTED":"ROLLED_BACK",wait,(System.nanoTime()-acquired)/1_000_000,elapsed);
+                    log.info("[FIX-125][TX_COMPLETED] stage={}, symbol={}, outcome={}, waitMs={}, holdMs={}, elapsedMs={}",stage,symbol,status==STATUS_COMMITTED?"COMMITTED":status==STATUS_ROLLED_BACK?"ROLLED_BACK":"UNKNOWN",wait,(System.nanoTime()-acquired)/1_000_000,elapsed);
                 else log.debug("[FIX-125][TX_COMPLETED] stage={}, symbol={}, outcome=COMMITTED, elapsedMs={}",stage,symbol,elapsed);
             }
         });

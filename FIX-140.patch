@@ -1,0 +1,1711 @@
+--- a/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java
++++ b/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java
+@@ -59,9 +59,22 @@
+             }
+             log.info("[FIX-127][ATTEMPT] signalId={}, symbol={}, interval={}, candleOpenTime={}, origin={}, attempt={}, background={}",
+                     signalId,work.symbol(),work.interval(),work.candleOpenTime(),work.origin(),work.attempts(),background);
++            java.util.concurrent.atomic.AtomicInteger completion=new java.util.concurrent.atomic.AtomicInteger(-1);
+             try {
+                 Optional<PaperPosition> result=transaction.execute(tx->{
+-                    if(walletCoordination!=null)walletCoordination.symbol(work.symbol());
++                    org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
++                        new org.springframework.transaction.support.TransactionSynchronization() {
++                            @Override public void afterCompletion(int status) { completion.set(status); }
++                        });
++                    // FIX-140: observe the real transaction completion; a thrown exception alone
++                    // does not prove rollback. The private marker is only created here.
++                    if(walletCoordination!=null) {
++                        try { walletCoordination.symbol(work.symbol()); }
++                        catch(RuntimeException failure) {
++                            if(sourceEventId!=null && retryableSymbolLock(failure))throw new SymbolLockFailure(failure);
++                            throw failure;
++                        }
++                    }
+                     var owned=store.locked(signalId);
+                     if(owned==null || !"RUNNING".equals(owned.status()) || !work.owner().equals(owned.owner()))
+                         throw new IllegalStateException("FIX-127 processing ownership changed");
+@@ -94,6 +107,18 @@
+                 log.warn("[FIX-127][EXPIRED] signalId={}, symbol={}, attempt={}",signalId,work.symbol(),work.attempts());
+                 return Optional.empty();
+             } catch(RuntimeException ex) {
++                // FIX-140: only this invocation's initial symbol-lock marker plus a
++                // confirmed rollback grants retry. Unknown connection/commit failures stay review-only.
++                if(ex instanceof SymbolLockFailure && completion.get()==
++                        org.springframework.transaction.support.TransactionSynchronization.STATUS_ROLLED_BACK) {
++                    String result=work.attempts()<4?"SYMBOL_LOCK_RETRY":"LOCK_RETRY_EXHAUSTED";
++                    int changed=store.finishSymbolLockFailure(work,result,ex.toString());
++                    if(changed!=1)throw new IllegalStateException("FIX-140 retry persistence unconfirmed",ex);
++                    log.warn("[FIX-140][SAFE_RETRY_RESULT] event={}, signal={}, attempt={}, outcome={}, rollback=CONFIRMED",
++                        sourceEventId,signalId,work.attempts(),result);
++                    if("SYMBOL_LOCK_RETRY".equals(result))throw new SymbolLockRetryScheduled(signalId);
++                    return Optional.empty();
++                }
+                 boolean initial=ex instanceof InitialLockFailure;
+                 String status=initial && work.attempts()<2 ? "RETRYABLE_FAILURE" : "REVIEW_REQUIRED";
+                 int recorded=store.finishWithoutBusiness(work,status,initial ? "INITIAL_POSITION_LOCK" : "PROCESSING_OR_COMMIT",ex.toString());
+@@ -105,6 +130,20 @@
+         }
+         return Optional.empty();
+     }
++    // FIX-140: classify only known lock cancellation/deadlock errors. Communications
++    // errors are deliberately excluded even when nested below a data-access exception.
++    static boolean retryableSymbolLock(Throwable failure) {
++        for(Throwable e=failure;e!=null;e=e.getCause())
++            if(e instanceof java.sql.SQLException sql && sql.getSQLState()!=null && sql.getSQLState().startsWith("08"))return false;
++        for(Throwable e=failure;e!=null;e=e.getCause())
++            if(e instanceof org.springframework.dao.QueryTimeoutException ||
++               e instanceof java.sql.SQLTimeoutException ||
++               e instanceof java.sql.SQLException sql && (sql.getErrorCode()==1205 || sql.getErrorCode()==1213))return true;
++        return false;
++    }
++    private static final class SymbolLockFailure extends RuntimeException {
++        SymbolLockFailure(Throwable cause) { super(cause); }
++    }
+     // A private marker cannot be supplied by a later business callback.
+     private static final class InitialLockFailure extends RuntimeException {
+         InitialLockFailure(RuntimeException cause) { super(cause); }
+--- a/src/main/java/com/crypto/execution/processing/SignalProcessingStore.java
++++ b/src/main/java/com/crypto/execution/processing/SignalProcessingStore.java
+@@ -74,9 +74,14 @@
+     public Work claim(long id, boolean background) {
+         return independent.execute(tx -> {
+             Work work = locked(id);
+-            if (work == null || !("PENDING".equals(work.status()) || "RETRYABLE_FAILURE".equals(work.status()))) return null;
++            if (work == null || !("PENDING".equals(work.status()) || "RETRYABLE_FAILURE".equals(work.status()) || "SYMBOL_LOCK_RETRY".equals(work.status()))) return null;
+             if (background && !work.origin().automaticRecovery()) return null;
+-            if (work.attempts() >= 2) return null;
++            // FIX-140: four attempts only for attributed, proven symbol-lock retries.
++            if ("SYMBOL_LOCK_RETRY".equals(work.status())) {
++                if(work.attempts()>=4)return null;
++                Integer due=jdbc.queryForObject("SELECT COUNT(*) FROM signal_processing_work WHERE signal_id=? AND source_event_id IS NOT NULL AND next_attempt_at<=?",Integer.class,id,Timestamp.from(Instant.now()));
++                if(due!=1)return null;
++            } else if (work.attempts() >= 2) return null;
+             String owner = UUID.randomUUID().toString();
+             jdbc.update("UPDATE signal_processing_work SET status='RUNNING',attempts=attempts+1,owner_token=?,updated_at=? WHERE signal_id=?",
+                     owner, Timestamp.from(Instant.now()), id);
+@@ -106,6 +111,13 @@
+                 UPDATE signal_processing_work SET status=?,failure_stage=?,error_message=?,owner_token=NULL,
+                 updated_at=?,next_attempt_at=? WHERE signal_id=? AND status='RUNNING' AND owner_token=?
+                 """,status,stage,error,Timestamp.from(Instant.now()),Timestamp.from(Instant.now().plusSeconds(30)),work.signalId(),work.owner()));
++    }
++    /** FIX-140: retry evidence is persisted after rollback, under the exact attempt owner.
++     * No connection is held during the 1/3/10-second scheduling delay. */
++    public int finishSymbolLockFailure(Work work,String status,String error) {
++        long delay=switch(work.attempts()) {case 1->1;case 2->3;default->10;};
++        return independent.execute(tx->jdbc.update("UPDATE signal_processing_work SET status=?,failure_stage='INITIAL_SYMBOL_LOCK_ROLLED_BACK',error_message=?,owner_token=NULL,updated_at=?,next_attempt_at=? WHERE signal_id=? AND status='RUNNING' AND owner_token=?",
++            status,error,Timestamp.from(Instant.now()),Timestamp.from(Instant.now().plusSeconds(delay)),work.signalId(),work.owner()));
+     }
+     public List<Long> due() {
+         return jdbc.query("""
+--- a/src/main/java/com/crypto/execution/processing/SymbolLockRetryScheduled.java
++++ b/src/main/java/com/crypto/execution/processing/SymbolLockRetryScheduled.java
+@@ -0,0 +1,5 @@
++package com.crypto.execution.processing;
++/** FIX-140: durable retry already recorded; the delivery dispatcher owns resumption. */
++public final class SymbolLockRetryScheduled extends RuntimeException {
++    public SymbolLockRetryScheduled(long signal) { super("FIX-140 safe symbol-lock retry scheduled for signal="+signal); }
++}
+--- a/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java
++++ b/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java
+@@ -1,199 +1,228 @@
+-package com.crypto.indicator.event;
+-
+-import com.crypto.domain.PaperPosition;
+-import com.crypto.domain.TechnicalIndicator;
+-import com.crypto.domain.TradeSignal;
+-import com.crypto.dto.CandleDataQualityResult;
+-import com.crypto.indicator.service.TechnicalIndicatorService;
+-import com.crypto.repository.TradeSignalRepository;
+-import com.crypto.service.AnalysisService;
+-import com.crypto.service.CandleDataQualityService;
+-import com.crypto.service.PaperTradingService;
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+-import org.springframework.stereotype.Component;
+-
+-import java.util.Optional;
+-
+-/**
+- * The exact production analysis work formerly embedded in CandleClosedEventListener.
+- *
+- * FIX-043 changes WHERE the work runs, not WHAT trading logic runs. Keeping the complete existing
+- * pipeline in one worker makes that boundary explicit and prevents future performance changes from
+- * accidentally duplicating/replacing scoring, veto, wake-up or execution rules.
+- */
+-@Component
+-public class CandleClosedAnalysisWorker {
+-    // FIX-138 review: required evidence dependency is explicit in production and tests.
+-    private final org.springframework.jdbc.core.JdbcTemplate sharedWorkEvidence;
+-
+-
+-    private static final Logger log = LoggerFactory.getLogger(CandleClosedAnalysisWorker.class);
+-
+-    private final TechnicalIndicatorService technicalIndicatorService;
+-    private final AnalysisService analysisService;
+-    private final PaperTradingService paperTradingService;
+-    private final CandleDataQualityService candleDataQualityService;
+-    private final TradeSignalRepository tradeSignalRepository;
+-    private final CandleAnalysisExecutionCoordinator executionCoordinator;
+-
+-    public CandleClosedAnalysisWorker(
+-            TechnicalIndicatorService technicalIndicatorService,
+-            AnalysisService analysisService,
+-            PaperTradingService paperTradingService,
+-            CandleDataQualityService candleDataQualityService,
+-            TradeSignalRepository tradeSignalRepository,
+-            CandleAnalysisExecutionCoordinator executionCoordinator,
+-            org.springframework.jdbc.core.JdbcTemplate sharedWorkEvidence
+-    ) {
+-        this.technicalIndicatorService = technicalIndicatorService;
+-        this.analysisService = analysisService;
+-        this.paperTradingService = paperTradingService;
+-        this.candleDataQualityService = candleDataQualityService;
+-        this.tradeSignalRepository = tradeSignalRepository;
+-        this.executionCoordinator = executionCoordinator;
+-        this.sharedWorkEvidence = java.util.Objects.requireNonNull(sharedWorkEvidence, "sharedWorkEvidence");
+-    }
+-
+-    public void process(CandleClosedEvent event) { processShared(event,null,true); }
+-
+-    /** FIX-132 reports actual completion, never enqueue success. Historical-only
+-     * analysis may persist evidence but never registers or invokes wallet work. */
+-    public String processShared(CandleClosedEvent event, java.time.Instant closeTime, boolean liveSource) {
+-        return processShared(event,closeTime,liveSource,null);
+-    }
+-
+-    /** FIX-132 event ownership is explicit, including across executor boundaries. */
+-    public String processShared(CandleClosedEvent event, java.time.Instant closeTime, boolean liveSource, Long sourceEventId) {
+-        // FIX-137: one correlated boundary around every legacy/shared worker attempt.
+-        long started = System.nanoTime();
+-        String outcome = "UNCONFIRMED";
+-        log.info("[FIX-137][WORKER_START] event={}, symbol={}, interval={}, open={}, close={}, liveSource={}",
+-                sourceEventId,event.symbol(),event.intervalCode(),event.openTime(),closeTime,liveSource);
+-        try {
+-            outcome = processSharedTraced(event,closeTime,liveSource,sourceEventId,started);
+-            return outcome;
+-        } finally {
+-            log.info("[FIX-137][WORKER_END] event={}, symbol={}, interval={}, open={}, outcome={}, elapsedMs={}",
+-                    sourceEventId,event.symbol(),event.intervalCode(),event.openTime(),outcome,
+-                    (System.nanoTime()-started)/1_000_000);
+-        }
+-    }
+-
+-    private String processSharedTraced(CandleClosedEvent event, java.time.Instant closeTime,
+-            boolean liveSource, Long sourceEventId, long started) {
+-        String stage = "COORDINATION_LOCK";
+-        traceStage(sourceEventId,event,stage,started);
+-        // FIX-074: serialize only the exact candle identity against FIX-043 recovery.
+-        // This removes the duplicate trade_signal race while preserving parallelism across
+-        // independent symbols/timeframes and does not alter scoring or execution semantics.
+-        try (CandleAnalysisExecutionCoordinator.LockHandle ignored = executionCoordinator.lock(
+-                event.symbol(), event.intervalCode(), event.openTime())) {
+-            log.info("Processing committed CandleClosedEvent: symbol={}, interval={}, openTime={}",
+-                    event.symbol(), event.intervalCode(), event.openTime());
+-
+-            stage = "DATA_QUALITY";
+-            traceStage(sourceEventId,event,stage,started);
+-            CandleDataQualityResult dataQuality = candleDataQualityService.validate(
+-                    event.symbol(), event.intervalCode());
+-            if (!dataQuality.valid()) {
+-                log.warn(
+-                        "Automatic analysis blocked by candle data quality: symbol={}, interval={}, warnings={}",
+-                        event.symbol(), event.intervalCode(), dataQuality.warnings());
+-                return "DATA_QUALITY_BLOCKED";
+-            }
+-
+-            stage = "INDICATORS";
+-            traceStage(sourceEventId,event,stage,started);
+-            Optional<TechnicalIndicator> indicatorResult = technicalIndicatorService.calculateAndPersist(
+-                    event.symbol(), event.intervalCode(), event.openTime());
+-            if (indicatorResult.isEmpty()) {
+-                log.info(
+-                        "Automatic analysis skipped: symbol={}, interval={}, openTime={}, reason=history/as-of candle unavailable",
+-                        event.symbol(), event.intervalCode(), event.openTime());
+-                return "HISTORY_UNAVAILABLE";
+-            }
+-
+-            TechnicalIndicator indicator = indicatorResult.get();
+-            stage = "EXISTING_SIGNAL_CHECK";
+-            traceStage(sourceEventId,event,stage,started);
+-            if (tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime(
+-                    indicator.getSymbol(), indicator.getIntervalCode(), indicator.getCandleOpenTime())) {
+-                log.info(
+-                        "Automatic analysis skipped: signal already exists for symbol={}, interval={}, candleOpenTime={}",
+-                        indicator.getSymbol(), indicator.getIntervalCode(), indicator.getCandleOpenTime());
+-                if(sourceEventId==null)return "ALREADY_EXISTS";
+-                // FIX-138: an expired source is historical even when originally LIVE.
+-                // Never register/replay work for an already existing historical signal.
+-                if(!liveSource || (closeTime!=null && !com.crypto.shared.SharedEventPolicy.closeEligible(
+-                        event.intervalCode(),closeTime,java.time.Instant.now())))return "HISTORICAL_ALREADY_EXISTS";
+-                // Existing signal is NOT processing completion. Only an attributed,
+-                // completed work row establishes a prior shared business outcome.
+-                Integer completed=sharedWorkEvidence.queryForObject("SELECT COUNT(*) FROM signal_processing_work w JOIN shared_market_event_delivery d ON d.source_event_id=w.source_event_id WHERE w.symbol=? AND w.interval_code=? AND w.candle_open_time=? AND w.status='COMPLETED' AND d.symbol=w.symbol AND d.interval_code=w.interval_code AND d.candle_open_time=w.candle_open_time",Integer.class,event.symbol(),event.intervalCode(),java.sql.Timestamp.from(event.openTime()));
+-                if(completed==0) log.warn("[FIX-137][EXISTING_SIGNAL_REVIEW] event={}, symbol={}, interval={}, open={}, reason=NO_MATCHING_COMPLETED_SHARED_WORK; this does not prove work is absent",
+-                        sourceEventId,event.symbol(),event.intervalCode(),event.openTime());
+-                return completed>0?"ALREADY_COMPLETED":"REVIEW_REQUIRED";
+-            }
+-
+-            if (closeTime != null && (!liveSource || !com.crypto.shared.SharedEventPolicy.closeEligible(event.intervalCode(),closeTime,java.time.Instant.now()))) {
+-                stage = "HISTORICAL_SIGNAL";
+-                traceStage(sourceEventId,event,stage,started);
+-                TradeSignal historical = analysisService.analyzeRecovered(indicator,closeTime);
+-                logSaved(sourceEventId,event,historical,"HISTORY");
+-                return "HISTORICAL_ONLY";
+-            }
+-            stage = "LIVE_SIGNAL_AND_REGISTRATION";
+-            traceStage(sourceEventId,event,stage,started);
+-            TradeSignal signal = sourceEventId == null
+-                ? analysisService.analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER)
+-                : analysisService.analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER,sourceEventId);
+-            logSaved(sourceEventId,event,signal,"LIVE");
+-            stage = "SIGNAL_PROCESSING";
+-            traceStage(sourceEventId,event,stage,started);
+-            Optional<PaperPosition> position = sourceEventId == null ? paperTradingService.processSignal(signal)
+-                    : paperTradingService.processSharedSignal(signal,sourceEventId);
+-
+-            log.info(
+-                    "Automatic candle flow completed: symbol={}, interval={}, openTime={}, score={}, decision={}, paperPositionOpened={}",
+-                    indicator.getSymbol(), indicator.getIntervalCode(), indicator.getCandleOpenTime(),
+-                    signal.getTotalScore(), signal.getDecision(), position.isPresent());
+-            return "COMPLETED";
+-        } catch (Exception exception) {
+-            // FIX-043: never let one analysis failure kill the dispatcher lane. The next candle must
+-            // continue. FIX-132 LIVE persists this failure for reconciliation; legacy
+-            // recovery must not independently execute an uncertain shared outcome.
+-            log.error("[FIX-137][WORKER_STAGE_FAILED] event={}, symbol={}, interval={}, open={}, stage={}, elapsedMs={}",
+-                    sourceEventId,event.symbol(),event.intervalCode(),event.openTime(),stage,
+-                    (System.nanoTime()-started)/1_000_000,exception);
+-            log.error("Automatic candle flow failed for {} {} at {}",
+-                    event.symbol(), event.intervalCode(), event.openTime(), exception);
+-            if(sourceEventId != null) {
+-                try {
+-                    String detail=exception.getClass().getName()+": "+exception.getMessage();
+-                    sharedWorkEvidence.update("UPDATE shared_market_event_delivery SET last_error=? WHERE source_event_id=? AND analysis_status IN ('RUNNING','REVIEW_REQUIRED')",
+-                            detail.substring(0,Math.min(1000,detail.length())),sourceEventId);
+-                } catch(Exception recordingFailure) {
+-                    log.error("[FIX-136][ANALYSIS_ERROR_RECORD_FAILED] event={}",sourceEventId,recordingFailure);
+-                }
+-            }
+-            return "REVIEW_REQUIRED";
+-        }
+-    }
+-    /** FIX-138: emitted only after the transactional service proxy returned.
+-     * Signal persistence is distinct from wallet processing and delivery completion. */
+-    private static void logSaved(Long eventId,CandleClosedEvent event,TradeSignal signal,String mode) {
+-        if(signal==null || signal.getId()==null) {
+-            log.warn("[FIX-138][SIGNAL_SAVE_UNCONFIRMED] mode={}, event={}, symbol={}, interval={}; service returned no persisted signal identity",
+-                mode,eventId,event.symbol(),event.intervalCode());
+-            return;
+-        }
+-        log.info("[FIX-138][SIGNAL_SAVED] mode={}, event={}, signal={}, symbol={}, interval={}, candleOpenUtc={}, generatedAt={}",
+-            mode,eventId,signal.getId(),event.symbol(),event.intervalCode(),event.openTime(),signal.getGeneratedAt());
+-    }
+-    private static void traceStage(Long id, CandleClosedEvent event, String stage, long started) {
+-        log.info("[FIX-138][WORKER_STAGE] event={}, symbol={}, interval={}, open={}, stage={}, elapsedMs={}",
+-                id,event.symbol(),event.intervalCode(),event.openTime(),stage,
+-                (System.nanoTime()-started)/1_000_000);
+-    }
+-
+-}
++package com.crypto.indicator.event;
++
++import com.crypto.domain.PaperPosition;
++import com.crypto.domain.TechnicalIndicator;
++import com.crypto.domain.TradeSignal;
++import com.crypto.dto.CandleDataQualityResult;
++import com.crypto.indicator.service.TechnicalIndicatorService;
++import com.crypto.repository.TradeSignalRepository;
++import com.crypto.service.AnalysisService;
++import com.crypto.service.CandleDataQualityService;
++import com.crypto.service.PaperTradingService;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.stereotype.Component;
++
++import java.util.Optional;
++
++/**
++ * The exact production analysis work formerly embedded in CandleClosedEventListener.
++ *
++ * FIX-043 changes WHERE the work runs, not WHAT trading logic runs. Keeping the complete existing
++ * pipeline in one worker makes that boundary explicit and prevents future performance changes from
++ * accidentally duplicating/replacing scoring, veto, wake-up or execution rules.
++ */
++@Component
++public class CandleClosedAnalysisWorker {
++    // FIX-138 review: required evidence dependency is explicit in production and tests.
++    private final org.springframework.jdbc.core.JdbcTemplate sharedWorkEvidence;
++
++
++    private static final Logger log = LoggerFactory.getLogger(CandleClosedAnalysisWorker.class);
++
++    private final TechnicalIndicatorService technicalIndicatorService;
++    private final AnalysisService analysisService;
++    private final PaperTradingService paperTradingService;
++    private final CandleDataQualityService candleDataQualityService;
++    private final TradeSignalRepository tradeSignalRepository;
++    private final CandleAnalysisExecutionCoordinator executionCoordinator;
++
++    public CandleClosedAnalysisWorker(
++            TechnicalIndicatorService technicalIndicatorService,
++            AnalysisService analysisService,
++            PaperTradingService paperTradingService,
++            CandleDataQualityService candleDataQualityService,
++            TradeSignalRepository tradeSignalRepository,
++            CandleAnalysisExecutionCoordinator executionCoordinator,
++            org.springframework.jdbc.core.JdbcTemplate sharedWorkEvidence
++    ) {
++        this.technicalIndicatorService = technicalIndicatorService;
++        this.analysisService = analysisService;
++        this.paperTradingService = paperTradingService;
++        this.candleDataQualityService = candleDataQualityService;
++        this.tradeSignalRepository = tradeSignalRepository;
++        this.executionCoordinator = executionCoordinator;
++        this.sharedWorkEvidence = java.util.Objects.requireNonNull(sharedWorkEvidence, "sharedWorkEvidence");
++    }
++
++    public void process(CandleClosedEvent event) { processShared(event,null,true); }
++
++    /** FIX-132 reports actual completion, never enqueue success. Historical-only
++     * analysis may persist evidence but never registers or invokes wallet work. */
++    public String processShared(CandleClosedEvent event, java.time.Instant closeTime, boolean liveSource) {
++        return processShared(event,closeTime,liveSource,null);
++    }
++
++    /** FIX-132 event ownership is explicit, including across executor boundaries. */
++    public String processShared(CandleClosedEvent event, java.time.Instant closeTime, boolean liveSource, Long sourceEventId) {
++        // FIX-137: one correlated boundary around every legacy/shared worker attempt.
++        long started = System.nanoTime();
++        String outcome = "UNCONFIRMED";
++        log.info("[FIX-137][WORKER_START] event={}, symbol={}, interval={}, open={}, close={}, liveSource={}",
++                sourceEventId,event.symbol(),event.intervalCode(),event.openTime(),closeTime,liveSource);
++        try {
++            outcome = processSharedTraced(event,closeTime,liveSource,sourceEventId,started);
++            return outcome;
++        } finally {
++            log.info("[FIX-137][WORKER_END] event={}, symbol={}, interval={}, open={}, outcome={}, elapsedMs={}",
++                    sourceEventId,event.symbol(),event.intervalCode(),event.openTime(),outcome,
++                    (System.nanoTime()-started)/1_000_000);
++        }
++    }
++
++    private String processSharedTraced(CandleClosedEvent event, java.time.Instant closeTime,
++            boolean liveSource, Long sourceEventId, long started) {
++        // FIX-140: only explicitly attributed safe retries can resume an existing signal.
++        // Generic REVIEW_REQUIRED rows and natural-key matches never authorize execution.
++        if(sourceEventId!=null && liveSource) {
++            var retry=sharedWorkEvidence.queryForList("SELECT signal_id FROM signal_processing_work WHERE source_event_id=? AND status='SYMBOL_LOCK_RETRY' AND failure_stage='INITIAL_SYMBOL_LOCK_ROLLED_BACK' AND next_attempt_at<=CURRENT_TIMESTAMP(6)",sourceEventId);
++            if(retry.size()==1) {
++                TradeSignal saved=tradeSignalRepository.findById(((Number)retry.getFirst().get("signal_id")).longValue()).orElseThrow();
++                if(!event.symbol().equals(saved.getSymbol()) || !event.intervalCode().equals(saved.getInterval())
++                    || !event.openTime().equals(saved.getCandleOpenTime()))return "REVIEW_REQUIRED";
++                try {paperTradingService.processSharedSignal(saved,sourceEventId);}
++                catch(com.crypto.execution.processing.SymbolLockRetryScheduled scheduled) {return processingOutcome(sourceEventId);}
++                catch(Exception failure) {log.error("[FIX-140][RETRY_FAILED] event={}",sourceEventId,failure);return "REVIEW_REQUIRED";}
++                return processingOutcome(sourceEventId);
++            }
++        }
++        String stage = "COORDINATION_LOCK";
++        traceStage(sourceEventId,event,stage,started);
++        // FIX-074: serialize only the exact candle identity against FIX-043 recovery.
++        // This removes the duplicate trade_signal race while preserving parallelism across
++        // independent symbols/timeframes and does not alter scoring or execution semantics.
++        try (CandleAnalysisExecutionCoordinator.LockHandle ignored = executionCoordinator.lock(
++                event.symbol(), event.intervalCode(), event.openTime())) {
++            log.info("Processing committed CandleClosedEvent: symbol={}, interval={}, openTime={}",
++                    event.symbol(), event.intervalCode(), event.openTime());
++
++            stage = "DATA_QUALITY";
++            traceStage(sourceEventId,event,stage,started);
++            CandleDataQualityResult dataQuality = candleDataQualityService.validate(
++                    event.symbol(), event.intervalCode());
++            if (!dataQuality.valid()) {
++                log.warn(
++                        "Automatic analysis blocked by candle data quality: symbol={}, interval={}, warnings={}",
++                        event.symbol(), event.intervalCode(), dataQuality.warnings());
++                return "DATA_QUALITY_BLOCKED";
++            }
++
++            stage = "INDICATORS";
++            traceStage(sourceEventId,event,stage,started);
++            Optional<TechnicalIndicator> indicatorResult = technicalIndicatorService.calculateAndPersist(
++                    event.symbol(), event.intervalCode(), event.openTime());
++            if (indicatorResult.isEmpty()) {
++                log.info(
++                        "Automatic analysis skipped: symbol={}, interval={}, openTime={}, reason=history/as-of candle unavailable",
++                        event.symbol(), event.intervalCode(), event.openTime());
++                return "HISTORY_UNAVAILABLE";
++            }
++
++            TechnicalIndicator indicator = indicatorResult.get();
++            stage = "EXISTING_SIGNAL_CHECK";
++            traceStage(sourceEventId,event,stage,started);
++            if (tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime(
++                    indicator.getSymbol(), indicator.getIntervalCode(), indicator.getCandleOpenTime())) {
++                log.info(
++                        "Automatic analysis skipped: signal already exists for symbol={}, interval={}, candleOpenTime={}",
++                        indicator.getSymbol(), indicator.getIntervalCode(), indicator.getCandleOpenTime());
++                if(sourceEventId==null)return "ALREADY_EXISTS";
++                // FIX-138: an expired source is historical even when originally LIVE.
++                // Never register/replay work for an already existing historical signal.
++                if(!liveSource || (closeTime!=null && !com.crypto.shared.SharedEventPolicy.closeEligible(
++                        event.intervalCode(),closeTime,java.time.Instant.now())))return "HISTORICAL_ALREADY_EXISTS";
++                // Existing signal is NOT processing completion. Only an attributed,
++                // completed work row establishes a prior shared business outcome.
++                Integer completed=sharedWorkEvidence.queryForObject("SELECT COUNT(*) FROM signal_processing_work w JOIN shared_market_event_delivery d ON d.source_event_id=w.source_event_id WHERE w.symbol=? AND w.interval_code=? AND w.candle_open_time=? AND w.status='COMPLETED' AND d.symbol=w.symbol AND d.interval_code=w.interval_code AND d.candle_open_time=w.candle_open_time",Integer.class,event.symbol(),event.intervalCode(),java.sql.Timestamp.from(event.openTime()));
++                if(completed==0) log.warn("[FIX-137][EXISTING_SIGNAL_REVIEW] event={}, symbol={}, interval={}, open={}, reason=NO_MATCHING_COMPLETED_SHARED_WORK; this does not prove work is absent",
++                        sourceEventId,event.symbol(),event.intervalCode(),event.openTime());
++                return completed>0?"ALREADY_COMPLETED":"REVIEW_REQUIRED";
++            }
++
++            if (closeTime != null && (!liveSource || !com.crypto.shared.SharedEventPolicy.closeEligible(event.intervalCode(),closeTime,java.time.Instant.now()))) {
++                stage = "HISTORICAL_SIGNAL";
++                traceStage(sourceEventId,event,stage,started);
++                TradeSignal historical = analysisService.analyzeRecovered(indicator,closeTime);
++                logSaved(sourceEventId,event,historical,"HISTORY");
++                return "HISTORICAL_ONLY";
++            }
++            stage = "LIVE_SIGNAL_AND_REGISTRATION";
++            traceStage(sourceEventId,event,stage,started);
++            TradeSignal signal = sourceEventId == null
++                ? analysisService.analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER)
++                : analysisService.analyzeForProcessing(indicator, com.crypto.execution.processing.ProcessingOrigin.WORKER,sourceEventId);
++            logSaved(sourceEventId,event,signal,"LIVE");
++            stage = "SIGNAL_PROCESSING";
++            traceStage(sourceEventId,event,stage,started);
++            Optional<PaperPosition> position = sourceEventId == null ? paperTradingService.processSignal(signal)
++                    : paperTradingService.processSharedSignal(signal,sourceEventId);
++
++            log.info(
++                    "Automatic candle flow completed: symbol={}, interval={}, openTime={}, score={}, decision={}, paperPositionOpened={}",
++                    indicator.getSymbol(), indicator.getIntervalCode(), indicator.getCandleOpenTime(),
++                    signal.getTotalScore(), signal.getDecision(), position.isPresent());
++            return sourceEventId==null?"COMPLETED":processingOutcome(sourceEventId);
++        } catch (com.crypto.execution.processing.SymbolLockRetryScheduled scheduled) {
++            return sourceEventId==null?"REVIEW_REQUIRED":processingOutcome(sourceEventId);
++        } catch (Exception exception) {
++            // FIX-043: never let one analysis failure kill the dispatcher lane. The next candle must
++            // continue. FIX-132 LIVE persists this failure for reconciliation; legacy
++            // recovery must not independently execute an uncertain shared outcome.
++            log.error("[FIX-137][WORKER_STAGE_FAILED] event={}, symbol={}, interval={}, open={}, stage={}, elapsedMs={}",
++                    sourceEventId,event.symbol(),event.intervalCode(),event.openTime(),stage,
++                    (System.nanoTime()-started)/1_000_000,exception);
++            log.error("Automatic candle flow failed for {} {} at {}",
++                    event.symbol(), event.intervalCode(), event.openTime(), exception);
++            if(sourceEventId != null) {
++                try {
++                    String detail=exception.getClass().getName()+": "+exception.getMessage();
++                    sharedWorkEvidence.update("UPDATE shared_market_event_delivery SET last_error=? WHERE source_event_id=? AND analysis_status IN ('RUNNING','REVIEW_REQUIRED')",
++                            detail.substring(0,Math.min(1000,detail.length())),sourceEventId);
++                } catch(Exception recordingFailure) {
++                    log.error("[FIX-136][ANALYSIS_ERROR_RECORD_FAILED] event={}",sourceEventId,recordingFailure);
++                }
++            }
++            return "REVIEW_REQUIRED";
++        }
++    }
++    /** FIX-138: emitted only after the transactional service proxy returned.
++     * Signal persistence is distinct from wallet processing and delivery completion. */
++    private static void logSaved(Long eventId,CandleClosedEvent event,TradeSignal signal,String mode) {
++        if(signal==null || signal.getId()==null) {
++            log.warn("[FIX-138][SIGNAL_SAVE_UNCONFIRMED] mode={}, event={}, symbol={}, interval={}; service returned no persisted signal identity",
++                mode,eventId,event.symbol(),event.intervalCode());
++            return;
++        }
++        log.info("[FIX-138][SIGNAL_SAVED] mode={}, event={}, signal={}, symbol={}, interval={}, candleOpenUtc={}, generatedAt={}",
++            mode,eventId,signal.getId(),event.symbol(),event.intervalCode(),event.openTime(),signal.getGeneratedAt());
++    }
++    /** FIX-140: Optional.empty is not proof of processing completion. */
++    private String processingOutcome(long event) {
++        var states=sharedWorkEvidence.queryForList("SELECT status FROM signal_processing_work WHERE source_event_id=?",event);
++        if(states.size()!=1)return "REVIEW_REQUIRED";
++        return switch(String.valueOf(states.getFirst().get("status"))) {
++            case "COMPLETED"->"COMPLETED";
++            case "EXPIRED"->"EXECUTION_EXPIRED";
++            case "LOCK_RETRY_EXHAUSTED"->"EXECUTION_NOT_EXECUTED";
++            case "SYMBOL_LOCK_RETRY"->"EXECUTION_RETRY";
++            default->"REVIEW_REQUIRED";
++        };
++    }
++
++    private static void traceStage(Long id, CandleClosedEvent event, String stage, long started) {
++        log.info("[FIX-138][WORKER_STAGE] event={}, symbol={}, interval={}, open={}, stage={}, elapsedMs={}",
++                id,event.symbol(),event.intervalCode(),event.openTime(),stage,
++                (System.nanoTime()-started)/1_000_000);
++    }
++
++}
+--- a/src/main/java/com/crypto/service/BtcMarketContextService.java
++++ b/src/main/java/com/crypto/service/BtcMarketContextService.java
+@@ -33,6 +33,9 @@
+ 
+     private final CandleRepository candleRepository;
+     private final TradeSignalRepository tradeSignalRepository;
++    // FIX-140: count missing/present saved BTC context without altering entry permission.
++    @org.springframework.beans.factory.annotation.Autowired(required=false)
++    private SignalContextMetrics contextMetrics;
+     private final BtcContextProperties properties;
+     @Autowired(required = false)
+     private ExecutionReplayScope replayScope;
+@@ -86,6 +89,7 @@
+                     .orElse(null);
+         }
+ 
++        if(contextMetrics!=null)contextMetrics.record("BTC",interval,1,btcSignal==null?0:1);
+         if (btcSignal == null) {
+             return result(relationshipType, BtcContextStatus.UNAVAILABLE,
+                     decisionAfterConfluence, confluenceEntryAllowed, interval, null, null,
+--- a/src/main/java/com/crypto/service/MultiTimeframeConfluenceService.java
++++ b/src/main/java/com/crypto/service/MultiTimeframeConfluenceService.java
+@@ -27,6 +27,9 @@
+     private static final int STRONG_BEARISH_TREND_MAXIMUM = 6;
+ 
+     private final TradeSignalRepository tradeSignalRepository;
++    // FIX-140: observability only; preserve existing missing-context decision policy.
++    @org.springframework.beans.factory.annotation.Autowired(required=false)
++    private SignalContextMetrics contextMetrics;
+     @Autowired(required = false)
+     private ExecutionReplayScope replayScope;
+ 
+@@ -60,6 +63,7 @@
+                 .filter(signal -> signal != null && isFresh(signal, snapshotTime))
+                 .toList();
+ 
++        if(contextMetrics!=null)contextMetrics.record("MTF",interval,higherIntervals.size(),contexts.size());
+         if (contexts.isEmpty()) {
+             return unavailable(currentDecision, snapshotTime,
+                     "No recent closed higher-timeframe signal was available at signal creation time; "
+--- a/src/main/java/com/crypto/service/SignalContextMetrics.java
++++ b/src/main/java/com/crypto/service/SignalContextMetrics.java
+@@ -0,0 +1,24 @@
++package com.crypto.service;
++
++import java.util.concurrent.ConcurrentHashMap;
++import java.util.concurrent.atomic.AtomicLong;
++import org.springframework.stereotype.Component;
++
++/** FIX-140: count every context evaluation; sampling applies only to summary output.
++ * No database queries, per-symbol tags, or trading-rule changes are introduced. */
++@Component
++public class SignalContextMetrics {
++    private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(SignalContextMetrics.class);
++    private final ConcurrentHashMap<String,AtomicLong> counts=new ConcurrentHashMap<>();
++    private final AtomicLong nextLog=new AtomicLong();
++    @org.springframework.beans.factory.annotation.Autowired(required=false)
++    private io.micrometer.core.instrument.MeterRegistry meters;
++    public void record(String kind,String interval,int required,int present) {
++        String coverage=present==0?"MISSING":present<required?"PARTIAL":"FULL";
++        counts.computeIfAbsent(kind+"|"+interval+"|"+coverage,k->new AtomicLong()).incrementAndGet();
++        if(meters!=null)meters.counter("signal.context.evaluations","kind",kind,"interval",interval,"coverage",coverage).increment();
++        long now=System.nanoTime(),previous=nextLog.get();
++        if(now>=previous && nextLog.compareAndSet(previous,now+java.util.concurrent.TimeUnit.SECONDS.toNanos(30)))
++            log.info("[FIX-140][CONTEXT_COVERAGE_TOTALS] counts={}; cumulative evaluations, not sampled throughput",counts);
++    }
++}
+--- a/src/main/java/com/crypto/shared/HistoricalBacklogRetirementService.java
++++ b/src/main/java/com/crypto/shared/HistoricalBacklogRetirementService.java
+@@ -0,0 +1,90 @@
++package com.crypto.shared;
++
++import java.sql.Timestamp;
++import java.time.Instant;
++import java.util.List;
++import java.util.UUID;
++import com.crypto.administration.service.CoinConfigurationService;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.scheduling.annotation.Scheduled;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.PlatformTransactionManager;
++import org.springframework.transaction.TransactionDefinition;
++import org.springframework.transaction.support.TransactionTemplate;
++
++/** FIX-140: opt-in bounded retirement of untouched analysis queue entries.
++ * Keeps source candles, saved signals and every uncertain execution/protection record.
++ * Defaults are conservative pending Production/Replay consumer-window acceptance. */
++@Service
++public class HistoricalBacklogRetirementService {
++    private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(HistoricalBacklogRetirementService.class);
++    private final JdbcTemplate jdbc;
++    private final TransactionTemplate tx;
++    private final CoinConfigurationService coins;
++    private final SharedMarketSource source;
++    private final String operation=UUID.randomUUID().toString();
++    private int cursor;
++    private record ScanPosition(Instant close,long sequence) {}
++    private final java.util.Map<String,ScanPosition> scans=new java.util.HashMap<>();
++    /** FIX-140: keyset progress skips ineligible heads without an expensive backlog anti-join.
++     * Cursor is advisory only; every mutation still rechecks the locked current row. */
++    private java.util.List<java.util.Map<String,Object>> candidates(String symbol,String interval,String status,Instant cutoff) {
++        String key=symbol+"|"+interval+"|"+status;
++        ScanPosition position=scans.getOrDefault(key,new ScanPosition(Instant.EPOCH,-1));
++        var result=jdbc.queryForList("SELECT source_event_id,candle_close_time,symbol_sequence FROM shared_market_event_delivery WHERE symbol=? AND interval_code=? AND phase=4 AND analysis_status=? AND candle_close_time<? AND analysis_started_at IS NULL AND analysis_completed_at IS NULL AND (candle_close_time,symbol_sequence)>(?,?) ORDER BY candle_close_time,symbol_sequence LIMIT 10",symbol,interval,status,Timestamp.from(cutoff),Timestamp.from(position.close()),position.sequence());
++        if(result.isEmpty())scans.remove(key);
++        else {
++            var last=result.getLast();
++            scans.put(key,new ScanPosition(SharedMarketConsumer.time(last,"candle_close_time"),SharedMarketConsumer.num(last,"symbol_sequence")));
++        }
++        return result;
++    }
++    @Value("${shared-market.analysis.historical-enabled:true}") private boolean historyEnabled=true;
++    @Value("${shared-market.analysis.retirement-enabled:false}") private boolean retirementEnabled;
++    @Value("${shared-market.analysis.retirement-dry-run:true}") private boolean dryRun=true;
++    @Value("${shared-market.analysis.retirement-retain-seconds:172800}") private long retainSeconds=172800;
++    public HistoricalBacklogRetirementService(JdbcTemplate local,PlatformTransactionManager manager,
++            CoinConfigurationService coins,SharedMarketSource source) {
++        jdbc=new JdbcTemplate(java.util.Objects.requireNonNull(local.getDataSource()));jdbc.setQueryTimeout(2);
++        tx=new TransactionTemplate(manager);tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);tx.setTimeout(3);
++        this.coins=coins;this.source=source;
++    }
++    @Scheduled(fixedDelayString="${shared-market.analysis.retirement-delay-ms:5000}")
++    public void retire() {
++        if(!retirementEnabled || historyEnabled || !source.enabled())return;
++        // FIX-140: fresh windows always survive, even when the operator explicitly
++        // chooses zero extra retention to retire all untouched expired queue entries.
++        if(retainSeconds<0) {log.error("[FIX-140][RETIREMENT_CONFIG_REJECTED] retainSeconds must be nonnegative");return;}
++        List<String> symbols=coins.enabledSymbols();if(symbols.isEmpty())return;
++        List<String> intervals=List.of("1m","5m","15m","1h","4h","1d");
++        int lane=Math.floorMod(cursor++,symbols.size()*intervals.size());
++        String symbol=symbols.get(lane/intervals.size()),interval=intervals.get(lane%intervals.size());
++        Instant cutoff=Instant.now().minusSeconds(Math.max(retainSeconds,SharedEventPolicy.closeGraceSeconds(interval)));
++        try {
++            var ids=new java.util.ArrayList<>(candidates(symbol,interval,"PENDING",cutoff));
++            ids.addAll(candidates(symbol,interval,"HISTORICAL_DEFERRED",cutoff));
++            int eligible=0,changed=0;
++            for(var id:ids) {
++                Boolean retired=tx.execute(t->{
++                    jdbc.queryForMap("SELECT symbol FROM shared_market_consumer_state WHERE symbol=? FOR UPDATE",symbol);
++                    var row=jdbc.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=? FOR UPDATE",id.get("source_event_id"));
++                    if(SharedMarketConsumer.num(row,"phase")!=4 || row.get("analysis_started_at")!=null || row.get("analysis_completed_at")!=null
++                        || !List.of("PENDING","HISTORICAL_DEFERRED").contains(String.valueOf(row.get("analysis_status")))
++                        || !SharedMarketConsumer.time(row,"candle_close_time").isBefore(cutoff))return false;
++                    // FIX-140: owner_token may belong to phase-0/price delivery; locked
++                    // pending status plus absent analysis markers proves no analysis claim.
++                    // Event and candle checks protect attributed and legacy processing evidence.
++                    if(!jdbc.queryForList("SELECT signal_id FROM signal_processing_work WHERE source_event_id=? LIMIT 1",id.get("source_event_id")).isEmpty())return false;
++                    if(!jdbc.queryForList("SELECT signal_id FROM signal_processing_work WHERE symbol=? AND interval_code=? AND candle_open_time=? LIMIT 1",symbol,interval,row.get("candle_open_time")).isEmpty())return false;
++                    if("REVIEW_REQUIRED".equals(String.valueOf(row.get("status"))) || row.get("protection_started_at")!=null && row.get("protection_completed_at")==null)return false;
++                    if(!jdbc.queryForList("SELECT wt.id FROM wallet_trade wt JOIN trade_signal s ON s.id=wt.signal_id WHERE s.symbol=? AND s.interval_code=? AND s.candle_open_time=? LIMIT 1",symbol,interval,row.get("candle_open_time")).isEmpty())return false;
++                    if(dryRun)return true;
++                    return jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='HISTORICAL_SKIPPED',analysis_retired_at=CURRENT_TIMESTAMP(6),analysis_retirement_operation=?,analysis_retirement_reason='FIX-140 operator-enabled untouched historical queue retirement; candles and saved signals retained' WHERE source_event_id=? AND analysis_status IN ('PENDING','HISTORICAL_DEFERRED') AND analysis_started_at IS NULL AND analysis_completed_at IS NULL",operation,id.get("source_event_id"))==1;
++                });
++                if(Boolean.TRUE.equals(retired)) {eligible++;if(!dryRun)changed++;}
++            }
++            if(eligible>0)log.info("[FIX-140][HISTORY_RETIREMENT] operation={}, symbol={}, interval={}, dryRun={}, eligible={}, retired={}",operation,symbol,interval,dryRun,eligible,changed);
++        } catch(RuntimeException failure) {log.warn("[FIX-140][HISTORY_RETIREMENT_FAILED] operation={}, symbol={}, interval={}",operation,symbol,interval,failure);}
++    }
++}
+--- a/src/main/java/com/crypto/shared/SharedAnalysisDispatcher.java
++++ b/src/main/java/com/crypto/shared/SharedAnalysisDispatcher.java
+@@ -57,6 +57,9 @@
+         tx.setTimeout(5);
+     }
+ 
++    // FIX-140: compatibility default; production disabling is an explicit operator setting.
++    private volatile boolean historicalEnabled=true;
++    public void historicalEnabled(boolean enabled) { historicalEnabled=enabled; }
+     public void live() { dispatch(true); }
+     public void historical() { dispatch(false); }
+     public void stop() { stopped=true; }
+@@ -73,7 +76,7 @@
+     }
+ 
+     private void dispatch(boolean live) {
+-        if(stopped || !source.enabled())return;
++        if(stopped || !source.enabled() || (!live && !historicalEnabled))return;
+         long started=System.nanoTime();
+         Set<Lane> poolActive=live?liveActive:historyActive;
+         int capacity=live?8:1;
+@@ -138,6 +141,12 @@
+         long started=System.nanoTime();
+         Map<String,Object> result=null;
+         Instant cutoff=now.minusSeconds(SharedEventPolicy.closeGraceSeconds(lane.interval()));
++        // FIX-140: attributed retry work is selected independently of candle grace,
++        // so an expired retry can be terminalized instead of remaining stuck forever.
++        if(live) {
++            var retry=jdbc.queryForList("SELECT * FROM shared_market_event_delivery WHERE symbol=? AND interval_code=? AND phase=4 AND analysis_status='EXECUTION_RETRY' AND (analysis_not_before IS NULL OR analysis_not_before<=?) ORDER BY candle_close_time,symbol_sequence LIMIT 1",lane.symbol(),lane.interval(),Timestamp.from(now));
++            if(!retry.isEmpty())return retry.getFirst();
++        }
+         // Single-status indexed ranges avoid IN-list sorting across the entire backlog.
+         for(String status:live?List.of("PENDING"):List.of("PENDING","HISTORICAL_DEFERRED")) {
+             String window=live
+@@ -163,15 +172,17 @@
+     }
+ 
+     private boolean claim(Lane lane,Map<String,Object> selected,boolean live,String token) {
+-        if(stopped || !SharedCutoverPolicy.approved(lockSymbol(lane)))return false;
++        if(stopped || (!live && !historicalEnabled) || !SharedCutoverPolicy.approved(lockSymbol(lane)))return false;
+         long id=num(selected,"source_event_id");
+         var e=jdbc.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=? FOR UPDATE",id);
+         Instant now=Instant.now();
+         if(num(e,"phase")!=4 || !truth(e.get("closed"))
+-                || !Set.of("PENDING","HISTORICAL_DEFERRED").contains(str(e,"analysis_status")))return false;
++                || !Set.of("PENDING","HISTORICAL_DEFERRED","EXECUTION_RETRY").contains(str(e,"analysis_status")))return false;
+         if(time(e,"analysis_not_before")!=null && !time(e,"analysis_not_before").isBefore(now))return false;
+         boolean fresh=SharedEventPolicy.closeEligible(lane.interval(),time(e,"candle_close_time"),now);
+-        if(live && (!fresh || !"COMPLETED".equals(str(e,"status"))))return false;
++        boolean retry="EXECUTION_RETRY".equals(str(e,"analysis_status"));
++        if(retry && !live)return false;
++        if(live && ((!fresh && !retry) || !"COMPLETED".equals(str(e,"status"))))return false;
+         if(!live && !time(e,"candle_close_time").isBefore(now.minusSeconds(SharedEventPolicy.closeGraceSeconds(lane.interval()))))return false;
+ 
+         // Both clocks/JVMs acquire symbol -> delivery locks in the same order.
+@@ -188,7 +199,7 @@
+         // A historical task may not claim a lane with ready fresh work. It does
+         // not become live if the clock changes; false authority is passed explicitly.
+         if(!live && candidate(lane,true,now)!=null)return false;
+-        return jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='RUNNING',owner_token=?,analysis_started_at=CURRENT_TIMESTAMP(6),analysis_completed_at=NULL WHERE source_event_id=? AND analysis_status IN ('PENDING','HISTORICAL_DEFERRED')",token,id)==1;
++        return jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='RUNNING',owner_token=?,analysis_started_at=CURRENT_TIMESTAMP(6),analysis_completed_at=NULL WHERE source_event_id=? AND analysis_status IN ('PENDING','HISTORICAL_DEFERRED','EXECUTION_RETRY')",token,id)==1;
+     }
+ 
+     private boolean isolateAnalysisOnlyReview(Map<String,Object> review) {
+@@ -240,6 +251,10 @@
+             try {
+                 Boolean committed=tx.execute(s->{lockSymbol(lane);
+                     int count=jdbc.update("UPDATE shared_market_event_delivery SET analysis_status=?,analysis_completed_at=CURRENT_TIMESTAMP(6) WHERE source_event_id=? AND owner_token=? AND analysis_status IN ('RUNNING','REVIEW_REQUIRED')",result,id,token);
++                    // FIX-140: persisted work owns retry due-time. The delivery remains
++                    // under the same scheduler and is never replayed by legacy recovery.
++                    if(count==1 && "EXECUTION_RETRY".equals(result))
++                        jdbc.update("UPDATE shared_market_event_delivery d JOIN signal_processing_work w ON w.source_event_id=d.source_event_id SET d.analysis_not_before=w.next_attempt_at WHERE d.source_event_id=? AND d.owner_token=? AND w.status='SYMBOL_LOCK_RETRY'",id,token);
+                     if(count==1 && Set.of("COMPLETED","ALREADY_COMPLETED").contains(result))
+                         jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='COVERED_BY_LIVE',analysis_completed_at=CURRENT_TIMESTAMP(6) WHERE symbol=? AND interval_code=? AND candle_open_time=? AND analysis_status='HISTORICAL_DEFERRED'",lane.symbol(),lane.interval(),e.get("candle_open_time"));
+                     return count==1;
+--- a/src/main/java/com/crypto/shared/SharedMarketConsumer.java
++++ b/src/main/java/com/crypto/shared/SharedMarketConsumer.java
+@@ -1,344 +1,349 @@
+-package com.crypto.shared;
+-
+-import com.crypto.administration.service.CoinConfigurationService;
+-import com.crypto.indicator.event.CandleClosedAnalysisWorker;
+-import com.crypto.indicator.event.CandleClosedEvent;
+-import com.crypto.position.service.LivePositionProtectionService;
+-import com.crypto.debug.monitor.service.PriceMoveMonitorService;
+-import jakarta.annotation.PreDestroy;
+-import org.springframework.stereotype.Component;
+-import org.springframework.jdbc.core.JdbcTemplate;
+-import org.springframework.transaction.*;
+-import org.springframework.transaction.support.TransactionTemplate;
+-import org.springframework.beans.factory.annotation.Qualifier;
+-import org.slf4j.*;
+-import java.sql.Timestamp;
+-import java.time.Instant;
+-import java.util.*;
+-import java.util.concurrent.*;
+-
+-/** FIX-132 independent consumer. The immutable source is never claimed/updated.
+- * Each phase fences on the local symbol row through COMMIT, then releases all
+- * locks before the next phase. Unknown analysis outcomes are never auto-retried.
+- * Durable rows are the backlog; executors never hold an unbounded event queue. */
+-@Component
+-public class SharedMarketConsumer {
+-    private static final Logger log=LoggerFactory.getLogger(SharedMarketConsumer.class);
+-    private final SharedMarketSource source;
+-    private final JdbcTemplate jdbc;
+-    private final CoinConfigurationService coins;
+-    private final LivePositionProtectionService protection;
+-    private final PriceMoveMonitorService observer;
+-    private final CandleClosedAnalysisWorker analysis;
+-    private final SharedAnalysisDispatcher analysisDispatch;
+-    private final TransactionTemplate transaction;
+-    private final ExecutorService prices=Executors.newFixedThreadPool(2);
+-    private final Set<String> activePrices=ConcurrentHashMap.newKeySet();
+-    private final String owner=UUID.randomUUID().toString();
+-    private final ScheduledExecutorService discoveryClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix132-discovery"));
+-    private final ScheduledExecutorService priceClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix132-price-dispatch"));
+-    private final ScheduledExecutorService analysisClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix132-analysis-dispatch"));
+-    private volatile boolean stopped;
+-    private int nextSymbol;
+-    private final ScheduledExecutorService historyClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix138-history-dispatch"));
+-    private final ScheduledExecutorService monitorClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix138-analysis-monitor"));
+-    private final Map<String,Long> discoveryLogTimes=new HashMap<>();
+-    private volatile String lastSourceStatus="";
+-    private volatile long lastSourceLog;
+-    private void sourceStatus(String status,String detail) {
+-        if(status.equals(lastSourceStatus))return;
+-        jdbc.update("INSERT INTO shared_market_health(component,status,detail) VALUES('SOURCE',?,?) ON DUPLICATE KEY UPDATE status=VALUES(status),detail=VALUES(detail)",status,detail);
+-        lastSourceStatus=status;
+-    }
+-    public SharedMarketConsumer(SharedMarketSource source,JdbcTemplate jdbc,CoinConfigurationService coins,
+-            LivePositionProtectionService protection,PriceMoveMonitorService observer,CandleClosedAnalysisWorker analysis,
+-            @Qualifier("sharedLiveAnalysisExecutor") Executor executor,
+-            @Qualifier("sharedHistoricalAnalysisExecutor") Executor historicalExecutor,PlatformTransactionManager manager) {
+-        this.source=source;this.jdbc=jdbc;this.coins=coins;this.protection=protection;this.observer=observer;
+-        this.analysis=analysis;transaction=new TransactionTemplate(manager);
+-        analysisDispatch=new SharedAnalysisDispatcher(source,jdbc,coins,
+-            ()->intervals==null?List.of("1m"):intervals.getIntervals(),analysis,executor,historicalExecutor,manager);
+-        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+-    }
+-    @org.springframework.beans.factory.annotation.Value("${shared-market.activation-approved:false}")
+-    private boolean activationApproved;
+-    @org.springframework.beans.factory.annotation.Autowired
+-    private com.crypto.client.config.binance.BinanceMarketDataProperties intervals;
+-
+-    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
+-    public void start() {
+-        validateCutover();
+-        if("OFF".equals(source.mode()))return;
+-        if(source.enabled())for(String symbol:coins.enabledSymbols()) {
+-            // Publish immutable cutover evidence only after every startup check passed.
+-            jdbc.update("INSERT IGNORE INTO shared_market_cutover_history(symbol,cutover_at,cutover_sequence) SELECT symbol,cutover_at,cutover_sequence FROM shared_market_consumer_state WHERE symbol=?",symbol);
+-        }
+-        // Independent clocks: slow source reads or CallerRuns analysis saturation
+-        // cannot monopolize Spring's default scheduler and stop price dispatch.
+-        discoveryClock.scheduleWithFixedDelay(this::discover,0,100,TimeUnit.MILLISECONDS);
+-        priceClock.scheduleWithFixedDelay(this::dispatchPrices,0,50,TimeUnit.MILLISECONDS);
+-        analysisClock.scheduleWithFixedDelay(this::dispatchAnalysis,0,100,TimeUnit.MILLISECONDS);
+-        historyClock.scheduleWithFixedDelay(this::dispatchHistoricalAnalysis,1000,1000,TimeUnit.MILLISECONDS);
+-        monitorClock.scheduleWithFixedDelay(analysisDispatch::monitor,30,30,TimeUnit.SECONDS);
+-        log.info("[FIX-138][ANALYSIS_CONFIGURATION] liveThreads=8, historyThreads=1, independentClocks=true, livePriority=true, historicalWalletExecution=false");
+-    }
+-    public void validateCutover() {
+-        log.info("[FIX-132][SOURCE_CONFIGURATION] mode={}, readPool=3, priceWorkers=2, pendingPerSymbol=200, publicationSource=collector",source.mode());
+-        if(!source.enabled())return;
+-        if(!activationApproved)throw new IllegalStateException("FIX-132 LIVE requires explicit measured cutover acceptance (activation-approved)");
+-        var unattributed=jdbc.queryForList("SELECT signal_id,status FROM signal_processing_work WHERE source_event_id IS NULL AND status NOT IN ('COMPLETED','EXPIRED') ORDER BY signal_id LIMIT 25");
+-        if(!unattributed.isEmpty())throw new IllegalStateException("[FIX-132][UNATTRIBUTED_WORK] reconcile before LIVE: "+unattributed);
+-        var invalidOwners=jdbc.queryForList("""
+-            SELECT w.signal_id,w.status,w.source_event_id FROM signal_processing_work w
+-            LEFT JOIN shared_market_event_delivery d ON d.source_event_id=w.source_event_id
+-            WHERE w.source_event_id IS NOT NULL AND w.status NOT IN ('COMPLETED','EXPIRED')
+-            AND (d.source_event_id IS NULL OR w.symbol<>d.symbol OR w.interval_code<>d.interval_code
+-                 OR w.candle_open_time<>d.candle_open_time OR d.closed=0
+-                 OR d.analysis_status NOT IN ('RUNNING','REVIEW_REQUIRED')) ORDER BY w.signal_id LIMIT 25
+-            """);
+-        if(!invalidOwners.isEmpty())throw new IllegalStateException("[FIX-132][PROCESSING_OWNER_INCONSISTENT] reconcile before LIVE: "+invalidOwners);
+-        for(String symbol:coins.enabledSymbols()) {
+-            var state=jdbc.queryForList("SELECT * FROM shared_market_consumer_state WHERE symbol=?",symbol);
+-            if(state.isEmpty() || !SharedCutoverPolicy.approved(state.getFirst()))
+-                throw new IllegalStateException("FIX-132 missing/unapproved/review-required cutover state for "+symbol);
+-            var boundary=state.getFirst();
+-            if(num(boundary,"cutover_sequence")<0 || num(boundary,"discovered_sequence")<num(boundary,"cutover_sequence"))
+-                throw new IllegalStateException("FIX-132 invalid sequence boundary for "+symbol);
+-            Integer approval=jdbc.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_approval WHERE symbol=? AND cutover_sequence=? AND cutover_at=? AND approved_by=? AND approved_at=? AND approval_reference=?",Integer.class,
+-                symbol,boundary.get("approved_sequence"),boundary.get("approved_cutover_at"),boundary.get("approved_by"),boundary.get("approved_at"),boundary.get("approval_reference"));
+-            if(approval==0)throw new IllegalStateException("FIX-132 missing approval audit for "+symbol);
+-            Long latest=source.feedReader().queryForObject("SELECT last_sequence FROM market_data_stream_cursor WHERE symbol=?",Long.class,symbol);
+-            if(latest==null || latest<num(state.getFirst(),"discovered_sequence"))throw new IllegalStateException("FIX-132 source sequence regressed for "+symbol);
+-            Set<String> required=new HashSet<>(intervals.getIntervals());required.add("1m");
+-            for(String interval:required) {
+-                Long count=source.reader().queryForObject("SELECT COUNT(*) FROM (SELECT id FROM candle WHERE symbol=? AND interval_code=? AND closed=1 LIMIT 300) c",Long.class,symbol,interval);
+-                if(count==null || count<300)throw new IllegalStateException("FIX-132 incomplete source history: "+symbol+" "+interval);
+-            }
+-        }
+-    }
+-
+-    public void discover() {
+-        if(stopped || "OFF".equals(source.mode())) return;
+-        try {
+-            for(String symbol:coins.enabledSymbols()) {
+-                var state=jdbc.queryForList("SELECT * FROM shared_market_consumer_state WHERE symbol=?",symbol);
+-                if(state.isEmpty()) {
+-                    if(source.enabled()) { log.error("[FIX-132][REVIEW_REQUIRED] symbol={}; explicit cutover boundary missing",symbol); continue; }
+-                    var seq=source.feedReader().queryForList("SELECT last_sequence FROM market_data_stream_cursor WHERE symbol=?",symbol);
+-                    if(seq.isEmpty()) continue;
+-                    long n=((Number)seq.getFirst().get("last_sequence")).longValue();
+-                    jdbc.update("INSERT IGNORE INTO shared_market_consumer_state(symbol,cutover_sequence,cutover_at,discovered_sequence,status,cutover_source) VALUES(?,?,CURRENT_TIMESTAMP(6),?,'PENDING_CUTOVER','AUTO_OBSERVED')",symbol,n,n);
+-                    continue;
+-                }
+-                if(!SharedCutoverPolicy.admitted(state.getFirst(),source.enabled())) continue;
+-                int pending=jdbc.queryForObject("SELECT COUNT(*) FROM shared_market_event_delivery WHERE symbol=? AND phase<4",Integer.class,symbol);
+-                boolean discoveryHeartbeat=System.nanoTime()-discoveryLogTimes.getOrDefault(symbol,0L)>=TimeUnit.SECONDS.toNanos(30);
+-                if(discoveryHeartbeat)discoveryLogTimes.put(symbol,System.nanoTime());
+-                if(pending>=200) {
+-                    if(discoveryHeartbeat)log.warn("[FIX-132][CONSUMER_LAG] symbol={}, pending={}; discovery paused before analysis admission",symbol,pending);
+-                    continue;
+-                }
+-                long after=((Number)state.getFirst().get("discovered_sequence")).longValue();
+-                var rows=source.feedReader().queryForList("SELECT * FROM market_data_stream_event WHERE symbol=? AND symbol_sequence>? ORDER BY symbol_sequence LIMIT ?",symbol,after,Math.min(100,200-pending));
+-                log.debug("[FIX-137][DISCOVERY_BATCH] symbol={}, afterSequence={}, pending={}, fetched={}",
+-                    symbol,after,pending,rows.size());
+-                if(discoveryHeartbeat)log.info("[FIX-138][DISCOVERY_PROGRESS] symbol={}, afterSequence={}, pendingPricePhases={}, fetched={}, lastFetchedObservationUtc={}",
+-                    symbol,after,pending,rows.size(),rows.isEmpty()?null:time(rows.getLast(),"observed_at"));
+-                // Shared connection is returned before any local transaction starts.
+-                transaction.executeWithoutResult(tx->{
+-                    var locked=lockSymbol(symbol);
+-                    if(!SharedCutoverPolicy.admitted(locked,source.enabled()) || ((Number)locked.get("discovered_sequence")).longValue()!=after) return;
+-                    long next=after;
+-                    for(var e:rows) {
+-                        long sequence=num(e,"symbol_sequence");
+-                        if(sequence!=next+1) {
+-                            jdbc.update("UPDATE shared_market_consumer_state SET status='SEQUENCE_GAP' WHERE symbol=?",symbol);
+-                            log.error("[FIX-132][SEQUENCE_GAP] symbol={}, expected={}, found={}",symbol,next+1,sequence);break;
+-                        }
+-                        jdbc.update("""
+-                            INSERT INTO shared_market_event_delivery(source_event_id,symbol,symbol_sequence,interval_code,
+-                            candle_open_time,candle_close_time,closed,observed_at,received_at,source_created_at,price,source,classification)
+-                            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+-                            """,e.get("id"),symbol,sequence,e.get("interval_code"),e.get("candle_open_time"),e.get("candle_close_time"),
+-                            e.get("closed"),e.get("observed_at"),e.get("received_at"),e.get("created_at"),e.get("price"),e.get("source"),e.get("classification"));
+-                        next=sequence;
+-                    }
+-                    jdbc.update("UPDATE shared_market_consumer_state SET discovered_sequence=? WHERE symbol=?",next,symbol);
+-                });
+-            }
+-            sourceStatus("AVAILABLE",null);
+-        } catch(Exception e) {
+-            try { sourceStatus("SOURCE_UNAVAILABLE",shortError(e)); } catch(Exception diagnostic) { log.error("[FIX-132][HEALTH_RECORD_FAILED]",diagnostic); }
+-            long now=System.nanoTime();
+-            if(now-lastSourceLog>TimeUnit.SECONDS.toNanos(5)) {
+-                lastSourceLog=now;log.error("[FIX-132][SOURCE_UNAVAILABLE] discovery failed; checkpoint not silently advanced",e);
+-            }
+-        }
+-    }
+-    public void dispatchPrices() {
+-        if(stopped || "OFF".equals(source.mode())) return;
+-        try {
+-            // At most TWO submitted tasks, so newFixedThreadPool's internal queue cannot grow.
+-            List<String> symbols=coins.enabledSymbols();
+-            for(int checked=0;checked<symbols.size();checked++) {
+-                if(activePrices.size()>=2) break;
+-                String symbol=symbols.get(Math.floorMod(nextSymbol++,symbols.size()));
+-                if(!activePrices.add(symbol))continue;
+-                try { prices.execute(()->{try {
+-                    int count=jdbc.queryForObject("SELECT COUNT(*) FROM shared_market_event_delivery WHERE symbol=? AND phase<4",Integer.class,symbol);
+-                    for(int n=0;n<Math.min(8,count)&&!stopped;n++) processNext(symbol);
+-                } finally { activePrices.remove(symbol); }}); }
+-                catch(RuntimeException rejected) { activePrices.remove(symbol); throw rejected; }
+-            }
+-        } catch(Exception e) { log.error("[FIX-132][DISPATCH_FAILED]",e); }
+-    }
+-    private Map<String,Object> lockSymbol(String symbol) {
+-        return jdbc.queryForMap("SELECT * FROM shared_market_consumer_state WHERE symbol=? FOR UPDATE",symbol);
+-    }
+-    private boolean beginProtection(String symbol,long id,String attempt) {
+-        return Boolean.TRUE.equals(transaction.execute(tx->{
+-            var state=lockSymbol(symbol);
+-            if(!SharedCutoverPolicy.admitted(state,source.enabled()))return false;
+-            var event=jdbc.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=? FOR UPDATE",id);
+-            if(num(event,"phase")!=1 || !"1m".equals(event.get("interval_code")))return true;
+-            if(event.get("protection_started_at")==null) {
+-                // Durable START precedes business. A process crash cannot turn an
+-                // already-started wallet attempt into a fresh automatic retry.
+-                jdbc.update("UPDATE shared_market_event_delivery SET protection_started_at=CURRENT_TIMESTAMP(6),protection_owner=?,status='PROTECTION_RUNNING' WHERE source_event_id=?",attempt,id);
+-                return true;
+-            }
+-            if(attempt.equals(event.get("protection_owner")))return true;
+-            // Never steal/re-execute a started attempt. After 30s, fence it into
+-            // review; a worker already in its transaction holds this row through
+-            // commit, while one resuming later must observe REVIEW_REQUIRED.
+-            if(time(event,"protection_started_at").plusSeconds(30).isBefore(Instant.now())) {
+-                jdbc.update("UPDATE shared_market_event_delivery SET status='REVIEW_REQUIRED',last_error='Started protection outcome requires reconciliation; no crash retry' WHERE source_event_id=?",id);
+-                jdbc.update("UPDATE shared_market_consumer_state SET status='REVIEW_REQUIRED' WHERE symbol=?",symbol);
+-                log.error("[FIX-132][REVIEW_REQUIRED] symbol={}, event={}; previous protection attempt unconfirmed",symbol,id);
+-            }
+-            return false;
+-        }));
+-    }
+-    void processNext(String symbol) {
+-        Long id=null;
+-        try {
+-            var candidates=jdbc.queryForList("SELECT source_event_id FROM shared_market_event_delivery WHERE symbol=? AND phase<4 ORDER BY symbol_sequence LIMIT 1",symbol);
+-            if(candidates.isEmpty())return;
+-            id=num(candidates.getFirst(),"source_event_id");
+-            log.debug("[FIX-137][DELIVERY_START] event={}, symbol={}",id,symbol);
+-            final long eventId=id;
+-            final String attemptToken=UUID.randomUUID().toString();
+-            // Small bounded turn: one event, four independently committed phases.
+-            for(int stage=0;stage<4;stage++) {
+-                final int expected=stage;
+-                if(source.enabled() && expected==1 && !beginProtection(symbol,eventId,attemptToken))return;
+-                int attempts=0;
+-                while(true) {
+-                try {
+-                transaction.executeWithoutResult(tx->{
+-                    var state=lockSymbol(symbol);
+-                    if(!SharedCutoverPolicy.admitted(state,source.enabled()))return;
+-                    var e=jdbc.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=? FOR UPDATE",eventId);
+-                    if(num(e,"phase")!=expected || "REVIEW_REQUIRED".equals(e.get("status")))return;
+-                    if(source.enabled() && expected==1 && "1m".equals(e.get("interval_code"))
+-                            && !attemptToken.equals(e.get("protection_owner")))return;
+-                    if(!source.enabled()) {
+-                        jdbc.update("UPDATE shared_market_event_delivery SET phase=4,status='OBSERVED',analysis_status='OBSERVED' WHERE source_event_id=?",eventId);return;
+-                    }
+-                    boolean postCutover=num(e,"symbol_sequence")>num(state,"cutover_sequence")
+-                        && time(e,"observed_at")!=null && time(e,"observed_at").isAfter(time(state,"cutover_at"));
+-                    boolean canonical="1m".equals(e.get("interval_code"));
+-                    String reason = !canonical ? "NON_CANONICAL_INTERVAL"
+-                        : !postCutover ? "PRE_CUTOVER_OR_UNKNOWN_TIME"
+-                        : ((java.math.BigDecimal)e.get("price")).signum()<=0 ? "NON_POSITIVE_PRICE"
+-                        : SharedEventPolicy.priceReason(str(e,"source"),str(e,"classification"),time(e,"observed_at"),time(state,"last_observed_at"),Instant.now());
+-                    boolean eligible="ELIGIBLE".equals(reason);
+-                    jdbc.update("UPDATE shared_market_event_delivery SET owner_token=?,status='PROCESSING' WHERE source_event_id=?",owner,eventId);
+-                    if(expected==0 && canonical && e.get("observed_at")!=null) {
+-                        jdbc.update("""
+-                            INSERT IGNORE INTO market_price_event(symbol,observed_at,price,source,source_event_id,source_sequence,source_received_at,delivery_status)
+-                            VALUES(?,?,?,'COLLECTOR_KLINE_LIVE',?,?,?,'PENDING')
+-                            """,symbol,e.get("observed_at"),e.get("price"),eventId,e.get("symbol_sequence"),e.get("received_at"));
+-                    }
+-                    if(expected==1) {
+-                        jdbc.update("UPDATE shared_market_event_delivery SET eligibility_reason=? WHERE source_event_id=?",reason,eventId);
+-                    }
+-                    if(expected==1 && canonical) {
+-                        if(eligible) {
+-                            protection.onPrice(symbol,(java.math.BigDecimal)e.get("price"));
+-                            jdbc.update("UPDATE shared_market_consumer_state SET last_observed_at=?,last_price=? WHERE symbol=?",e.get("observed_at"),e.get("price"),symbol);
+-                        }
+-                        jdbc.update("UPDATE market_price_event SET delivery_status=? WHERE source_event_id=?",eligible?"APPLIED":"HISTORICAL_ONLY",eventId);
+-                        jdbc.update("UPDATE shared_market_event_delivery SET protection_completed_at=CURRENT_TIMESTAMP(6) WHERE source_event_id=?",eventId);
+-                        if(!eligible) log.debug("[FIX-132][PRICE_EXCLUDED] symbol={}, event={}, reason={}",symbol,eventId,reason);
+-                    }
+-                    if(expected==2 && canonical) {
+-                        String applied=jdbc.query("SELECT delivery_status FROM market_price_event WHERE source_event_id=?",r->r.next()?r.getString(1):"UNKNOWN",eventId);
+-                        if("APPLIED".equals(applied)) observer.onPrice(symbol,(java.math.BigDecimal)e.get("price"),Instant.now());
+-                        jdbc.update("UPDATE shared_market_event_delivery SET observer_status=? WHERE source_event_id=?","APPLIED".equals(applied)?"COMPLETED":"NOT_APPLICABLE",eventId);
+-                    }
+-                    if(expected==3) {
+-                        boolean live=postCutover && !time(e,"observed_at").isAfter(Instant.now())
+-                            && time(e,"candle_close_time").isAfter(time(state,"cutover_at"))
+-                            && "LIVE".equals(e.get("classification")) && "LIVE_WEBSOCKET".equals(e.get("source"));
+-                        jdbc.update("UPDATE shared_market_event_delivery SET status=?,analysis_status=? WHERE source_event_id=?",
+-                            live?"COMPLETED":"HISTORICAL_ONLY",truth(e.get("closed"))?"PENDING":"NOT_APPLICABLE",eventId);
+-                        if(!live && truth(e.get("closed"))) {
+-                            Instant afterGrace=time(e,"candle_close_time").plusSeconds(SharedEventPolicy.closeGraceSeconds(str(e,"interval_code"))).plusNanos(1_000_000);
+-                            jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='HISTORICAL_DEFERRED',analysis_not_before=? WHERE source_event_id=?",Timestamp.from(afterGrace),eventId);
+-                            log.debug("[FIX-132][HISTORICAL_DEFERRED] event={}, until={}",eventId,afterGrace);
+-                        }
+-                    }
+-                    jdbc.update("UPDATE shared_market_event_delivery SET phase=? WHERE source_event_id=?",expected+1,eventId);
+-                });
+-                log.debug("[FIX-137][DELIVERY_STAGE_RETURNED] event={}, symbol={}, expectedPhase={}; transaction returned, may have been a guarded no-op",eventId,symbol,expected);
+-                break;
+-                } catch(com.crypto.infrastructure.transaction.InitialPositionLockDeadlock initial) {
+-                    // FIX-124's one safe retry is retained AFTER rollback. This marker
+-                    // is emitted only before position evaluation/wallet effects begin.
+-                    if(expected!=1 || ++attempts>=2)throw initial;
+-                    log.warn("[FIX-132][INITIAL_LOCK_RETRY] symbol={}, event={}",symbol,eventId);
+-                } catch(RuntimeException failure) {
+-                    if(expected!=2)throw failure;
+-                    // FIX-124 observer failures never prevented future protection.
+-                    // Record uncertainty without retrying diagnostic side effects.
+-                    transaction.executeWithoutResult(tx->{lockSymbol(symbol);
+-                        jdbc.update("UPDATE shared_market_event_delivery SET phase=3,observer_status='REVIEW_REQUIRED',last_error=? WHERE source_event_id=? AND phase=2",shortError(failure),eventId);
+-                    });
+-                    log.warn("[FIX-132][OBSERVER_REVIEW_REQUIRED] event={}; protection retained, no observer retry",eventId,failure);
+-                    break;
+-                }
+-                }
+-            }
+-        } catch(Exception failure) {
+-            if(id!=null) {
+-                final long failedId=id;
+-                // Unknown commits are reconciled manually. Never overwrite a committed
+-                // phase marker or replay a potentially committed wallet side effect.
+-                try { transaction.executeWithoutResult(tx->{lockSymbol(symbol);
+-                    jdbc.update("UPDATE shared_market_consumer_state SET status='REVIEW_REQUIRED' WHERE symbol=?",symbol);
+-                    jdbc.update("UPDATE shared_market_event_delivery SET status='REVIEW_REQUIRED',last_error=? WHERE source_event_id=?",shortError(failure),failedId);
+-                }); } catch(Exception recording) { log.error("[FIX-132][FAILURE_RECORD_FAILED] symbol={}",symbol,recording); }
+-            }
+-            log.error("[FIX-132][REVIEW_REQUIRED] symbol={}, event={}; no automatic wallet retry",symbol,id,failure);
+-        }
+-    }
+-    public void dispatchAnalysis() { analysisDispatch.live(); }
+-    public void dispatchHistoricalAnalysis() { analysisDispatch.historical(); }
+-    static long num(Map<String,Object> row,String key) { return ((Number)row.get(key)).longValue(); }
+-    static String str(Map<String,Object> row,String key) { return String.valueOf(row.get(key)); }
+-    static Instant time(Map<String,Object> row,String key) { return row.get(key)==null?null:((Timestamp)row.get(key)).toInstant(); }
+-    static boolean truth(Object value) { return Boolean.TRUE.equals(value)||"1".equals(String.valueOf(value)); }
+-    static String shortError(Exception e) { String s=e.toString();return s.substring(0,Math.min(1000,s.length())); }
+-    @PreDestroy public void stop() {
+-        stopped=true;analysisDispatch.stop();historyClock.shutdown();monitorClock.shutdown();discoveryClock.shutdownNow();priceClock.shutdownNow();analysisClock.shutdown();prices.shutdown();
+-        long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(30);
+-        try {
+-            boolean priceDone=prices.awaitTermination(30,TimeUnit.SECONDS);
+-            boolean analysisDone=analysisClock.awaitTermination(Math.max(0,deadline-System.nanoTime()),TimeUnit.NANOSECONDS);
+-            boolean historyDone=historyClock.awaitTermination(Math.max(0,deadline-System.nanoTime()),TimeUnit.NANOSECONDS);
+-            boolean monitorDone=monitorClock.awaitTermination(Math.max(0,deadline-System.nanoTime()),TimeUnit.NANOSECONDS);
+-            if(!priceDone || !analysisDone || !historyDone || !monitorDone)log.error("[FIX-132][SHUTDOWN_REVIEW_REQUIRED] worker did not drain within 30 seconds; reconcile durable phases before restarting execution");
+-        } catch(InterruptedException e) {Thread.currentThread().interrupt();log.error("[FIX-132][SHUTDOWN_REVIEW_REQUIRED] drain interrupted",e);}
+-    }
+-}
++package com.crypto.shared;
++
++import com.crypto.administration.service.CoinConfigurationService;
++import com.crypto.indicator.event.CandleClosedAnalysisWorker;
++import com.crypto.indicator.event.CandleClosedEvent;
++import com.crypto.position.service.LivePositionProtectionService;
++import com.crypto.debug.monitor.service.PriceMoveMonitorService;
++import jakarta.annotation.PreDestroy;
++import org.springframework.stereotype.Component;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.transaction.*;
++import org.springframework.transaction.support.TransactionTemplate;
++import org.springframework.beans.factory.annotation.Qualifier;
++import org.slf4j.*;
++import java.sql.Timestamp;
++import java.time.Instant;
++import java.util.*;
++import java.util.concurrent.*;
++
++/** FIX-132 independent consumer. The immutable source is never claimed/updated.
++ * Each phase fences on the local symbol row through COMMIT, then releases all
++ * locks before the next phase. Unknown analysis outcomes are never auto-retried.
++ * Durable rows are the backlog; executors never hold an unbounded event queue. */
++@Component
++public class SharedMarketConsumer {
++    private static final Logger log=LoggerFactory.getLogger(SharedMarketConsumer.class);
++    private final SharedMarketSource source;
++    private final JdbcTemplate jdbc;
++    private final CoinConfigurationService coins;
++    private final LivePositionProtectionService protection;
++    private final PriceMoveMonitorService observer;
++    private final CandleClosedAnalysisWorker analysis;
++    private final SharedAnalysisDispatcher analysisDispatch;
++    private final TransactionTemplate transaction;
++    private final ExecutorService prices=Executors.newFixedThreadPool(2);
++    private final Set<String> activePrices=ConcurrentHashMap.newKeySet();
++    private final String owner=UUID.randomUUID().toString();
++    private final ScheduledExecutorService discoveryClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix132-discovery"));
++    private final ScheduledExecutorService priceClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix132-price-dispatch"));
++    private final ScheduledExecutorService analysisClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix132-analysis-dispatch"));
++    private volatile boolean stopped;
++    private int nextSymbol;
++    private final ScheduledExecutorService historyClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix138-history-dispatch"));
++    private final ScheduledExecutorService monitorClock=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"fix138-analysis-monitor"));
++    private final Map<String,Long> discoveryLogTimes=new HashMap<>();
++    private volatile String lastSourceStatus="";
++    private volatile long lastSourceLog;
++    private void sourceStatus(String status,String detail) {
++        if(status.equals(lastSourceStatus))return;
++        jdbc.update("INSERT INTO shared_market_health(component,status,detail) VALUES('SOURCE',?,?) ON DUPLICATE KEY UPDATE status=VALUES(status),detail=VALUES(detail)",status,detail);
++        lastSourceStatus=status;
++    }
++    public SharedMarketConsumer(SharedMarketSource source,JdbcTemplate jdbc,CoinConfigurationService coins,
++            LivePositionProtectionService protection,PriceMoveMonitorService observer,CandleClosedAnalysisWorker analysis,
++            @Qualifier("sharedLiveAnalysisExecutor") Executor executor,
++            @Qualifier("sharedHistoricalAnalysisExecutor") Executor historicalExecutor,PlatformTransactionManager manager) {
++        this.source=source;this.jdbc=jdbc;this.coins=coins;this.protection=protection;this.observer=observer;
++        this.analysis=analysis;transaction=new TransactionTemplate(manager);
++        analysisDispatch=new SharedAnalysisDispatcher(source,jdbc,coins,
++            ()->intervals==null?List.of("1m"):intervals.getIntervals(),analysis,executor,historicalExecutor,manager);
++        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
++    }
++    @org.springframework.beans.factory.annotation.Value("${shared-market.activation-approved:false}")
++    private boolean activationApproved;
++    // FIX-140: disabling history is explicit; candles and saved decision context remain intact.
++    @org.springframework.beans.factory.annotation.Value("${shared-market.analysis.historical-enabled:true}")
++    private boolean historicalEnabled=true;
++    @org.springframework.beans.factory.annotation.Autowired
++    private com.crypto.client.config.binance.BinanceMarketDataProperties intervals;
++
++    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
++    public void start() {
++        analysisDispatch.historicalEnabled(historicalEnabled);
++        validateCutover();
++        if("OFF".equals(source.mode()))return;
++        if(source.enabled())for(String symbol:coins.enabledSymbols()) {
++            // Publish immutable cutover evidence only after every startup check passed.
++            jdbc.update("INSERT IGNORE INTO shared_market_cutover_history(symbol,cutover_at,cutover_sequence) SELECT symbol,cutover_at,cutover_sequence FROM shared_market_consumer_state WHERE symbol=?",symbol);
++        }
++        // Independent clocks: slow source reads or CallerRuns analysis saturation
++        // cannot monopolize Spring's default scheduler and stop price dispatch.
++        discoveryClock.scheduleWithFixedDelay(this::discover,0,100,TimeUnit.MILLISECONDS);
++        priceClock.scheduleWithFixedDelay(this::dispatchPrices,0,50,TimeUnit.MILLISECONDS);
++        analysisClock.scheduleWithFixedDelay(this::dispatchAnalysis,0,100,TimeUnit.MILLISECONDS);
++        if(historicalEnabled)historyClock.scheduleWithFixedDelay(this::dispatchHistoricalAnalysis,1000,1000,TimeUnit.MILLISECONDS);
++        log.info("[FIX-140][HISTORY_CONFIGURATION] enabled={}, savedSignalsAndCandlesRetained=true",historicalEnabled);
++        monitorClock.scheduleWithFixedDelay(analysisDispatch::monitor,30,30,TimeUnit.SECONDS);
++        log.info("[FIX-138][ANALYSIS_CONFIGURATION] liveThreads=8, historyThreads=1, independentClocks=true, livePriority=true, historicalWalletExecution=false");
++    }
++    public void validateCutover() {
++        log.info("[FIX-132][SOURCE_CONFIGURATION] mode={}, readPool=3, priceWorkers=2, pendingPerSymbol=200, publicationSource=collector",source.mode());
++        if(!source.enabled())return;
++        if(!activationApproved)throw new IllegalStateException("FIX-132 LIVE requires explicit measured cutover acceptance (activation-approved)");
++        var unattributed=jdbc.queryForList("SELECT signal_id,status FROM signal_processing_work WHERE source_event_id IS NULL AND status NOT IN ('COMPLETED','EXPIRED','LOCK_RETRY_EXHAUSTED') ORDER BY signal_id LIMIT 25");
++        if(!unattributed.isEmpty())throw new IllegalStateException("[FIX-132][UNATTRIBUTED_WORK] reconcile before LIVE: "+unattributed);
++        var invalidOwners=jdbc.queryForList("""
++            SELECT w.signal_id,w.status,w.source_event_id FROM signal_processing_work w
++            LEFT JOIN shared_market_event_delivery d ON d.source_event_id=w.source_event_id
++            WHERE w.source_event_id IS NOT NULL AND w.status NOT IN ('COMPLETED','EXPIRED','LOCK_RETRY_EXHAUSTED')
++            AND (d.source_event_id IS NULL OR w.symbol<>d.symbol OR w.interval_code<>d.interval_code
++                 OR w.candle_open_time<>d.candle_open_time OR d.closed=0
++                 OR d.analysis_status NOT IN ('RUNNING','REVIEW_REQUIRED','EXECUTION_RETRY')) ORDER BY w.signal_id LIMIT 25
++            """);
++        if(!invalidOwners.isEmpty())throw new IllegalStateException("[FIX-132][PROCESSING_OWNER_INCONSISTENT] reconcile before LIVE: "+invalidOwners);
++        for(String symbol:coins.enabledSymbols()) {
++            var state=jdbc.queryForList("SELECT * FROM shared_market_consumer_state WHERE symbol=?",symbol);
++            if(state.isEmpty() || !SharedCutoverPolicy.approved(state.getFirst()))
++                throw new IllegalStateException("FIX-132 missing/unapproved/review-required cutover state for "+symbol);
++            var boundary=state.getFirst();
++            if(num(boundary,"cutover_sequence")<0 || num(boundary,"discovered_sequence")<num(boundary,"cutover_sequence"))
++                throw new IllegalStateException("FIX-132 invalid sequence boundary for "+symbol);
++            Integer approval=jdbc.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_approval WHERE symbol=? AND cutover_sequence=? AND cutover_at=? AND approved_by=? AND approved_at=? AND approval_reference=?",Integer.class,
++                symbol,boundary.get("approved_sequence"),boundary.get("approved_cutover_at"),boundary.get("approved_by"),boundary.get("approved_at"),boundary.get("approval_reference"));
++            if(approval==0)throw new IllegalStateException("FIX-132 missing approval audit for "+symbol);
++            Long latest=source.feedReader().queryForObject("SELECT last_sequence FROM market_data_stream_cursor WHERE symbol=?",Long.class,symbol);
++            if(latest==null || latest<num(state.getFirst(),"discovered_sequence"))throw new IllegalStateException("FIX-132 source sequence regressed for "+symbol);
++            Set<String> required=new HashSet<>(intervals.getIntervals());required.add("1m");
++            for(String interval:required) {
++                Long count=source.reader().queryForObject("SELECT COUNT(*) FROM (SELECT id FROM candle WHERE symbol=? AND interval_code=? AND closed=1 LIMIT 300) c",Long.class,symbol,interval);
++                if(count==null || count<300)throw new IllegalStateException("FIX-132 incomplete source history: "+symbol+" "+interval);
++            }
++        }
++    }
++
++    public void discover() {
++        if(stopped || "OFF".equals(source.mode())) return;
++        try {
++            for(String symbol:coins.enabledSymbols()) {
++                var state=jdbc.queryForList("SELECT * FROM shared_market_consumer_state WHERE symbol=?",symbol);
++                if(state.isEmpty()) {
++                    if(source.enabled()) { log.error("[FIX-132][REVIEW_REQUIRED] symbol={}; explicit cutover boundary missing",symbol); continue; }
++                    var seq=source.feedReader().queryForList("SELECT last_sequence FROM market_data_stream_cursor WHERE symbol=?",symbol);
++                    if(seq.isEmpty()) continue;
++                    long n=((Number)seq.getFirst().get("last_sequence")).longValue();
++                    jdbc.update("INSERT IGNORE INTO shared_market_consumer_state(symbol,cutover_sequence,cutover_at,discovered_sequence,status,cutover_source) VALUES(?,?,CURRENT_TIMESTAMP(6),?,'PENDING_CUTOVER','AUTO_OBSERVED')",symbol,n,n);
++                    continue;
++                }
++                if(!SharedCutoverPolicy.admitted(state.getFirst(),source.enabled())) continue;
++                int pending=jdbc.queryForObject("SELECT COUNT(*) FROM shared_market_event_delivery WHERE symbol=? AND phase<4",Integer.class,symbol);
++                boolean discoveryHeartbeat=System.nanoTime()-discoveryLogTimes.getOrDefault(symbol,0L)>=TimeUnit.SECONDS.toNanos(30);
++                if(discoveryHeartbeat)discoveryLogTimes.put(symbol,System.nanoTime());
++                if(pending>=200) {
++                    if(discoveryHeartbeat)log.warn("[FIX-132][CONSUMER_LAG] symbol={}, pending={}; discovery paused before analysis admission",symbol,pending);
++                    continue;
++                }
++                long after=((Number)state.getFirst().get("discovered_sequence")).longValue();
++                var rows=source.feedReader().queryForList("SELECT * FROM market_data_stream_event WHERE symbol=? AND symbol_sequence>? ORDER BY symbol_sequence LIMIT ?",symbol,after,Math.min(100,200-pending));
++                log.debug("[FIX-137][DISCOVERY_BATCH] symbol={}, afterSequence={}, pending={}, fetched={}",
++                    symbol,after,pending,rows.size());
++                if(discoveryHeartbeat)log.info("[FIX-138][DISCOVERY_PROGRESS] symbol={}, afterSequence={}, pendingPricePhases={}, fetched={}, lastFetchedObservationUtc={}",
++                    symbol,after,pending,rows.size(),rows.isEmpty()?null:time(rows.getLast(),"observed_at"));
++                // Shared connection is returned before any local transaction starts.
++                transaction.executeWithoutResult(tx->{
++                    var locked=lockSymbol(symbol);
++                    if(!SharedCutoverPolicy.admitted(locked,source.enabled()) || ((Number)locked.get("discovered_sequence")).longValue()!=after) return;
++                    long next=after;
++                    for(var e:rows) {
++                        long sequence=num(e,"symbol_sequence");
++                        if(sequence!=next+1) {
++                            jdbc.update("UPDATE shared_market_consumer_state SET status='SEQUENCE_GAP' WHERE symbol=?",symbol);
++                            log.error("[FIX-132][SEQUENCE_GAP] symbol={}, expected={}, found={}",symbol,next+1,sequence);break;
++                        }
++                        jdbc.update("""
++                            INSERT INTO shared_market_event_delivery(source_event_id,symbol,symbol_sequence,interval_code,
++                            candle_open_time,candle_close_time,closed,observed_at,received_at,source_created_at,price,source,classification)
++                            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
++                            """,e.get("id"),symbol,sequence,e.get("interval_code"),e.get("candle_open_time"),e.get("candle_close_time"),
++                            e.get("closed"),e.get("observed_at"),e.get("received_at"),e.get("created_at"),e.get("price"),e.get("source"),e.get("classification"));
++                        next=sequence;
++                    }
++                    jdbc.update("UPDATE shared_market_consumer_state SET discovered_sequence=? WHERE symbol=?",next,symbol);
++                });
++            }
++            sourceStatus("AVAILABLE",null);
++        } catch(Exception e) {
++            try { sourceStatus("SOURCE_UNAVAILABLE",shortError(e)); } catch(Exception diagnostic) { log.error("[FIX-132][HEALTH_RECORD_FAILED]",diagnostic); }
++            long now=System.nanoTime();
++            if(now-lastSourceLog>TimeUnit.SECONDS.toNanos(5)) {
++                lastSourceLog=now;log.error("[FIX-132][SOURCE_UNAVAILABLE] discovery failed; checkpoint not silently advanced",e);
++            }
++        }
++    }
++    public void dispatchPrices() {
++        if(stopped || "OFF".equals(source.mode())) return;
++        try {
++            // At most TWO submitted tasks, so newFixedThreadPool's internal queue cannot grow.
++            List<String> symbols=coins.enabledSymbols();
++            for(int checked=0;checked<symbols.size();checked++) {
++                if(activePrices.size()>=2) break;
++                String symbol=symbols.get(Math.floorMod(nextSymbol++,symbols.size()));
++                if(!activePrices.add(symbol))continue;
++                try { prices.execute(()->{try {
++                    int count=jdbc.queryForObject("SELECT COUNT(*) FROM shared_market_event_delivery WHERE symbol=? AND phase<4",Integer.class,symbol);
++                    for(int n=0;n<Math.min(8,count)&&!stopped;n++) processNext(symbol);
++                } finally { activePrices.remove(symbol); }}); }
++                catch(RuntimeException rejected) { activePrices.remove(symbol); throw rejected; }
++            }
++        } catch(Exception e) { log.error("[FIX-132][DISPATCH_FAILED]",e); }
++    }
++    private Map<String,Object> lockSymbol(String symbol) {
++        return jdbc.queryForMap("SELECT * FROM shared_market_consumer_state WHERE symbol=? FOR UPDATE",symbol);
++    }
++    private boolean beginProtection(String symbol,long id,String attempt) {
++        return Boolean.TRUE.equals(transaction.execute(tx->{
++            var state=lockSymbol(symbol);
++            if(!SharedCutoverPolicy.admitted(state,source.enabled()))return false;
++            var event=jdbc.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=? FOR UPDATE",id);
++            if(num(event,"phase")!=1 || !"1m".equals(event.get("interval_code")))return true;
++            if(event.get("protection_started_at")==null) {
++                // Durable START precedes business. A process crash cannot turn an
++                // already-started wallet attempt into a fresh automatic retry.
++                jdbc.update("UPDATE shared_market_event_delivery SET protection_started_at=CURRENT_TIMESTAMP(6),protection_owner=?,status='PROTECTION_RUNNING' WHERE source_event_id=?",attempt,id);
++                return true;
++            }
++            if(attempt.equals(event.get("protection_owner")))return true;
++            // Never steal/re-execute a started attempt. After 30s, fence it into
++            // review; a worker already in its transaction holds this row through
++            // commit, while one resuming later must observe REVIEW_REQUIRED.
++            if(time(event,"protection_started_at").plusSeconds(30).isBefore(Instant.now())) {
++                jdbc.update("UPDATE shared_market_event_delivery SET status='REVIEW_REQUIRED',last_error='Started protection outcome requires reconciliation; no crash retry' WHERE source_event_id=?",id);
++                jdbc.update("UPDATE shared_market_consumer_state SET status='REVIEW_REQUIRED' WHERE symbol=?",symbol);
++                log.error("[FIX-132][REVIEW_REQUIRED] symbol={}, event={}; previous protection attempt unconfirmed",symbol,id);
++            }
++            return false;
++        }));
++    }
++    void processNext(String symbol) {
++        Long id=null;
++        try {
++            var candidates=jdbc.queryForList("SELECT source_event_id FROM shared_market_event_delivery WHERE symbol=? AND phase<4 ORDER BY symbol_sequence LIMIT 1",symbol);
++            if(candidates.isEmpty())return;
++            id=num(candidates.getFirst(),"source_event_id");
++            log.debug("[FIX-137][DELIVERY_START] event={}, symbol={}",id,symbol);
++            final long eventId=id;
++            final String attemptToken=UUID.randomUUID().toString();
++            // Small bounded turn: one event, four independently committed phases.
++            for(int stage=0;stage<4;stage++) {
++                final int expected=stage;
++                if(source.enabled() && expected==1 && !beginProtection(symbol,eventId,attemptToken))return;
++                int attempts=0;
++                while(true) {
++                try {
++                transaction.executeWithoutResult(tx->{
++                    var state=lockSymbol(symbol);
++                    if(!SharedCutoverPolicy.admitted(state,source.enabled()))return;
++                    var e=jdbc.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=? FOR UPDATE",eventId);
++                    if(num(e,"phase")!=expected || "REVIEW_REQUIRED".equals(e.get("status")))return;
++                    if(source.enabled() && expected==1 && "1m".equals(e.get("interval_code"))
++                            && !attemptToken.equals(e.get("protection_owner")))return;
++                    if(!source.enabled()) {
++                        jdbc.update("UPDATE shared_market_event_delivery SET phase=4,status='OBSERVED',analysis_status='OBSERVED' WHERE source_event_id=?",eventId);return;
++                    }
++                    boolean postCutover=num(e,"symbol_sequence")>num(state,"cutover_sequence")
++                        && time(e,"observed_at")!=null && time(e,"observed_at").isAfter(time(state,"cutover_at"));
++                    boolean canonical="1m".equals(e.get("interval_code"));
++                    String reason = !canonical ? "NON_CANONICAL_INTERVAL"
++                        : !postCutover ? "PRE_CUTOVER_OR_UNKNOWN_TIME"
++                        : ((java.math.BigDecimal)e.get("price")).signum()<=0 ? "NON_POSITIVE_PRICE"
++                        : SharedEventPolicy.priceReason(str(e,"source"),str(e,"classification"),time(e,"observed_at"),time(state,"last_observed_at"),Instant.now());
++                    boolean eligible="ELIGIBLE".equals(reason);
++                    jdbc.update("UPDATE shared_market_event_delivery SET owner_token=?,status='PROCESSING' WHERE source_event_id=?",owner,eventId);
++                    if(expected==0 && canonical && e.get("observed_at")!=null) {
++                        jdbc.update("""
++                            INSERT IGNORE INTO market_price_event(symbol,observed_at,price,source,source_event_id,source_sequence,source_received_at,delivery_status)
++                            VALUES(?,?,?,'COLLECTOR_KLINE_LIVE',?,?,?,'PENDING')
++                            """,symbol,e.get("observed_at"),e.get("price"),eventId,e.get("symbol_sequence"),e.get("received_at"));
++                    }
++                    if(expected==1) {
++                        jdbc.update("UPDATE shared_market_event_delivery SET eligibility_reason=? WHERE source_event_id=?",reason,eventId);
++                    }
++                    if(expected==1 && canonical) {
++                        if(eligible) {
++                            protection.onPrice(symbol,(java.math.BigDecimal)e.get("price"));
++                            jdbc.update("UPDATE shared_market_consumer_state SET last_observed_at=?,last_price=? WHERE symbol=?",e.get("observed_at"),e.get("price"),symbol);
++                        }
++                        jdbc.update("UPDATE market_price_event SET delivery_status=? WHERE source_event_id=?",eligible?"APPLIED":"HISTORICAL_ONLY",eventId);
++                        jdbc.update("UPDATE shared_market_event_delivery SET protection_completed_at=CURRENT_TIMESTAMP(6) WHERE source_event_id=?",eventId);
++                        if(!eligible) log.debug("[FIX-132][PRICE_EXCLUDED] symbol={}, event={}, reason={}",symbol,eventId,reason);
++                    }
++                    if(expected==2 && canonical) {
++                        String applied=jdbc.query("SELECT delivery_status FROM market_price_event WHERE source_event_id=?",r->r.next()?r.getString(1):"UNKNOWN",eventId);
++                        if("APPLIED".equals(applied)) observer.onPrice(symbol,(java.math.BigDecimal)e.get("price"),Instant.now());
++                        jdbc.update("UPDATE shared_market_event_delivery SET observer_status=? WHERE source_event_id=?","APPLIED".equals(applied)?"COMPLETED":"NOT_APPLICABLE",eventId);
++                    }
++                    if(expected==3) {
++                        boolean live=postCutover && !time(e,"observed_at").isAfter(Instant.now())
++                            && time(e,"candle_close_time").isAfter(time(state,"cutover_at"))
++                            && "LIVE".equals(e.get("classification")) && "LIVE_WEBSOCKET".equals(e.get("source"));
++                        jdbc.update("UPDATE shared_market_event_delivery SET status=?,analysis_status=? WHERE source_event_id=?",
++                            live?"COMPLETED":"HISTORICAL_ONLY",truth(e.get("closed"))?"PENDING":"NOT_APPLICABLE",eventId);
++                        if(!live && truth(e.get("closed"))) {
++                            Instant afterGrace=time(e,"candle_close_time").plusSeconds(SharedEventPolicy.closeGraceSeconds(str(e,"interval_code"))).plusNanos(1_000_000);
++                            jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='HISTORICAL_DEFERRED',analysis_not_before=? WHERE source_event_id=?",Timestamp.from(afterGrace),eventId);
++                            log.debug("[FIX-132][HISTORICAL_DEFERRED] event={}, until={}",eventId,afterGrace);
++                        }
++                    }
++                    jdbc.update("UPDATE shared_market_event_delivery SET phase=? WHERE source_event_id=?",expected+1,eventId);
++                });
++                log.debug("[FIX-137][DELIVERY_STAGE_RETURNED] event={}, symbol={}, expectedPhase={}; transaction returned, may have been a guarded no-op",eventId,symbol,expected);
++                break;
++                } catch(com.crypto.infrastructure.transaction.InitialPositionLockDeadlock initial) {
++                    // FIX-124's one safe retry is retained AFTER rollback. This marker
++                    // is emitted only before position evaluation/wallet effects begin.
++                    if(expected!=1 || ++attempts>=2)throw initial;
++                    log.warn("[FIX-132][INITIAL_LOCK_RETRY] symbol={}, event={}",symbol,eventId);
++                } catch(RuntimeException failure) {
++                    if(expected!=2)throw failure;
++                    // FIX-124 observer failures never prevented future protection.
++                    // Record uncertainty without retrying diagnostic side effects.
++                    transaction.executeWithoutResult(tx->{lockSymbol(symbol);
++                        jdbc.update("UPDATE shared_market_event_delivery SET phase=3,observer_status='REVIEW_REQUIRED',last_error=? WHERE source_event_id=? AND phase=2",shortError(failure),eventId);
++                    });
++                    log.warn("[FIX-132][OBSERVER_REVIEW_REQUIRED] event={}; protection retained, no observer retry",eventId,failure);
++                    break;
++                }
++                }
++            }
++        } catch(Exception failure) {
++            if(id!=null) {
++                final long failedId=id;
++                // Unknown commits are reconciled manually. Never overwrite a committed
++                // phase marker or replay a potentially committed wallet side effect.
++                try { transaction.executeWithoutResult(tx->{lockSymbol(symbol);
++                    jdbc.update("UPDATE shared_market_consumer_state SET status='REVIEW_REQUIRED' WHERE symbol=?",symbol);
++                    jdbc.update("UPDATE shared_market_event_delivery SET status='REVIEW_REQUIRED',last_error=? WHERE source_event_id=?",shortError(failure),failedId);
++                }); } catch(Exception recording) { log.error("[FIX-132][FAILURE_RECORD_FAILED] symbol={}",symbol,recording); }
++            }
++            log.error("[FIX-132][REVIEW_REQUIRED] symbol={}, event={}; no automatic wallet retry",symbol,id,failure);
++        }
++    }
++    public void dispatchAnalysis() { analysisDispatch.live(); }
++    public void dispatchHistoricalAnalysis() { analysisDispatch.historical(); }
++    static long num(Map<String,Object> row,String key) { return ((Number)row.get(key)).longValue(); }
++    static String str(Map<String,Object> row,String key) { return String.valueOf(row.get(key)); }
++    static Instant time(Map<String,Object> row,String key) { return row.get(key)==null?null:((Timestamp)row.get(key)).toInstant(); }
++    static boolean truth(Object value) { return Boolean.TRUE.equals(value)||"1".equals(String.valueOf(value)); }
++    static String shortError(Exception e) { String s=e.toString();return s.substring(0,Math.min(1000,s.length())); }
++    @PreDestroy public void stop() {
++        stopped=true;analysisDispatch.stop();historyClock.shutdown();monitorClock.shutdown();discoveryClock.shutdownNow();priceClock.shutdownNow();analysisClock.shutdown();prices.shutdown();
++        long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(30);
++        try {
++            boolean priceDone=prices.awaitTermination(30,TimeUnit.SECONDS);
++            boolean analysisDone=analysisClock.awaitTermination(Math.max(0,deadline-System.nanoTime()),TimeUnit.NANOSECONDS);
++            boolean historyDone=historyClock.awaitTermination(Math.max(0,deadline-System.nanoTime()),TimeUnit.NANOSECONDS);
++            boolean monitorDone=monitorClock.awaitTermination(Math.max(0,deadline-System.nanoTime()),TimeUnit.NANOSECONDS);
++            if(!priceDone || !analysisDone || !historyDone || !monitorDone)log.error("[FIX-132][SHUTDOWN_REVIEW_REQUIRED] worker did not drain within 30 seconds; reconcile durable phases before restarting execution");
++        } catch(InterruptedException e) {Thread.currentThread().interrupt();log.error("[FIX-132][SHUTDOWN_REVIEW_REQUIRED] drain interrupted",e);}
++    }
++}
+--- a/src/main/java/com/crypto/wallet/service/WalletTransactionCoordination.java
++++ b/src/main/java/com/crypto/wallet/service/WalletTransactionCoordination.java
+@@ -40,10 +40,16 @@
+         if(TransactionSynchronizationManager.getSynchronizations().stream().anyMatch(s->s instanceof SymbolOwnership owned && owned.symbol.equals(key)))return;
+         if(mutationHeld())throw new IllegalStateException("[FIX-125][LOCK_ORDER] cannot acquire new symbol after wallet mutation guard");
+         long start=System.nanoTime();
+-        var rows=jdbc.query(connection->{
++        java.util.List<String> rows;
++        try { rows=jdbc.query(connection->{
+             var statement=connection.prepareStatement("SELECT symbol FROM wallet_symbol_coordination WHERE symbol=? FOR UPDATE");
+             statement.setQueryTimeout(2);statement.setString(1,key);return statement;
+         },(rs,n)->rs.getString(1));
++        } catch(RuntimeException failure) {
++            // FIX-140: failed acquisition is observable; rollback is reported by the caller.
++            log.warn("[FIX-125][LOCK_ACQUIRE_FAILED] stage=SYMBOL, symbol={}, waitMs={}, errorType={}",key,(System.nanoTime()-start)/1_000_000,failure.getClass().getSimpleName());
++            throw failure;
++        }
+         if(rows.size()!=1)throw new IllegalStateException("[FIX-125][UNPROVISIONED_SYMBOL] "+key);
+         TransactionSynchronizationManager.registerSynchronization(new SymbolOwnership(key));
+         timing("SYMBOL",key,start);
+@@ -88,11 +94,11 @@
+                 long completed=System.nanoTime();
+                 long elapsed=(completed-start)/1_000_000;
+                 if(meters!=null)io.micrometer.core.instrument.Timer.builder("wallet.coordination.hold")
+-                    .tag("stage",stage).tag("outcome",status==STATUS_COMMITTED?"COMMITTED":"ROLLED_BACK")
++                    .tag("stage",stage).tag("outcome",status==STATUS_COMMITTED?"COMMITTED":status==STATUS_ROLLED_BACK?"ROLLED_BACK":"UNKNOWN")
+                     .publishPercentileHistogram().register(meters)
+                     .record(completed-acquired,java.util.concurrent.TimeUnit.NANOSECONDS);
+                 if(status!=STATUS_COMMITTED || wait>=100 || elapsed>=1000)
+-                    log.info("[FIX-125][TX_COMPLETED] stage={}, symbol={}, outcome={}, waitMs={}, holdMs={}, elapsedMs={}",stage,symbol,status==STATUS_COMMITTED?"COMMITTED":"ROLLED_BACK",wait,(System.nanoTime()-acquired)/1_000_000,elapsed);
++                    log.info("[FIX-125][TX_COMPLETED] stage={}, symbol={}, outcome={}, waitMs={}, holdMs={}, elapsedMs={}",stage,symbol,status==STATUS_COMMITTED?"COMMITTED":status==STATUS_ROLLED_BACK?"ROLLED_BACK":"UNKNOWN",wait,(System.nanoTime()-acquired)/1_000_000,elapsed);
+                 else log.debug("[FIX-125][TX_COMPLETED] stage={}, symbol={}, outcome=COMMITTED, elapsedMs={}",stage,symbol,elapsed);
+             }
+         });
+--- a/src/main/resources/db/migration/V96__fix_140_history_retirement_audit.sql
++++ b/src/main/resources/db/migration/V96__fix_140_history_retirement_audit.sql
+@@ -0,0 +1,6 @@
++-- FIX-140: terminal retirement is distinct from successful analysis completion.
++-- No UPDATE/DELETE of existing deliveries, candles, signals, or wallet work is performed by migration.
++ALTER TABLE shared_market_event_delivery
++ ADD COLUMN analysis_retired_at TIMESTAMP(6) NULL,
++ ADD COLUMN analysis_retirement_operation VARCHAR(36) NULL,
++ ADD COLUMN analysis_retirement_reason VARCHAR(255) NULL;
+--- a/src/main/resources/md/FIX-140.md
++++ b/src/main/resources/md/FIX-140.md
+@@ -0,0 +1,51 @@
++# FIX-140 — confirmed initial wallet-symbol retry and audited historical retirement
++
++Status: REVIEW CANDIDATE. Java 21 compilation, Maven/JUnit, and real MySQL validation have not run. This workspace has a Java 17 JRE and no javac, Maven, or MySQL. JavaScript syntax check passed. Do not interpret source inspection as a successful build.
++
++## Implemented scope
++
++A shared signal's first wallet-symbol SELECT FOR UPDATE may schedule a retry only when a private marker proves the failure occurred at that call, the exception is a recognized lock timeout/deadlock, and Spring afterCompletion reported ROLLED_BACK. SQLState 08 communications failures do not qualify. Business/commit failures retain review behavior.
++
++The existing shared LIVE dispatcher resumes the exact registered signal. It owns all attempts; SignalProcessingRecovery remains deferred in shared mode. Retry delays are 1/3/10 seconds, with four total attempts; there is no sleep and no held connection during the delay. The existing latest-candle/freshness gate runs after lock acquisition on retries. Expired attempts map to EXECUTION_EXPIRED; exhausted proven non-executions map to EXECUTION_NOT_EXECUTED. No signal regeneration or wallet replay is granted by an Optional.empty result. Persistence uncertainty retains review.
++
++Work state SYMBOL_LOCK_RETRY with failure_stage INITIAL_SYMBOL_LOCK_ROLLED_BACK is new evidence, not a reinterpretation of old QueryTimeoutException strings. Generic REVIEW_REQUIRED records cannot enter this path. A crash between work persistence and delivery persistence remains review-only; automatic incident reconciliation is not implemented.
++
++Initial-position deadlock behavior remains the existing two-attempt policy. Protection failures in ENA/ICP/SUI are not automatically repaired by this patch. Existing incident records require separate evidence-based reconciliation.
++
++## Historical queue handling
++
++No DELETE statement is introduced. Source candles, existing trade_signal rows, wallet records, and consumer checkpoints are retained. An opt-in worker retires only untouched expired phase-4 PENDING/HISTORICAL_DEFERRED analysis rows, with absent analysis start/completion markers and no processing/wallet or incomplete-protection evidence. It records HISTORICAL_SKIPPED, retirement time, reason and operation identity; it does not fabricate analysis_completed_at.
++
++Owner tokens retained from the price phase are not analysis claims. Eligibility is rechecked under symbol-state then delivery-row locks. Active analysis is excluded by status and attempt markers. Keyset scan progress avoids repeatedly encountering ineligible queue heads; it is advisory and resets when exhausted. Each tick scans one symbol/interval lane, at most 20 candidates, with independent three-second mutation transactions. V95 supplies the lane selection index; inspect EXPLAIN on the target MySQL server before enabling writes.
++
++Compatibility defaults:
++- shared-market.analysis.historical-enabled=true
++- shared-market.analysis.retirement-enabled=false
++- shared-market.analysis.retirement-dry-run=true
++- shared-market.analysis.retirement-retain-seconds=172800
++- shared-market.analysis.retirement-delay-ms=5000
++
++Explicit dry-run of all untouched expired queue history:
++```
++--shared-market.analysis.historical-enabled=false
++--shared-market.analysis.retirement-enabled=true
++--shared-market.analysis.retirement-dry-run=true
++--shared-market.analysis.retirement-retain-seconds=0
++```
++After reviewing dry-run evidence, changing retirement-dry-run to false enables mutation. Zero extra retention never retires a still-live close. RUNNING, REVIEW_REQUIRED, previously attempted, processing-attributed, or unresolved protection rows are not retired. Retiring every database history record is intentionally not provided.
++
++Disabling historical recovery can remove future reconstruction of missing decision context. This is not proven neutral for live trading. Existing saved context is retained, but keeping stored signals does not prove missing inputs are adequately covered. Consumers include MTF, same-interval BTC, position protection, opportunity consolidation, execution intelligence and validation. Bounded context restoration and Production/Replay context-window acceptance are NOT implemented here. History therefore remains enabled by default.
++
++## Observability
++
++FIX-125 LOCK_ACQUIRE_FAILED complements existing LOCK_WAIT/TX_COMPLETED. Transaction completion distinguishes UNKNOWN from ROLLED_BACK. FIX-140 SAFE_RETRY_RESULT correlates event/signal/attempt/outcome with confirmed rollback. Context evaluation counters count every MTF FULL/PARTIAL/MISSING and BTC present/missing lookup; summaries are rate-limited, the underlying counts are not. They do not change decisions. BTC coverage does not establish freshness and LEARNING early returns are not counted as saved-signal lookups. No dashboard health wiring or throughput claim is included.
++
++## Validation required
++
++Five new H2 coordinator tests cover due-time enforcement, exact-signal resumption, expiry, later business timeout, four-attempt exhaustion, and communications classification (five test methods; first method covers several assertions). Six retirement tests cover audited retirement, processing evidence, incomplete protection, dry-run, history-enabled guard and fresh-close retention. Existing expired-signal test now permits the bounded attributed-retry lookup while continuing to prohibit wallet processing.
++
++Before deployment run the complete Java 21 Maven suite and real MySQL ownership/rollback/claim/rejection/expiry tests. Add two-instance resume, uncertain rollback, crash between state commits, late completion, and actual MySQL EXPLAIN/load acceptance. Production/Replay scoring functions are unchanged; scheduling/actual execution availability changes and is not claimed parity-validated.
++
++## Explicit remaining work
++
++Protection-specific safe recovery; existing-incident reconciliation; cross-instance failure-injection acceptance; graceful deployment/shutdown fencing; bounded missing-context restoration; stale-context/dashboard metrics. No worker or DB-pool count increase. The current ZIP did not include the current Jenkinsfile/Deploy-Trader script, so no deployment-script modification is bundled.
+--- a/src/main/resources/static/js/fix-registry.js
++++ b/src/main/resources/static/js/fix-registry.js
+@@ -1,5 +1,6 @@
+ (() => {
+     const FIXES = [
++        {"id": "FIX-140", "title": "Confirmed initial wallet-lock retry and audited history retirement", "status": "REVIEW CANDIDATE \u2014 JAVA 21 / MYSQL VALIDATION REQUIRED", "cause": "Initial wallet-symbol cancellation fell into generic review, blocking lanes; Optionals obscured non-execution.", "solution": "Confirmed-rollback attributed retries through the existing live dispatcher, 1/3/10-second due times, exact saved-signal resumption, terminal expiry/exhaustion, context coverage counters and opt-in audited queue retirement.", "behavior": "Execution recovery changes; history remains enabled by default; retirement is disabled and dry-run by default. No saved signal or candle deletion. Unknown outcomes remain review-only. Protection recovery and deployment drain are not implemented by this patch.", "regression": "Five real-transaction H2 tests authored; execution unavailable here (JRE17, no javac/Maven/MySQL). Java21 compilation and all tests must pass before deployment.", "location": "md/FIX-140.md", "classes": ["SignalProcessingCoordinator", "SignalProcessingStore", "SharedAnalysisDispatcher", "CandleClosedAnalysisWorker", "HistoricalBacklogRetirementService", "SignalContextMetrics", "V96__fix_140_history_retirement_audit.sql"]},
+         {"id": "FIX-139", "title": "Collector-backed indexed candle health", "status": "IMPLEMENTED \u2014 JAVA 21 / MYSQL VALIDATION PENDING", "cause": "Candle staleness aggregation times out; daily counts read stale local candles.", "solution": "Serial indexed per-symbol/timeframe collector reads inside existing cached single-flight health snapshot.", "behavior": "Health reporting only. Daily candle counts now cover enabled symbols and monitored 1m/5m/1h. No worker, trading, ownership or pool changes.", "regression": "Java syntax parsing only; H2 routing/closed-candle/cutoff regression test added, not executed here.", "location": "md/FIX-139.md", "classes": ["SystemHealthDailyService", "SystemHealthCollectorReadTest"]},
+         {"id": "FIX-138", "title": "Fresh-candle priority and isolated historical workers", "status": "IMPLEMENTED \u2014 JAVA 21 BUILD / RUNTIME VALIDATION PENDING", "cause": "Slow backlog-wide dispatch and stale/review lane blocking delayed current signal creation.", "solution": "Eight live workers and one historical worker, independent clocks, bounded indexed per-lane selection, durable ownership and guarded analysis-only review isolation.", "behavior": "Intentional scheduling change: fresh closes bypass stale pending/deferred analysis. Historical work never executes trades. Unknown execution review remains blocking; no history deleted. Scoring and price-protection phases unchanged.", "regression": "Java syntax parsing passed. Regression tests added; Maven/JUnit and MySQL validation not run in authoring runtime.", "location": "md/FIX-138.md", "classes": ["SharedAnalysisDispatcher", "SharedAnalysisExecutorConfig", "SharedMarketConsumer", "CandleClosedAnalysisWorker", "SharedMarketConsumerTest", "V95__fix_138_analysis_dispatch_ranges.sql"]},
+         {"id": "FIX-137", "title": "Collector consumer and candle worker diagnostics", "status": "IMPLEMENTED \u2014 BUILD VALIDATION PENDING", "cause": "Worker stages and existing-signal review decisions lacked correlated diagnostics.", "solution": "Event-correlated stage logs, queue timing, outcome commit confirmation and dispatcher heartbeat.", "behavior": "Logging only. No status repair, retry, trading-policy or SQL selection changes.", "regression": "Source diff reviewed; Java 21/Maven build unavailable in authoring environment.", "location": "md/FIX-137.md", "classes": ["SharedMarketConsumer", "CandleClosedAnalysisWorker"]},
+--- a/src/test/java/com/crypto/execution/processing/SignalProcessingCoordinatorTest.java
++++ b/src/test/java/com/crypto/execution/processing/SignalProcessingCoordinatorTest.java
+@@ -301,4 +301,54 @@
+         assertThrows(IllegalStateException.class,()->coordinator.process(127,false,sig->Optional.empty()));
+     }
+ 
++
++    // FIX-140: real transaction rollback with a mocked first wallet lock; no business callback.
++    void sharedSymbolLockFixture() {
++        register(ProcessingOrigin.WORKER);
++        jdbc.update("UPDATE signal_processing_work SET source_event_id=77 WHERE signal_id=127");
++        store=spy(store);
++        doNothing().when(store).requireSourceOwner(127L,77L);
++        coordinator=new SignalProcessingCoordinator(store,signals,positions,new SignalProcessingFreshness(jdbc),manager);
++        freshCandle();
++    }
++    @Test void fix140SymbolTimeoutSchedulesOnlyAfterRollbackAndResumesExactSignalOnce() {
++        sharedSymbolLockFixture();
++        var wallet=mock(com.crypto.wallet.service.WalletTransactionCoordination.class);
++        ReflectionTestUtils.setField(coordinator,"walletCoordination",wallet);
++        doThrow(new org.springframework.dao.QueryTimeoutException("controlled first lock timeout"))
++            .doNothing().when(wallet).symbol("PEPEUSDT");
++        AtomicInteger calls=new AtomicInteger();
++        assertThrows(SymbolLockRetryScheduled.class,()->coordinator.process(127,false,x->{calls.incrementAndGet();return Optional.empty();},77L));
++        assertEquals("SYMBOL_LOCK_RETRY",status());assertEquals(0,calls.get());
++        assertEquals("INITIAL_SYMBOL_LOCK_ROLLED_BACK",jdbc.queryForObject("SELECT failure_stage FROM signal_processing_work",String.class));
++        assertNull(store.claim(127,false),"due time is checked inside claim");
++        jdbc.update("UPDATE signal_processing_work SET next_attempt_at=?",Timestamp.from(Instant.now().minusSeconds(1)));
++        coordinator.process(127,false,x->{calls.incrementAndGet();return Optional.empty();},77L);
++        assertEquals("COMPLETED",status());assertEquals(1,calls.get());
++    }
++    @Test void fix140ExpiredSafeRetryDoesNotExecuteBusiness() {
++        sharedSymbolLockFixture();
++        jdbc.update("UPDATE signal_processing_work SET status='SYMBOL_LOCK_RETRY',attempts=1,next_attempt_at=?",Timestamp.from(Instant.now().minusSeconds(1)));
++        jdbc.update("DELETE FROM candle");
++        coordinator.process(127,false,x->{fail("expired work must not execute");return Optional.empty();},77L);
++        assertEquals("EXPIRED",status());
++    }
++    @Test void fix140LaterTimeoutRemainsReviewAndDoesNotGrantRetry() {
++        sharedSymbolLockFixture();
++        assertThrows(org.springframework.dao.QueryTimeoutException.class,()->coordinator.process(127,false,x->{throw new org.springframework.dao.QueryTimeoutException("business timeout");},77L));
++        assertEquals("REVIEW_REQUIRED",status());
++    }
++    @Test void fix140FourthSymbolTimeoutIsTerminalNonExecution() {
++        sharedSymbolLockFixture();
++        jdbc.update("UPDATE signal_processing_work SET status='SYMBOL_LOCK_RETRY',attempts=3,next_attempt_at=?",Timestamp.from(Instant.now().minusSeconds(1)));
++        var wallet=mock(com.crypto.wallet.service.WalletTransactionCoordination.class);
++        ReflectionTestUtils.setField(coordinator,"walletCoordination",wallet);
++        doThrow(new org.springframework.dao.QueryTimeoutException("lock timeout")).when(wallet).symbol("PEPEUSDT");
++        coordinator.process(127,false,x->{fail("lock never acquired");return Optional.empty();},77L);
++        assertEquals("LOCK_RETRY_EXHAUSTED",status());
++    }
++    @Test void fix140CommunicationsFailureNeverClassifiedAsSafeLockRetry() {
++        assertFalse(SignalProcessingCoordinator.retryableSymbolLock(new org.springframework.dao.QueryTimeoutException("timeout",new SQLException("communications","08S01"))));
++        assertTrue(SignalProcessingCoordinator.retryableSymbolLock(new RuntimeException(new SQLException("lock wait","HY000",1205))));
++    }
+ }
+--- a/src/test/java/com/crypto/service/CandleClosedAnalysisWorkerTest.java
++++ b/src/test/java/com/crypto/service/CandleClosedAnalysisWorkerTest.java
+@@ -123,7 +123,9 @@
+         when(tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime("BTCUSDT","1m",open)).thenReturn(true);
+         String outcome=worker.processShared(new CandleClosedEvent("BTCUSDT","1m",open),open.plusSeconds(60),true,42L);
+         org.junit.jupiter.api.Assertions.assertEquals("HISTORICAL_ALREADY_EXISTS",outcome);
+-        org.mockito.Mockito.verifyNoInteractions(analysisService,paperTradingService,sharedWorkEvidence);
++        // FIX-140 performs a bounded attributed-retry lookup even for an expired source;
++        // an ordinary existing historical signal still never reaches wallet processing.
++        org.mockito.Mockito.verifyNoInteractions(analysisService,paperTradingService);
+     }
+ 
+     @Test
+--- a/src/test/java/com/crypto/shared/HistoricalBacklogRetirementServiceTest.java
++++ b/src/test/java/com/crypto/shared/HistoricalBacklogRetirementServiceTest.java
+@@ -0,0 +1,64 @@
++package com.crypto.shared;
++
++import java.sql.Timestamp;
++import java.time.Instant;
++import java.util.List;
++import java.util.UUID;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.jdbc.datasource.DriverManagerDataSource;
++import org.springframework.jdbc.datasource.DataSourceTransactionManager;
++import org.springframework.test.util.ReflectionTestUtils;
++import com.crypto.administration.service.CoinConfigurationService;
++import static org.junit.jupiter.api.Assertions.*;
++import static org.mockito.Mockito.*;
++
++/** FIX-140: real H2 transaction tests for opt-in retirement; MySQL acceptance remains required. */
++class HistoricalBacklogRetirementServiceTest {
++    JdbcTemplate jdbc;
++    HistoricalBacklogRetirementService service;
++    @BeforeEach void setup() {
++        var ds=new DriverManagerDataSource("jdbc:h2:mem:"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1","sa","");
++        jdbc=new JdbcTemplate(ds);
++        jdbc.execute("CREATE TABLE shared_market_consumer_state(symbol VARCHAR(30) PRIMARY KEY)");
++        jdbc.execute("INSERT INTO shared_market_consumer_state VALUES('BTCUSDT')");
++        jdbc.execute("CREATE TABLE shared_market_event_delivery(source_event_id BIGINT PRIMARY KEY,symbol VARCHAR(30),interval_code VARCHAR(10),phase INT,status VARCHAR(40),analysis_status VARCHAR(40),symbol_sequence BIGINT,candle_open_time TIMESTAMP(6),candle_close_time TIMESTAMP(6),analysis_started_at TIMESTAMP(6),analysis_completed_at TIMESTAMP(6),owner_token VARCHAR(36),protection_started_at TIMESTAMP(6),protection_completed_at TIMESTAMP(6),analysis_retired_at TIMESTAMP(6),analysis_retirement_operation VARCHAR(36),analysis_retirement_reason VARCHAR(255))");
++        jdbc.execute("CREATE TABLE signal_processing_work(signal_id BIGINT,source_event_id BIGINT,symbol VARCHAR(30),interval_code VARCHAR(10),candle_open_time TIMESTAMP(6))");
++        jdbc.execute("CREATE TABLE trade_signal(id BIGINT,symbol VARCHAR(30),interval_code VARCHAR(10),candle_open_time TIMESTAMP(6))");
++        jdbc.execute("CREATE TABLE wallet_trade(id BIGINT,signal_id BIGINT)");
++        var coins=mock(CoinConfigurationService.class);when(coins.enabledSymbols()).thenReturn(List.of("BTCUSDT"));
++        var source=mock(SharedMarketSource.class);when(source.enabled()).thenReturn(true);
++        service=new HistoricalBacklogRetirementService(jdbc,new DataSourceTransactionManager(ds),coins,source);
++        ReflectionTestUtils.setField(service,"historyEnabled",false);
++        ReflectionTestUtils.setField(service,"retirementEnabled",true);
++        ReflectionTestUtils.setField(service,"dryRun",false);
++        ReflectionTestUtils.setField(service,"retainSeconds",0L);
++        jdbc.update("INSERT INTO shared_market_event_delivery(source_event_id,symbol,interval_code,phase,status,analysis_status,symbol_sequence,candle_open_time,candle_close_time,owner_token) VALUES(1,'BTCUSDT','1m',4,'COMPLETED','PENDING',1,?,?,'price-phase-owner')",Timestamp.from(Instant.now().minusSeconds(3660)),Timestamp.from(Instant.now().minusSeconds(3600)));
++    }
++    String status() {return jdbc.queryForObject("SELECT analysis_status FROM shared_market_event_delivery",String.class);}
++    @Test void untouchedExpiredAnalysisIsRetiredWithoutFakeCompletion() {
++        service.retire();assertEquals("HISTORICAL_SKIPPED",status());
++        assertNull(jdbc.queryForObject("SELECT analysis_completed_at FROM shared_market_event_delivery",Timestamp.class));
++        assertNotNull(jdbc.queryForObject("SELECT analysis_retired_at FROM shared_market_event_delivery",Timestamp.class));
++        assertEquals("price-phase-owner",jdbc.queryForObject("SELECT owner_token FROM shared_market_event_delivery",String.class));
++    }
++    @Test void processingEvidencePreventsRetirement() {
++        jdbc.update("INSERT INTO signal_processing_work(signal_id,source_event_id) VALUES(7,1)");
++        service.retire();assertEquals("PENDING",status());
++    }
++    @Test void incompleteProtectionPreventsRetirement() {
++        jdbc.update("UPDATE shared_market_event_delivery SET protection_started_at=CURRENT_TIMESTAMP(6)");
++        service.retire();assertEquals("PENDING",status());
++    }
++    @Test void dryRunDoesNotMutateLedger() {
++        ReflectionTestUtils.setField(service,"dryRun",true);service.retire();assertEquals("PENDING",status());
++    }
++    @Test void historyEnabledPreventsRetirement() {
++        ReflectionTestUtils.setField(service,"historyEnabled",true);service.retire();assertEquals("PENDING",status());
++    }
++    @Test void freshCandleSurvivesZeroExtraRetention() {
++        jdbc.update("UPDATE shared_market_event_delivery SET candle_close_time=?",Timestamp.from(Instant.now().minusSeconds(5)));
++        service.retire();assertEquals("PENDING",status());
++    }
++}

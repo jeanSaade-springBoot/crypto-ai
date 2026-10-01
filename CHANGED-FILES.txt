@@ -1,0 +1,17 @@
+src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java
+src/main/java/com/crypto/execution/processing/SignalProcessingStore.java
+src/main/java/com/crypto/execution/processing/SymbolLockRetryScheduled.java
+src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java
+src/main/java/com/crypto/service/BtcMarketContextService.java
+src/main/java/com/crypto/service/MultiTimeframeConfluenceService.java
+src/main/java/com/crypto/service/SignalContextMetrics.java
+src/main/java/com/crypto/shared/HistoricalBacklogRetirementService.java
+src/main/java/com/crypto/shared/SharedAnalysisDispatcher.java
+src/main/java/com/crypto/shared/SharedMarketConsumer.java
+src/main/java/com/crypto/wallet/service/WalletTransactionCoordination.java
+src/main/resources/db/migration/V96__fix_140_history_retirement_audit.sql
+src/main/resources/md/FIX-140.md
+src/main/resources/static/js/fix-registry.js
+src/test/java/com/crypto/execution/processing/SignalProcessingCoordinatorTest.java
+src/test/java/com/crypto/service/CandleClosedAnalysisWorkerTest.java
+src/test/java/com/crypto/shared/HistoricalBacklogRetirementServiceTest.java

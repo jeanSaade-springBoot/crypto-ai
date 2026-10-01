@@ -62,11 +62,15 @@ public class SharedMarketConsumer {
     }
     @org.springframework.beans.factory.annotation.Value("${shared-market.activation-approved:false}")
     private boolean activationApproved;
+    // FIX-140: disabling history is explicit; candles and saved decision context remain intact.
+    @org.springframework.beans.factory.annotation.Value("${shared-market.analysis.historical-enabled:true}")
+    private boolean historicalEnabled=true;
     @org.springframework.beans.factory.annotation.Autowired
     private com.crypto.client.config.binance.BinanceMarketDataProperties intervals;
 
     @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
     public void start() {
+        analysisDispatch.historicalEnabled(historicalEnabled);
         validateCutover();
         if("OFF".equals(source.mode()))return;
         if(source.enabled())for(String symbol:coins.enabledSymbols()) {
@@ -78,7 +82,8 @@ public class SharedMarketConsumer {
         discoveryClock.scheduleWithFixedDelay(this::discover,0,100,TimeUnit.MILLISECONDS);
         priceClock.scheduleWithFixedDelay(this::dispatchPrices,0,50,TimeUnit.MILLISECONDS);
         analysisClock.scheduleWithFixedDelay(this::dispatchAnalysis,0,100,TimeUnit.MILLISECONDS);
-        historyClock.scheduleWithFixedDelay(this::dispatchHistoricalAnalysis,1000,1000,TimeUnit.MILLISECONDS);
+        if(historicalEnabled)historyClock.scheduleWithFixedDelay(this::dispatchHistoricalAnalysis,1000,1000,TimeUnit.MILLISECONDS);
+        log.info("[FIX-140][HISTORY_CONFIGURATION] enabled={}, savedSignalsAndCandlesRetained=true",historicalEnabled);
         monitorClock.scheduleWithFixedDelay(analysisDispatch::monitor,30,30,TimeUnit.SECONDS);
         log.info("[FIX-138][ANALYSIS_CONFIGURATION] liveThreads=8, historyThreads=1, independentClocks=true, livePriority=true, historicalWalletExecution=false");
     }
@@ -86,15 +91,15 @@ public class SharedMarketConsumer {
         log.info("[FIX-132][SOURCE_CONFIGURATION] mode={}, readPool=3, priceWorkers=2, pendingPerSymbol=200, publicationSource=collector",source.mode());
         if(!source.enabled())return;
         if(!activationApproved)throw new IllegalStateException("FIX-132 LIVE requires explicit measured cutover acceptance (activation-approved)");
-        var unattributed=jdbc.queryForList("SELECT signal_id,status FROM signal_processing_work WHERE source_event_id IS NULL AND status NOT IN ('COMPLETED','EXPIRED') ORDER BY signal_id LIMIT 25");
+        var unattributed=jdbc.queryForList("SELECT signal_id,status FROM signal_processing_work WHERE source_event_id IS NULL AND status NOT IN ('COMPLETED','EXPIRED','LOCK_RETRY_EXHAUSTED') ORDER BY signal_id LIMIT 25");
         if(!unattributed.isEmpty())throw new IllegalStateException("[FIX-132][UNATTRIBUTED_WORK] reconcile before LIVE: "+unattributed);
         var invalidOwners=jdbc.queryForList("""
             SELECT w.signal_id,w.status,w.source_event_id FROM signal_processing_work w
             LEFT JOIN shared_market_event_delivery d ON d.source_event_id=w.source_event_id
-            WHERE w.source_event_id IS NOT NULL AND w.status NOT IN ('COMPLETED','EXPIRED')
+            WHERE w.source_event_id IS NOT NULL AND w.status NOT IN ('COMPLETED','EXPIRED','LOCK_RETRY_EXHAUSTED')
             AND (d.source_event_id IS NULL OR w.symbol<>d.symbol OR w.interval_code<>d.interval_code
                  OR w.candle_open_time<>d.candle_open_time OR d.closed=0
-                 OR d.analysis_status NOT IN ('RUNNING','REVIEW_REQUIRED')) ORDER BY w.signal_id LIMIT 25
+                 OR d.analysis_status NOT IN ('RUNNING','REVIEW_REQUIRED','EXECUTION_RETRY')) ORDER BY w.signal_id LIMIT 25
             """);
         if(!invalidOwners.isEmpty())throw new IllegalStateException("[FIX-132][PROCESSING_OWNER_INCONSISTENT] reconcile before LIVE: "+invalidOwners);
         for(String symbol:coins.enabledSymbols()) {

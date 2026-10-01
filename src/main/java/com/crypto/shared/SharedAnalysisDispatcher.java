@@ -57,6 +57,9 @@ public final class SharedAnalysisDispatcher {
         tx.setTimeout(5);
     }
 
+    // FIX-140: compatibility default; production disabling is an explicit operator setting.
+    private volatile boolean historicalEnabled=true;
+    public void historicalEnabled(boolean enabled) { historicalEnabled=enabled; }
     public void live() { dispatch(true); }
     public void historical() { dispatch(false); }
     public void stop() { stopped=true; }
@@ -73,7 +76,7 @@ public final class SharedAnalysisDispatcher {
     }
 
     private void dispatch(boolean live) {
-        if(stopped || !source.enabled())return;
+        if(stopped || !source.enabled() || (!live && !historicalEnabled))return;
         long started=System.nanoTime();
         Set<Lane> poolActive=live?liveActive:historyActive;
         int capacity=live?8:1;
@@ -138,6 +141,12 @@ public final class SharedAnalysisDispatcher {
         long started=System.nanoTime();
         Map<String,Object> result=null;
         Instant cutoff=now.minusSeconds(SharedEventPolicy.closeGraceSeconds(lane.interval()));
+        // FIX-140: attributed retry work is selected independently of candle grace,
+        // so an expired retry can be terminalized instead of remaining stuck forever.
+        if(live) {
+            var retry=jdbc.queryForList("SELECT * FROM shared_market_event_delivery WHERE symbol=? AND interval_code=? AND phase=4 AND analysis_status='EXECUTION_RETRY' AND (analysis_not_before IS NULL OR analysis_not_before<=?) ORDER BY candle_close_time,symbol_sequence LIMIT 1",lane.symbol(),lane.interval(),Timestamp.from(now));
+            if(!retry.isEmpty())return retry.getFirst();
+        }
         // Single-status indexed ranges avoid IN-list sorting across the entire backlog.
         for(String status:live?List.of("PENDING"):List.of("PENDING","HISTORICAL_DEFERRED")) {
             String window=live
@@ -163,15 +172,17 @@ public final class SharedAnalysisDispatcher {
     }
 
     private boolean claim(Lane lane,Map<String,Object> selected,boolean live,String token) {
-        if(stopped || !SharedCutoverPolicy.approved(lockSymbol(lane)))return false;
+        if(stopped || (!live && !historicalEnabled) || !SharedCutoverPolicy.approved(lockSymbol(lane)))return false;
         long id=num(selected,"source_event_id");
         var e=jdbc.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=? FOR UPDATE",id);
         Instant now=Instant.now();
         if(num(e,"phase")!=4 || !truth(e.get("closed"))
-                || !Set.of("PENDING","HISTORICAL_DEFERRED").contains(str(e,"analysis_status")))return false;
+                || !Set.of("PENDING","HISTORICAL_DEFERRED","EXECUTION_RETRY").contains(str(e,"analysis_status")))return false;
         if(time(e,"analysis_not_before")!=null && !time(e,"analysis_not_before").isBefore(now))return false;
         boolean fresh=SharedEventPolicy.closeEligible(lane.interval(),time(e,"candle_close_time"),now);
-        if(live && (!fresh || !"COMPLETED".equals(str(e,"status"))))return false;
+        boolean retry="EXECUTION_RETRY".equals(str(e,"analysis_status"));
+        if(retry && !live)return false;
+        if(live && ((!fresh && !retry) || !"COMPLETED".equals(str(e,"status"))))return false;
         if(!live && !time(e,"candle_close_time").isBefore(now.minusSeconds(SharedEventPolicy.closeGraceSeconds(lane.interval()))))return false;
 
         // Both clocks/JVMs acquire symbol -> delivery locks in the same order.
@@ -188,7 +199,7 @@ public final class SharedAnalysisDispatcher {
         // A historical task may not claim a lane with ready fresh work. It does
         // not become live if the clock changes; false authority is passed explicitly.
         if(!live && candidate(lane,true,now)!=null)return false;
-        return jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='RUNNING',owner_token=?,analysis_started_at=CURRENT_TIMESTAMP(6),analysis_completed_at=NULL WHERE source_event_id=? AND analysis_status IN ('PENDING','HISTORICAL_DEFERRED')",token,id)==1;
+        return jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='RUNNING',owner_token=?,analysis_started_at=CURRENT_TIMESTAMP(6),analysis_completed_at=NULL WHERE source_event_id=? AND analysis_status IN ('PENDING','HISTORICAL_DEFERRED','EXECUTION_RETRY')",token,id)==1;
     }
 
     private boolean isolateAnalysisOnlyReview(Map<String,Object> review) {
@@ -240,6 +251,10 @@ public final class SharedAnalysisDispatcher {
             try {
                 Boolean committed=tx.execute(s->{lockSymbol(lane);
                     int count=jdbc.update("UPDATE shared_market_event_delivery SET analysis_status=?,analysis_completed_at=CURRENT_TIMESTAMP(6) WHERE source_event_id=? AND owner_token=? AND analysis_status IN ('RUNNING','REVIEW_REQUIRED')",result,id,token);
+                    // FIX-140: persisted work owns retry due-time. The delivery remains
+                    // under the same scheduler and is never replayed by legacy recovery.
+                    if(count==1 && "EXECUTION_RETRY".equals(result))
+                        jdbc.update("UPDATE shared_market_event_delivery d JOIN signal_processing_work w ON w.source_event_id=d.source_event_id SET d.analysis_not_before=w.next_attempt_at WHERE d.source_event_id=? AND d.owner_token=? AND w.status='SYMBOL_LOCK_RETRY'",id,token);
                     if(count==1 && Set.of("COMPLETED","ALREADY_COMPLETED").contains(result))
                         jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='COVERED_BY_LIVE',analysis_completed_at=CURRENT_TIMESTAMP(6) WHERE symbol=? AND interval_code=? AND candle_open_time=? AND analysis_status='HISTORICAL_DEFERRED'",lane.symbol(),lane.interval(),e.get("candle_open_time"));
                     return count==1;

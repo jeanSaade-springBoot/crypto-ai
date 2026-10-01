@@ -33,6 +33,9 @@ public class BtcMarketContextService {
 
     private final CandleRepository candleRepository;
     private final TradeSignalRepository tradeSignalRepository;
+    // FIX-140: count missing/present saved BTC context without altering entry permission.
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private SignalContextMetrics contextMetrics;
     private final BtcContextProperties properties;
     @Autowired(required = false)
     private ExecutionReplayScope replayScope;
@@ -86,6 +89,7 @@ public class BtcMarketContextService {
                     .orElse(null);
         }
 
+        if(contextMetrics!=null)contextMetrics.record("BTC",interval,1,btcSignal==null?0:1);
         if (btcSignal == null) {
             return result(relationshipType, BtcContextStatus.UNAVAILABLE,
                     decisionAfterConfluence, confluenceEntryAllowed, interval, null, null,

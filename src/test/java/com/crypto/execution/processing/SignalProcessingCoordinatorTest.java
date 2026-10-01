@@ -301,4 +301,54 @@ class SignalProcessingCoordinatorTest {
         assertThrows(IllegalStateException.class,()->coordinator.process(127,false,sig->Optional.empty()));
     }
 
+
+    // FIX-140: real transaction rollback with a mocked first wallet lock; no business callback.
+    void sharedSymbolLockFixture() {
+        register(ProcessingOrigin.WORKER);
+        jdbc.update("UPDATE signal_processing_work SET source_event_id=77 WHERE signal_id=127");
+        store=spy(store);
+        doNothing().when(store).requireSourceOwner(127L,77L);
+        coordinator=new SignalProcessingCoordinator(store,signals,positions,new SignalProcessingFreshness(jdbc),manager);
+        freshCandle();
+    }
+    @Test void fix140SymbolTimeoutSchedulesOnlyAfterRollbackAndResumesExactSignalOnce() {
+        sharedSymbolLockFixture();
+        var wallet=mock(com.crypto.wallet.service.WalletTransactionCoordination.class);
+        ReflectionTestUtils.setField(coordinator,"walletCoordination",wallet);
+        doThrow(new org.springframework.dao.QueryTimeoutException("controlled first lock timeout"))
+            .doNothing().when(wallet).symbol("PEPEUSDT");
+        AtomicInteger calls=new AtomicInteger();
+        assertThrows(SymbolLockRetryScheduled.class,()->coordinator.process(127,false,x->{calls.incrementAndGet();return Optional.empty();},77L));
+        assertEquals("SYMBOL_LOCK_RETRY",status());assertEquals(0,calls.get());
+        assertEquals("INITIAL_SYMBOL_LOCK_ROLLED_BACK",jdbc.queryForObject("SELECT failure_stage FROM signal_processing_work",String.class));
+        assertNull(store.claim(127,false),"due time is checked inside claim");
+        jdbc.update("UPDATE signal_processing_work SET next_attempt_at=?",Timestamp.from(Instant.now().minusSeconds(1)));
+        coordinator.process(127,false,x->{calls.incrementAndGet();return Optional.empty();},77L);
+        assertEquals("COMPLETED",status());assertEquals(1,calls.get());
+    }
+    @Test void fix140ExpiredSafeRetryDoesNotExecuteBusiness() {
+        sharedSymbolLockFixture();
+        jdbc.update("UPDATE signal_processing_work SET status='SYMBOL_LOCK_RETRY',attempts=1,next_attempt_at=?",Timestamp.from(Instant.now().minusSeconds(1)));
+        jdbc.update("DELETE FROM candle");
+        coordinator.process(127,false,x->{fail("expired work must not execute");return Optional.empty();},77L);
+        assertEquals("EXPIRED",status());
+    }
+    @Test void fix140LaterTimeoutRemainsReviewAndDoesNotGrantRetry() {
+        sharedSymbolLockFixture();
+        assertThrows(org.springframework.dao.QueryTimeoutException.class,()->coordinator.process(127,false,x->{throw new org.springframework.dao.QueryTimeoutException("business timeout");},77L));
+        assertEquals("REVIEW_REQUIRED",status());
+    }
+    @Test void fix140FourthSymbolTimeoutIsTerminalNonExecution() {
+        sharedSymbolLockFixture();
+        jdbc.update("UPDATE signal_processing_work SET status='SYMBOL_LOCK_RETRY',attempts=3,next_attempt_at=?",Timestamp.from(Instant.now().minusSeconds(1)));
+        var wallet=mock(com.crypto.wallet.service.WalletTransactionCoordination.class);
+        ReflectionTestUtils.setField(coordinator,"walletCoordination",wallet);
+        doThrow(new org.springframework.dao.QueryTimeoutException("lock timeout")).when(wallet).symbol("PEPEUSDT");
+        coordinator.process(127,false,x->{fail("lock never acquired");return Optional.empty();},77L);
+        assertEquals("LOCK_RETRY_EXHAUSTED",status());
+    }
+    @Test void fix140CommunicationsFailureNeverClassifiedAsSafeLockRetry() {
+        assertFalse(SignalProcessingCoordinator.retryableSymbolLock(new org.springframework.dao.QueryTimeoutException("timeout",new SQLException("communications","08S01"))));
+        assertTrue(SignalProcessingCoordinator.retryableSymbolLock(new RuntimeException(new SQLException("lock wait","HY000",1205))));
+    }
 }

@@ -82,6 +82,20 @@ public class CandleClosedAnalysisWorker {
 
     private String processSharedTraced(CandleClosedEvent event, java.time.Instant closeTime,
             boolean liveSource, Long sourceEventId, long started) {
+        // FIX-140: only explicitly attributed safe retries can resume an existing signal.
+        // Generic REVIEW_REQUIRED rows and natural-key matches never authorize execution.
+        if(sourceEventId!=null && liveSource) {
+            var retry=sharedWorkEvidence.queryForList("SELECT signal_id FROM signal_processing_work WHERE source_event_id=? AND status='SYMBOL_LOCK_RETRY' AND failure_stage='INITIAL_SYMBOL_LOCK_ROLLED_BACK' AND next_attempt_at<=CURRENT_TIMESTAMP(6)",sourceEventId);
+            if(retry.size()==1) {
+                TradeSignal saved=tradeSignalRepository.findById(((Number)retry.getFirst().get("signal_id")).longValue()).orElseThrow();
+                if(!event.symbol().equals(saved.getSymbol()) || !event.intervalCode().equals(saved.getInterval())
+                    || !event.openTime().equals(saved.getCandleOpenTime()))return "REVIEW_REQUIRED";
+                try {paperTradingService.processSharedSignal(saved,sourceEventId);}
+                catch(com.crypto.execution.processing.SymbolLockRetryScheduled scheduled) {return processingOutcome(sourceEventId);}
+                catch(Exception failure) {log.error("[FIX-140][RETRY_FAILED] event={}",sourceEventId,failure);return "REVIEW_REQUIRED";}
+                return processingOutcome(sourceEventId);
+            }
+        }
         String stage = "COORDINATION_LOCK";
         traceStage(sourceEventId,event,stage,started);
         // FIX-074: serialize only the exact candle identity against FIX-043 recovery.
@@ -157,7 +171,9 @@ public class CandleClosedAnalysisWorker {
                     "Automatic candle flow completed: symbol={}, interval={}, openTime={}, score={}, decision={}, paperPositionOpened={}",
                     indicator.getSymbol(), indicator.getIntervalCode(), indicator.getCandleOpenTime(),
                     signal.getTotalScore(), signal.getDecision(), position.isPresent());
-            return "COMPLETED";
+            return sourceEventId==null?"COMPLETED":processingOutcome(sourceEventId);
+        } catch (com.crypto.execution.processing.SymbolLockRetryScheduled scheduled) {
+            return sourceEventId==null?"REVIEW_REQUIRED":processingOutcome(sourceEventId);
         } catch (Exception exception) {
             // FIX-043: never let one analysis failure kill the dispatcher lane. The next candle must
             // continue. FIX-132 LIVE persists this failure for reconciliation; legacy
@@ -190,6 +206,19 @@ public class CandleClosedAnalysisWorker {
         log.info("[FIX-138][SIGNAL_SAVED] mode={}, event={}, signal={}, symbol={}, interval={}, candleOpenUtc={}, generatedAt={}",
             mode,eventId,signal.getId(),event.symbol(),event.intervalCode(),event.openTime(),signal.getGeneratedAt());
     }
+    /** FIX-140: Optional.empty is not proof of processing completion. */
+    private String processingOutcome(long event) {
+        var states=sharedWorkEvidence.queryForList("SELECT status FROM signal_processing_work WHERE source_event_id=?",event);
+        if(states.size()!=1)return "REVIEW_REQUIRED";
+        return switch(String.valueOf(states.getFirst().get("status"))) {
+            case "COMPLETED"->"COMPLETED";
+            case "EXPIRED"->"EXECUTION_EXPIRED";
+            case "LOCK_RETRY_EXHAUSTED"->"EXECUTION_NOT_EXECUTED";
+            case "SYMBOL_LOCK_RETRY"->"EXECUTION_RETRY";
+            default->"REVIEW_REQUIRED";
+        };
+    }
+
     private static void traceStage(Long id, CandleClosedEvent event, String stage, long started) {
         log.info("[FIX-138][WORKER_STAGE] event={}, symbol={}, interval={}, open={}, stage={}, elapsedMs={}",
                 id,event.symbol(),event.intervalCode(),event.openTime(),stage,

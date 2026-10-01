@@ -27,6 +27,9 @@ public class MultiTimeframeConfluenceService {
     private static final int STRONG_BEARISH_TREND_MAXIMUM = 6;
 
     private final TradeSignalRepository tradeSignalRepository;
+    // FIX-140: observability only; preserve existing missing-context decision policy.
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private SignalContextMetrics contextMetrics;
     @Autowired(required = false)
     private ExecutionReplayScope replayScope;
 
@@ -60,6 +63,7 @@ public class MultiTimeframeConfluenceService {
                 .filter(signal -> signal != null && isFresh(signal, snapshotTime))
                 .toList();
 
+        if(contextMetrics!=null)contextMetrics.record("MTF",interval,higherIntervals.size(),contexts.size());
         if (contexts.isEmpty()) {
             return unavailable(currentDecision, snapshotTime,
                     "No recent closed higher-timeframe signal was available at signal creation time; "

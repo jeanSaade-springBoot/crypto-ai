@@ -59,9 +59,22 @@ public class SignalProcessingCoordinator {
             }
             log.info("[FIX-127][ATTEMPT] signalId={}, symbol={}, interval={}, candleOpenTime={}, origin={}, attempt={}, background={}",
                     signalId,work.symbol(),work.interval(),work.candleOpenTime(),work.origin(),work.attempts(),background);
+            java.util.concurrent.atomic.AtomicInteger completion=new java.util.concurrent.atomic.AtomicInteger(-1);
             try {
                 Optional<PaperPosition> result=transaction.execute(tx->{
-                    if(walletCoordination!=null)walletCoordination.symbol(work.symbol());
+                    org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                        new org.springframework.transaction.support.TransactionSynchronization() {
+                            @Override public void afterCompletion(int status) { completion.set(status); }
+                        });
+                    // FIX-140: observe the real transaction completion; a thrown exception alone
+                    // does not prove rollback. The private marker is only created here.
+                    if(walletCoordination!=null) {
+                        try { walletCoordination.symbol(work.symbol()); }
+                        catch(RuntimeException failure) {
+                            if(sourceEventId!=null && retryableSymbolLock(failure))throw new SymbolLockFailure(failure);
+                            throw failure;
+                        }
+                    }
                     var owned=store.locked(signalId);
                     if(owned==null || !"RUNNING".equals(owned.status()) || !work.owner().equals(owned.owner()))
                         throw new IllegalStateException("FIX-127 processing ownership changed");
@@ -94,6 +107,18 @@ public class SignalProcessingCoordinator {
                 log.warn("[FIX-127][EXPIRED] signalId={}, symbol={}, attempt={}",signalId,work.symbol(),work.attempts());
                 return Optional.empty();
             } catch(RuntimeException ex) {
+                // FIX-140: only this invocation's initial symbol-lock marker plus a
+                // confirmed rollback grants retry. Unknown connection/commit failures stay review-only.
+                if(ex instanceof SymbolLockFailure && completion.get()==
+                        org.springframework.transaction.support.TransactionSynchronization.STATUS_ROLLED_BACK) {
+                    String result=work.attempts()<4?"SYMBOL_LOCK_RETRY":"LOCK_RETRY_EXHAUSTED";
+                    int changed=store.finishSymbolLockFailure(work,result,ex.toString());
+                    if(changed!=1)throw new IllegalStateException("FIX-140 retry persistence unconfirmed",ex);
+                    log.warn("[FIX-140][SAFE_RETRY_RESULT] event={}, signal={}, attempt={}, outcome={}, rollback=CONFIRMED",
+                        sourceEventId,signalId,work.attempts(),result);
+                    if("SYMBOL_LOCK_RETRY".equals(result))throw new SymbolLockRetryScheduled(signalId);
+                    return Optional.empty();
+                }
                 boolean initial=ex instanceof InitialLockFailure;
                 String status=initial && work.attempts()<2 ? "RETRYABLE_FAILURE" : "REVIEW_REQUIRED";
                 int recorded=store.finishWithoutBusiness(work,status,initial ? "INITIAL_POSITION_LOCK" : "PROCESSING_OR_COMMIT",ex.toString());
@@ -104,6 +129,20 @@ public class SignalProcessingCoordinator {
             }
         }
         return Optional.empty();
+    }
+    // FIX-140: classify only known lock cancellation/deadlock errors. Communications
+    // errors are deliberately excluded even when nested below a data-access exception.
+    static boolean retryableSymbolLock(Throwable failure) {
+        for(Throwable e=failure;e!=null;e=e.getCause())
+            if(e instanceof java.sql.SQLException sql && sql.getSQLState()!=null && sql.getSQLState().startsWith("08"))return false;
+        for(Throwable e=failure;e!=null;e=e.getCause())
+            if(e instanceof org.springframework.dao.QueryTimeoutException ||
+               e instanceof java.sql.SQLTimeoutException ||
+               e instanceof java.sql.SQLException sql && (sql.getErrorCode()==1205 || sql.getErrorCode()==1213))return true;
+        return false;
+    }
+    private static final class SymbolLockFailure extends RuntimeException {
+        SymbolLockFailure(Throwable cause) { super(cause); }
     }
     // A private marker cannot be supplied by a later business callback.
     private static final class InitialLockFailure extends RuntimeException {
