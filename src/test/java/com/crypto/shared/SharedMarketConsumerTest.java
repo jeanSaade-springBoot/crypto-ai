@@ -563,4 +563,83 @@ class SharedMarketConsumerTest {
         local.update("UPDATE shared_market_event_delivery SET analysis_not_before=? WHERE source_event_id=2",Timestamp.from(now.plusSeconds(300)));
         consumer.dispatchHistoricalAnalysis();consumer.dispatchAnalysis();verifyNoInteractions(worker);
     }
+
+    /** FIX-140: real dispatcher, worker, store, coordinator and H2 transactions.
+     * Only scoring, repositories and the first wallet-lock error are controlled.
+     * Wait for the persisted database deadline; never manually make the retry due. */
+    @Test void fix140DeliveryReclaimsDueRetryResumesSameSignalAndNeverUsesHistoryPool() throws Exception {
+        realWorkSchema();
+        queued(140,"1m",now.minusSeconds(1),"COMPLETED","PENDING");
+        Instant open=local.queryForObject("SELECT candle_open_time FROM shared_market_event_delivery WHERE source_event_id=140",Timestamp.class).toInstant();
+        var signal=new com.crypto.domain.TradeSignal();signal.setId(740L);
+        signal.setSymbol("BTCUSDT");signal.setInterval("1m");signal.setCandleOpenTime(open);
+        var signals=mock(com.crypto.repository.TradeSignalRepository.class);
+        when(signals.findById(740L)).thenReturn(Optional.of(signal));
+        var store=new com.crypto.execution.processing.SignalProcessingStore(local,manager);
+        var freshness=mock(com.crypto.execution.processing.SignalProcessingFreshness.class);
+        when(freshness.eligible(any(),any())).thenReturn(true);
+        var positions=mock(com.crypto.wallet.repository.WalletManagedPositionRepository.class);
+        var coordinator=new com.crypto.execution.processing.SignalProcessingCoordinator(store,signals,positions,freshness,manager);
+        var wallet=mock(com.crypto.wallet.service.WalletTransactionCoordination.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(coordinator,"walletCoordination",wallet);
+        doThrow(new org.springframework.dao.QueryTimeoutException("controlled initial symbol lock timeout"))
+            .doNothing().when(wallet).symbol("BTCUSDT");
+        var technical=mock(com.crypto.indicator.service.TechnicalIndicatorService.class);
+        var indicator=new com.crypto.domain.TechnicalIndicator();indicator.setSymbol("BTCUSDT");indicator.setIntervalCode("1m");indicator.setCandleOpenTime(open);
+        when(technical.calculateAndPersist("BTCUSDT","1m",open)).thenReturn(Optional.of(indicator));
+        var quality=mock(com.crypto.service.CandleDataQualityService.class);
+        when(quality.validate("BTCUSDT","1m")).thenReturn(new com.crypto.dto.CandleDataQualityResult(true,300,300,0,0,List.of()));
+        var scoring=mock(com.crypto.service.AnalysisService.class);
+        var tx=new org.springframework.transaction.support.TransactionTemplate(manager);
+        when(scoring.analyzeForProcessing(any(),any(),eq(140L))).thenAnswer(call->{
+            tx.executeWithoutResult(t->{
+                local.update("INSERT INTO trade_signal(id,symbol,interval_code,candle_open_time) VALUES(740,'BTCUSDT','1m',?)",Timestamp.from(open));
+                store.register(signal,com.crypto.execution.processing.ProcessingOrigin.WORKER,140L);
+            });
+            return signal;
+        });
+        var paper=mock(com.crypto.service.PaperTradingService.class);
+        when(paper.processSharedSignal(same(signal),eq(140L))).thenAnswer(call->coordinator.process(740L,false,x->{
+            local.update("INSERT INTO effects(id) VALUES(DEFAULT)");return Optional.empty();
+        },140L));
+        var actualWorker=new CandleClosedAnalysisWorker(technical,scoring,paper,quality,signals,
+            new com.crypto.indicator.event.CandleAnalysisExecutionCoordinator(),local);
+        var liveSubmissions=new java.util.concurrent.atomic.AtomicInteger();
+        var historySubmissions=new java.util.concurrent.atomic.AtomicInteger();
+        var actual=new SharedMarketConsumer(source,local,coins,protect,observer,actualWorker,
+            task->{liveSubmissions.incrementAndGet();task.run();},
+            task->{historySubmissions.incrementAndGet();task.run();},manager);
+        try {
+            actual.dispatchAnalysis();
+            assertEquals("EXECUTION_RETRY",analysisStatus(140));
+            Timestamp workDue=local.queryForObject("SELECT next_attempt_at FROM signal_processing_work WHERE signal_id=740",Timestamp.class);
+            assertEquals(workDue,local.queryForObject("SELECT analysis_not_before FROM shared_market_event_delivery WHERE source_event_id=140",Timestamp.class));
+            assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM effects",Integer.class));
+            actual.dispatchHistoricalAnalysis();assertEquals(0,historySubmissions.get());
+            // Use an explicit future delivery deadline only for this negative control,
+            // then restore the untouched persisted work deadline for the actual wait.
+            local.update("UPDATE shared_market_event_delivery SET analysis_not_before=? WHERE source_event_id=140",Timestamp.from(Instant.now().plusSeconds(10)));
+            actual.dispatchAnalysis();assertEquals(1,liveSubmissions.get());
+            local.update("UPDATE shared_market_event_delivery SET analysis_not_before=? WHERE source_event_id=140",workDue);
+            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);
+            while(!Instant.now().isAfter(workDue.toInstant())) {
+                assertTrue(System.nanoTime()<deadline,"persisted retry deadline must become due");
+                Thread.sleep(10);
+            }
+            actual.dispatchAnalysis();
+            assertEquals("COMPLETED",analysisStatus(140));
+            assertEquals("COMPLETED",local.queryForObject("SELECT status FROM signal_processing_work WHERE signal_id=740",String.class));
+            assertEquals(2,local.queryForObject("SELECT attempts FROM signal_processing_work WHERE signal_id=740",Integer.class));
+            assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM signal_processing_work",Integer.class));
+            assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM effects",Integer.class));
+            assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM trade_signal WHERE id=740",Integer.class));
+            assertEquals(2,liveSubmissions.get());assertEquals(0,historySubmissions.get());
+            verify(paper,times(2)).processSharedSignal(same(signal),eq(140L));
+            verify(scoring,times(1)).analyzeForProcessing(any(),any(),eq(140L));
+            verify(scoring,never()).analyzeRecovered(any(),any());
+            verify(technical,times(1)).calculateAndPersist("BTCUSDT","1m",open);
+            verify(freshness).eligible(any(),any());
+            actual.dispatchAnalysis();assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM effects",Integer.class));
+        } finally {actual.stop();}
+    }
 }

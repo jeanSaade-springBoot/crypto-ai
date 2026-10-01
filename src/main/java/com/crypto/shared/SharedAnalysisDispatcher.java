@@ -253,8 +253,14 @@ public final class SharedAnalysisDispatcher {
                     int count=jdbc.update("UPDATE shared_market_event_delivery SET analysis_status=?,analysis_completed_at=CURRENT_TIMESTAMP(6) WHERE source_event_id=? AND owner_token=? AND analysis_status IN ('RUNNING','REVIEW_REQUIRED')",result,id,token);
                     // FIX-140: persisted work owns retry due-time. The delivery remains
                     // under the same scheduler and is never replayed by legacy recovery.
-                    if(count==1 && "EXECUTION_RETRY".equals(result))
-                        jdbc.update("UPDATE shared_market_event_delivery d JOIN signal_processing_work w ON w.source_event_id=d.source_event_id SET d.analysis_not_before=w.next_attempt_at WHERE d.source_event_id=? AND d.owner_token=? AND w.status='SYMBOL_LOCK_RETRY'",id,token);
+                    if(count==1 && "EXECUTION_RETRY".equals(result)) {
+                        // FIX-140 review: equivalent single-row propagation on both MySQL
+                        // and H2; missing/ambiguous work rolls back the delivery transition.
+                        var retryWork=jdbc.queryForList("SELECT next_attempt_at FROM signal_processing_work WHERE source_event_id=? AND status='SYMBOL_LOCK_RETRY'",id);
+                        if(retryWork.size()!=1 || retryWork.getFirst().get("next_attempt_at")==null)
+                            throw new IllegalStateException("FIX-140 retry due-time evidence missing or ambiguous");
+                        jdbc.update("UPDATE shared_market_event_delivery SET analysis_not_before=? WHERE source_event_id=? AND owner_token=?",retryWork.getFirst().get("next_attempt_at"),id,token);
+                    }
                     if(count==1 && Set.of("COMPLETED","ALREADY_COMPLETED").contains(result))
                         jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='COVERED_BY_LIVE',analysis_completed_at=CURRENT_TIMESTAMP(6) WHERE symbol=? AND interval_code=? AND candle_open_time=? AND analysis_status='HISTORICAL_DEFERRED'",lane.symbol(),lane.interval(),e.get("candle_open_time"));
                     return count==1;

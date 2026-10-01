@@ -15,3 +15,4 @@ src/main/resources/static/js/fix-registry.js
 src/test/java/com/crypto/execution/processing/SignalProcessingCoordinatorTest.java
 src/test/java/com/crypto/service/CandleClosedAnalysisWorkerTest.java
 src/test/java/com/crypto/shared/HistoricalBacklogRetirementServiceTest.java
+src/test/java/com/crypto/shared/SharedMarketConsumerTest.java

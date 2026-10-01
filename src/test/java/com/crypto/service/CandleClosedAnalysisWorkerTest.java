@@ -153,6 +153,9 @@ class CandleClosedAnalysisWorkerTest {
                 .thenReturn(Optional.of(indicator));
         when(tradeSignalRepository.existsBySymbolAndIntervalAndCandleOpenTime("BTCUSDT", "1m", open))
                 .thenReturn(true);
+        // FIX-140: ordinary redelivery checks for a due attributed retry first.
+        String retrySql = "SELECT signal_id FROM signal_processing_work WHERE source_event_id=? AND status='SYMBOL_LOCK_RETRY' AND failure_stage='INITIAL_SYMBOL_LOCK_ROLLED_BACK' AND next_attempt_at<=CURRENT_TIMESTAMP(6)";
+        when(sharedWorkEvidence.queryForList(retrySql, 42L)).thenReturn(List.of());
         String evidenceSql = "SELECT COUNT(*) FROM signal_processing_work w JOIN shared_market_event_delivery d ON d.source_event_id=w.source_event_id WHERE w.symbol=? AND w.interval_code=? AND w.candle_open_time=? AND w.status='COMPLETED' AND d.symbol=w.symbol AND d.interval_code=w.interval_code AND d.candle_open_time=w.candle_open_time";
         java.sql.Timestamp candleOpen = java.sql.Timestamp.from(open);
         when(sharedWorkEvidence.queryForObject(evidenceSql, Integer.class, "BTCUSDT", "1m", candleOpen))
@@ -161,8 +164,27 @@ class CandleClosedAnalysisWorkerTest {
         String outcome = worker.processShared(new CandleClosedEvent("BTCUSDT", "1m", open), close, true, 42L);
 
         org.junit.jupiter.api.Assertions.assertEquals(expectedOutcome, outcome);
+        verify(sharedWorkEvidence).queryForList(retrySql, 42L);
         verify(sharedWorkEvidence).queryForObject(evidenceSql, Integer.class, "BTCUSDT", "1m", candleOpen);
         org.mockito.Mockito.verifyNoMoreInteractions(sharedWorkEvidence);
         org.mockito.Mockito.verifyNoInteractions(analysisService, paperTradingService);
+    }
+
+    // FIX-140: cover every durable processing outcome on the saved-signal branch.
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"COMPLETED,COMPLETED","EXPIRED,EXECUTION_EXPIRED",
+        "LOCK_RETRY_EXHAUSTED,EXECUTION_NOT_EXECUTED","SYMBOL_LOCK_RETRY,EXECUTION_RETRY","REVIEW_REQUIRED,REVIEW_REQUIRED"})
+    void fix140SavedSignalResumeMapsActualWorkState(String state,String expected) {
+        Instant open=Instant.now().minusSeconds(65);
+        var saved=new TradeSignal();saved.setId(740L);saved.setSymbol("BTCUSDT");saved.setInterval("1m");saved.setCandleOpenTime(open);
+        when(sharedWorkEvidence.queryForList(org.mockito.ArgumentMatchers.contains("failure_stage='INITIAL_SYMBOL_LOCK_ROLLED_BACK'"),org.mockito.ArgumentMatchers.eq(140L)))
+            .thenReturn(List.of(java.util.Map.of("signal_id",740L)));
+        when(tradeSignalRepository.findById(740L)).thenReturn(Optional.of(saved));
+        when(paperTradingService.processSharedSignal(saved,140L)).thenReturn(Optional.empty());
+        when(sharedWorkEvidence.queryForList("SELECT status FROM signal_processing_work WHERE source_event_id=?",140L))
+            .thenReturn(List.of(java.util.Map.of("status",state)));
+        org.junit.jupiter.api.Assertions.assertEquals(expected,worker.processShared(new CandleClosedEvent("BTCUSDT","1m",open),open.plusSeconds(60),true,140L));
+        org.mockito.Mockito.verifyNoInteractions(technicalIndicatorService,analysisService,candleDataQualityService);
+        verify(paperTradingService).processSharedSignal(saved,140L);
     }
 }
