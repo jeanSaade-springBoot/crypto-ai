@@ -65,12 +65,22 @@ public class SharedMarketConsumer {
     // FIX-140: disabling history is explicit; candles and saved decision context remain intact.
     @org.springframework.beans.factory.annotation.Value("${shared-market.analysis.historical-enabled:true}")
     private boolean historicalEnabled=true;
+    // FIX-141 Phase 2 review correction: reconcileOwnerTimeoutReviews() no longer mutates
+    // analysis_status - it only logs candidates for manual review (see
+    // SharedAnalysisDispatcher#reconcileOwnerTimeoutReviews). This flag now gates whether
+    // that diagnostic logging runs at all; off by default.
+    @org.springframework.beans.factory.annotation.Value("${shared-market.analysis.owner-timeout-reconciliation-enabled:false}")
+    private boolean ownerTimeoutReconciliationEnabled=false;
+    @org.springframework.beans.factory.annotation.Value("${shared-market.analysis.owner-timeout-reconciliation-quiet-seconds:3600}")
+    private long ownerTimeoutReconciliationQuietSeconds=3600;
     @org.springframework.beans.factory.annotation.Autowired
     private com.crypto.client.config.binance.BinanceMarketDataProperties intervals;
 
     @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
     public void start() {
         analysisDispatch.historicalEnabled(historicalEnabled);
+        analysisDispatch.ownerTimeoutReconciliationEnabled(ownerTimeoutReconciliationEnabled);
+        analysisDispatch.ownerTimeoutQuietSeconds(ownerTimeoutReconciliationQuietSeconds);
         validateCutover();
         if("OFF".equals(source.mode()))return;
         if(source.enabled())for(String symbol:coins.enabledSymbols()) {
@@ -85,6 +95,15 @@ public class SharedMarketConsumer {
         if(historicalEnabled)historyClock.scheduleWithFixedDelay(this::dispatchHistoricalAnalysis,1000,1000,TimeUnit.MILLISECONDS);
         log.info("[FIX-140][HISTORY_CONFIGURATION] enabled={}, savedSignalsAndCandlesRetained=true",historicalEnabled);
         monitorClock.scheduleWithFixedDelay(analysisDispatch::monitor,30,30,TimeUnit.SECONDS);
+        // FIX-141 Phase 2: runs independently of claim()'s REVIEW_BATCH_LIMIT check, so a lane
+        // that crossed 16 unresolved reviews can still drain over successive runs.
+        monitorClock.scheduleWithFixedDelay(analysisDispatch::reconcileAnalysisOnlyReviews,60,60,TimeUnit.SECONDS);
+        // FIX-141 Phase 2 review correction: owner-timeout reconciliation is diagnostic-only
+        // (logs candidates, performs no mutation) and off until the team enables it and sets a
+        // quiet window (see SharedAnalysisDispatcher#ownerTimeoutReconciliationEnabled/Seconds);
+        // scheduling it unconditionally here is safe since it no-ops while disabled, and even
+        // enabled it cannot change analysis_status itself.
+        monitorClock.scheduleWithFixedDelay(analysisDispatch::reconcileOwnerTimeoutReviews,300,300,TimeUnit.SECONDS);
         log.info("[FIX-138][ANALYSIS_CONFIGURATION] liveThreads=8, historyThreads=1, independentClocks=true, livePriority=true, historicalWalletExecution=false");
     }
     public void validateCutover() {

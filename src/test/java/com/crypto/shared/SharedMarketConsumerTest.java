@@ -61,6 +61,7 @@ class SharedMarketConsumerTest {
         local.execute("CREATE TABLE trade_signal(id BIGINT PRIMARY KEY,symbol VARCHAR(30),interval_code VARCHAR(10),candle_open_time TIMESTAMP(6),UNIQUE(symbol,interval_code,candle_open_time))");
         local.execute("CREATE TABLE wallet_trade(id BIGINT PRIMARY KEY,signal_id BIGINT)");
         for(String sql:Files.readString(Path.of("src/main/resources/db/migration/V95__fix_138_analysis_dispatch_ranges.sql")).replaceAll("(?m)^\\s*--.*$", "").split(";"))if(!sql.isBlank())local.execute(sql);
+        for(String sql:Files.readString(Path.of("src/main/resources/db/migration/V98__fix_141_reconciliation_scan_index.sql")).replaceAll("(?m)^\\s*--.*$", "").split(";"))if(!sql.isBlank())local.execute(sql);
         consumer=newConsumer();
     }
     SharedMarketConsumer newConsumer() { return new SharedMarketConsumer(source,local,coins,protect,observer,worker,Runnable::run,Runnable::run,manager); }
@@ -641,5 +642,277 @@ class SharedMarketConsumerTest {
             verify(freshness).eligible(any(),any());
             actual.dispatchAnalysis();assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM effects",Integer.class));
         } finally {actual.stop();}
+    }
+
+    // FIX-141 Phase 2 reconciliation: SharedAnalysisDispatcher#reconcileAnalysisOnlyReviews
+    // and #reconcileOwnerTimeoutReviews are package-private collaborators of this consumer,
+    // not exposed on SharedMarketConsumer itself, so these tests reach the dispatcher the
+    // same way enableValidation() above reaches private consumer state: reflection on the
+    // already-wired instance, never a second ad-hoc dispatcher.
+    //
+    // These tests validate lock ordering, isolation correctness and scan fairness against
+    // H2. They do NOT validate behavior against real MySQL row-lock semantics (MySQL's
+    // locking, isolation level and FOR UPDATE wait-queue behavior differ from H2's), which
+    // the reviewer explicitly required in addition to this harness; that validation still
+    // needs to run against an actual MySQL instance outside this sandbox.
+    SharedAnalysisDispatcher dispatcher() {
+        return (SharedAnalysisDispatcher) org.springframework.test.util.ReflectionTestUtils.getField(consumer, "analysisDispatch");
+    }
+    /** Polls INFORMATION_SCHEMA.SESSIONS (same mechanism as twoConsumersCannotCommitTheSameProtectionEffect
+     * above) until some session is observed genuinely blocked on a database lock, or the deadline
+     * passes. Used in place of a fixed sleep to prove a thread actually reached and is waiting on
+     * a lock attempt, not merely that "enough time probably passed." */
+    boolean awaitBlockedSession(long seconds) {
+        long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(seconds);
+        while(System.nanoTime()<deadline) {
+            if(blockedSessions()>0)return true;
+            Thread.onSpinWait();
+        }
+        return blockedSessions()>0;
+    }
+
+    @Test void fix141ReconcileAnalysisOnlyReviewsIsolatesClearRowDirectly() {
+        // Exercises reconcileAnalysisOnlyReviews() standalone, not via claim()'s own
+        // per-lane isolation loop (already covered by fix138CompletedAnalysisOnlyReviewIsRetainedWithoutBlockingFreshCandle).
+        queued(1,"1m",now.minusSeconds(3600),"COMPLETED","REVIEW_REQUIRED");
+        local.update("UPDATE shared_market_event_delivery SET analysis_completed_at=?,last_error='original failure' WHERE source_event_id=1",Timestamp.from(now));
+        dispatcher().reconcileAnalysisOnlyReviews();
+        assertEquals("ANALYSIS_ONLY_REVIEW",analysisStatus(1));
+        assertEquals("original failure",local.queryForObject("SELECT last_error FROM shared_market_event_delivery WHERE source_event_id=1",String.class));
+    }
+    @Test void fix141ReconcileAnalysisOnlyReviewsSkipsRowsWithDurableEvidence() {
+        queued(1,"1m",now.minusSeconds(3600),"COMPLETED","REVIEW_REQUIRED");
+        local.update("UPDATE shared_market_event_delivery SET analysis_completed_at=? WHERE source_event_id=1",Timestamp.from(now));
+        local.update("INSERT INTO trade_signal SELECT 99,symbol,interval_code,candle_open_time FROM shared_market_event_delivery WHERE source_event_id=1");
+        local.update("INSERT INTO wallet_trade VALUES(10,99)");
+        dispatcher().reconcileAnalysisOnlyReviews();
+        assertEquals("REVIEW_REQUIRED",analysisStatus(1));
+    }
+    @Test void fix141ReconcileAnalysisOnlyReviewsAdvancesPastStuckRowsInsteadOfStarvingLaterOnes() {
+        // Review correction: the old fixed "ORDER BY symbol_sequence LIMIT 64" re-selected
+        // the same leading rows every invocation, so a row that could never clear (real
+        // evidence) permanently starved every later-ordered eligible row. 64 rows here have
+        // durable evidence and can never clear; row 65 has none and is immediately clearable.
+        for(long id=1;id<=64;id++) {
+            queued(id,"1m",now.minusSeconds(3600+id),"COMPLETED","REVIEW_REQUIRED");
+            local.update("UPDATE shared_market_event_delivery SET analysis_completed_at=? WHERE source_event_id=?",Timestamp.from(now),id);
+            local.update("INSERT INTO signal_processing_work(signal_id,status,source_event_id) VALUES(?,'PENDING',?)",1000+id,id);
+        }
+        queued(65,"1m",now.minusSeconds(1),"COMPLETED","REVIEW_REQUIRED");
+        local.update("UPDATE shared_market_event_delivery SET analysis_completed_at=? WHERE source_event_id=65",Timestamp.from(now));
+
+        dispatcher().reconcileAnalysisOnlyReviews();
+        assertEquals("REVIEW_REQUIRED",analysisStatus(65),"the first pass is bounded to 64 rows and none of ids 1-64 can ever clear");
+        dispatcher().reconcileAnalysisOnlyReviews();
+        assertEquals("ANALYSIS_ONLY_REVIEW",analysisStatus(65),"the cursor must advance past the stuck rows to reach row 65 on the next pass");
+        for(long id=1;id<=64;id++)assertEquals("REVIEW_REQUIRED",analysisStatus(id),"rows with real evidence must never be isolated, id="+id);
+    }
+    /** Deterministic lock-order regression, replacing an earlier version that just ran claim()
+     * and reconcileAnalysisOnlyReviews() concurrently with no coordination: both internally
+     * catch their own exceptions, so an actual deadlock (resolved by H2's lock-wait timeout)
+     * would have been swallowed and logged rather than surfaced, and the test could pass
+     * whether or not the fix was real. This version forces the actual interleaving: thread A
+     * holds the symbol lock (claim()'s own first step) while the real reconcileAnalysisOnlyReviews()
+     * runs as "B" against the same row. If B also locks symbol -> delivery (the fix), B simply
+     * queues behind A's symbol lock, A's subsequent delivery-lock acquisition is uncontended,
+     * and both finish quickly. If B instead locked delivery -> symbol (the original defect), B
+     * would already hold the delivery lock by the time A is released to acquire it, so A would
+     * block on B's delivery lock while B blocks on A's symbol lock - a genuine, deterministic
+     * ABBA deadlock, which the explicit aDone.await(...) assertion below turns into a hard
+     * test failure instead of a silent pass. */
+    @Test @Timeout(20) void fix141ReconcileLocksSymbolBeforeDeliveryDeterministic() throws Exception {
+        queued(1,"1m",now.minusSeconds(3600),"COMPLETED","REVIEW_REQUIRED");
+        local.update("UPDATE shared_market_event_delivery SET analysis_completed_at=? WHERE source_event_id=1",Timestamp.from(now));
+        var aHasSymbolLock=new CountDownLatch(1);
+        var aMayProceedToDelivery=new CountDownLatch(1);
+        var aDone=new CountDownLatch(1);
+        var aFailure=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        var threads=Executors.newFixedThreadPool(2);
+        try {
+            var txA=new org.springframework.transaction.support.TransactionTemplate(manager);
+            Future<?> a=threads.submit(()->{
+                try {
+                    txA.executeWithoutResult(s->{
+                        local.queryForMap("SELECT * FROM shared_market_consumer_state WHERE symbol=? FOR UPDATE","BTCUSDT");
+                        aHasSymbolLock.countDown();
+                        try {assertTrue(aMayProceedToDelivery.await(15,TimeUnit.SECONDS),"test signal to proceed never arrived");}
+                        catch(InterruptedException e) {throw new RuntimeException(e);}
+                        // Mirrors claim()'s second step: delivery row FOR UPDATE, same row B targets.
+                        local.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=1 FOR UPDATE");
+                    });
+                } catch(Throwable t) {aFailure.set(t);}
+                finally {aDone.countDown();}
+            });
+            assertTrue(aHasSymbolLock.await(5,TimeUnit.SECONDS),"A must hold the symbol lock before B starts");
+            Future<?> b=threads.submit(dispatcher()::reconcileAnalysisOnlyReviews);
+            // Wait for an OBSERVED lock wait rather than a fixed sleep: B must actually reach a
+            // lock attempt and be genuinely blocked on it (A holds the only lock in play so far)
+            // before A is released. A fixed sleep only proves time passed, not that B got there.
+            assertTrue(awaitBlockedSession(5),"B must actually be blocked on a database lock (the symbol lock A holds) before A is released");
+            aMayProceedToDelivery.countDown();
+            assertTrue(aDone.await(10,TimeUnit.SECONDS),
+                "A must not be blocked waiting on B's delivery lock - B must not hold the delivery row while waiting on the symbol lock (lock order regression)");
+            assertNull(aFailure.get(),"A must complete without error: "+aFailure.get());
+            b.get(10,TimeUnit.SECONDS);
+        } finally {threads.shutdownNow();}
+        assertEquals("ANALYSIS_ONLY_REVIEW",analysisStatus(1));
+    }
+    @Test @Timeout(20) void fix141OwnerTimeoutReconciliationLocksSymbolBeforeDeliveryDeterministic() throws Exception {
+        // Same deterministic construction as fix141ReconcileLocksSymbolBeforeDeliveryDeterministic,
+        // against reconcileOwnerTimeoutReviews() instead: it independently acquires the same two
+        // locks in the same order and was found with the same reversed-order defect.
+        queued(1,"1m",now.minusSeconds(60),"COMPLETED","REVIEW_REQUIRED");
+        local.update("UPDATE shared_market_event_delivery SET analysis_started_at=? WHERE source_event_id=1",Timestamp.from(now.minusSeconds(7200)));
+        var dispatch=dispatcher();
+        dispatch.ownerTimeoutReconciliationEnabled(true);
+        dispatch.ownerTimeoutQuietSeconds(3600);
+        var aHasSymbolLock=new CountDownLatch(1);
+        var aMayProceedToDelivery=new CountDownLatch(1);
+        var aDone=new CountDownLatch(1);
+        var aFailure=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        var threads=Executors.newFixedThreadPool(2);
+        try {
+            var txA=new org.springframework.transaction.support.TransactionTemplate(manager);
+            Future<?> a=threads.submit(()->{
+                try {
+                    txA.executeWithoutResult(s->{
+                        local.queryForMap("SELECT * FROM shared_market_consumer_state WHERE symbol=? FOR UPDATE","BTCUSDT");
+                        aHasSymbolLock.countDown();
+                        try {assertTrue(aMayProceedToDelivery.await(15,TimeUnit.SECONDS),"test signal to proceed never arrived");}
+                        catch(InterruptedException e) {throw new RuntimeException(e);}
+                        local.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=1 FOR UPDATE");
+                    });
+                } catch(Throwable t) {aFailure.set(t);}
+                finally {aDone.countDown();}
+            });
+            assertTrue(aHasSymbolLock.await(5,TimeUnit.SECONDS),"A must hold the symbol lock before B starts");
+            Future<?> b=threads.submit(dispatch::reconcileOwnerTimeoutReviews);
+            assertTrue(awaitBlockedSession(5),"B must actually be blocked on a database lock (the symbol lock A holds) before A is released");
+            aMayProceedToDelivery.countDown();
+            assertTrue(aDone.await(10,TimeUnit.SECONDS),
+                "A must not be blocked waiting on B's delivery lock - B must not hold the delivery row while waiting on the symbol lock (lock order regression)");
+            assertNull(aFailure.get(),"A must complete without error: "+aFailure.get());
+            b.get(10,TimeUnit.SECONDS);
+        } finally {threads.shutdownNow();}
+        // Diagnostic-only: must still never mutate, lock-order aside.
+        assertEquals("REVIEW_REQUIRED",analysisStatus(1));
+    }
+    /** Meta-test: there is no reversed-order production code left to call (that was the bug,
+     * now fixed), so this proves the SYNCHRONIZATION TECHNIQUE used by the two deterministic
+     * lock-order tests above is actually capable of catching a reversed order, by manufacturing
+     * the reversed side directly with raw SQL - thread "R" locks delivery first, then symbol,
+     * the opposite of claim()'s order - against thread "A" which locks symbol first, then
+     * delivery (the correct order, same as claim() and the fixed dispatcher methods). Each
+     * thread is released to attempt its second (conflicting) lock only once the other is
+     * confirmed to hold its first lock, so both end up wanting what the other already holds: a
+     * genuine ABBA deadlock. If this test ever stopped producing a real failure on one side, it
+     * would mean this harness technique is no longer sensitive to lock order, and the two
+     * "Deterministic" tests above could no longer be trusted as regression coverage. */
+    @Test @Timeout(20) void fix141LockOrderHarnessDetectsReversedOrderAsAGenuineConflict() throws Exception {
+        queued(1,"1m",now.minusSeconds(3600),"COMPLETED","REVIEW_REQUIRED");
+        var aHasSymbolLock=new CountDownLatch(1);
+        var rHasDeliveryLock=new CountDownLatch(1);
+        var aDone=new CountDownLatch(1);
+        var rDone=new CountDownLatch(1);
+        var aFailure=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        var rFailure=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        var threads=Executors.newFixedThreadPool(2);
+        try {
+            var txA=new org.springframework.transaction.support.TransactionTemplate(manager);
+            var txR=new org.springframework.transaction.support.TransactionTemplate(manager);
+            threads.submit(()->{
+                try {
+                    txA.executeWithoutResult(s->{
+                        local.queryForMap("SELECT * FROM shared_market_consumer_state WHERE symbol=? FOR UPDATE","BTCUSDT");
+                        aHasSymbolLock.countDown();
+                        try {assertTrue(rHasDeliveryLock.await(5,TimeUnit.SECONDS),"R never reached the delivery lock");}
+                        catch(InterruptedException e) {throw new RuntimeException(e);}
+                        // A now wants delivery, which R holds - the other half of the ABBA cycle.
+                        local.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=1 FOR UPDATE");
+                    });
+                } catch(Throwable t) {aFailure.set(t);}
+                finally {aDone.countDown();}
+            });
+            threads.submit(()->{
+                try {
+                    txR.executeWithoutResult(s->{
+                        // The reversed order: delivery first, then symbol - what the original
+                        // defect did.
+                        local.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=1 FOR UPDATE");
+                        rHasDeliveryLock.countDown();
+                        try {assertTrue(aHasSymbolLock.await(5,TimeUnit.SECONDS),"A never reached the symbol lock");}
+                        catch(InterruptedException e) {throw new RuntimeException(e);}
+                        // R now wants symbol, which A holds - completing the ABBA cycle.
+                        local.queryForMap("SELECT * FROM shared_market_consumer_state WHERE symbol=? FOR UPDATE","BTCUSDT");
+                    });
+                } catch(Throwable t) {rFailure.set(t);}
+                finally {rDone.countDown();}
+            });
+            // A real deadlock is broken by the database (H2's LOCK_TIMEOUT, configured at
+            // 10s in this harness's datasource URL, or its own deadlock detection) - it resolves
+            // by failing (at least) one side, not by hanging both forever. Both futures must
+            // still resolve within the bound below.
+            assertTrue(aDone.await(15,TimeUnit.SECONDS),"A must resolve (succeed or fail), not hang forever");
+            assertTrue(rDone.await(15,TimeUnit.SECONDS),"R must resolve (succeed or fail), not hang forever");
+            assertTrue(aFailure.get()!=null || rFailure.get()!=null,
+                "reversed lock order must produce a genuine conflict - at least one side must fail "+
+                "(lock-wait timeout or detected deadlock); both succeeding cleanly would mean the "+
+                "two threads never actually contended for the same two locks in opposite order");
+        } finally {threads.shutdownNow();}
+    }
+    @Test void fix141ReconcileAnalysisOnlyReviewsSkipsFailedRowAndRevisitsItAfterWrapping() {
+        // Review correction: an earlier row's transaction can fail for reasons unrelated to
+        // real evidence (lock-wait timeout, transient error, a constraint violation here used
+        // to force it deterministically). The cursor must advance past it so later eligible
+        // rows in the SAME pass still clear, the failed row must be left exactly as it was (its
+        // transaction rolled back, not partially applied), and it must be revisited - and clear
+        // normally - once the failure condition is gone and the cursor returns to it. The
+        // existing 65-row starvation test covers rows with real evidence that are correctly
+        // never cleared; this covers a row whose processing itself fails.
+        queued(1,"1m",now.minusSeconds(3602),"COMPLETED","REVIEW_REQUIRED");
+        local.update("UPDATE shared_market_event_delivery SET analysis_completed_at=?,last_error='row 1 original' WHERE source_event_id=1",Timestamp.from(now));
+        queued(2,"1m",now.minusSeconds(3601),"COMPLETED","REVIEW_REQUIRED");
+        local.update("UPDATE shared_market_event_delivery SET analysis_completed_at=?,last_error='row 2 original' WHERE source_event_id=2",Timestamp.from(now));
+        // Force row 1's isolation UPDATE specifically to fail; row 1 would otherwise clear
+        // exactly like row 2, so this isolates "the row's own transaction fails" from "the row
+        // has real evidence."
+        local.execute("ALTER TABLE shared_market_event_delivery ADD CONSTRAINT test_fix141_reject_row1 CHECK (NOT (analysis_status='ANALYSIS_ONLY_REVIEW' AND source_event_id=1))");
+
+        dispatcher().reconcileAnalysisOnlyReviews();
+
+        // Row 1's failed transaction must roll back cleanly: left exactly as it was.
+        assertEquals("REVIEW_REQUIRED",analysisStatus(1));
+        assertEquals("row 1 original",local.queryForObject("SELECT last_error FROM shared_market_event_delivery WHERE source_event_id=1",String.class));
+        // Row 2, ordered after row 1 by source_event_id, must still clear in the SAME pass -
+        // one row's failure must not abort the rest of the batch.
+        assertEquals("ANALYSIS_ONLY_REVIEW",analysisStatus(2));
+
+        // Remove the forced failure and confirm row 1 is revisited and clears once the cursor
+        // returns to it, rather than being permanently stuck ahead of an unmoved cursor.
+        local.execute("ALTER TABLE shared_market_event_delivery DROP CONSTRAINT test_fix141_reject_row1");
+        dispatcher().reconcileAnalysisOnlyReviews();
+        assertEquals("ANALYSIS_ONLY_REVIEW",analysisStatus(1));
+    }
+    @Test void fix141OwnerTimeoutReconciliationNeverMutatesStatusEvenWithNoEvidenceAfterQuietWindow() {
+        // Review correction: quiet time plus absent evidence is NOT owner fencing - there is
+        // no cross-JVM process-liveness/heartbeat check anywhere in this codebase, so an old
+        // worker that merely stalled could still resume. Even enabled, with the quiet window
+        // fully elapsed and zero durable evidence (the most favorable case for isolation),
+        // this must only log a candidate and never touch analysis_status or last_error.
+        queued(1,"1m",now.minusSeconds(60),"COMPLETED","REVIEW_REQUIRED");
+        local.update("UPDATE shared_market_event_delivery SET analysis_started_at=? WHERE source_event_id=1",Timestamp.from(now.minusSeconds(7200)));
+        var dispatch=dispatcher();
+        dispatch.ownerTimeoutReconciliationEnabled(true);
+        dispatch.ownerTimeoutQuietSeconds(3600);
+        dispatch.reconcileOwnerTimeoutReviews();
+        assertEquals("REVIEW_REQUIRED",analysisStatus(1));
+        assertNull(local.queryForObject("SELECT last_error FROM shared_market_event_delivery WHERE source_event_id=1",String.class));
+        assertNull(local.queryForObject("SELECT analysis_completed_at FROM shared_market_event_delivery WHERE source_event_id=1",Timestamp.class));
+    }
+    @Test void fix141OwnerTimeoutReconciliationDoesNothingWhenDisabled() {
+        queued(1,"1m",now.minusSeconds(60),"COMPLETED","REVIEW_REQUIRED");
+        local.update("UPDATE shared_market_event_delivery SET analysis_started_at=? WHERE source_event_id=1",Timestamp.from(now.minusSeconds(7200)));
+        dispatcher().reconcileOwnerTimeoutReviews();
+        assertEquals("REVIEW_REQUIRED",analysisStatus(1));
     }
 }

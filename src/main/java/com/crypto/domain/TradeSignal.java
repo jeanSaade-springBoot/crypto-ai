@@ -102,6 +102,16 @@ public class TradeSignal {
     @Column(name = "btc_signal_generated_at")
     private Instant btcSignalGeneratedAt;
 
+    // FIX-141: freshness evidence - not representable by the existing btc_context_* columns above.
+    @Column(name = "btc_context_candle_close_time")
+    private Instant btcContextCandleCloseTime;
+
+    @Column(name = "btc_context_age_seconds")
+    private Long btcContextAgeSeconds;
+
+    @Column(name = "btc_context_freshness_threshold_seconds")
+    private Long btcContextFreshnessThresholdSeconds;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "derivatives_status", nullable = false, length = 40)
     private DerivativesPositioningStatus derivativesStatus;

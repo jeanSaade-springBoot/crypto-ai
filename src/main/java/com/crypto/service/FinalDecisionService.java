@@ -245,6 +245,15 @@ public class FinalDecisionService {
             case CONFLICT -> 30;
             case STRONG_CONFLICT -> 10;
             case UNAVAILABLE -> 40;
+            // FIX-141 review correction: this case was missing, which does not compile once
+            // STALE_CONTEXT exists on the enum (this switch has no default). STALE_CONTEXT is
+            // a known, evidenced data-quality failure - unlike UNAVAILABLE (missing data,
+            // historically a non-authoritative pass-through, scored 40), it is the one other
+            // path here (besides CONFLICT/STRONG_CONFLICT) that is a hard, evidenced veto
+            // (entryAllowed=false is already enforced separately above via
+            // entryAllowed && btcContext.entryAllowed()), so it is scored the same as
+            // STRONG_CONFLICT rather than grouped with UNAVAILABLE's more permissive default.
+            case STALE_CONTEXT -> 10;
         };
         return stable ? base : Math.max(0, base - 10);
     }

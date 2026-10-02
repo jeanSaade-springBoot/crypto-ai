@@ -27,6 +27,16 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
     Optional<TradeSignal> findTopBySymbolAndIntervalAndGeneratedAtLessThanOrderByGeneratedAtDesc(
             String symbol, String interval, Instant generatedAt
     );
+
+    // FIX-141: selection by candle close time, not generatedAt. generatedAt-only ordering let a
+    // backfilled/reprocessed signal for an OLD candle (stamped with a recent generatedAt) outrank
+    // a legitimately newer candle's signal whose generatedAt was earlier. candleOpenTime is the
+    // caller's look-ahead bound (evaluationTime minus the interval duration, i.e. the latest candle
+    // open time whose close has already happened); generatedAt still may not exceed evaluationTime
+    // either, so a signal can't be picked before it was actually generated.
+    Optional<TradeSignal> findTopBySymbolAndIntervalAndCandleOpenTimeLessThanEqualAndGeneratedAtLessThanEqualOrderByCandleOpenTimeDesc(
+            String symbol, String interval, Instant candleOpenTime, Instant generatedAt
+    );
     List<TradeSignal> findTop100ByOrderByGeneratedAtDesc();
     List<TradeSignal> findTop20BySymbolOrderByGeneratedAtDesc(String symbol);
     List<TradeSignal> findTop20BySymbolAndIntervalOrderByGeneratedAtDesc(String symbol, String interval);

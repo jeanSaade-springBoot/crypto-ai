@@ -119,6 +119,23 @@ public class ExecutionReplayScope {
         return recent(symbol, interval, reference, 1).stream().findFirst();
     }
 
+    /**
+     * FIX-141: Replay-side equivalent of
+     * TradeSignalRepository#findTopBySymbolAndIntervalAndCandleOpenTimeLessThanEqualAndGeneratedAtLessThanEqualOrderByCandleOpenTimeDesc.
+     * Selects by candle open time (close-time ordering), not generatedAt, so Replay cannot diverge
+     * from Production on which BTC snapshot it picks. candleOpenTimeBound is the caller's look-ahead
+     * bound (reference minus the interval duration); generatedAt must also be at or before reference.
+     */
+    public Optional<TradeSignal> latestClosedAtOrBefore(String symbol, String interval, Instant reference, Instant candleOpenTimeBound) {
+        State s = required();
+        if (reference == null || candleOpenTimeBound == null) return Optional.empty();
+        return s.signals.stream()
+                .filter(x -> symbol.equals(x.getSymbol()) && interval.equals(x.getInterval()))
+                .filter(x -> x.getGeneratedAt() != null && !x.getGeneratedAt().isAfter(reference))
+                .filter(x -> x.getCandleOpenTime() != null && !x.getCandleOpenTime().isAfter(candleOpenTimeBound))
+                .max(Comparator.comparing(TradeSignal::getCandleOpenTime));
+    }
+
     public Optional<TradeSignal> previousBefore(String symbol, String interval, Instant reference) {
         State s = required();
         return s.signals.stream()

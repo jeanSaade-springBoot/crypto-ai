@@ -206,6 +206,20 @@ public final class SharedAnalysisDispatcher {
         long id=num(review,"source_event_id");
         // Completion marker is mandatory. Age alone NEVER proves a stopped worker.
         if(review.get("analysis_completed_at")==null || num(review,"phase")!=4)return false;
+        if(!hasNoDurableEvidence(review))return false;
+        jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='ANALYSIS_ONLY_REVIEW' WHERE source_event_id=? AND analysis_status='REVIEW_REQUIRED'",id);
+        // Original error, ownership, timestamps and signal remain intact. This is
+        // an isolated analysis failure, NOT a claim that analysis succeeded.
+        log.info("[FIX-138][ANALYSIS_REVIEW_ISOLATED] event={}; completed attempt, no processing work or wallet evidence; no retry; transaction pending commit",id);
+        return true;
+    }
+
+    /** FIX-141: the durable no-evidence check shared by isolateAnalysisOnlyReview (completed
+     * attempts) and reconcileOwnerTimeoutReviews (owner-timeout attempts, see below). Checks
+     * signal_processing_work and wallet_trade only - never phase/completion, which each caller
+     * gates differently. Caller must hold the row's lock (FOR UPDATE on the review) already. */
+    private boolean hasNoDurableEvidence(Map<String,Object> review) {
+        long id=num(review,"source_event_id");
         var workByEvent=jdbc.queryForList("SELECT signal_id FROM signal_processing_work WHERE source_event_id=? LIMIT 1 FOR UPDATE",id);
         var workByCandle=jdbc.queryForList("SELECT signal_id FROM signal_processing_work WHERE symbol=? AND candle_open_time=? AND interval_code=? LIMIT 1 FOR UPDATE",
             review.get("symbol"),review.get("candle_open_time"),review.get("interval_code"));
@@ -216,11 +230,154 @@ public final class SharedAnalysisDispatcher {
             if(!jdbc.queryForList("SELECT signal_id FROM signal_processing_work WHERE signal_id=? FOR UPDATE",signal.get("id")).isEmpty())return false;
             if(!jdbc.queryForList("SELECT id FROM wallet_trade WHERE signal_id=? LIMIT 1 FOR UPDATE",signal.get("id")).isEmpty())return false;
         }
-        jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='ANALYSIS_ONLY_REVIEW' WHERE source_event_id=? AND analysis_status='REVIEW_REQUIRED'",id);
-        // Original error, ownership, timestamps and signal remain intact. This is
-        // an isolated analysis failure, NOT a claim that analysis succeeded.
-        log.info("[FIX-138][ANALYSIS_REVIEW_ISOLATED] event={}; completed attempt, no processing work or wallet evidence; no retry; transaction pending commit",id);
         return true;
+    }
+
+    // FIX-141 Phase 2: claim()'s REVIEW_BATCH_LIMIT check (reviews.size()>16, above) runs BEFORE
+    // any row is ever examined, so a lane that crosses that count has no path back down - nothing
+    // ever calls isolateAnalysisOnlyReview on those rows to shrink it. This pass runs independently
+    // of claim(), globally (not per-lane-capped), so the backlog actually drains over successive
+    // scheduled invocations instead of being permanently gated by the same limit it needs to clear.
+    //
+    // Review correction: locking is now symbol -> delivery, matching claim()'s established
+    // order (previously this locked the delivery row first, then the symbol - reversed from
+    // every existing lock acquisition, a deadlock risk against claim()). The outer scan is
+    // unlocked and reads only the identifying columns needed to take the symbol lock; the
+    // delivery row is re-read and revalidated under both locks before anything is isolated.
+    //
+    // Review correction: the scan also now advances a cursor by source_event_id instead of
+    // always starting at symbol_sequence 0. A fixed "ORDER BY ... LIMIT 64" re-selects the
+    // same leading rows every run, so any row that fails isolation (real evidence found)
+    // permanently blocks every later-ordered eligible row from ever being examined. The
+    // cursor advances past every row this pass looked at - cleared or not - and wraps back
+    // to the start once it reaches the end, so the whole backlog gets fair rotation instead
+    // of stalling behind whatever sits first.
+    private volatile long reconcileAnalysisOnlyCursor=0;
+
+    public void reconcileAnalysisOnlyReviews() {
+        if(stopped || !source.enabled())return;
+        long cursor=reconcileAnalysisOnlyCursor;
+        List<Map<String,Object>> rows;
+        try {
+            rows=jdbc.queryForList(
+                "SELECT source_event_id,symbol,interval_code FROM shared_market_event_delivery WHERE analysis_status='REVIEW_REQUIRED' AND analysis_completed_at IS NOT NULL AND source_event_id>? ORDER BY source_event_id LIMIT 64",cursor);
+            if(rows.isEmpty() && cursor>0) {
+                // Nothing left ahead of the cursor: wrap around so rows before it (whose
+                // evidence may have changed since they were last looked at) get revisited.
+                cursor=0;
+                rows=jdbc.queryForList(
+                    "SELECT source_event_id,symbol,interval_code FROM shared_market_event_delivery WHERE analysis_status='REVIEW_REQUIRED' AND analysis_completed_at IS NOT NULL AND source_event_id>? ORDER BY source_event_id LIMIT 64",cursor);
+            }
+        } catch(Exception failure) {
+            log.error("[FIX-141][REVIEW_BACKLOG_RECONCILIATION_FAILED] scan query failed; cursor unchanged",failure);
+            return;
+        }
+        // Review correction: the cursor previously advanced only after the WHOLE batch
+        // succeeded, inside a single try/catch around the entire loop. One row throwing
+        // (e.g. a lock-wait timeout) escaped the loop, skipped the cursor update entirely, and
+        // left every row behind it - including the thrown-on row itself - stuck ahead of an
+        // unmoved cursor, to be re-attempted (and potentially re-fail) on every future pass.
+        // The cursor now advances past each row as it is attempted, success or failure, inside
+        // a per-row try/catch, so a single bad row is skipped (retried only after the next
+        // wrap-around) instead of stalling everything behind it.
+        int isolated=0;
+        long lastSeen=cursor;
+        for(var row:rows) {
+            long id=num(row,"source_event_id");
+            try {
+                Boolean cleared=tx.execute(status->{
+                    // Symbol lock first, then the delivery row - claim()'s order. Everything
+                    // about the row is revalidated once both locks are held.
+                    lockSymbol(new Lane(str(row,"symbol"),str(row,"interval_code")));
+                    var current=jdbc.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=? FOR UPDATE",id);
+                    if(!"REVIEW_REQUIRED".equals(str(current,"analysis_status")))return false;
+                    return isolateAnalysisOnlyReview(current);
+                });
+                if(Boolean.TRUE.equals(cleared))isolated++;
+            } catch(Exception failure) {
+                log.warn("[FIX-141][REVIEW_RECONCILE_ROW_FAILED] event={}; left REVIEW_REQUIRED, will be retried after the cursor wraps",id,failure);
+            } finally {
+                lastSeen=id;
+                reconcileAnalysisOnlyCursor=lastSeen;
+            }
+        }
+        if(rows.size()<64)reconcileAnalysisOnlyCursor=0;
+        if(isolated>0)log.info("[FIX-141][REVIEW_BACKLOG_RECONCILED] isolated={}, checked={}",isolated,rows.size());
+    }
+
+    // FIX-141 Phase 2 review correction: this method NO LONGER MUTATES STATE. Quiet time plus
+    // the absence of durable evidence is not owner fencing - this codebase has no cross-JVM
+    // process-liveness or heartbeat mechanism, so an old worker that merely stalled (GC pause,
+    // slow network, suspended container) could still be alive and resume after this pass looked
+    // at the row. Being disabled by default was not a sufficient safeguard, since enabling it
+    // would still let a resumed old worker race a row this pass had already isolated. The
+    // mutation (the UPDATE to ANALYSIS_ONLY_REVIEW) is removed entirely until real fencing
+    // (a durable liveness/heartbeat check) and transaction-resolution evidence exist.
+    //
+    // What remains is diagnostic-only: it locks and re-reads each candidate the same way the
+    // old mutating path did, checks hasNoDurableEvidence(...), and logs a candidate for an
+    // operator to inspect and act on manually. It performs no write to analysis_status or
+    // last_error. The enable flag now only controls whether this diagnostic logging runs.
+    //
+    // Review correction: locking is symbol -> delivery (claim()'s order), not delivery -> symbol
+    // as before. The scan also advances a source_event_id cursor instead of a fixed
+    // "ORDER BY analysis_started_at LIMIT 16", so a row that keeps failing the no-evidence check
+    // cannot permanently block later-ordered rows from ever being looked at.
+    private volatile boolean ownerTimeoutReconciliationEnabled=false;
+    public void ownerTimeoutReconciliationEnabled(boolean enabled) { ownerTimeoutReconciliationEnabled=enabled; }
+    private volatile long ownerTimeoutQuietSeconds=3600;
+    public void ownerTimeoutQuietSeconds(long seconds) { ownerTimeoutQuietSeconds=seconds; }
+    private volatile long ownerTimeoutReviewCursor=0;
+
+    public void reconcileOwnerTimeoutReviews() {
+        if(stopped || !source.enabled() || !ownerTimeoutReconciliationEnabled)return;
+        long cursor=ownerTimeoutReviewCursor;
+        List<Map<String,Object>> rows;
+        try {
+            var cutoff=Timestamp.from(Instant.now().minusSeconds(ownerTimeoutQuietSeconds));
+            rows=jdbc.queryForList(
+                "SELECT source_event_id,symbol,interval_code FROM shared_market_event_delivery WHERE analysis_status='REVIEW_REQUIRED' "+
+                "AND analysis_completed_at IS NULL AND phase=4 AND analysis_started_at<? AND source_event_id>? ORDER BY source_event_id LIMIT 16",cutoff,cursor);
+            if(rows.isEmpty() && cursor>0) {
+                cursor=0;
+                rows=jdbc.queryForList(
+                    "SELECT source_event_id,symbol,interval_code FROM shared_market_event_delivery WHERE analysis_status='REVIEW_REQUIRED' "+
+                    "AND analysis_completed_at IS NULL AND phase=4 AND analysis_started_at<? AND source_event_id>? ORDER BY source_event_id LIMIT 16",cutoff,cursor);
+            }
+        } catch(Exception failure) {
+            log.error("[FIX-141][OWNER_TIMEOUT_RECONCILIATION_FAILED] scan query failed; cursor unchanged",failure);
+            return;
+        }
+        // Review correction: same per-row cursor persistence as reconcileAnalysisOnlyReviews()
+        // - a single row's failure must not abort the pass or skip the cursor update for the
+        // rows already examined before it.
+        int candidates=0;
+        long lastSeen=cursor;
+        for(var row:rows) {
+            long id=num(row,"source_event_id");
+            try {
+                Boolean noEvidence=tx.execute(status->{
+                    // Symbol lock first, then the delivery row - claim()'s order. Read-only:
+                    // no write to analysis_status or last_error happens anywhere below.
+                    lockSymbol(new Lane(str(row,"symbol"),str(row,"interval_code")));
+                    var current=jdbc.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=? FOR UPDATE",id);
+                    if(!"REVIEW_REQUIRED".equals(str(current,"analysis_status")) || current.get("analysis_completed_at")!=null)return false;
+                    if(time(current,"analysis_started_at")==null || !time(current,"analysis_started_at").isBefore(Instant.now().minusSeconds(ownerTimeoutQuietSeconds)))return false;
+                    return hasNoDurableEvidence(current);
+                });
+                if(Boolean.TRUE.equals(noEvidence)) {
+                    candidates++;
+                    log.warn("[FIX-141][OWNER_TIMEOUT_CANDIDATE] event={}; quietSeconds={}, no durable evidence found; NOT isolated automatically - diagnostic only, pending real owner fencing",id,ownerTimeoutQuietSeconds);
+                }
+            } catch(Exception failure) {
+                log.warn("[FIX-141][OWNER_TIMEOUT_ROW_FAILED] event={}; skipped, will be retried after the cursor wraps",id,failure);
+            } finally {
+                lastSeen=id;
+                ownerTimeoutReviewCursor=lastSeen;
+            }
+        }
+        if(rows.size()<16)ownerTimeoutReviewCursor=0;
+        if(candidates>0)log.info("[FIX-141][OWNER_TIMEOUT_CANDIDATES] candidates={}, checked={}",candidates,rows.size());
     }
     private void blocked(Lane lane,String reason,long event) {
         long now=System.nanoTime();

@@ -212,9 +212,14 @@ public class TradeExecutionValidationService {
                 && isBullish(oneHour.getDecision());
         BtcContextStatus btcStatus = executionSignal.getBtcContextStatus();
         // FIX-112B: plain/strong BTC conflict cannot be rescued by this exception.
+        // FIX-141: nor can a failed freshness guard - STALE_CONTEXT is a real, evidenced
+        // block (missing/stale/future-dated/unknown-candle-time BTC context), not an
+        // "unavailable, non-authoritative" state. This exception must not restore the
+        // entry permission the freshness guard already withheld upstream.
         // Other BTC states retain their existing upstream Production semantics.
         boolean btcSafeForException = btcStatus != BtcContextStatus.CONFLICT
-                && btcStatus != BtcContextStatus.STRONG_CONFLICT;
+                && btcStatus != BtcContextStatus.STRONG_CONFLICT
+                && btcStatus != BtcContextStatus.STALE_CONTEXT;
         boolean strongEnough = executionSignal.getConfidenceScore() >= 72
                 && entryQualityScore >= 70
                 && btcSafeForException;
@@ -249,8 +254,10 @@ public class TradeExecutionValidationService {
         if (neutralFiveWatchOne) {
             boolean upstreamApproved = executionSignal.isFinalEntryAllowed();
             boolean entryQualitySafe = entryQualityScore >= BALANCED_TRANSITIONAL_MIN_ENTRY_QUALITY;
+            // FIX-141: see btcSafeForException above - STALE_CONTEXT must not be rescued here either.
             boolean btcSafeForTransitionalAuthority = btcStatus != BtcContextStatus.CONFLICT
-                    && btcStatus != BtcContextStatus.STRONG_CONFLICT;
+                    && btcStatus != BtcContextStatus.STRONG_CONFLICT
+                    && btcStatus != BtcContextStatus.STALE_CONTEXT;
 
             if (upstreamApproved && entryQualitySafe && btcSafeForTransitionalAuthority) {
                 log.info("FIX-11G transitional BUY authority granted: signalId={}, symbol={}, generatedAt={}, "

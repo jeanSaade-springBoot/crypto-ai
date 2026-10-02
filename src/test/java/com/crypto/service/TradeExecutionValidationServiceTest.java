@@ -224,6 +224,23 @@ class TradeExecutionValidationServiceTest {
         assertThat(service.validateBuy(enoughConfidence, 75).code()).isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
     }
 
+    // FIX-141: a failed freshness guard (STALE_CONTEXT) must not be rescued by this exception
+    // any more than a plain/strong BTC conflict is - it is a real, evidenced block, not an
+    // "unavailable, non-authoritative" state that this exploratory path is allowed to override.
+    @Test
+    void balancedNeutralFiveExceptionRejectsStaleBtcContext() {
+        settings("BALANCED", false);
+        TradeSignal five = signal("SHIBUSDT", "5m", SignalDecision.NEUTRAL, now.minusSeconds(120), 60, 15, 10, 8);
+        TradeSignal one = signal("SHIBUSDT", "1h", SignalDecision.BUY, now.minusSeconds(1800), 82, 23, 17, 13);
+        latest("SHIBUSDT", "5m", five);
+        latest("SHIBUSDT", "1h", one);
+
+        TradeSignal staleContext = signal("SHIBUSDT", "1m", SignalDecision.BUY, now, 72, 23, 18, 13);
+        staleContext.setBtcContextStatus(BtcContextStatus.STALE_CONTEXT);
+
+        assertThat(service.validateBuy(staleContext, 75).code()).isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+    }
+
     @Test
     void fix11gAllowsApprovedDirectBuyWithNeutralFiveAndWatchOneAtTwentyFivePercent() {
         settings("BALANCED", false);
@@ -269,6 +286,13 @@ class TradeExecutionValidationServiceTest {
 
         btcConflict.setBtcContextStatus(BtcContextStatus.STRONG_CONFLICT);
         assertThat(service.validateBuy(btcConflict, 80).code())
+                .isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+
+        // FIX-141: the FIX-11G transitional exploratory authority must not rescue STALE_CONTEXT either.
+        TradeSignal staleContext = signal("EDUUSDT", "1m", SignalDecision.BUY, now, 90, 15, 20, 12);
+        staleContext.setFinalEntryAllowed(true);
+        staleContext.setBtcContextStatus(BtcContextStatus.STALE_CONTEXT);
+        assertThat(service.validateBuy(staleContext, 80).code())
                 .isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
     }
 

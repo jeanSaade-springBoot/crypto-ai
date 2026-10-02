@@ -22,6 +22,11 @@ public record BtcMarketContextResult(
         boolean stable,
         Instant evaluatedAt,
         Instant btcSignalGeneratedAt,
-        String explanation
+        String explanation,
+        // FIX-141 freshness evidence. candleCloseTime/ageSeconds/thresholdSeconds are null
+        // when no BTC signal/candle time was available to evaluate (e.g. UNAVAILABLE).
+        Instant contextCandleCloseTime,
+        Long contextAgeSeconds,
+        Long freshnessThresholdSeconds
 ) {
 }

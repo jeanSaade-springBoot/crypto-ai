@@ -21,4 +21,13 @@ public class SignalContextMetrics {
         if(now>=previous && nextLog.compareAndSet(previous,now+java.util.concurrent.TimeUnit.SECONDS.toNanos(30)))
             log.info("[FIX-140][CONTEXT_COVERAGE_TOTALS] counts={}; cumulative evaluations, not sampled throughput",counts);
     }
+
+    /** FIX-141: record() alone counts snapshot PRESENCE only, so a stale snapshot counts
+     * identically to a fresh one (both "present"). This records the freshness outcome
+     * (FRESH/STALE/MISSING) as its own series so degradation is visible on its own, not
+     * folded into presence counts. Call alongside record(), not instead of it. */
+    public void recordFreshness(String kind,String interval,String outcome) {
+        counts.computeIfAbsent(kind+"|"+interval+"|FRESHNESS_"+outcome,k->new AtomicLong()).incrementAndGet();
+        if(meters!=null)meters.counter("signal.context.freshness","kind",kind,"interval",interval,"outcome",outcome).increment();
+    }
 }

@@ -1,0 +1,26 @@
+-- FIX-141 Phase 2 review correction: SharedAnalysisDispatcher#reconcileAnalysisOnlyReviews and
+-- #reconcileOwnerTimeoutReviews scan shared_market_event_delivery GLOBALLY (not per-symbol like
+-- claim()), filtering by analysis_status and paging via a source_event_id cursor in
+-- "ORDER BY source_event_id" order. Neither existing FIX-138 index supports that access path:
+-- idx_fix138_analysis_close is led by symbol (no symbol filter in these global scans), and
+-- idx_fix138_analysis_timeout is led by analysis_status but then analysis_started_at, so rows
+-- are grouped by analysis_started_at before source_event_id - not sorted by source_event_id
+-- across the whole analysis_status slice, which "ORDER BY source_event_id" would otherwise need
+-- to satisfy with a filesort over the entire REVIEW_REQUIRED backlog on every scheduled pass.
+--
+-- This index leads with analysis_status (the one true equality filter both scans share) and
+-- sorts by source_event_id, so the two reconciliation queries can read analysis_status=
+-- 'REVIEW_REQUIRED' rows already in source_event_id order starting from the cursor, instead of
+-- sorting the whole matching set with a filesort.
+--
+-- What this index does NOT cover: analysis_completed_at, phase and analysis_started_at are not
+-- part of it, so those predicates are not answered from the index alone - each candidate row
+-- the index yields still needs a row lookup to evaluate them. LIMIT 64 (or 16) bounds how many
+-- ROWS ARE RETURNED after those predicates are applied, not how many rows are READ to find them:
+-- if REVIEW_REQUIRED rows are numerous and the remaining predicates are selective, this can still
+-- examine far more than 64/16 rows per pass. Whether that is acceptable, and whether MySQL
+-- actually avoids a filesort with this index in place, has NOT been verified against a deployed
+-- MySQL instance - EXPLAIN against real data and realistic REVIEW_REQUIRED volume must happen
+-- before enabling scheduled reconciliation in production.
+CREATE INDEX idx_fix141_reconcile_scan
+ ON shared_market_event_delivery(analysis_status, source_event_id);
