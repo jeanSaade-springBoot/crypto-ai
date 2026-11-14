@@ -1,0 +1,1 @@
+SELECT s.id, s.symbol, s.interval_code, s.candle_open_time, s.generated_at, s.created_at, TIMESTAMPDIFF(MICROSECOND, s.generated_at, s.created_at) AS persist_lag_us, s.decision FROM trade_signal s WHERE s.id IN (156594,156721,156723,159285,159407,159408,165289,165412,165415,167616,167668,171559,171589,176655,176710) ORDER BY s.symbol, s.generated_at

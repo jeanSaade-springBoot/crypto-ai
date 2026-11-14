@@ -1,0 +1,1 @@
+SELECT DATABASE() AS db, CURRENT_USER() AS authenticated_user, COUNT(*) AS trade_signal_count FROM trade_signal

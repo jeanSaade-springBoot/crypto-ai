@@ -1,0 +1,1 @@
+SELECT id, symbol, status, started_at, anchor_entry_price, best_entry_price, opportunity_health, evidence_score, decision_code, executed_at FROM execution_opportunity WHERE id IN (24369,24429,25823,25962,24814,29327) ORDER BY id

@@ -1,0 +1,140 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Trade-specific attribution remains **insufficiently evidenced** for frozen positions **182, 172, 162, 158, 143, 137**. The permitted `db/CODEX` directory is empty; no symbol, entry/exit, trigger, price-event, or signal record has been supplied.
+
+- **PROJECT EVIDENCE — self-challenge upheld:** Current source has a real exit-context time-boundary weakness. The direct price-event path validates `observedAt`, then calls an overload that selects each interval’s newest signal without an `at-or-before observedAt` predicate or maximum-age check. That affects TP continuation, profit-lock, and normal signal exits. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:54) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:95)
+
+- **PROJECT EVIDENCE — refinement:** This is stronger than merely a policy-test gap, but it is not proof of a future-data leak in any frozen trade. If processing was immediate, the selected signals may still have been valid. A causal claim requires the accepted event’s `observed_at`, the exit audit’s source signal, and the contemporaneous 1m/5m/1h records.
+
+- **PROJECT EVIDENCE:** The repository already has an at-or-before generated-time query, but the normal/profit-lock production path does not use it. Near-TP protection is separately bounded only against `Instant.now()`, not the Binance observation timestamp, and still has no age limit. [TradeSignalRepository.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/TradeSignalRepository.java:23) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:336)
+
+- **PROJECT EVIDENCE — correction to Iteration 6:** `paper_position.closed_at` is not a safe substitute for the actual protection observation time. Signals generated between `observed_at` and close commit could appear valid in a close-time-only reconstruction while being unavailable when the market observation occurred.
+
+- **PROJECT EVIDENCE:** `production_exit_audit` identifies the terminal trigger and one source signal, but does not persist the `market_price_event` ID or all three interval signals. An `APPLIED` price event proves callback completion, not by itself that it caused the close. [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:20) [ProductionExitAuditService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:25)
+
+- **PROJECT EVIDENCE:** The frozen population intentionally excludes `status=STOPPED`; fixed stop-loss losses therefore fall outside this six-trade study. No conclusion about all daily failed trades is justified from this subset.
+
+- **AGENT INFERENCE:** The time-boundary defect is a material causal candidate only where a selected trade’s trigger is `HTF_SELL_CONFIRMED`, `SELL_CONFIRMED`, `PROFIT_LOCK_*`, or a continuation-dependent `TAKE_PROFIT`. It is not the direct close trigger for a mechanically reached fixed stop.
+
+## EVIDENCE
+
+- Required shared/Codex context, charter, all six prior Codex iterations, and permitted Codex DB directory were read.
+- No new external research was used.
+- **PROJECT EVIDENCE:** The snapshot metadata has a one-second label conflict: `2026-10-17 15:00:03 UTC` converts to `2026-10-17 18:00:03 KSA`, while the supplied snapshot label is `18:00:02 KSA`. Frozen IDs remain unchanged; no timestamp has been inferred from this discrepancy.
+
+## UNKNOWNS
+
+- Actual symbol, entry/close timeline, trigger, signal linkage, accepted event, and fee-adjusted result for every frozen trade.
+- Whether the current source revision and configuration were deployed when these positions closed.
+- Whether any event processed after its `observed_at` selected a later or stale 1m/5m/1h signal.
+- Whether Replay can reproduce a given trade; it cannot be claimed from source alone.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Confirm actual schema and linkage columns before trade-level causality queries.
+
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    k.referenced_table_name,
+    k.referenced_column_name
+FROM information_schema.columns c
+LEFT JOIN information_schema.key_column_usage k
+    ON k.table_schema = c.table_schema
+   AND k.table_name = c.table_name
+   AND k.column_name = c.column_name
+   AND k.referenced_table_name IS NOT NULL
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'production_exit_audit',
+      'market_price_event',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'position_management_event',
+      'position_analysis'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-002  
+Purpose: After DBQ-CODEX-I7-001 confirms columns, retrieve the authoritative position and terminal-audit records for only the frozen IDs. Returned timestamps are UTC.
+
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.status,
+    p.quantity,
+    p.entry_price,
+    p.stop_loss,
+    p.take_profit,
+    p.exit_price,
+    p.realized_pnl,
+    p.signal_id AS entry_signal_id,
+    p.exit_signal_id,
+    p.close_reason,
+    p.opened_at,
+    p.closed_at,
+    a.id AS exit_audit_id,
+    a.wallet_position_id,
+    a.close_trigger,
+    a.source_signal_id,
+    a.source_signal_decision,
+    a.source_signal_original_decision,
+    a.exit_price_usdt AS audited_exit_price,
+    a.close_explanation,
+    a.audited_at
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.production_exit_audit a
+    ON a.paper_position_id = p.id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-003  
+Purpose: After DBQ-CODEX-I7-001 confirms columns, return bounded accepted protection-event candidates near each frozen close. These are correlation candidates only, not proof of causation. Returned timestamps are UTC.
+
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.exit_price,
+    p.closed_at,
+    m.id AS market_price_event_id,
+    m.observed_at,
+    m.price,
+    m.source,
+    m.delivery_status,
+    m.outcome_reason
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.market_price_event m
+    ON m.symbol = p.symbol
+   AND m.observed_at BETWEEN DATE_SUB(p.closed_at, INTERVAL 5 MINUTE)
+                         AND DATE_ADD(p.closed_at, INTERVAL 10 SECOND)
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+  AND m.delivery_status IN ('LEGACY', 'APPLIED')
+ORDER BY p.id, m.observed_at, m.id;
+```
+
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation changes were made.

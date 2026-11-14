@@ -1,0 +1,13 @@
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+symbol	varchar(32)	NO	MUL	NULL	
+observed_at	timestamp(6)	NO		NULL	
+price	decimal(30,12)	NO		NULL	
+source	varchar(64)	NO	MUL	BINANCE_KLINE_LIVE_CLOSE	
+created_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+source_event_id	bigint	YES	UNI	NULL	
+source_sequence	bigint	YES		NULL	
+source_received_at	timestamp(6)	YES		NULL	
+delivery_status	varchar(40)	NO		LEGACY	
+ordering_slot	tinyint	YES		NULL	
+outcome_reason	varchar(64)	YES		NULL

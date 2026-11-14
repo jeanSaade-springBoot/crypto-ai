@@ -1,0 +1,2 @@
+global_tz	session_tz	system_tz	now_session	now_utc	gen_display	gen_epoch	btc_eval_datetime_col	btc_sig_datetime_col
+SYSTEM	SYSTEM	Arab Standard Time	2026-10-30 15:53:09.398022	2026-10-30 12:53:09.398022	2026-10-11 22:40:01.633945	1791747601.633945	2026-10-11 19:40:01.633945	2026-10-11 19:40:00.128415

@@ -191,7 +191,9 @@ public class RegressionTestWorker {
             // price observations that Production consumed. Historical windows before
             // V64 was deployed naturally have no events and are explicitly degraded to
             // signal/candle-close protection inside ShadowProductionReplayService.
-            marketPriceEventService.assertReplayEvidence(symbol,start,end);
+            // FIX-153: validate the entire price window consumed, including context warm-up.
+            marketPriceEventService.assertReplayEvidence(symbol,contextStart,end);
+            var priceOutcomeCounts=marketPriceEventService.replayOutcomeCounts(symbol,contextStart,end);
             List<MarketPriceEventService.PriceEvent> productionPriceEvents =
                     marketPriceEventService.find(symbol, contextStart, end);
             ShadowProductionReplayService.ReplayStats shadow = shadowReplayService.replay(
@@ -333,6 +335,7 @@ public class RegressionTestWorker {
                     + (livePriceParityPass
                         ? "FIX-052/FIX-056 exact price parity is active: Replay consumed " + productionPriceEvents.size() + " persisted Production 1m live-price observations in UTC order, exposes the latest event through the shared ExecutionPriceAuthorityService, and revalidates/sizes BUYs from that execution-time price. "
                         : "FIX-052/FIX-056 exact price parity is NOT available for this historical window because no persisted Production live-price observations exist; the run is intentionally not marked fully passed. ")
+                    + "FIX-153 persisted price outcomes in consumed window (NON_CANONICAL/PROTECTION_NOT_APPLIED are excluded, unresolved PENDING aborts): " + priceOutcomeCounts + ". "
                     + "The decision replay validates that originalDecision is audit-only and cannot override a non-null final decision. "
                     + "Regression AnalysisService returns unsaved TradeSignal objects. Fresh signals then pass through an isolated shadow execution/position lifecycle that records exact simulated BUY/SELL points. Real wallet, trade_signal and production execution_opportunity tables are never written.";
 

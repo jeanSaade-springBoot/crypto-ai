@@ -1,0 +1,70 @@
+## Iteration 6 — Root cause + research
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+- Frozen scope remains exactly: `paper_position` IDs **182, 172, 162, 158, 143, 137**. The permitted `db/CODEX/` folder contains **0 files**, so no DB proof-query result is available.
+- **Trade 182 only:** prior position-specific log evidence supports a provisional mechanical stop-loss sequence for `ICPUSDT`:
+  - Entry signal `164053` used `BREAKOUT_CONTINUATION_ENTRY`.
+  - Entry completed at UTC `2026-10-11 22:41:04.863` / KSA `2026-10-12 01:41:04.863`.
+  - A price observation at UTC `2026-10-11 22:49:33.460` / KSA `2026-10-12 01:49:33.460` was recorded `APPLIED` as event `1837489`.
+  - Stop execution logged at UTC `2026-10-11 22:49:36.971` / KSA `2026-10-12 01:49:36.971`, at `3.465000000000` versus stop `3.465026371152`.
+- Current source makes stop loss absolute: at or below the managed stop, it performs the mechanical exit and records `STOP_LOSS`. The source also shows execution-time revalidation against a fresh price and a no-chase guard. This is current-route evidence only, not proof of the historic deployed version.
+- Trade 182’s logged static geometry was reward/risk ≈ **1.589**, above the current continuation route’s 1:1 minimum. That supports neither full entry quality nor the eventual loss’s cause.
+- The code-path discrepancy remains material: current stop-loss routing saves `PositionStatus.STOPPED`, while the charter selection predicate is `status=CLOSED`. Without the actual row, this is unresolved—not a confirmed selection error or code defect.
+
+**AGENT INFERENCE**
+
+- **Provisional root cause for 182:** adverse price movement after a continuation entry reached the configured stop; available evidence supports a completed mechanical protection exit, not a missed-stop failure.
+- The approximately **3.514 s** from recorded observation to logged stop execution, including a **2.438 s** symbol transaction, is a measurement concern. It does not establish that latency caused or worsened the loss: the accepted observation was already below the stop, and `APPLIED` evidence follows.
+- Root cause for **172, 162, 158, 143, and 137 is unestablished**. Classifying them as strategy losses, stale-data losses, execution defects, or protection failures would be unsupported.
+
+**EXTERNAL RESEARCH**
+
+- Binance documents that spot kline streams include an explicit closed-candle flag and that non-1-second kline updates are delivered every two seconds; it separately offers real-time trade streams. This means a kline-derived observation must not be treated as a complete exchange-tick record. It does **not** prove any missed move, delay, or defect in these six trades. [Binance WebSocket Streams](https://developers.binance.com/zh-CN/docs/products/spot/testnet/web-socket-streams)
+
+### UNKNOWNS
+
+- All durable attributes and links for the six authoritative rows: symbol, status, entry/exit, quantity, P&L, close reason, linked signal/work/wallet/managed-position/price-event/audit IDs.
+- Whether logged signal `164053` and price event `1837489` durably link to position 182.
+- Whether the 3.514-second path changed the paper exit price relative to a later/earlier accepted observation.
+- Runtime version, ingestion mode, configuration, data freshness, BTC/HTF context, and Replay reproducibility for every frozen trade.
+- Snapshot metadata remains inconsistent: the supplied UTC timestamp converts to KSA `2026-10-22 13:28:18`, not the separately supplied KSA timestamp.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Obtain the actual authoritative schema and six frozen lifecycle rows, then derive evidence-backed entry, execution, and protection joins without guessing columns.
+
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key
+FROM information_schema.columns AS c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'position_management_event',
+      'production_exit_audit',
+      'signal_processing_work'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+
+SELECT p.*
+FROM crypto_ai.paper_position AS p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST
+
+Analysis only; no project files, configuration, database, or deployment state were changed.

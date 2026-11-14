@@ -1,0 +1,6 @@
+Tables_in_crypto_ai (%audit%)
+buy_htf_assessment_audit
+local_reconciliation_audit
+production_exit_audit
+shared_candle_input_audit
+shared_delivery_resolution_audit

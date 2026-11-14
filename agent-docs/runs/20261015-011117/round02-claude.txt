@@ -1,0 +1,114 @@
+# FIX-156 Round 2 cross-examination: is the preparation implementable as a Replay-only fix with no Production code changes?
+
+This was a read-only review. I changed no code, configuration, database, git state or preparation file. I also couldn't save a plan file: no file-writing or plan-exit tool is available in this session, so this report is the whole output.
+
+**Short answer:** not freeze-ready. Codex and I agree it should be rejected. Below I correct two overstated Codex claims and three of my own Round-1 claims; the corrections change how serious some findings are, not the verdict.
+
+## FINDINGS
+
+### Where I agree with Codex (checked against the code)
+
+**C1. AGREE: the required specification file still holds an older draft.**
+- **PROJECT EVIDENCE:** `agent-docs/FINAL_CHANGE_SPECIFICATION.md:3` is `RPR-0.4-DRAFT`, and every approval line (`:315-317`) is PENDING.
+- The preparation admits this itself (`FIX-156_IMPLEMENTATION_PREPARATION.md:427`).
+- The reviewed RPR-0.9.12 lives in Downloads, outside the repository. Its hash proves nothing about the file the governance rules require.
+
+**C2. AGREE, with a refinement: "Section 3.3.1" is a broken reference.**
+- **PROJECT EVIDENCE:** the preparation cites it at `:152`, `:167` and `:168` but never defines it.
+- **AGENT INFERENCE:** the section probably exists inside RPR-0.9.12. Either way, the order in which TP, stop-loss, profit-lock, rebase and near-TP exits are checked (what tests T156-02a/b must match) isn't anywhere in the repository. This is a consequence of C1, not a separate defect, but it is blocking.
+
+**C3. AGREE: R156-05 and R156-06 name shared Production classes as the things to change.** This matches my Round-1 point F2.
+
+### Where Codex overstated
+
+**C4. CHALLENGE: Codex says equal-time price ordering "cannot currently be certified."**
+- **PROJECT EVIDENCE:** `MarketPriceEventService.find` (`:118-128`) already:
+  - keeps only accepted prices (`delivery_status IN ('LEGACY','APPLIED')`);
+  - orders by `observed_at ASC, id ASC`.
+- `RegressionTestWorker.java:198` passes exactly that list to `replay`. The re-sort at `ShadowProductionReplayService.java:93` is by time only, but Java's `Stream.sorted` keeps the original order for equal times. So the id order for prices at the same instant is preserved in practice today.
+- **AGENT INFERENCE:** the real gap is about evidence, not behaviour:
+  - `PriceEvent` has no `id` (`:173`), so `PRICE_SPAN`, `priceEventId` and `OPEN_AT_REPLAY_END` (R156-08) have no event id to record;
+  - the correct order relies on an implicit stable sort, not an explicit tie-breaker.
+- R156-06 is still needed, but as a new Replay-owned reader of `market_price_event`, not a change to the shared projection. Severity: material for logging and certification, not proof that Replay orders prices wrongly today.
+
+**C5. NARROW: Codex's claim that analysis uses a "broad decision graph."** It's correct but partly overstated. See my correction R1 below: regime state does nothing in the baseline run.
+
+### Corrections to my own Round 1
+
+**R1. CORRECTION to my F4: regime state does not carry over between signals in a baseline run.**
+- **PROJECT EVIDENCE:** `RegimeStateService.java:35` returns early unless the Replay scope is active and in EXPERIMENTAL mode. Baseline runs use `PRODUCTION_PARITY` (`ShadowProductionReplayService.java:99`).
+- I withdraw "stateful `regimeStateService.apply`" as a parity input. Sentiment on/off (`AnalysisService.java:227`), fundamentals availability, the prior indicator snapshot, ATR and the market context remain valid points.
+
+**R2. RESOLVED unknown: SELL validation doesn't read wallet settings.**
+- **PROJECT EVIDENCE:** `validateSell` (`TradeExecutionValidationService.java:165-191`) only does basic signal checks and looks up recent signals through the Replay scope (`:377`) when the scope is active.
+- `wallet_settings` is read only on the BUY path (`:66`, `:152`, via `settings()` at `:400`).
+- So rule O-1 is a BUY-only problem. That narrows the choice in my F3: only BUY validation and execution-price revalidation need a fixture-backed mechanism.
+
+**R3. DOWNGRADE of my F6 (Replay thread pool).**
+- **PROJECT EVIDENCE:** seven named executor beans already exist (`SharedAnalysisExecutorConfig`, `OrderBookPersistence`, `OrderBookCollection`, `LocalCandleReconciliation`, `Fix154Audit`, `CandleAnalysis`, …). None is named `taskExecutor`, and there is no `AsyncConfigurer`.
+- **AGENT INFERENCE:** plain `@Async` methods already find no single default executor. Adding one more named executor doesn't change how they are resolved. Only a bean named `taskExecutor`, an `AsyncConfigurer`, or a `spring.task.execution` property change would.
+- Severity drops from MATERIAL to MINOR. Keep one requirement in R156-02: no bean named `taskExecutor`, no `AsyncConfigurer`, use `@Async("<replay-name>")`.
+- **UNVERIFIED:** I haven't checked how Spring Boot 4.1 resolves the default async executor.
+
+**R4. DOWNGRADE of my F5 (synthetic signal IDs).**
+- **PROJECT EVIDENCE:** across the codebase, `signalRepository.save` appears only in `AnalysisService` (`:123`, `:153`, `:175`). `analyzeForRegression` is read-only and returns an unsaved signal (`:180-190`).
+- The write risk is lower than I said. A test that no repository write is reachable is still required, because `TradeSignal` is a JPA entity.
+
+### Blockers still standing under the "no Production code" rule
+
+- **B1. The mechanism isn't chosen.** For BUY validation, D50–D52 and analysis inputs, the preparation must pick between:
+  - copying the logic into Replay, which then needs a drift-detection test; or
+  - building unmodified Production classes with Replay-owned fixture dependencies.
+  
+  Neither is in the registry.
+- **B2. No file-ownership rule.** No R156 item lists exact files, and there is no acceptance check that the diff touches no Production-owned file.
+- **B3. Two rulings are needed from Jean:**
+  - Does redeploying the single application, which includes Replay, count as a Production change? This touches the unresolved release gate on protecting open positions during redeploy.
+  - Does an additive Flyway migration (R156-13) on the shared datasource count?
+- **B4. Gates P01–P07 are all pending, and evidence items E03–E10 don't exist.** The working tree is dirty. There is no historical source for the single `wallet_settings` row or for Binance minimum notional.
+- **B5. The FIX-154 BUY path has no difference-register row.** `htfAuditStore` is optional-autowired into `TradeExecutionValidationService` (`:58`).
+- **B6. The 99% acceptance method isn't frozen.** The confidence method, denominator, exclusion cap and sealed acceptance period are all missing (P07). Replay doesn't simulate fills, so a cost or slippage stance is out of scope, but that should be stated explicitly.
+
+## EVIDENCE
+
+| Claim | Location |
+|---|---|
+| Specification file still holds the old draft | `agent-docs/FINAL_CHANGE_SPECIFICATION.md:3,315-317` |
+| Section 3.3.1 is never defined | `FIX-156_IMPLEMENTATION_PREPARATION.md:152,167,168` |
+| Price query filters accepted prices and orders by `(observed_at,id)` | `MarketPriceEventService.java:118-128` |
+| `PriceEvent` has no id | `MarketPriceEventService.java:173` |
+| Replay re-sorts by time only | `ShadowProductionReplayService.java:89-94`; caller `RegressionTestWorker.java:198` |
+| Prices at or before signal time are consumed before the signal (D37) | `ShadowProductionReplayService.java:126-128` |
+| Opportunity completed on price-driven exits (D39) | `ShadowProductionReplayService.java:157` |
+| Settings read only on the BUY path | `TradeExecutionValidationService.java:66,152,400-402` vs `:165-191` |
+| Signal lookups go through the Replay scope when active | `TradeExecutionValidationService.java:372,377` |
+| Regime state does nothing in baseline runs | `RegimeStateService.java:35`; `ShadowProductionReplayService.java:99` |
+| Only `AnalysisService` saves signals | grep `signalRepository.save` → `AnalysisService.java:123,153,175` |
+| Named executors, no `taskExecutor`, no `AsyncConfigurer` | `config/*Config.java` bean names |
+
+## OBJECTIONS
+1. **Codex C4 overstated:** price ordering is correct in practice today; what's missing is the event id for evidence and logging. Wording should be corrected before freeze.
+2. **Both agents:** the preparation calls itself "Replay only" (§1, §11.6) while assigning changes to shared classes (R156-05, R156-06). This contradiction has to be removed from the document; it can't be fixed during implementation.
+3. **Both agents:** without one canonical, frozen copy of RPR-0.9.12 inside the repository, the decision-order reference, the D-rows and the fixture schema can't be audited.
+
+## UNKNOWNS
+- How Spring Boot 4.1 resolves the default executor for plain `@Async`.
+- Whether `indicator_snapshot` records when each snapshot became available (needed for D54).
+- How Replay reaches `shared_candle_input_audit` (D49).
+- Whether historical `wallet_settings` values and Binance minimum notional can be reconstructed at all.
+- The contents of RPR-0.9.12 itself. I didn't re-read or re-hash it.
+
+## FINDINGS FOR JEAN
+1. **Not freeze-ready.** Both agents reject it. The design goal (Replay matching Production non-wallet output) is achievable without touching Production source, but the document itself still assigns changes to two shared Production classes, `ExecutionReplayScope` and the price-event service.
+2. **One decision unblocks most of the work:** copy the BUY logic into Replay, or run the unchanged Production BUY classes with Replay-supplied fixture settings and exchange limits. I recommend the second. The good news is that SELL validation doesn't touch wallet settings, so only the BUY path needs this.
+3. **Two rulings are needed:**
+   - Does redeploying the application to ship Replay-only code count as a Production change?
+   - Do new Replay tables added by Flyway to the shared database count?
+4. **Move RPR-0.9.12 into `agent-docs/FINAL_CHANGE_SPECIFICATION.md`** so the "Section 3.3.1" exit-order rules are in the repository and can be reviewed and hashed.
+5. **Smaller risks than I reported in Round 1:**
+   - Price ordering is correct today; the gap is that no event id is recorded.
+   - A new Replay thread pool won't change Production's `@Async` behaviour, provided it isn't named `taskExecutor`.
+   - Regime state doesn't carry over in baseline runs.
+   - These are now test requirements, not blockers.
+
+VERDICT: REJECTED

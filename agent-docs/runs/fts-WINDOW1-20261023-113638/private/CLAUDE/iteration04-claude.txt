@@ -1,0 +1,194 @@
+# CLAUDE: FTS WINDOW1, Iteration 4 (code and trade route, self-review)
+
+**Status.** This was read-only work. I added the six I3 results (DBQ-CLAUDE-I3-001 to 006) and traced the entry path (PaperTradingService, ExecutionIntelligenceService, WalletAutoExecutionService), the signal-path exit, the portfolio snapshot work, and how Replay feeds the protection logic. I did not open the other agent's folders, LIVE_TEAM_STATUS.md or LIVE_EVENTS.log. Database times are UTC; every KSA time below is UTC+3.
+
+**Limitations:**
+- **Output not saved.** I'm in plan mode and have no file-write tool, so this was not written to `private/CLAUDE/iteration04-claude.txt`.
+- **No production logs.** I still have no SSH access, so no production log search was possible.
+
+---
+
+## FINDINGS
+
+**F-I4-01: The late exits on 182, 172 and 137 were caused by sparse price ticks, and they cost nothing.** [PROJECT EVIDENCE: I3-001, I3-002] (closes U-13 and U-07)
+
+| PP | Last required signal committed (UTC → KSA) | Last tick before commit | Next tick, which fired the exit | Price before → after |
+|---|---|---|---|---|
+| 182 ACE | 5m 176934 at 10:05:05.787 → 13:05:05.787 | 10:05:02.431 | 10:05:18.446 (16.0 s gap) | 0.188 → 0.188 |
+| 172 SHIB | 5m 172588 NEUTRAL at 07:15:05.866 → 10:15:05.866 | 07:15:03.470 | 07:15:43.462 (40.0 s gap) | 5.48e-6 → 5.48e-6 |
+| 137 EGLD | 5m 156852 SELL at 21:00:04.262 → 00:00:04.262 (12 Oct) | 21:00:01.023 | 21:00:09.033 (8.0 s gap) | 3.987 → 3.987 |
+| 158 XRP | 5m 166821 at 03:30:02.811 → 06:30:02.811 | 03:30:02.320 | 03:30:04.319 | 1.4090 → 1.4090 |
+
+- **Trade 137 is now settled.** The exit needed the 1m STRONG_SELL (156850) plus the 5m SELL (156852); the 1h context (156853) was NEUTRAL. That fits SELL_CONFIRMED, so the exit followed the policy.
+- **Tick density** (I3-003): 182 had 30 ticks in 8 min (max gap 57.6 s), 137 had 30 ticks (max gap 44.0 s), and 172 had 88 gaps of 10 s or more.
+- [AGENT INFERENCE] Exit latency depends on how often ticks arrive. In these four trades it was harmless because price did not move during the wait. It is a latent risk for fast markets.
+
+**F-I4-02: My earlier "stop-fill slippage" claim (F-I3-07) was wrong.** [PROJECT EVIDENCE: I3-006]
+- Across all 75 STOPPED trades, the average fill past the stop is 0.075% and the maximum is 0.559%.
+- The −0.60% figure in I3 was the loss measured from entry, not slippage past the stop.
+- Every stop fill (75 of 75) is below the stop. That is expected for a tick-triggered stop, but on average the slip is small. [AGENT INFERENCE] The 0.56% maximum matches the kind of gap seen in trade 143.
+
+**F-I4-03: The 1.2–3.2 s gap between wallet and paper records is portfolio work inside the same transaction. This is now confirmed for both entries and exits.** [PROJECT EVIDENCE: code + I3-004] (closes U-10)
+- **Entry path.**
+  - `WalletAutoExecutionService.executeBuy` (`:178`) stamps `executedAt`.
+  - It then calls `currentPortfolioValue()` (`:190`) and `captureSnapshot()` (`:193`).
+  - Only after that does `PaperTradingService` set `openedAt=Instant.now()` (`PaperTradingService.java:412`).
+- **The snapshot rows match the paper timestamps to within 5 ms:**
+
+| Trade | Snapshot | Captured (UTC) | Paper timestamp (UTC) |
+|---|---|---|---|
+| 182 entry | 452 | 09:57:06.473 | opened 09:57:06.476 |
+| 182 exit | 455 | 10:05:20.484 | closed 10:05:20.486 |
+| 137 exit | 347 | 21:00:12.118 | closed 21:00:12.122 |
+| 143 exit | 360 | 22:43:36.227 | closed 22:43:36.229 |
+
+- **Where the time goes.** There are only 20 `wallet_asset` rows, 1 of them non-zero. Each portfolio pass still runs one `candleRepository.findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByCloseTimeDesc` per asset (`WalletService.java:607`), plus `totalRealizedPnl` and `netInvested` aggregates (`:603`). Each trade runs at least 2–3 such passes.
+- [AGENT INFERENCE] About 2 s for roughly 40–60 small queries suggests at least one query is not index-backed. DBQ-CLAUDE-I4-001 checks this.
+- **Impact.** This is not an atomicity defect. It is a lock-hold and latency cost on every entry and exit. The fill price is fixed before this work starts, so P&L is unaffected.
+
+**F-I4-04: Signal-path exits fill at the signal's decision price, not a fresh market price.** [PROJECT EVIDENCE: code]
+- `PaperTradingService.closeFromSignal` uses `signal.getLatestPrice()` (`:449`).
+- `WalletAutoExecutionService.executeSignalLinkedExit` uses the same value (`:230`).
+- Entries, by contrast, must use a fresh canonical price ("TradeSignal.latestPrice … must not be reused as the wallet fill", `:74-77`). The SELL side is asymmetric.
+- For 162, the fill is the close of the 04:25 UTC candle, used at 04:26:04 UTC (07:26:04 KSA), about 4 s later.
+- [AGENT INFERENCE] The cost here is probably near zero; DBQ-CLAUDE-I4-005 measures it. It is a design inconsistency, not a confirmed defect for this trade.
+
+**F-I4-05: After a non-stop-loss exit, the "evidence boundary" closes the opportunity record, but the next entry's evidence still counts signals from before the exit.** [PROJECT EVIDENCE: code + I2-005]
+- `completePositionOpportunity` (`ExecutionIntelligenceService.java:821-839`) marks the opportunity row `COMPLETED`. Its stated rule is "pre-exit opportunity evidence is consumed and cannot justify a new position."
+- But `evidence()` (`:2241-2310`) recounts every 1m signal in a 30-minute window (`EVIDENCE_WINDOW`, `:47`). It stops early only on:
+  - a 1m STRONG_SELL (`:2274`), or
+  - the FIX-122 boundary (`StopLossEvidenceService.eligible`, `:99-103`), which is set only after stop-loss exits.
+- **Trade 143.** The prior EGLD position 171 exited by PROFIT_LOCK_EXIT at 22:39:41 UTC (01:39:41 KSA). Only one new 1m signal (159408, at 22:40:01) existed after that exit. Yet the new opportunity 36524 recorded evidence_count=7 (1 BUY, 5 WATCH). Six of those seven came from before the exit.
+- **Was it decisive?** [AGENT INFERENCE] Probably not for 143. The SETUP_TIMEFRAME_ATR route (`:1472-1491`) only needs the current 1m to be supportive (a WATCH above the score and confidence thresholds, `:2214-2218`), a fresh 5m BUY that permits ATR entry, and a 1h that is not bearish. Evidence count matters only in the neutral-timing branch.
+- **Classification:** a confirmed mismatch between code and its own stated rule. Whether it changed any outcome is unproven. DBQ-CLAUDE-I4-002/003 test it.
+
+**F-I4-06: How each frozen trade entered.** [PROJECT EVIDENCE: I2-005 + code route `PaperTradingService.processSignalBody:296-414` → `evaluateBuyInternal:466-786`]
+
+| PP | Route (source / code) | % | Route decisive on |
+|---|---|---|---|
+| 182 | IMMEDIATE_VALIDATION / BALANCED_NEUTRAL_5M_WATCH_1H | 25 | 1m BUY passed `validateBuy` despite a WEAK_DOWNTREND regime |
+| 172 | IMMEDIATE_VALIDATION / BALANCED_STRONG | 25 | 1m BUY plus 5m BUY |
+| 162 | ACCUMULATED_EVIDENCE / OPPORTUNITY_CONFIRMED | 25 | 20 signals of evidence (1 BUY, 9 WATCH) over 21 min |
+| 158 | SETUP_CONFIRMATION_WAKEUP / FRESH_5M_CONFIRMATION | 25 | 5m BUY 165415 woke the 1m opportunity 37621 (FIX-014/023 path, `:298-308`) |
+| 143 | SETUP_TIMEFRAME_ATR / REDUCED_POSITION_ALLOWED | 25 | The 5m ATR overrode the 1m WAIT_FOR_RETRACEMENT; entry quality was judged on the 5m ATR (`:628-640`) |
+| 137 | IMMEDIATE_VALIDATION / BALANCED_NEUTRAL_5M_WATCH_1H | 25 | 1m BUY, 5m NEUTRAL, 1h WATCH |
+
+- All six trades went through the fresh-price recheck before execution (`PaperTradingService.java:342-355`).
+- [AGENT INFERENCE] Every route behaved as coded. None of the routes rejects an entry whose reward-to-risk is below 1:1. The deferred-continuation comment (`:533-536`) asks for ≥1:1, but that route did not fire here. This is consistent with F-I2-03.
+
+**F-I4-07: Replay feeds protection one stored production price tick at a time, so it can reproduce the tick gaps. Signal visibility differs, though.** [PROJECT EVIDENCE: code] (closes U-15)
+- `ShadowProductionReplayService.java:91-159` replays the stored production `market_price_event` stream in `observed_at` order. Each tick goes through `evaluateLivePrice` (`:387`), before each signal is made visible.
+- That means the 143 gap fill at 4.027 and the 15–40 s exit waits are reproducible.
+- **The difference.** Replay makes a signal visible at `generated_at` (`:129`). Production makes it visible at commit, which is `created_at` (+1.3 to 2.3 s), and only on a tick after that.
+  - **158:** Replay would exit on the 03:30:02.320 tick. Production exited on the 03:30:04.319 tick. The price was the same (1.409), so the P&L matches but the exit time differs.
+  - **Other cases:** 182, 172 and 137 match exactly, because no tick fell between generation and commit.
+- **Clock mixing.** Replay compares Binance `observed_at` with the host's `generated_at`. These clocks are offset by about 130–150 ms (F-I2-09). [AGENT INFERENCE] This can move a tick to the other side of a signal at a boundary.
+- **Parity verdict:** P&L parity is likely for all six trades. Exit-time parity holds for 182, 172 and 137 and fails for 158. 162, a signal-path exit, depends on whether Replay prices its signal exit at `latestPrice` (unchecked).
+
+**F-I4-08: Trading stopped because the system ran intermittently, not because entries were all vetoed.** [PROJECT EVIDENCE: I3-005] (narrows U-14)
+- **13 Oct:** 1m candles stop at 00:51 UTC (03:51 KSA).
+- **14 Oct:** 18,491 candles stored but only 3 signals.
+- **15 Oct:** runs until 03:29 UTC (06:29 KSA).
+- **16 Oct:** 16,881 candles stored and **0 signals**.
+- **17 Oct:** ends at 03:26 UTC (06:26 KSA). After that there are no candles or signals up to the snapshot.
+- [AGENT INFERENCE] Days that have candles but no signals look like backfilled or recovered candles, which by design never dispatch analysis (AGENTS.md recovery rule). Read that way, the app was largely down. This is outside the frozen set; it matters operationally.
+
+**F-I4-09: Overall classification of the six trades so far.** [AGENT INFERENCE]
+- **No stale data, no execution delay that cost money, and no code defect that caused any of the six losses.**
+- **Shared root cause: the geometry.** Floor-stop trades had reward-to-risk of 0.33–0.74 (F-I2-03), and the targets are near the size of round-trip fees (F-I2-04). For SHIB and ACE, the price step is coarse relative to the targets (F-I2-07).
+- **Trade 143.** A design outcome: the target was extended instead of taking profit, then a tick gap made the fill worse. Its entry route was coded behaviour, plus the F-I4-05 evidence mismatch, which was probably not decisive.
+- **Code issues confirmed but not tied to these losses:**
+  - F-I4-03: lock-hold latency.
+  - F-I4-04: the signal-exit price asymmetry.
+  - F-I4-05: the evidence-boundary mismatch.
+  - F-I4-07: Replay's signal-visibility timing.
+
+---
+
+## EVIDENCE INDEX
+- **Database results:** I3-001 (exit-window ticks), I3-002 (signal commit times and 137's context), I3-003 (tick gaps), I3-004 (snapshots and asset rows), I3-005 (activity), I3-006 (stop slippage), I2-005 (opportunities).
+- **Entry path:**
+  - `PaperTradingService.java:106-414` (entry), `:442-534` (signal close)
+  - `ExecutionIntelligenceService.java:466-786` (routes), `:1472-1514` (SETUP_TIMEFRAME_ATR), `:2214-2310` (supportive check and evidence), `:821-839` (boundary)
+  - `StopLossEvidenceService.java:94-103`
+- **Wallet:** `WalletAutoExecutionService.java:79-195` (BUY), `:211-278` (signal exit); `WalletService.java:484-490, 592-607`.
+- **Replay:** `ShadowProductionReplayService.java:91-159, 380-444`.
+
+## UNKNOWNS
+| ID | Status |
+|---|---|
+| U-07 | **Resolved.** All four normal exits followed the policy (F-I4-01) |
+| U-08 | Still open (the 143 gap cause; needs production logs) |
+| U-10 | **Resolved** (F-I4-03) |
+| U-12 | The fee tier is still unverified |
+| U-13 | **Resolved** (F-I4-01) |
+| U-14 | Narrowed: the app ran intermittently. The cause of the downtime is unknown |
+| U-15 | **Resolved:** Replay is tick-driven, with a signal-visibility difference (F-I4-07) |
+| U-16 | The live price-event `maxAge`/`futureSkew` is still unread |
+| U-17 (new) | Whether the evidence leak (F-I4-05) was decisive for 143, and how often re-entries happen system-wide |
+| U-18 (new) | Whether a missing candle index explains the ~2 s portfolio work |
+| U-19 (new) | What Replay uses as the fill price for a signal-path exit (162 parity) |
+
+---
+
+## DB REQUESTS (read-only, bounded `SELECT`, `crypto_ai`)
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: Check whether the per-asset candle lookup that the portfolio and snapshot work depend on is index-backed (F-I4-03, U-18).
+SQL:
+SELECT INDEX_NAME, SEQ_IN_INDEX, COLUMN_NAME, NON_UNIQUE FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME='candle' ORDER BY INDEX_NAME, SEQ_IN_INDEX LIMIT 50;
+SELECT TABLE_ROWS FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME IN ('candle','wallet_trade','wallet_cash_flow');
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: Show what trade 143's evidence was made of: the entry signal, plus the EGLD 1m signals in the 30-minute evidence window before it, split at the exit of position 171 (F-I4-05, U-17).
+SQL:
+SELECT id, interval_code, generated_at, decision, original_decision, total_score, confidence_score, final_entry_allowed, latest_price
+FROM trade_signal WHERE symbol='EGLDUSDT' AND interval_code='1m'
+ AND generated_at BETWEEN '2026-10-11 22:10:00' AND '2026-10-11 22:40:02' ORDER BY generated_at DESC LIMIT 35;
+SELECT id, interval_code, generated_at, decision, final_entry_allowed, atr_recommended_position_percent
+FROM trade_signal WHERE symbol='EGLDUSDT' AND interval_code IN ('5m','1h')
+ AND generated_at BETWEEN '2026-10-11 21:35:00' AND '2026-10-11 22:40:02' ORDER BY interval_code, generated_at DESC LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: Opportunity rows for EGLD around the 171 → 143 handover. Confirms whether a COMPLETED boundary row exists and when 36524 started (F-I4-05).
+SQL:
+SELECT id, status, started_at, last_evidence_at, latest_signal_id, evidence_count, buy_count, watch_count, evidence_score, decision_code, executed_at, updated_at
+FROM execution_opportunity WHERE symbol='EGLDUSDT' AND started_at BETWEEN '2026-10-11 21:30:00' AND '2026-10-11 22:45:00' ORDER BY started_at LIMIT 20;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: Across the system, how often a re-entry on the same symbol within 5 minutes of a non-stop exit happens, and how those re-entries turn out (generalises F-I4-05).
+SQL:
+SELECT CASE WHEN prev.status='STOPPED' THEN 'AFTER_STOP' ELSE 'AFTER_NON_STOP' END prev_kind,
+       COUNT(*) n, SUM(nx.realized_pnl>0) wins, ROUND(SUM(nx.realized_pnl),6) pnl
+FROM paper_position nx
+JOIN paper_position prev ON prev.symbol=nx.symbol AND prev.closed_at IS NOT NULL
+ AND prev.closed_at <= nx.opened_at AND prev.closed_at >= nx.opened_at - INTERVAL 5 MINUTE AND prev.id<>nx.id
+WHERE nx.closed_at IS NOT NULL GROUP BY prev_kind LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-005
+Purpose: Compare trade 162's signal-path fill price with the market ticks at the exit (F-I4-04).
+SQL:
+SELECT pp.id, pp.exit_price, ts.latest_price, ts.generated_at FROM paper_position pp JOIN trade_signal ts ON ts.id=168277 WHERE pp.id=162;
+SELECT id, observed_at, price, created_at FROM market_price_event
+WHERE symbol='DOGEUSDT' AND observed_at BETWEEN '2026-10-12 04:25:58' AND '2026-10-12 04:26:06' ORDER BY observed_at LIMIT 20;
+### END_DB_REQUEST
+
+---
+
+**Self-review.**
+- I retracted F-I3-07 because the system-wide data contradicted it.
+- Every route claim cites a code line or a record ID.
+- I separated a confirmed code-intent mismatch (F-I4-05) from its unproven effect on outcomes.
+- No trades were substituted. Every KSA time is UTC+3, with date rollovers shown.
+
+**Iteration 5 plan:** fold in the I4 results; score each entry at decision time against its outcome; draft corrections and regression checks for F-I4-03, -04, -05 and -07, analysis only.

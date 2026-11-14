@@ -27,6 +27,9 @@ public class KlineTransactionCoordinator {
     public KlineTransactionCoordinator(PlatformTransactionManager manager, Fix124ProtectionStore diagnostics) {
         transaction = new TransactionTemplate(manager);
         transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        // FIX-153: current committed ordering after consistency locks; bound JDBC transaction work.
+        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        transaction.setTimeout(30);
         this.diagnostics = diagnostics;
     }
 
@@ -36,7 +39,12 @@ public class KlineTransactionCoordinator {
         var context = timing.context(symbol, interval, candleOpenTime, observedAt, null);
         // Candle and exact canonical price observation commit together. A failed
         // input write must not produce an unrecorded protection decision.
-        timing.measure(context, "INPUT_TRANSACTION", false, () -> transaction.executeWithoutResult(tx -> persistInput.run()));
+        try {
+            timing.measure(context,"INPUT_TRANSACTION",false,()->transaction.executeWithoutResult(tx->persistInput.run()));
+            com.crypto.local.LocalRuntimeDiagnostics.count(com.crypto.local.LocalRuntimeDiagnostics.Event.INPUT_COMMITTED);
+        }catch(RuntimeException failure){
+            com.crypto.local.LocalRuntimeDiagnostics.count(com.crypto.local.LocalRuntimeDiagnostics.Event.INPUT_FAILED_OR_UNCONFIRMED);throw failure;
+        }
         // FIX-131: executeWithoutResult returned successfully: this is input COMMIT, not callback completion.
         try { com.crypto.client.binance.websocket.KlineReceipt.inputCommitted(symbol, interval, candleOpenTime, observedAt); }
         catch (RuntimeException diagnosticFailure) { log.warn("[FIX-131][RECEIPT_DIAGNOSTIC_FAILED] symbol={}", symbol, diagnosticFailure); }
@@ -51,7 +59,7 @@ public class KlineTransactionCoordinator {
                     break;
                 } catch (RuntimeException ex) {
                     failure = ex;
-                    // executeWithoutResult has finished rollback before this catch.
+                    // FIX-153: completion returned/failed; a commit exception alone does not prove rollback.
                     // Never retry a late wallet/commit error or an unknown outcome.
                     if (!(ex instanceof InitialPositionLockDeadlock) || attempts == MAX_ATTEMPTS) break;
                     log.warn("[FIX-124][PRODUCTION][INITIAL_LOCK_RETRY] symbol={}, candleOpenTime={}, observedAt={}, attempt={}",
@@ -63,7 +71,8 @@ public class KlineTransactionCoordinator {
                 if (failure == null) {
                     log.info("[FIX-124][PRODUCTION][RECOVERED] symbol={}, observedAt={}, attempts={}", symbol, observedAt, attempts);
                 } else {
-                    log.error("[FIX-124][PRODUCTION][FAILED] symbol={}, observedAt={}, attempts={}; input committed, protection failed",
+                    com.crypto.local.LocalRuntimeDiagnostics.count(com.crypto.local.LocalRuntimeDiagnostics.Event.PROTECTION_FAILED_OR_UNCONFIRMED);
+                    log.error("[FIX-124][PRODUCTION][FAILED] symbol={}, observedAt={}, attempts={}; input committed; protection completion failed or unconfirmed, consult durable price evidence",
                             symbol, observedAt, attempts, failure);
                 }
                 diagnostics.record(symbol, interval, candleOpenTime, observedAt, price, attempts, outcome, failure);
@@ -73,7 +82,7 @@ public class KlineTransactionCoordinator {
             try {
                 timing.measure(context, "OBSERVER_TRANSACTION", false, () -> transaction.executeWithoutResult(tx -> observe.run()));
             } catch (RuntimeException ex) {
-                log.warn("[FIX-124][OBSERVER_FAILED] symbol={}; committed input and protection retained", symbol, ex);
+                log.warn("[FIX-124][OBSERVER_FAILED] symbol={}; input committed; protection outcome remains in durable price evidence", symbol, ex);
             }
         }
         // AFTER_COMMIT listener still receives an actual committed transaction;

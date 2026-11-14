@@ -1,0 +1,68 @@
+## Iteration 2 — Database Forensics
+
+### Findings
+
+**PROJECT EVIDENCE**
+
+- Frozen cohort remains exactly `paper_position` IDs: **182, 172, 162, 158, 143, 137**. No substitution made.
+- The permitted `db/CODEX/` directory contains **0 result files**. No database query result, schema result, or proof-query output is available for this iteration.
+- The previous Codex request (`DBQ-CODEX-I1-001`) has not produced schema evidence in the permitted directory; therefore trade-row field selection would be speculative.
+- `PaperPosition` source currently maps the expected lifecycle fields: signal links, entry/exit price, stop/target, P&L, close reason, entry/exit reason, and UTC lifecycle instants. This is source evidence only—not proof of deployed schema or the six stored records.
+- The supplied snapshot timestamps are internally inconsistent: `2026-10-19 09:08:24 UTC` converts to **2026-10-19 12:08:24 KSA**, whereas the supplied snapshot KSA time and note say **12:08:09 KSA**. The selection snapshot is therefore uncertain by at least 15 seconds, in addition to occurring after the intended 10:00:00 KSA clock.
+
+**AGENT INFERENCE**
+
+- No conclusion is supportable yet for any selected trade’s symbol, loss amount, entry/exit linkage, exit trigger, protection result, fees, data quality, or rule compliance.
+- The correct next forensic action is actual-schema retrieval, followed by six-ID-only lifecycle queries. Selecting presumed physical columns before schema evidence would violate the investigation rules.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+### Evidence
+
+- Allowed Codex DB evidence path checked: `agent-docs/runs/fts-WINDOW1-20261019-120809/db/CODEX/` — empty.
+- Prior Codex iteration artifact confirms an unfulfilled schema request and no individual-trade reconstruction.
+- Current project source: `src/main/java/com/crypto/domain/PaperPosition.java`.
+- Investigation requirements: `codex-docs/TRADE_INVESTIGATION_AGENT.md`.
+- Database constraints and UTC/KSA requirement: `agent-docs/DATABASE_INVESTIGATION_RULES.md`.
+
+### Unknowns
+
+For each of IDs 182, 172, 162, 158, 143, and 137: actual row values; symbol; UTC/KSA entry and exit; entry/exit signal IDs; executed quantities/prices/fees; stop/target state; close reason; accepted protection-price evidence; data-quality context; processing latency; runtime mode/version; and Replay comparability.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Obtain the actual `crypto_ai` schema needed to construct bounded, six-position forensic queries without assuming source mappings equal the deployed database.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    ordinal_position,
+    column_type,
+    is_nullable,
+    column_key,
+    column_default
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'position_management_event',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST
+
+No implementation occurred; documentation updates are not required for this analysis-only iteration.

@@ -1,0 +1,110 @@
+# NON-AUTHORITATIVE PEER POSITION  - CLAUDE
+Updated: 2026-10-16 03:02:32
+Run: 20261016-024616
+Round: 2
+Status: NOT CONVERGED
+
+THIS FILE IS NOT ESTABLISHED FACT.
+It is a standing claim/position only.
+It is NOT dual-agreed knowledge.
+It is NOT an approved decision.
+It is NOT current architecture unless current code/database/log/test evidence confirms it.
+Current code/database/log/test evidence outranks this file.
+Proposed future architecture must not be read as implemented architecture.
+Authoritative shared memory is only:
+- agent-docs/AGREED_KNOWLEDGE.md
+- agent-docs/DECISIONS.md
+# FIX-156 Round 2 (Claude, cross-examination): is the preparation ready to freeze?
+
+**Not freeze-ready.** I changed no code, configuration, database or git state, and did not edit the preparation file. I used no external research. Every claim is PROJECT EVIDENCE unless it is marked AGENT INFERENCE.
+
+## FINDINGS
+
+### Codex claims that hold up against the code
+- **C1 – the Production signal-path exit order (confirmed).** Production checks take-profit, then profit-lock, then stop-loss, then the hard floor (`PaperTradingService.java:170-195`).
+- **C2 – Replay calls the live Binance minimum-order check in two places (confirmed):** `ShadowProductionReplayService.java:534-535` and `:687-688`.
+- **C3 – the price-event record drops `id` and `delivery_status` (confirmed).** `MarketPriceEventService.java:121` selects only `observed_at, price, source`, and the `PriceEvent` record at `:173` has no `id`.
+- **C4 – `ExecutionReplayScope` is shared with Production (confirmed).** It is used by 11 Production classes: `TradeExecutionValidationService`, `ExecutionIntelligenceService`, `EntryConsumptionPolicy`, `BtcMarketContextService`, `MultiTimeframeConfluenceService`, `EntryAuthorityService`, `RegimeStateService`, `OpportunityConsolidationService`, `BuyHtfAssessmentAuditStore`, `StopLossEvidenceService` and `ExecutionPriceAuthorityService`. I said 12 in Round 1; the correct number is 11.
+- **C5 – the existing `ReplayAccessPolicy` covers only four tables (confirmed).** It checks table names only, and `fix122_evaluation` is not on it (`ReplayAccessPolicy.java:11-15`).
+- **C6 – Section 3.3.1 does not exist (confirmed).** It is cited at preparation `:152` and `:167-168` but is not defined anywhere in the repository.
+
+### Codex claims I correct, and my own Round-1 errors
+
+**R2-1 – Codex compared Production against a Replay path that recent runs never use. This is material.**
+- Replay's `evaluateExit` (`:562-666`, where the TP → stop-loss → profit-lock order lives) runs only when a window has no stored price events: `if (open != null && !exactPriceReplay)` at `:183`.
+- For every window that has price events (the V64+ windows), Replay has **no signal-path take-profit, profit-lock, stop-loss or hard-floor check at all**. After the price path, its only signal-driven exit is the 1m bearish `validateSell` (`:232-254`).
+- Production runs its signal path on every signal (`PaperTradingService.java:170-195`).
+- One concrete gap: Production's `closeFromProfitLock` closes as soon as the lock is hit (`:176-179`, `:452-475`) and never consults the profit-lock breach policy. Replay's price path can *hold* when the lock is breached (`ShadowProductionReplayService.java:500-508`).
+- AGENT INFERENCE: a position that the Replay price path holds can therefore be closed by Production on the next 1m signal, and Replay will not reproduce that exit.
+- The preparation's plan for D30–D33 is "retire fallback". That removes the only Replay copy of the signal path but does not add the one Production needs. R156-09 hints at it ("keep the two orders separate") but registers no specific item.
+- This is the main gap against your rule of matching Production's non-wallet exits.
+
+**R2-2 – Equal-time price order is preserved; the event id is what is lost.** Both Codex and I overstated this.
+- The query orders by `(observed_at, id)` (`MarketPriceEventService.java:124`). Replay's `.sorted(comparing(observedAt))` (`ShadowProductionReplayService.java:93`) is a stable sort, so rows with the same time keep the database's id order.
+- What is missing is the event `id` and `delivery_status`. The logging registry and `OPEN_AT_REPLAY_END` both require the price-event id, so R156-06 is still needed.
+- AGENT INFERENCE: the order also depends on the caller passing `find()`'s result unchanged. A test should pin that.
+
+**R2-3 – D39 confirmed.** Replay closes the opportunity after a price-path exit (`:157`). `LivePositionProtectionService` never calls `completePositionOpportunity`.
+
+### Round-1 findings that still stand
+- **F1 – BUY decision.** Replay calls Production's `evaluateBuy` directly (`ShadowProductionReplayService.java:270`). Rules O-1, R156-09, RET-08 and T156-05c forbid shared `validateBuy`, so they require either copying the BUY path or changing Production. Your `wallet_settings` waiver makes reusing the shared services possible, but the document has not been revised to allow it.
+- **F2 – no mechanism keeps Replay in step with future Production changes.**
+- **F5 – the policy profile cannot hold everything it needs.**
+  - `replay_policy_profile` (V110) has only the profit-lock toggle and its percentages, plus a fixed notional.
+  - It has no execution profile, no new-BUY-transition flag and no BUY values. R156-04(b) requires "BUY values", so the table as written cannot store the profile R156-04(b) describes.
+- **F6 – run-id collision (confirmed).**
+  - "Delete Data" purges the legacy test tables and then resets the `analysis_test_run` id counter (`RegressionTestService.java:362`, `:403-407`).
+  - It never purges `replay_*`, and `replay_policy_profile.run_id` is the primary key (V110 `:3`).
+  - The purge's post-delete check list (`:378-386`) also leaves out `fix122_replay_revision`.
+- **F7 – `fix122_replay_revision` is read by Replay (`:113-116`) and is on no allow-list.**
+- **F9 – D56 is confirmed and changes decisions.** `EntryConsumptionPolicy.java:21` returns `NOT_CONSUMED` for a null id before the Replay scope is ever checked.
+- **F10 – FIX-154 parity and the Production metric counters that Replay increments are not in the register.**
+
+## EVIDENCE
+- **Production signal path:** `PaperTradingService.java:170-213`, `:452-485`
+- **Replay:**
+  - `ShadowProductionReplayService.java`:
+    - `:89-95`, `:126-160`: price-path drain and price-path exits
+    - `:183-230`, `:232-254`, `:270`: fallback exit, 1m SELL, BUY via `evaluateBuy`
+    - `:500-560`: price-path lock hold, normal exit, near-TP
+    - `:562-666`: `evaluateExit`, the signal path that runs only when there are no price events
+    - `:999-1000`: loads `wallet_settings` row 1
+  - `LivePositionProtectionService.java`: no `completePositionOpportunity` call
+- **Price events:** `MarketPriceEventService.java:118-129`, `:173`
+- **Entry consumption:** `EntryConsumptionPolicy.java:20-34`
+- **Replay foundation:** `ReplayAccessPolicy.java:11-15`; `V110__fix_156_replay_owned_tables.sql:2-13`
+- **Delete Data:** `RegressionTestService.java:350-407`
+- **Preparation file:** `:53-61` (P01–P07 pending), `:152`, `:167-168`; `agent-docs/JEAN_REVIEW_FIX-156.md` exists
+
+## OBJECTIONS
+1. **There is no oracle for signal-path exits.** Replay never applies Production's signal-path mechanical exits in exact runs, and Section 3.3.1 is missing. T156-02a therefore has nothing to test against.
+2. **The preparation contradicts your rules.** It forbids shared `validateBuy` and treats `wallet_settings` as a hard prohibition, against your waiver and against the "mirror later Production changes" rule.
+3. **R156-05 and R156-06 name Production classes** (`ExecutionReplayScope`, `MarketPriceEventService`) with no file-boundary rule. That breaks "zero Production code" unless they become Replay-owned replacements.
+4. **The run-level settings fingerprint has nowhere to live.** V110's profile schema cannot store the non-wallet decision settings, and settings history is unrecoverable. An explicit outcome such as `SETTINGS_ASSUMED_CURRENT` is needed.
+5. **The 99% claim and the percentage denominator are not frozen.** Codex's point that refusals can inflate the percentage stands.
+6. **V110 changes the shared schema.** Codex is right that it must be declared, not described as having no Production impact.
+
+## UNKNOWNS
+- How often, in real data, the Replay price path holds a lock breach that Production's signal path then closes. That needs E07/E08 evidence.
+- The text of RPR-0.9.12 (D02–D29, S01–S14). It is outside the repository.
+- Whether E03–E10 evidence exists. No tests, builds or database queries were run.
+
+## FINDINGS FOR JEAN
+1. **Missing signal-path exits.** Add a registered Replay signal-path mirror that runs in exact mode. It must cover lock-trigger-before-stop-loss, the direct close with no breach-policy hold, and the hard floor. "Retire fallback" alone loses Production behaviour.
+2. **Reuse instead of copying.** Revise O-1, R156-09, RET-08, T156-05c and D47 so Replay reuses the shared decision services under your `wallet_settings` waiver. Replay then picks up future Production changes automatically.
+3. **A rule for future Production changes.** Every Production change to a decision or exit must carry a "Replay impact" row and a parity test that runs both paths on the same fixture.
+4. **Settings label.** Record a fingerprint of the current settings on every run and label results "current settings assumed". Extend the V110 profile with the execution profile and the new-BUY-transition flag, or drop the "dated profile" claim.
+5. **Small fixes to register:**
+   - add the `replay_*` tables to Delete Data;
+   - add `fix122_replay_revision` to the allow-list or retire it;
+   - keep the price-event id in a Replay-owned record;
+   - D56 synthetic signal keys;
+   - FIX-154 parity and the Production metric counters Replay increments.
+6. **Clean up the documents.**
+   - Install RPR-0.9.12, including Section 3.3.1, at the canonical specification path.
+   - Correct §12, which says no code has started even though the V110 foundation exists.
+   - Reflect JEAN_REVIEW mode instead of dual-agent approval.
+
+`wallet_settings` was not treated as a blocker.
+
+VERDICT: REJECTED

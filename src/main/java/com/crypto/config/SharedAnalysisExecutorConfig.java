@@ -9,11 +9,14 @@ import java.util.concurrent.ThreadPoolExecutor;
  * No caller-runs fallback: a saturated pool must never execute on a dispatch clock. */
 @Configuration
 public class SharedAnalysisExecutorConfig {
+    // FIX-142: dispatcher and executor receive the same validated historical setting.
+    @org.springframework.beans.factory.annotation.Value("${shared-market.analysis.historical-threads:1}")
+    private int historicalThreads=1;
     @Bean("sharedLiveAnalysisExecutor")
     public ThreadPoolTaskExecutor live() { return pool(8, "shared-live-"); }
 
     @Bean("sharedHistoricalAnalysisExecutor")
-    public ThreadPoolTaskExecutor historical() { return pool(1, "shared-history-"); }
+    public ThreadPoolTaskExecutor historical() { if(historicalThreads<1||historicalThreads>4)throw new IllegalArgumentException("Historical capacity must be 1..4");return pool(historicalThreads, "shared-history-"); }
 
     private ThreadPoolTaskExecutor pool(int size, String prefix) {
         var executor = new ThreadPoolTaskExecutor();

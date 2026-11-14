@@ -8,6 +8,8 @@ import java.sql.Timestamp;
 
 /** Persisted Production delivery evidence, distinct from simulated Replay results. */
 @RestController
+// FIX-153: these routes show retired shared evidence only; no shared DB queries in OFF.
+@org.springframework.boot.autoconfigure.condition.ConditionalOnExpression("'${shared-market.mode:OFF}' != 'OFF'")
 @RequestMapping("/api/administration/shared-market")
 public class Fix132DiagnosticsController {
     private final JdbcTemplate jdbc; private final SharedMarketSource source;

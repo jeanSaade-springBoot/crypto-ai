@@ -1,0 +1,284 @@
+# Claude: Daily Failed-Trade Study, WINDOW1, Iteration 2 (Database Forensics, self-review)
+
+This iteration was analysis only. I changed no code, config, database, git state or docs. This session has no Write tool, so I couldn't write a plan file. All output is below.
+
+**Read this iteration:**
+- **Required docs:** AGENTS.md, AGREED_KNOWLEDGE.md and DECISIONS.md (both have no entries yet), DATABASE_INVESTIGATION_RULES.md and CHARTER.md.
+- **My earlier work:** my iteration-1 output.
+- **DB results:** `db/CLAUDE/DBQ-CLAUDE-I1-001..009` results.
+- **Code:** `AtrRiskService`, `application.yml` (`atr-risk`), the relevant parts of `ExecutionIntelligenceService`, `PaperTradingService` and `LivePositionProtectionService`, and `Candle`.
+
+**Not read:** `private/CODEX/`, `LIVE_EVENTS.log` and `LIVE_TEAM_STATUS.md`.
+
+**Time convention:** times are raw UTC, with KSA = UTC + 3h where shown.
+
+---
+
+## Headline
+
+- **Prices were fresh.** At entry, every signal has `data_quality_valid=1` and every fill is within 3.0–4.2 s of the 1m candle close. I found no evidence of stale prices or slow execution at entry.
+- **Main pattern:** these trades lost money mainly because of how the stop and target are placed.
+  - In low volatility, the stop is held at a minimum 0.5% below entry, while the target stays at 3 ATR.
+  - Five of the six entries therefore had a reward smaller than their risk (R:R 0.33–0.74), and I found no gate that blocks that.
+  - Paper fees are recorded as 0. That hides the fact that three of the targets were smaller than a normal Binance round-trip fee.
+- **Two possible code defects need verification:**
+  - **Trade 143:** it may have taken its 5m approval from a superseded 5m signal at a 5-minute boundary.
+  - **Sizing:** a 0% ATR size recommendation is turned into 100% (`PaperTradingService.java:328-330`).
+- **Trade 143's exit followed the code as written,** but the design is weak. A position that reached about 95% of its target closed below entry.
+
+---
+
+## FINDINGS
+
+### F2-1 Stop/target placement gives R:R < 1 in low volatility [PROJECT EVIDENCE: code + DBQ-CLAUDE-I1-003]
+**How the code places them:**
+- The stop distance is the larger of 2 ATR and 0.5% of price (`AtrRiskService.java:34-40`; `application.yml:143` sets `minimum-stop-percent: 0.50`).
+- The target is always 3 ATR (`:41`).
+- So R:R = 3·ATR / max(2·ATR, 0.5%·P). It drops below 1.5 once ATR is under 0.25% of price, and below 1.0 once ATR is under 0.167%.
+
+Every stored SL/TP matches this formula exactly. For example, 158: 1.4109 × 0.995 = 1.4038455 = SL, and 1.4109 + 3 × 0.000769622546 = 1.413208867638 = TP.
+
+| Pos | ATR % of price | Target (TP) distance | SL distance | Stored R:R | Realized % |
+|---|---|---|---|---|---|
+| 137 | 0.107 | +0.322% | 0.50% | 0.644 | −0.300% |
+| 143 | 0.270 | +0.81% (before extension) | 0.54% | 1.500 | −0.149% |
+| 158 | 0.055 | +0.164% | 0.50% | 0.327 | −0.128% |
+| 162 | 0.073 | +0.219% | 0.50% | 0.438 | −0.345% |
+| 172 | 0.124 | +0.372% | 0.50% | 0.744 | −0.182% |
+| 182 | 0.080 | +0.241% | 0.50% | 0.482 | −0.212% |
+
+`grep` finds `riskRewardRatio` only where it is persisted (`AnalysisService.java:540`). There is no minimum-R:R entry gate. Some routes check `EntryQuality.rewardRisk()`, for example the transition route at `:1455` and breakout retracement at `:1539`, but I have not exhaustively checked every route [AGENT INFERENCE].
+
+**Classification:** this is a configuration/design weakness, not a code defect. It works as coded.
+
+### F2-2 Paper P&L leaves out fees, and three targets were below a normal round-trip fee [PROJECT EVIDENCE + EXTERNAL RESEARCH + AGENT INFERENCE]
+- Every `wallet_trade` row has `fee_usdt=0` (DBQ-CLAUDE-I1-006).
+- Binance's standard VIP0 spot rate is 0.10% maker and 0.10% taker, or 0.075% when paying in BNB [EXTERNAL; source is Binance.US. I have not confirmed the global binance.com schedule].
+- At 0.10% per side (0.20% round trip), the targets for 158 (0.164%) and 162 (0.219%) are at or below the fee, and 182 (0.241%) is barely above it. Hitting those targets would have been flat or losing after real fees.
+- The six losses total −0.2732 USDT gross. With fees the estimate is about −0.53 USDT. Fees are about 0.26 USDT, roughly the same size as the losses.
+
+**Correction to iteration 1, F-3:** `paper_position.realized_pnl` is in USDT. It exactly matches `wallet_trade.realized_pnl_usdt` for all six trades.
+
+### F2-3 Entry timing and data freshness look clean [PROJECT EVIDENCE: I1-003, I1-006]
+| Pos | 1m candle close UTC (KSA) | Signal generated | Fill executed | Price observed | Decision → fill price |
+|---|---|---|---|---|---|
+| 137 | 20:55:00 (23:55:00) | +1.58 s | +3.02 s | 20:55:00.032 | 3.999 → 3.999 |
+| 143 | 22:40:00 (01:40:00, 10-12) | +1.63 s | +3.12 s | 22:40:01.028 | 4.032 → 4.033 |
+| 158 | 02:35:00 (05:35:00) | +1.47 s | +2.99 s | 02:35:00.328 | 1.4109 → 1.4108 |
+| 162 | 04:02:00 (07:02:00) | +2.81 s | +4.21 s | 04:02:02.580 | 0.08705 → 0.08705 |
+| 172 | 06:36:00 (09:36:00) | +1.51 s | +2.94 s | 06:36:01.457 | 5.49e-6 → 5.49e-6 |
+| 182 | 09:57:00 (12:57:00) | +1.85 s | +4.23 s | 09:57:02.437 | 0.1884 → 0.1884 |
+
+- **Data quality:** every entry signal has `data_quality_valid=1`, and so does every 5m/1h context signal (I1-009).
+- **Slippage:** at most 1 tick.
+- **Exit observability gap [PROJECT EVIDENCE]:** every SELL row has `decision_price_usdt=NULL` and `execution_price_observed_at=NULL`. Exit-price freshness therefore cannot be checked from the database.
+
+### F2-4 Correction: `wallet_trade.executed_at` is the true exit time, not `paper_position.closed_at` [PROJECT EVIDENCE: I1-001/005/006]
+On the mechanical exits, the wallet SELL comes before the paper close:
+
+| Pos | Lag (wallet SELL → paper close) |
+|---|---|
+| 137 | 3.19 s |
+| 143 | 1.18 s |
+| 158 | 2.42 s |
+| 172 | 1.99 s |
+| 182 | 1.98 s |
+
+This matches `executeMechanicalExit` running first and then `closePaper` (`LivePositionProtectionService.java:237-238`). For 162, which exited on a signal, the paper close is 18 ms before the wallet row.
+
+So any timeline anchored on `closed_at` is 1–3 s late.
+
+### F2-5 Correction to iteration-1 F-5: the `SELL_CONFIRMED` exits name a 1m source signal [PROJECT EVIDENCE: I1-005]
+`production_exit_audit` names the triggering signal for each exit:
+
+| Pos | Source signal | Decision |
+|---|---|---|
+| 137 | 156850 | STRONG_SELL |
+| 158 | 166819 | STRONG_SELL |
+| 182 | 176927 | SELL |
+| 172 | 172587 | SELL (`HTF_SELL_CONFIRMED`) |
+| 143 | 159487 | NEUTRAL |
+
+`position_recommendation` is HOLD on all of these except 162 (REDUCE).
+
+None of the six trades reached its stop loss. Every loss (−0.13% to −0.35%) was smaller than the 0.5% stop distance. The exit decision is reached on the live price path, while the 5m/1h exit context comes from signals. Whether these exits were early or saved money still needs post-exit price data (DBQ-CLAUDE-I2-006).
+
+### F2-6 Trade 143: entry approval may have come from a superseded 5m signal [PROJECT EVIDENCE + AGENT INFERENCE → candidate defect, unverified]
+- **The 1m signal said wait:** 159408 was `WAIT_FOR_RETRACEMENT` with a recommended size of 0%, `atr_overextended=1`, RSI 84.32 and price 4.35 ATR above SMA20 (I1-001/003).
+- **It filled anyway, at 25 USDT:** the fill (`wallet_trade` 358) used the `SETUP_TIMEFRAME_ATR` route.
+- **That route needs a bullish 5m signal:** `ExecutionIntelligenceService.java:1485-1486` takes it from `latestAtOrBefore(current, "5m", 20min)`, which means generated at or before the 1m signal's `generated_at` (`:2455-2461`).
+- **The new 5m signal was written 2 ms after the 1m signal:** 159407 (5m, candle 22:35 UTC, decision **WATCH**) was generated at 22:40:01.635944, 2 ms after 1m signal 159408 at 22:40:01.633945. The entry reason quotes "5m=**BUY**", so the bullish 5m it used was most likely the previous one (candle 22:30, closed about 5 min earlier).
+- **Hypothesis H2-6:** at 5-minute boundaries, the 1m and 5m analysis lanes race each other. The setup approval can come from a 5m signal that is replaced within milliseconds by a non-bullish one.
+
+Trade 158 shows the same race, but harmlessly. Its 1m signal 165412 (02:35:01.469) cited "5m=WATCH", while 5m BUY 165415 arrived at 02:35:01.490, and that 5m BUY was the trigger for the wake-up route.
+
+**Classification:** candidate defect (wrong higher-timeframe evidence used at a boundary). Not confirmed until DBQ-CLAUDE-I2-001/003.
+
+### F2-7 Trade 143: a 0% size recommendation is treated as 100% [PROJECT EVIDENCE: code; AGENT INFERENCE on effect]
+- `PaperTradingService.java:328-330` reads `getAtrRecommendedPositionPercent() <= 0 ? 100 : …`.
+- For 143 the execution signal recommended 0%, so the ATR size multiplier became 100%. The effective size was then set only by the route's cap (`DEFERRED_POSITION_PERCENT=30`, `:104`).
+- The wallet notional was 25 USDT, the same as the full-size entries 137, 158 and 172. How the wallet sizes trades is not yet traced, so this is a candidate sizing defect, not a confirmed one. DBQ-CLAUDE-I2-003 should provide the execution message.
+
+### F2-8 Trade 143 exit: about 95% of the way to target, closed at a loss — the code did what it says [PROJECT EVIDENCE: I1-001/005/008 + code]
+Timeline (UTC):
+1. **22:40:03.115 — entry** at 4.033. Signal TP 4.0647; SL 4.0102.
+2. **22:40:41 — first TP extension.** Price 4.067 was at or above TP, so TP moved 4.0647 → 4.0805 (`position_management_event` 51), 38 s after entry.
+3. **22:41:13 — second TP extension.** TP moved 4.0805 → 4.1043 (event 52) at price 4.081.
+4. **Then:** a peak of about 4.101 is inferred from "95.35% of TP distance" (≈ +1.68%). The lock was set at 4.07579 (activation 70%, initial lock 40%, trail 10%).
+5. **22:43:35.046 — hard exit** at 4.027 (`PROFIT_LOCK_HARD_EXIT`, wallet 359). That is below the hard floor of 4.0350165 (entry × 1.0005).
+
+**Why it played out this way:**
+- When the lock triggers, the code exits only if `evaluateProfitLockBreach` confirms the exit. Otherwise it logs a "protected hold" (`LivePositionProtectionService.java:219-230`).
+- The only exit that needs no confirmation is the floor at entry + 0.05% (`:210-216`). The exit source signal 159487 was NEUTRAL, which fits a "protected hold" through the lock level. I can't confirm that because I have no logs.
+- **Result:** an open profit of about +1.68% became −0.149%.
+
+**Classification:** behaved as coded; this is a design weakness, not a code defect. The price filled 0.20% below the floor, which depends on how often price events arrive (DBQ-CLAUDE-I2-005).
+
+### F2-9 Correction to iteration-1 F-7: what came before EGLD trade 143 [PROJECT EVIDENCE: I1-006]
+Another EGLD lifecycle (`wallet_position` 171) sold at 22:39:41.05 (`PROFIT_LOCK_EXIT` at 3.996, +0.0376 USDT). Trade 143 opened 22 s later, at a price 0.93% higher, on a breakout candle with RVOL 21.9.
+
+So 143 was a chase re-entry straight after a profitable exit, not a re-entry 1h39m after the 137 loss. Its paper position ID is unknown (DBQ-CLAUDE-I2-007).
+
+### F2-10 Entry-context concerns, judged only on what was known at entry [PROJECT EVIDENCE: I1-001/003/009]
+- **182:** a trend-following BUY in a `WEAK_DOWNTREND` regime, with confluence `CONFLICT`. The latest 5m signal (176655) was NEUTRAL but its *original* decision was STRONG_SELL (score 25). It was bought through `IMMEDIATE_VALIDATION` at 60% size and exited 8 min later on 1m SELL plus bearish 5m. The evidence available at entry was weak. Whether this was a rule gap or a valid loss is still open.
+- **Three of the six entries had decision WATCH** (143, 158, 162). They came in through other entry routes (`SETUP_TIMEFRAME_ATR`, `SETUP_CONFIRMATION_WAKEUP`, `ACCUMULATED_EVIDENCE`). That is allowed by design. `atr_overextended=1` on 143, 162 and 182.
+- **172:** one SHIB price tick is 1e-8 / 5.49e-6 = 0.182%. The target was about 2 ticks away and the loss was exactly 1 tick, so tick size dominates the geometry [AGENT INFERENCE].
+
+### F2-11 Losing trades outside the frozen set, and a long trading gap [PROJECT EVIDENCE: I1-007]
+- After the newest frozen close (10:05:20 UTC on 2026-10-12), there were 3 more losing `STOPPED` closes and 2 non-negative `CLOSED` ones. The last was at 2026-10-12 15:19:51 UTC (18:19:51 KSA). This confirms F-2: the selection leaves out stop-loss losers.
+- No position closed for about 53.7 h before the snapshot (2026-10-14 20:59:44 UTC). It is unknown whether the trader was running, idle or blocked (DBQ-CLAUDE-I2-008).
+
+---
+
+## Per-trade classification so far (provisional)
+| Pos | Classification so far | Main evidence |
+|---|---|---|
+| 137 | Valid loss under weak geometry (R:R 0.64); exited on 1m STRONG_SELL + 5m bearish | F2-1, F2-5 |
+| 143 | **Candidate defect:** 5m approval possibly superseded (F2-6), 0%→100% sizing (F2-7). **Design weakness:** lock hold down to the floor (F2-8) | F2-6..9 |
+| 158 | Geometry problem: target 0.164% is below round-trip fee | F2-1, F2-2 |
+| 162 | Geometry problem; exited on a signal (1m STRONG_SELL, 5m SELL) | F2-1, F2-2 |
+| 172 | Tick-size dominated; exited on 1h SELL | F2-10 |
+| 182 | Weak evidence at entry (downtrend regime, 5m originally STRONG_SELL) | F2-10 |
+
+## EVIDENCE
+- **DB results:**
+  - DBQ-CLAUDE-I1-001: lifecycle, SL/TP and reasons.
+  - DBQ-CLAUDE-I1-002: schemas.
+  - DBQ-CLAUDE-I1-003: entry signals.
+  - DBQ-CLAUDE-I1-004: exit signal for 162.
+  - DBQ-CLAUDE-I1-005: exit audit with source signals.
+  - DBQ-CLAUDE-I1-006: wallet fills.
+  - DBQ-CLAUDE-I1-007: selection scope.
+  - DBQ-CLAUDE-I1-008: 143 TP extensions.
+  - DBQ-CLAUDE-I1-009: 5m/1h context at entry.
+- **Code** (current working tree; whether it is the deployed build is still unknown):
+  - `AtrRiskService.java:34-45`
+  - `application.yml:137-151`
+  - `ExecutionIntelligenceService.java:66,104,1472-1514,2455-2461,397-457`
+  - `PaperTradingService.java:296-379`
+  - `LivePositionProtectionService.java:100-244`
+- **External:** Binance.US fee article (secondary source; global schedule not verified).
+
+## UNKNOWNS
+- **U-1/U-3:** resolved by I1-001/003.
+- **U-2:** schemas resolved, except `candle`. `Candle.java:23` says no local candle table is required (FIX-132), so `crypto_ai.candle` may not exist.
+- **U-4:** entry side resolved; exit price/observation time cannot be recovered (F2-3).
+- **U-5:** partly resolved. No `PROFIT_LOCK_*` activation events in `position_management_event`, so the lock state needs `wallet_managed_position`.
+- **U-6:** Near-TP harvest. No harvest-type `wallet_trade` rows inside the lifecycles; still need `near_tp_harvest_used`.
+- **U-7:** deployed version and `shared-market.mode`. Still unknown.
+- **U-8:** logs (protected hold, execution-intelligence decisions). Unavailable in this track.
+- **U-10:** Replay reproducibility. Not assessed.
+- **New U-11:** whether a 5m BUY existed for 143 and what it was.
+- **New U-12:** price path after exit (were the exits premature or protective?).
+- **New U-13:** why there was no trading activity for about 54 h.
+
+---
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-001
+Purpose: Verify H2-6. Which EGLD 5m and 1m signals existed around 143's entry, and in what generation order.
+SQL:
+SELECT id, interval_code, candle_open_time, generated_at, created_at, decision, original_decision, final_entry_allowed, atr_immediate_entry_allowed, atr_recommended_position_percent, total_score FROM trade_signal WHERE symbol='EGLDUSDT' AND interval_code IN ('1m','5m') AND generated_at BETWEEN '2026-10-11 22:20:00' AND '2026-10-11 22:41:00' ORDER BY generated_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-002
+Purpose: Exit source signals plus the 5m/1h context at each exit (F2-5).
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, generated_at, decision, original_decision, total_score, confidence_score, latest_price, data_quality_valid FROM trade_signal WHERE id IN (156850,159487,166819,168277,172587,176927) ORDER BY id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-003
+Purpose: Entry execution reasoning (route, percent, entry quality, 5m authority ID) for the six BUY fills (F2-6, F2-7).
+SQL:
+SELECT id, signal_id, symbol, execution_reason, gross_amount_usdt, LEFT(notes,500) AS notes, LEFT(execution_message,3000) AS execution_message FROM wallet_trade WHERE id IN (344,358,392,403,426,451) ORDER BY id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-004
+Purpose: Final managed-position state: profit-lock, highest price and Near-TP (U-5, U-6).
+SQL:
+SELECT id, entry_signal_id, symbol, status, average_entry_price_usdt, total_cost_usdt, stop_loss_usdt, take_profit_usdt, highest_price_usdt, profit_lock_active, profit_lock_price_usdt, profit_lock_progress_percent, profit_lock_activated_at, profit_lock_state, profit_lock_rebase_started_at, entry_stage, allocated_position_percent, entry_quality_score, near_tp_state, near_tp_best_price, near_tp_harvest_used, opened_at, updated_at FROM wallet_managed_position WHERE id IN (166,171,172,187,191,201,211) ORDER BY id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-005
+Purpose: Price-event cadence and path for 143 (peak, lock breach, floor overshoot); bounded.
+SQL:
+SELECT id, observed_at, price, source, delivery_status, outcome_reason FROM market_price_event WHERE symbol='EGLDUSDT' AND observed_at BETWEEN '2026-10-11 22:40:00' AND '2026-10-11 22:43:40' ORDER BY observed_at LIMIT 400
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-006
+Purpose: Outcome price path (U-12), kept separate from entry assessment. High/low during the hold and in the 60 min after exit, and whether TP or SL would have been hit. Run SHOW TABLES first; if `candle` is absent, use market_price_event.
+SQL:
+SHOW TABLES LIKE '%candle%';
+SELECT p.id AS position_id, p.entry_price, p.stop_loss, p.take_profit, p.exit_price, (SELECT MAX(c.high_price) FROM candle c WHERE c.symbol=p.symbol AND c.interval_code='1m' AND c.open_time >= p.opened_at AND c.open_time < p.closed_at) AS hold_high, (SELECT MIN(c.low_price) FROM candle c WHERE c.symbol=p.symbol AND c.interval_code='1m' AND c.open_time >= p.opened_at AND c.open_time < p.closed_at) AS hold_low, (SELECT MAX(c.high_price) FROM candle c WHERE c.symbol=p.symbol AND c.interval_code='1m' AND c.open_time >= p.closed_at AND c.open_time < p.closed_at + INTERVAL 60 MINUTE) AS post60_high, (SELECT MIN(c.low_price) FROM candle c WHERE c.symbol=p.symbol AND c.interval_code='1m' AND c.open_time >= p.closed_at AND c.open_time < p.closed_at + INTERVAL 60 MINUTE) AS post60_low FROM paper_position p WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-006B
+Purpose: Fallback for I2-006 using price events, if no candle table exists.
+SQL:
+SELECT p.id AS position_id, (SELECT MAX(m.price) FROM market_price_event m WHERE m.symbol=p.symbol AND m.observed_at BETWEEN p.opened_at AND p.closed_at) AS hold_high, (SELECT MIN(m.price) FROM market_price_event m WHERE m.symbol=p.symbol AND m.observed_at BETWEEN p.opened_at AND p.closed_at) AS hold_low, (SELECT MAX(m.price) FROM market_price_event m WHERE m.symbol=p.symbol AND m.observed_at BETWEEN p.closed_at AND p.closed_at + INTERVAL 60 MINUTE) AS post60_high, (SELECT MIN(m.price) FROM market_price_event m WHERE m.symbol=p.symbol AND m.observed_at BETWEEN p.closed_at AND p.closed_at + INTERVAL 60 MINUTE) AS post60_low, (SELECT COUNT(*) FROM market_price_event m WHERE m.symbol=p.symbol AND m.observed_at BETWEEN p.opened_at AND p.closed_at) AS hold_events FROM paper_position p WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-007
+Purpose: The EGLD lifecycle before 143 (F2-9) and all EGLD positions between 137 and 143.
+SQL:
+SELECT id, status, entry_price, exit_price, realized_pnl, close_reason, signal_id, opened_at, closed_at FROM paper_position WHERE symbol='EGLDUSDT' AND opened_at BETWEEN '2026-10-11 20:00:00' AND '2026-10-11 22:45:00' ORDER BY opened_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-008
+Purpose: Activity check for the ~54 h gap (U-13): latest signal, price event, position open, and current open positions.
+SQL:
+SELECT 'trade_signal' AS src, MAX(generated_at) AS latest FROM trade_signal UNION ALL SELECT 'market_price_event', MAX(observed_at) FROM market_price_event UNION ALL SELECT 'paper_position_opened', MAX(opened_at) FROM paper_position UNION ALL SELECT 'wallet_trade', MAX(executed_at) FROM wallet_trade UNION ALL SELECT 'open_positions', NULL FROM DUAL WHERE (SELECT COUNT(*) FROM paper_position WHERE status='OPEN') >= 0;
+SELECT COUNT(*) AS open_paper FROM paper_position WHERE status='OPEN'
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-009
+Purpose: Is F2-1 a pattern, not just these six? Outcome by entry-signal R:R bucket across all closed paper positions.
+SQL:
+SELECT CASE WHEN s.risk_reward_ratio < 0.5 THEN 'a<0.5' WHEN s.risk_reward_ratio < 1.0 THEN 'b0.5-1.0' WHEN s.risk_reward_ratio < 1.5 THEN 'c1.0-1.5' ELSE 'd>=1.5' END AS rr_bucket, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS wins, SUM(p.realized_pnl < 0) AS losses, ROUND(SUM(p.realized_pnl),6) AS net_pnl_usdt, ROUND(AVG(p.realized_pnl),6) AS avg_pnl FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL GROUP BY rr_bucket ORDER BY rr_bucket
+### END_DB_REQUEST
+
+---
+
+## Iteration 2 self-review
+- **Timestamps:** every one is raw UTC. KSA appears only where explicitly converted (+3h).
+- **Corrections to iteration 1:**
+  - F-3: the P&L unit is USDT.
+  - F-5: the exits name 1m source signals.
+  - F-7: 143 was a re-entry 22 s after a profitable exit, not after the 137 loss.
+  - The timeline should use `wallet_trade` time, not `paper_position.closed_at`.
+- **Confirmed as behaving as coded:** F2-1 (R:R geometry) and F2-8 (lock hold down to the floor).
+- **Candidate defects, unconfirmed:** F2-6 (boundary race on 5m approval) and F2-7 (0%→100% sizing). They need I2-001 and I2-003.
+- **Still missing:** logs (U-8), Replay (U-10) and the deployed version (U-7).
+
+Sources:
+- [Binance.US — Trading Fee Discount and VIP Program With BNB](https://support.binance.us/hc/en-us/articles/360047428113-Binance-US-Launches-Trading-Fee-Discount-and-VIP-Program-With-BNB)
+- [Binance.US — Trading Fee Discount and VIP Program With BNB (current article)](https://support.binance.us/en/articles/9843536-binance-us-launches-trading-fee-discount-and-vip-program-with-bnb)

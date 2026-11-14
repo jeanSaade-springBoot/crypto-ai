@@ -1,0 +1,2 @@
+SELECT signal_id, symbol, interval_code, candle_open_time, origin, status, attempts, next_attempt_at, updated_at, completed_at, paper_position_id, failure_stage, LEFT(error_message, 300) AS err_300 FROM crypto_ai.signal_processing_work WHERE signal_id IN (156723,159408,165412,167668,168277,171589,176710) ORDER BY signal_id;
+DESCRIBE crypto_ai.wallet_trade;

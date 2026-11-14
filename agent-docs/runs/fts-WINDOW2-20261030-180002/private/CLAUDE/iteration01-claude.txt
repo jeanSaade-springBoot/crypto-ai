@@ -1,0 +1,127 @@
+I couldn't write the plan file because this session has no Write or ExitPlanMode tool, so the full iteration-1 output is below.
+
+# CLAUDE: Daily failed-trade study, WINDOW2 (run `fts-WINDOW2-20261030-180002`), Iteration 1 of 8: trade reconstruction
+
+**Mode:** analysis only. I made no code, config, database or git changes.
+
+**Isolation note:** I didn't open any Codex private files, `LIVE_TEAM_STATUS.md` or `LIVE_EVENTS.log`. One of my Grep searches on the earlier run folder `fts-WINDOW2-20261029-204757` matched paths and single-line snippets in `LIVE_EVENTS.log` and `private/CODEX/*`. The snippets showed only that query IDs had run. I used none of it, and I'll keep future searches limited to `private/CLAUDE` and `db/CLAUDE`.
+
+**Labels:** **[PE]** = project evidence, **[ER]** = external research, **[AI]** = agent inference.
+
+**Time convention:** UTC first, then KSA = UTC+3.
+
+---
+
+## Findings
+
+**I1-F01: the frozen set is the same six trades studied in the last run.** [PE]
+- My frozen study from the previous run (`fts-WINDOW2-20261029-204757/private/CLAUDE/CLAUDE_FAILED_TRADE_STUDY.md:17`) covers exactly 182, 172, 162, 158, 143 and 137.
+- In that study, the newest of these losses is trade 182, which closed on 2026-10-12 at 07:05:20 UTC (10:05:20 KSA).
+- If today's selection is correct, no CLOSED position with negative P&L has closed in the roughly 18 days since then.
+
+[AI] Possible reasons, none proven:
+- the trader stopped trading or stopped running;
+- every newer loss was recorded as `STOPPED`, which the selection excludes;
+- every newer CLOSED trade was profitable.
+
+DBQ-CLAUDE-I1-001 and I1-006 test this. It is the main new question for this window.
+
+**I1-F02: the selection rule leaves out stop-loss closes.** [PE + AI]
+- A stop-loss close is stored as paper status `STOPPED` (claude-docs/TRADING_RULES.md §7).
+- The selection only takes `status=CLOSED`, so stop-loss losses are outside the study.
+- The previous study found 75 `STOPPED` losses totalling −15.886 USDT, about 58 times the frozen set's loss.
+- I'm recording this as a scope warning; it does not replace any trade.
+
+**I1-F03: the stored timestamps may not display as UTC, so I convert them through epoch.** [PE]
+- `paper_position.opened_at` and `closed_at` are `TIMESTAMP(6)` (`V1__initial_schema.sql:181-182`).
+- MySQL shows `TIMESTAMP` values in the session time zone. The previous run proved the query session was +03:00, so the displayed values were already KSA.
+- My queries therefore calculate UTC from `UNIX_TIMESTAMP()`, which does not depend on the session time zone, and then add 3 hours for KSA.
+
+**I1-F04: earlier per-trade results are only a starting point.** [PE as history, AI as hypothesis]
+From my previous study:
+
+| Trade | Earlier result |
+|---|---|
+| 143 | Logic defect at entry: an outdated 5m signal was reused |
+| 162 | Valid under Production rules; mechanism of a Production/Replay difference (opportunity age rounded down) confirmed |
+| 137, 158, 172, 182 | Valid losses under the coded rules |
+
+This iteration re-reads the base rows instead of carrying those results forward.
+
+**I1-F05: the schema has been checked for the columns these queries use.** [PE]
+- `paper_position`: `PaperPosition.java:13-69`.
+- `wallet_trade`: `WalletTrade.java`. It has no `paper_position_id`, so wallet fills are matched by symbol and time window.
+- `production_exit_audit`: has `paper_position_id` (`ProductionExitAudit.java:29`).
+- `trade_signal`: columns checked in `TradeSignal.java`.
+- `wallet_trade.fee_usdt` is 0 on automatic trades, so P&L is before fees.
+
+## Per-trade reconstruction status (pending DB results)
+
+| ID | Symbol [earlier PE, to re-verify] | Open/close times | Entry signal | Exit audit | Wallet fills | Status |
+|---|---|---|---|---|---|---|
+| 182 | ACEUSDT | I1-002 | I1-003 | I1-004 | I1-005 | PENDING |
+| 172 | SHIBUSDT | I1-002 | I1-003 | I1-004 | I1-005 | PENDING |
+| 162 | DOGEUSDT | I1-002 | I1-003 | I1-004 | I1-005 | PENDING |
+| 158 | XRPUSDT | I1-002 | I1-003 | I1-004 | I1-005 | PENDING |
+| 143 | EGLDUSDT | I1-002 | I1-003 | I1-004 | I1-005 | PENDING |
+| 137 | EGLDUSDT | I1-002 | I1-003 | I1-004 | I1-005 | PENDING |
+
+## Unknowns
+
+- **U1-01:** Why no newer CLOSED loss exists after 2026-10-12, if the selection is confirmed.
+- **U1-02:** Whether `realized_pnl` on the paper rows matches the wallet `realized_pnl_usdt`, since the paper row takes its quantity from the wallet.
+- **U1-03:** Whether every trade has a `production_exit_audit` row.
+- **U1-04:** Whether Replay could reproduce any of the six. That's for a later iteration, and nothing has been run.
+- **U1-05:** Logs: I have no SSH access and haven't searched any logs.
+
+---
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-001
+Purpose: Check the time zone, re-run the frozen selection with UTC and KSA times, and test I1-F01/F02 (newest close of any status, counts after 2026-10-12, and the size of the STOPPED losses).
+SQL:
+SELECT @@session.time_zone AS session_tz, UTC_TIMESTAMP(6) AS now_utc, p.id, p.symbol, p.status, p.realized_pnl, TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(p.closed_at)*1000000) AS SIGNED), '1970-01-01 00:00:00') AS closed_utc, TIMESTAMPADD(HOUR, 3, TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(p.closed_at)*1000000) AS SIGNED), '1970-01-01 00:00:00')) AS closed_ksa FROM paper_position p WHERE p.status = 'CLOSED' AND p.closed_at IS NOT NULL AND p.realized_pnl < 0 ORDER BY p.closed_at DESC LIMIT 6;
+SELECT p.status, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losses, SUM(CASE WHEN p.realized_pnl < 0 THEN p.realized_pnl ELSE 0 END) AS loss_sum, TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(MAX(p.closed_at))*1000000) AS SIGNED), '1970-01-01 00:00:00') AS max_closed_utc, SUM(UNIX_TIMESTAMP(p.closed_at) > UNIX_TIMESTAMP('2026-10-12 07:05:21') ) AS n_after_182_session_tz_note FROM paper_position p GROUP BY p.status;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-002
+Purpose: Get the lifecycle row for each frozen trade with UTC/KSA times, holding time, and stop/target distances. Reason fields are cut to 800 characters.
+SQL:
+SELECT p.id, p.symbol, p.side, p.status, p.quantity, p.entry_price, p.stop_loss, p.take_profit, p.exit_price, p.realized_pnl, p.signal_id, p.exit_signal_id, p.close_reason, TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(p.opened_at)*1000000) AS SIGNED), '1970-01-01 00:00:00') AS opened_utc, TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(p.closed_at)*1000000) AS SIGNED), '1970-01-01 00:00:00') AS closed_utc, ROUND(UNIX_TIMESTAMP(p.closed_at)-UNIX_TIMESTAMP(p.opened_at),3) AS hold_s, ROUND((p.entry_price-p.stop_loss)/p.entry_price*100,4) AS stop_pct, ROUND((p.take_profit-p.entry_price)/p.entry_price*100,4) AS target_pct, ROUND((p.exit_price-p.entry_price)/p.entry_price*100,4) AS exit_move_pct, LEFT(p.entry_reason,800) AS entry_reason_800, LEFT(p.exit_reason,800) AS exit_reason_800 FROM paper_position p WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-003
+Purpose: Get the entry and exit signals for each trade: candle, decision chain, data-quality flag, plan, and the delay from candle open to signal.
+SQL:
+SELECT p.id AS position_id, 'ENTRY' AS role, s.id AS signal_id, s.symbol, s.interval_code, TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(s.candle_open_time)*1000000) AS SIGNED), '1970-01-01 00:00:00') AS candle_open_utc, TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(s.generated_at)*1000000) AS SIGNED), '1970-01-01 00:00:00') AS generated_utc, ROUND(UNIX_TIMESTAMP(s.generated_at)-UNIX_TIMESTAMP(s.candle_open_time),3) AS gen_minus_open_s, s.decision, s.original_decision, s.final_entry_allowed, s.primary_blocking_stage, s.strategy_entry_allowed, s.market_regime, s.btc_context_status, s.btc_context_entry_allowed, s.confluence_status, s.confluence_higher_decision, s.data_quality_valid, s.latest_price, s.stop_loss, s.take_profit, s.risk_reward_ratio FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id WHERE p.id IN (182,172,162,158,143,137)
+UNION ALL
+SELECT p.id, 'EXIT', s.id, s.symbol, s.interval_code, TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(s.candle_open_time)*1000000) AS SIGNED), '1970-01-01 00:00:00'), TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(s.generated_at)*1000000) AS SIGNED), '1970-01-01 00:00:00'), ROUND(UNIX_TIMESTAMP(s.generated_at)-UNIX_TIMESTAMP(s.candle_open_time),3), s.decision, s.original_decision, s.final_entry_allowed, s.primary_blocking_stage, s.strategy_entry_allowed, s.market_regime, s.btc_context_status, s.btc_context_entry_allowed, s.confluence_status, s.confluence_higher_decision, s.data_quality_valid, s.latest_price, s.stop_loss, s.take_profit, s.risk_reward_ratio FROM paper_position p JOIN trade_signal s ON s.id = p.exit_signal_id WHERE p.id IN (182,172,162,158,143,137) ORDER BY 1, 2;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-004
+Purpose: Find the recorded close trigger for each trade.
+SQL:
+SELECT a.id, a.paper_position_id, a.wallet_position_id, a.close_trigger, a.source_signal_id, a.source_signal_decision, a.source_signal_original_decision, a.position_analysis_id, a.position_recommendation, a.entry_price_usdt, a.exit_price_usdt, a.stop_loss_usdt, a.take_profit_usdt, TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(a.audited_at)*1000000) AS SIGNED), '1970-01-01 00:00:00') AS audited_utc, LEFT(a.close_explanation,600) AS close_explanation_600 FROM production_exit_audit a WHERE a.paper_position_id IN (182,172,162,158,143,137) ORDER BY a.paper_position_id, a.id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-005
+Purpose: Get the wallet fills within each position's open/close window (±120 s) to rebuild quantity, prices, gross P&L and fees, and to check fill price against decision price and price age.
+SQL:
+SELECT p.id AS position_id, w.id AS wallet_trade_id, w.symbol, w.side, w.quantity, w.price_usdt, w.decision_price_usdt, TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(w.execution_price_observed_at)*1000000) AS SIGNED), '1970-01-01 00:00:00') AS price_observed_utc, TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(w.executed_at)*1000000) AS SIGNED), '1970-01-01 00:00:00') AS executed_utc, ROUND(UNIX_TIMESTAMP(w.executed_at)-UNIX_TIMESTAMP(w.execution_price_observed_at),3) AS price_age_s, w.gross_amount_usdt, w.fee_usdt, w.net_amount_usdt, w.cost_basis_usdt, w.realized_pnl_usdt, w.realized_pnl_percent, w.execution_type, w.execution_reason, w.execution_key, w.signal_id, w.position_analysis_id FROM paper_position p JOIN wallet_trade w ON w.symbol = p.symbol AND w.executed_at BETWEEN TIMESTAMPADD(SECOND,-120,p.opened_at) AND TIMESTAMPADD(SECOND,120,p.closed_at) WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, w.executed_at;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-006
+Purpose: Test I1-F01 by checking whether the trader kept running after 2026-10-12. Shows the newest paper position of any status and the newest saved trade signal, with UTC times.
+SQL:
+SELECT 'paper_position' AS src, p.id, p.symbol, p.status, p.realized_pnl, TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(p.opened_at)*1000000) AS SIGNED), '1970-01-01 00:00:00') AS opened_utc, TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(p.closed_at)*1000000) AS SIGNED), '1970-01-01 00:00:00') AS closed_utc FROM paper_position p ORDER BY p.id DESC LIMIT 10;
+SELECT 'trade_signal' AS src, s.id, s.symbol, s.interval_code, s.decision, TIMESTAMPADD(MICROSECOND, CAST(ROUND(UNIX_TIMESTAMP(s.generated_at)*1000000) AS SIGNED), '1970-01-01 00:00:00') AS generated_utc FROM trade_signal s ORDER BY s.id DESC LIMIT 5;
+### END_DB_REQUEST
+
+---
+
+**Next (Iteration 2):** use the I1-001..006 results to fill the reconstruction table and check the selection and time basis. Then build each trade's timeline (candle → signal → fill → exit) in UTC and KSA, and decide whether I1-F01 is a real finding or an artefact of the selection rule.

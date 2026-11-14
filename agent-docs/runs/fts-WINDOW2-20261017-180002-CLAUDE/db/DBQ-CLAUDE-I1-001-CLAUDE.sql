@@ -1,0 +1,2 @@
+SELECT @@session.time_zone AS session_tz, @@global.time_zone AS global_tz, @@system_time_zone AS system_tz, NOW(6) AS now_session, UTC_TIMESTAMP(6) AS now_utc, TIMEDIFF(NOW(), UTC_TIMESTAMP()) AS session_offset;
+SELECT id, opened_at, UNIX_TIMESTAMP(opened_at) AS opened_epoch_utc, closed_at, UNIX_TIMESTAMP(closed_at) AS closed_epoch_utc FROM crypto_ai.paper_position WHERE id IN (182,172,162,158,143,137) ORDER BY id;

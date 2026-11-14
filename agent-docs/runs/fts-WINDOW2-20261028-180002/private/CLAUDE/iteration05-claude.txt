@@ -1,0 +1,256 @@
+# CLAUDE: FTS WINDOW2, Iteration 5 of 8 (entry quality)
+
+**The main result this iteration:** I4-003 does not support last iteration's claim that low R:R entries are the main systemic loss driver. That claim (R1) is now downgraded. Separately, I found two new code inconsistencies on the entry path. Neither caused any of the six losses.
+
+**Run:** `fts-WINDOW2-20261028-180002`. This was analysis only and I reviewed only my own work.
+
+**What I read:**
+- CHARTER, my iteration 2 and 4 outputs, and my I4-001..003 results.
+- The I2-002 and I2-003 results again.
+- `claude-docs/TRADING_RULES.md`.
+- The production code: the entry-quality score, the entry guards and the paper-trading entry path.
+
+**Isolation:** I did not open any Codex folder, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or any Codex memory.
+
+**Writes:** none. The session is read-only, so this response is the iteration artifact.
+
+**Times:** I convert from epochs. Each is shown as UTC → KSA (UTC+3).
+
+---
+
+## Ingesting the I4 results
+
+| Result | What it shows | Effect |
+|---|---|---|
+| **I4-001** | Stored entry-quality scores (out of 100): 137 = 58, 143 = 70, **158 = 50, 162 = 50, 182 = 50**, 172 = 60. Allocation was 15% on 162 and 182 and 25% on the rest. `average_entry_price_usdt` is 0 on every row. | U-I4-1 is partly closed (E1, E2). The zero average price looks like something cleared after close; it is not used here. |
+| **I4-002** | 176655 and 176792 are `original=STRONG_SELL → NEUTRAL` with CONFLICT. The explanation says "Bearish signal conflicts with bullish higher-timeframe structure", with 1h = WATCH (trend 16/25). | **U-I4-2 closed.** This is the TREND_FOLLOWING branch (SELL against a bullish higher timeframe → NEUTRAL, `MultiTimeframeConfluenceService.java:132-138`). Note that a 1h **WATCH** counts as "bullish structure" there. |
+| **I4-003** | Outcome by the entry signal's R:R, across all closed positions: R:R < 1 (n = 69) had 40 wins / 28 losses and a P&L sum of −0.12. R:R ≥ 1.5 (n = 63) had 21 wins / 42 losses and a P&L sum of **−4.13**. | **R1 is downgraded** (see C1 below). |
+
+---
+
+## FINDINGS
+
+### C1. Correction: R:R below 1 is not shown to be the systemic loss driver (PROJECT EVIDENCE)
+
+In iteration 4 I called the inverted R:R "the main systemic mechanism behind the losses in five of six trades." I4-003 contradicts that:
+- System-wide, entries with R:R below 1 had a 58% win rate and roughly flat P&L.
+- The R:R ≥ 1.5 bucket carries almost all of the losses.
+
+The frozen trades point the same way:
+- None of the six hit its stop-loss.
+- All six were closed early by an exit signal or a profit lock, so the inverted geometry never produced a full-stop loss.
+- Realised wallet losses were small: −0.13% to −0.34% (I2-003: 454 −0.212%, 407 −0.345%, 346 −0.300%, 359 −0.149%, 429 −0.182%, 401 −0.128%).
+
+**What remains true:**
+- The geometry caps the upside. Target distances were only 0.17–0.37%.
+- The R:R floor still differs by route (iteration-4 R1 table). That is now a **policy-consistency observation**, not a proven loss driver.
+
+**AGENT INFERENCE:** the −4.13 in the ≥ 1.5 bucket has an average loss about 25× larger than the other buckets. It is probably dominated by a few large losses, possibly from an older sizing era. I5-003 tests this.
+
+### E1. Three of six entries sat exactly on the score cutoff (PROJECT EVIDENCE)
+
+How the guard works:
+- It blocks only when `q.score() < CHASE_ENTRY_CUTOFF (50)` (`ExecutionIntelligenceService.java:1173`, `:229`).
+- So a score of exactly 50 passes. A score of 50–54 is LATE_ENTRY (`:1021`), which only caps size at 25% (`:1183`).
+- FIX-119 documents this deliberately: "the shared guard intentionally treats that range as a sizing warning rather than a timing block" (`fix-registry.js:48`).
+
+LATE_ENTRY becomes a timing block in only two places:
+- BALANCED_EARLY (FIX-041, `:672-684`).
+- ACCUMULATED_EVIDENCE with no 1m BUY in the accumulated evidence and no fresh 5m BUY (FIX-119, `:1257-1280`).
+
+How each of the three passed:
+- **158** (SETUP_CONFIRMATION_WAKEUP): neither block applies to this route.
+- **182** (IMMEDIATE_VALIDATION): it passed, so its validation code was not BALANCED_EARLY (inference; I5-001 will confirm).
+- **162** (ACCUMULATED_EVIDENCE): it passed FIX-119. The 5m context was WATCH (I2-002 `confluence_higher_decision`), so the accumulated evidence must have contained at least one 1m BUY. This is inference, and assumes FIX-119 was deployed on 2026-10-12, which is unproven (U8). I5-002 tests it.
+
+**AGENT INFERENCE:** all three behaved as designed. The design lets an entry scored 50 with R:R 0.35–0.48 open, sized at 15–25%.
+
+### E2. Breaking down each stored score (PROJECT EVIDENCE for R:R; AGENT INFERENCE for the remainder)
+
+The stored score is the **execution-time** score (`PaperTradingService.java:377-385` → `assessEntryQualityAtPrice`).
+
+I recomputed R:R from the signal's SL/TP and the actual fill price using `currentRewardRisk` (`:1811-1816`), then applied the penalty at `:991-993`:
+
+| ID | Fill | Fill R:R | R:R penalty | Score | Remaining deduction | Class |
+|---|---|---|---|---|---|---|
+| 137 | 3.999 | 0.64 | −30 | 58 | −12 | ACCEPTABLE |
+| 143 | 4.033 | 1.39 (1m TP) | −15 | 70 | −15 | GOOD |
+| 158 | 1.4108 | 0.35 | −30 | 50 | −20 | LATE |
+| 162 | 0.08705 | 0.44 | −30 | 50 | −20 | LATE |
+| 172 | 0.00000549 | 0.74 | −30 | 60 | −10 | ACCEPTABLE |
+| 182 | 0.1884 | 0.48 | −30 | 50 | −20 | LATE |
+
+- **The R:R penalty was the largest single deduction on five of six trades.** Without it, 158, 162 and 182 would have scored 80 (GOOD).
+- **137:** the remaining −12 equals `RECENT_REJECTION_ENTRY_QUALITY_PENALTY` (`:236`) exactly, which suggests it entered near a recently rejected high. This is inference; I5-001's message text would show it.
+- **158, 162 and 182:** −20 matches an ATR extension above 4 (`:984`). Because the 1m ATR was tiny (0.05–0.08%), about 0.2–0.3% of movement above the 30-minute reference already counts as "4 ATR." This is inference.
+
+### E3. The score is purely geometric and has no momentum or overbought input (PROJECT EVIDENCE)
+
+`assessEntryQuality` (`:865-1030`) uses only:
+- expansion from the reference price
+- ATR extension
+- opportunity age
+- R:R
+- the rejection zone
+- the HIGH_VOLATILITY regime
+- the STOP_EXPOSED liquidity status
+- a BREAKOUT bonus
+
+RSI and Bollinger position are not inputs. That is why **143 entered at RSI 84.3** and 4.35 ATR above SMA20, on a 1m `WAIT_FOR_RETRACEMENT` plan with 0% recommended size (I2-002), and still scored **70 (GOOD)**. Trade 162 likewise entered at the upper Bollinger band at RSI 68.
+
+**AGENT INFERENCE:** this is a design gap, not a coding defect. I raise it only as a recommendation.
+
+### E4. Candidate defect: the execution-time rescore uses the 1m ATR on the 5m-setup route (PROJECT EVIDENCE)
+
+- **Decision time:** on the SETUP_TIMEFRAME_ATR route, entry quality uses the **5m** ATR. The code comment at `:631-633` says this is deliberate: "Using the much smaller 1m ATR here can falsely label a valid 5m setup as a 9-10 ATR chase."
+- **Execution time:** `revalidateAtExecutionPrice` (`:1167`) calls `assessEntryQualityAtPrice` (`:857-858`), which passes the signal's own `atrAtSignal`, which is the **1m** ATR. The score stored on the position (`PaperTradingService.java:377-378`) comes from the same call.
+
+So the final guard contradicts the route's stated intent. A valid 5m setup could be blocked or downsized at fill time.
+
+- **Effect on 143:** none. It still scored 70 and kept 25%.
+- **Classification:** a code-level inconsistency with no outcome impact on these trades.
+- **Replay:** `ShadowProductionReplayService.java:300,335` calls the same method, so Replay shares the behaviour.
+
+### E5. Candidate ambiguity: an ATR plan of 0% is sized as 100% (PROJECT EVIDENCE)
+
+`PaperTradingService.java:328-330` treats an ATR recommended size of 0 or less as "unset" and uses 100% instead.
+
+Signal 159408 (trade 143) had `atr_recommended_position_percent = 0` (WAIT_FOR_RETRACEMENT). It was executed at the full route size of 25%.
+
+This may be intended, since the 5m plan owns the ATR risk on this route. But 0 ("do not enter") and "no plan" are the same value here. **U-I5-3.**
+
+### E6. Allocation explained (PROJECT EVIDENCE)
+
+- **162 and 182:** the ATR plan was REDUCED_POSITION at 60% (I2-002). The score-50 cap is 25%. Since 60% × 25% = 15% (`PaperTradingService.java:331-333,358-360`), the 15% allocation matches.
+- **The others:** STANDARD_ENTRY at 100% × 25% = 25%. 143 is 0 treated as 100 (E5), × 25% = 25%.
+
+### E7. Per-trade entry verdicts, using only information available at entry
+
+Entries are shown UTC → KSA. MFE is the maximum favourable move, given here as the share of the distance to target reached.
+
+| ID | Entry | At-entry assessment | Outcome (separate) |
+|---|---|---|---|
+| 137 EGLD | 10-11 17:55:04 → 20:55:04 | STRONG_BUY with AGREEMENT, RANGE regime. R:R 0.64, likely near a rejection zone. **Acceptable but low edge.** | MFE 47% of target, then a 5m SELL exit |
+| 143 EGLD | 19:40:04 → 22:40:04 | WATCH. RSI 84, 1m plan said wait / 0%. Re-entered 22 s after the trade-142 exit. **Weak; the score overstated it (E3).** | Lock armed, then breached by a price gap |
+| 158 XRP | 23:35:04 → 10-12 02:35:04 | WATCH, score 50, R:R 0.35, ATR 0.05%. The 0.17% target is **below the ~0.2% round-trip spot fee** (fee level from general knowledge, iteration-2 F2). **No edge after fees even if the target is hit.** | MFE 33% |
+| 162 DOGE | 10-12 01:02:06 → 04:02:06 | Accumulated WATCH evidence, BREAKOUT at the upper Bollinger band, score 50, R:R 0.44. **Weak / late.** | MFE 31% |
+| 172 SHIB | 03:36:05 → 06:36:05 | BUY with CONFLICT. ATR smaller than one price tick (F3), R:R 0.74. **The geometry carried no information.** | Lost exactly one tick |
+| 182 ACE | 06:57:06 → 09:57:06 | BUY with CONFLICT, inside a WEAK_DOWNTREND, score 50, R:R 0.48. **Weak.** | Never went above entry |
+
+**Verdict:** **no defect confirmed for any of the six entries.** All six followed the coded rules. Four of six were weak or late using only what was known at entry (143, 158, 162, 182). For 158 and 172, the geometry had no edge at all.
+
+---
+
+## EVIDENCE INDEX
+
+| ID | Source |
+|---|---|
+| C-E1 | `ExecutionIntelligenceService.java:229,672-694,1171-1223,1257-1280`; `fix-registry.js:48` (FIX-119 cause text) |
+| C-E2 | `ExecutionIntelligenceService.java:236,976-1022,1811-1816`; `PaperTradingService.java:349-385` |
+| C-E4 | `ExecutionIntelligenceService.java:628-641,857-858,1150-1169`; `ShadowProductionReplayService.java:300,335` |
+| C-E5 | `PaperTradingService.java:328-333` |
+| DB | I4-001, I4-002, I4-003; I2-002 (signal SL/TP/ATR/plan); I2-003 (fills, wallet P&L) |
+| DOC | `claude-docs/TRADING_RULES.md` §4–6. It does not document R:R floors or the reason for the stop floor, so **U-New3 is still open.** |
+
+---
+
+## UNKNOWNS
+
+- **U-I5-1:** the actual components of each score (rejection zone, ATR extension, age, STOP_EXPOSED) and each validation code (I5-001).
+- **U-I5-2:** the evidence counts behind 162 (buy count, 5m context) and whether FIX-119 was deployed on 10-12 (I5-002; U8).
+- **U-I5-3:** whether "0% ATR size becomes 100%" is intended on the SETUP_TIMEFRAME_ATR route (E5). There is no documentation trail.
+- **U-I5-4:** what drives the −4.13 in the R:R ≥ 1.5 bucket (I5-003).
+- **Still open:** U-New3 (intent of the 0.50% stop floor) and U-I3-1 (EGLD silence; needs a 10-11 log that does not exist).
+
+---
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: Full execution explanation (route, validation code, entry-quality cap reasons, rejection zone) for the six entry BUYs (E1/E2, U-I5-1)
+SQL:
+SELECT id, signal_id, symbol, execution_reason, UNIX_TIMESTAMP(executed_at) AS exec_epoch,
+       LEFT(execution_message, 2000) AS msg
+FROM wallet_trade
+WHERE id IN (344,358,392,403,426,451)
+ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: Opportunity evidence at each entry (anchor/best reference, age, buy/watch counts, 5m/1h context, decision code) (E1 FIX-119 path for 162, E2 reference, U-I5-2)
+SQL:
+SELECT id, symbol, status, latest_signal_id, UNIX_TIMESTAMP(started_at) AS started_epoch,
+       anchor_entry_price, best_entry_price, evidence_count, buy_count, watch_count, neutral_count,
+       bearish_count, evidence_score, opportunity_health, five_minute_decision, one_hour_decision,
+       execution_source, recommended_position_percent, decision_code,
+       UNIX_TIMESTAMP(executed_at) AS executed_epoch, LEFT(decision_explanation, 800) AS expl
+FROM execution_opportunity
+WHERE latest_signal_id IN (156723,159408,165412,167668,171589,176710)
+   OR (symbol='EGLDUSDT' AND started_at BETWEEN '2026-10-11 14:00:00' AND '2026-10-11 20:00:00')
+ORDER BY symbol, started_at
+LIMIT 60;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: Decompose the R:R>=1.5 loss concentration from I4-003 by month and close reason (C1, U-I5-4)
+SQL:
+SELECT DATE_FORMAT(p.closed_at, '%Y-%m') AS ym,
+       CASE WHEN s.risk_reward_ratio IS NULL THEN 'NULL'
+            WHEN s.risk_reward_ratio < 1.0 THEN 'a <1.0'
+            WHEN s.risk_reward_ratio < 1.5 THEN 'b 1.0-1.5'
+            ELSE 'c >=1.5' END AS rr_bucket,
+       p.close_reason, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS wins,
+       ROUND(SUM(p.realized_pnl), 6) AS pnl_sum, ROUND(MIN(p.realized_pnl), 6) AS worst
+FROM paper_position p
+LEFT JOIN trade_signal s ON s.id = p.signal_id
+WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL
+GROUP BY ym, rr_bucket, p.close_reason
+ORDER BY ym, rr_bucket, pnl_sum
+LIMIT 120;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: Entry-signal oscillator context not used by the entry-quality score (E3)
+SQL:
+SELECT id, symbol, decision, total_score, confidence_score, rsi_score, bollinger_score,
+       market_regime, liquidity_status, btc_context_status, LEFT(explanation, 600) AS expl
+FROM trade_signal
+WHERE id IN (156723,159408,165412,167668,171589,176710)
+ORDER BY id;
+### END_DB_REQUEST
+
+---
+
+## SELF-REVIEW (iteration 5)
+
+**Coverage:** all six frozen trades have an entry-quality assessment. None was substituted.
+
+**Corrections:**
+- R1's "main systemic mechanism" claim is withdrawn on the I4-003 evidence (C1).
+- Iteration-2 F1's "negative expectancy is built into every trade" is weakened: these losses were small exits triggered by bearish signals, not stop-loss hits.
+
+**Defects:**
+- None confirmed in outcome terms.
+- E4 is a code-level inconsistency with no impact on these trades.
+- E5 may or may not be intended (U-I5-3).
+
+**Recommendations only (analysis, no implementation):**
+- Rescore at execution with the route's own ATR (E4).
+- Add an overbought/momentum input to entry quality (E3).
+- Require minimum target distance to exceed estimated fees plus one price tick (158, 172).
+- Make the 50-point cutoff unambiguous (`<=` vs `<`), or put an R:R floor on the direct routes. Both are policy decisions for Jean.
+
+**Labels:** each claim is tagged.
+- The E2 remainders and the E1 FIX-119 inference are AGENT INFERENCE until I5-001 and I5-002 return.
+- The fee figure is general knowledge and was not fetched this iteration.
+- No log search was done this iteration.
+
+**Next iteration (6):**
+- Ingest I5-001..004.
+- Confirm or refute the E2 decomposition and the 162 FIX-119 path.
+- Assess Replay reproducibility of E1, E2 and E4 for 182 and 158.
+- Finish the outcome-vs-entry separation for the exit assessment.

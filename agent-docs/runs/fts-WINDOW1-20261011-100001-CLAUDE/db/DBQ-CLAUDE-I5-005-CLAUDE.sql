@@ -1,0 +1,1 @@
+SELECT symbol, open_time, open_price, high_price, low_price, close_price, closed, ingestion_source FROM candle WHERE symbol IN ('UNIUSDT','AEROUSDT') AND interval_code = '1m' AND open_time BETWEEN '2026-10-10 17:58:00' AND '2026-10-10 18:04:00' ORDER BY symbol, open_time

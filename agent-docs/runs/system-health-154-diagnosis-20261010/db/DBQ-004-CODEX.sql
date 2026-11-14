@@ -1,0 +1,1 @@
+SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'signal_processing_work' ORDER BY ordinal_position

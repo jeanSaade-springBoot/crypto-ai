@@ -1,0 +1,242 @@
+# Daily failed-trade study, WINDOW1: Claude track, Iteration 3 (log and timing forensics, self-review)
+
+**Bottom line: the timestamps in this study's database results are shown in KSA, not UTC.** Every UTC and KSA time I gave in Iterations 1 and 2 is therefore off by 3 hours. Two independent sources prove it:
+- Java's own UTC timestamps written into the trades' execution messages.
+- Binance's public price history for trade 143.
+
+Trade order, durations and gaps are unaffected. Only the labels of absolute times change.
+
+The other headline: the Iteration 2 suspicion about trade 143 is now confirmed. Its entry relied on a 5-minute BUY signal that the newly closed 5-minute candle had already replaced with WATCH, and which of the two was chosen came down to 2 milliseconds.
+
+I made no changes to code, configuration, the database, git or deployments. No `Write` or `ExitPlanMode` tool was available, so there is no plan file and this message is the whole Iteration 3 output.
+
+**Inputs:**
+- My Iteration 2 database results, DBQ-CLAUDE-I2-001 to 009.
+- Code: `ExecutionPriceAuthorityService`, `PaperTradingService:342-383`, `ExecutionIntelligenceService:2455-2462 and 2606-2609`, `ExecutionReplayScope:106-120`, `AnalysisService:150, 172-190`, `TradeExecutionValidationService:300-316`, `application.yml:13-35`, and the V1/B105 migrations (column types).
+- External: Binance public 1-minute price history (klines) for EGLDUSDT.
+- As required, I did not read `private/CODEX/`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md`, or the other agent's memory files.
+
+---
+
+## FINDINGS
+
+**F-23 (study-wide, blocks every absolute time): the result files show KSA, not UTC.** [PROJECT EVIDENCE + EXTERNAL RESEARCH]
+- **How the database works:** the columns are `TIMESTAMP(6)` (V1 and B105 migrations), so MySQL converts them to the reading session's time zone. The application sets its session to UTC (`application.yml:21-25, 35`). None of the coordinator's queries or mine set a session time zone (DBQ-FTS-001…005, all Claude SQL files).
+- **Evidence 1, the application's own UTC timestamps.** Each execution message contains `priceObservedAt`, which Java prints in UTC. The value comes from the price-event row the application read back over its UTC session (`ExecutionPriceAuthorityService:46-48`, `PaperTradingService:383`). In every case, the stored column shows that time **plus 3 hours** (DBQ-CLAUDE-I2-002):
+
+  | Trade | `priceObservedAt` in message (UTC) | Stored column as shown |
+  |---|---|---|
+  | 137 | 17:55:00.032Z | 20:55:00.032 |
+  | 143 | 19:40:01.028Z | 22:40:01.028 |
+  | 158 | 10-11 23:35:00.328Z | 10-12 02:35:00.328 |
+  | 162 | 01:02:02.580Z | 04:02:02.580 |
+  | 172 | 03:36:01.457Z | 06:36:01.457 |
+  | 182 | 06:57:02.437Z | 09:57:02.437 |
+
+- **Evidence 2, Binance price history.** Binance's EGLDUSDT 1-minute candles for 2026-10-11 **19:39–19:43 UTC** match trade 143 exactly:
+  - 19:39 closes at 4.032, the decision price.
+  - 19:40 reaches a high of 4.067, where the take-profit was passed.
+  - 19:41 reaches a high of 4.101, the trade's peak.
+  - 19:43 has high 4.100, low 3.994 and close 4.026.
+  - The same window at 22:35–22:47 UTC trades at about 3.966–3.982, which matches nothing.
+- **Conclusion:** stored values are correct UTC, but the study's MySQL client showed them in a +03:00 session. That is a fault in the study tooling, not in the application (pending DBQ-CLAUDE-I3-001).
+- **Corrections:**
+  - Take the numbers I labelled "UTC" in Iterations 1 and 2 as **KSA**, and subtract 3 h to get UTC.
+  - The "KSA" values I gave earlier are 6 h ahead of UTC and are wrong.
+  - The application log files write UTC (for example, `logs/crypto-ai-trader.log:177` shows log time 14:32:32 next to `observedUtc=…14:32:32Z`). When matching DB rows to log lines, subtract 3 h from the displayed DB value.
+  - DATABASE_INVESTIGATION_RULES.md:35 ("Raw MySQL timestamps are UTC") is right about storage. It is broken in practice when the client session isn't UTC. I'm reporting this contradiction rather than accepting it.
+
+**Corrected timeline of the six frozen trades** (all dates 2026):
+
+| Trade | Symbol | Opened (UTC) | Opened (KSA) | Closed (UTC) | Closed (KSA) |
+|---|---|---|---|---|---|
+| 182 | ACEUSDT | 10-12 06:57:06 | 10-12 09:57:06 | 07:05:20 | 10:05:20 |
+| 172 | SHIBUSDT | 10-12 03:36:05 | 10-12 06:36:05 | 04:15:45 | 07:15:45 |
+| 162 | DOGEUSDT | 10-12 01:02:06 | 10-12 04:02:06 | 01:26:04 | 04:26:04 |
+| 158 | XRPUSDT | 10-11 23:35:04 | 10-12 02:35:04 | 10-12 00:30:06 | 10-12 03:30:06 |
+| 143 | EGLDUSDT | 10-11 19:40:04 | 10-11 22:40:04 | 19:43:36 | 22:43:36 |
+| 137 | EGLDUSDT | 10-11 17:55:04 | 10-11 20:55:04 | 18:00:12 | 21:00:12 |
+
+- **Other corrections, values as shown = KSA:**
+  - The last position close was 10-15 03:15 KSA (00:15 UTC).
+  - V107 was installed 10-10 00:15 KSA (10-09 21:15 UTC).
+  - The daily `data_quality_valid` counts in I2-007 are grouped by KSA calendar day.
+- **The study clock itself is inconsistent.** CHARTER shows "Snapshot UTC 2026-10-22 10:28:18" next to "Snapshot KSA 2026-10-21 12:50:52". The query log shows the queries actually ran at `2026-10-22T13:28:13…18+03:00` (DATABASE_QUERY_LOG.md), which is 10:28 UTC. So the KSA label is the run-folder creation time, not the snapshot time.
+
+**F-24: F-13 is confirmed. Trade 143 entered on a 5-minute BUY that the latest 5-minute candle had already downgraded to WATCH.** [PROJECT EVIDENCE] Severity: high, likely defect.
+- The execution opportunity row 36524 records `five_minute_decision=BUY`, route `SETUP_TIMEFRAME_ATR`, and "the fresh 5m BUY remains the setup-risk authority" (I2-003).
+- That 5-minute candle (19:35–19:40 UTC) had already produced 5-minute signal **159407 = WATCH**. Its own ATR check said not to buy immediately (`atr_immediate_entry_allowed=0`, `PULLBACK_ENTRY`, `atr_overextended=1`).
+- Mechanism:
+  - The 5-minute signal is chosen by `latestAtOrBefore` → `findTop…GeneratedAtLessThanEqual…(…, current.getGeneratedAt())` (`ExecutionIntelligenceService.java:2455-2462, 2608`).
+  - In production, `generatedAt` is simply the clock time when analysis of that candle started (`Instant.now()`, `AnalysisService.java:150`).
+  - 159407 started 1.999 ms after the 1-minute signal 159408, so it was excluded. The previous 5-minute signal, **159285 BUY 83**, was used instead.
+- **Timing (as shown → UTC 19:40):**
+  - 159407 row written: 22:40:02.9406.
+  - 159408 row written: 22:40:02.9487.
+  - Wallet fill: 22:40:03.115.
+
+  So the WATCH signal was already in the database before the buy executed. It was skipped because of the rule's `generated_at` boundary, not because of a timing delay.
+- **How common is this (I2-008)?**
+  - Among the 32 positions opened since 10-11, the 5-minute signal for the same candle close was generated **after** the 1-minute signal in 28 cases.
+  - So any route triggered by a 1-minute signal normally judges the 5-minute timeframe from the **previous** 5-minute bar, which can be up to 5 minutes old.
+  - Among the frozen trades, only 143 had its decision changed by this.
+- **Replay probably behaves differently.** [AGENT INFERENCE]
+  - Replay uses the same `generatedAt` rule (`ExecutionReplayScope.java:110-119`), but its `generatedAt` comes from a supplied `evaluationTime`, or from candle open time if none is supplied (`AnalysisService.java:172, 190`).
+  - If the 1-minute and 5-minute signals for the same candle close get equal times, the WATCH would be visible in Replay, and trade 143 would likely **not** be admitted.
+  - That would be a gap between Replay and Production. Not verified (U-14).
+
+**F-25: Trade 143's sale below its profit floor came from a real crash, not a data delay; holding on would have done worse.** [PROJECT EVIDENCE + EXTERNAL RESEARCH] This settles U-12.
+- Binance's 19:43 UTC candle traded between 4.100 and **3.994**. That low is below the stop (4.0102), the hard floor (4.0350) and the entry.
+- The system sold at 4.027, 25 ms after the price update at 22:43:35.021 (shown time = 19:43:35 UTC). Within the next 60 minutes the price reached 3.940 (I2-009).
+- **Still unexplained:** the 8-second gap with no stored price updates (22:43:27 → 22:43:35 as shown) during a heavy move.
+  - [EXTERNAL RESEARCH, from memory, not re-fetched] Binance pushes 1-minute candle updates about every 2 seconds, so 3–4 updates are missing. Possible causes: duplicates being dropped, a stalled stream, or Binance simply not sending them. See DBQ-CLAUDE-I3-002.
+- **Classification:** the outcome was made worse by extending the target (F-14), but this exit followed the rules and saved money.
+
+**F-26: Trade 172's "5m is bullish" came from a 5-minute signal that its own checks had rejected.** [PROJECT EVIDENCE] Severity: medium, design gap.
+- The opportunity recorded `five_minute_decision=BUY` and code `BALANCED_STRONG`.
+- The only fresh 5-minute signal was **171559: BUY, confidence 49, `final_entry_allowed=0`**.
+- `TradeExecutionValidationService.balancedBuy(SignalDecision five, SignalDecision one)` (lines 300-308) looks only at the BUY/SELL/WATCH label. It never looks at whether the 5-minute signal itself was allowed to enter, or at its confidence.
+- [AGENT INFERENCE] So a 5-minute signal the system itself would not trade on still counted as bullish support for a 75%-profile entry. Other callers may check this; I have not traced them.
+
+**F-27: Trade 158's route is confirmed, and it has the same timing race.** [PROJECT EVIDENCE]
+- The execution message (wallet trade 392) says: 5-minute signal 165415 woke up an existing opportunity, and execution used 1-minute signal 165412 (WATCH, reward/risk 0.327).
+- The 5-minute trigger 165415 was generated **21 ms after** that 1-minute signal.
+- The opportunity row still shows `five_minute_decision=WATCH`, the older 5-minute signal 165289. The new BUY acted only as the wake-up trigger.
+- This was a deliberately designed route. The low reward/risk (F-11) remains the main weakness.
+
+**F-28: In two trades, an earlier, better 1-minute BUY was not taken and the system entered one minute later on a weaker signal.** [PROJECT EVIDENCE for the rows; the reason is unknown]
+- **Trade 162:**
+  - 1-minute 167646 at 01:01 UTC (04:01 KSA): BUY 76, `STANDARD_ENTRY 100`, not overextended.
+  - Executed instead: 167668 at 01:02 UTC (04:02 KSA): **WATCH**, `REDUCED_POSITION 60`, overextended, `BREAKOUT`, through `ACCUMULATED_EVIDENCE`, labelled "LATE_ENTRY" with Entry Quality 50.
+- **Trade 182:**
+  - 1-minute 176692 at 06:56 UTC: BUY 78, not overextended.
+  - Executed instead: 176710 at 06:57 UTC: BUY 75, overextended, Entry Quality 50.
+- In both cases the entry that went through was worse than the one that was skipped. Why the first was rejected is not in the evidence I have (DBQ-CLAUDE-I3-005).
+
+**F-29: Execution timing was within limits; no trade traded on old data.** [PROJECT EVIDENCE] This refines F-22.
+- **Price age at fill** (wallet fill time − `priceObservedAt`):
+
+  | Trade | Price age at fill |
+  |---|---|
+  | 137 | 2.98 s |
+  | 143 | 2.09 s |
+  | 158 | 2.66 s |
+  | 162 | 1.63 s |
+  | 172 | 1.48 s |
+  | 182 | 1.80 s |
+
+  All are under `MAX_EXECUTION_PRICE_AGE` = 15 s (`ExecutionPriceAuthorityService:25`).
+- **Signal write delay:** about 1.3 s between when analysis started (`generated_at`) and when the signal row was written (`created_at`).
+- **Position record after the opportunity:** the paper position's `opened_at` equals the opportunity's `executed_at` exactly, and both come 1.7–2.2 s after the wallet fill.
+- **Price-feed write lag** (time written − Binance time): up to **1.88 s** (158), 1.75 s (162), 1.72 s (172) and 1.16 s (137).
+- **Local clock:** the minimum write lag is as low as −167 ms, meaning the local clock was up to about 0.17 s behind Binance's event time.
+- [AGENT INFERENCE] The lag peaks of 1.7–1.9 s may line up with candle-close analysis. That would delay stop and profit-lock checks right at minute boundaries (DBQ-CLAUDE-I3-003).
+
+**F-30: Application logs exist locally but I could not read them.** [PROJECT EVIDENCE]
+- The files `logs/crypto-ai-trader.2026-10-12.{0..10}.log.gz`, `…10-13…`, `…10-14…`, `…10-15.{0,1}…` and `…10-17…` exist.
+- They are gzip-compressed, and the search tool available to me cannot read compressed files.
+- **No log evidence was examined in this iteration.** The coordinator can search them with `rg -z`, remembering that log lines are UTC (subtract 3 h from the DB time shown). Suggested search terms:
+  - `signalId=167646`, `signalId=176692`
+  - `FIX-11G`
+  - `SETUP_TIMEFRAME_ATR`
+  - `EGLDUSDT` between 19:43:20 and 19:43:40 UTC
+
+## EVIDENCE: Updated classification
+
+| Trade | Classification after Iteration 3 |
+|---|---|
+| 182 | Poor entry quality; the earlier, better BUY was skipped (F-28); reward/risk 0.48. Exit followed the rules. A valid losing trade from a weak plan. |
+| 172 | 5-minute "bullish" support came from a 5-minute signal its own checks had rejected (F-26). The price step is larger than ATR (F-16). Exit followed the rules. |
+| 162 | Entered on a 1-minute WATCH, one minute after a better BUY that was not executed (F-28). Exit followed the rules. |
+| 158 | Designed wake-up route, confirmed (F-27); reward/risk 0.33, below fees. A plan-design loss. |
+| 143 | **Confirmed decision on a superseded signal (F-24).** The exit was correct, taken during a crash (F-25). |
+| 137 | Mean-reversion entry against a bearish streak; reward/risk 0.64. Exit followed the rules. |
+
+## UNKNOWNS
+
+- **U-17:** The session time zone of the study's MySQL client, and the true stored epoch values. To be confirmed by I3-001.
+- **U-12′:** Why no price updates were stored for 8 seconds during the trade 143 crash.
+- **U-14:** How Replay assigns `generatedAt`, and whether Replay would reject trade 143.
+- **U-18:** Why signals 167646 and 176692 were not executed.
+- **U-13:** Whether a FIX-154 assessment (`buy_htf_assessment_audit`) exists for these entries.
+- **U-19:** Whether write-lag peaks cluster at minute boundaries.
+- All application-log evidence (F-30).
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-001
+Purpose: Prove the session time zone and the true stored epoch values (F-23). UNIX_TIMESTAMP on a TIMESTAMP column returns the stored epoch regardless of session. Expect 358 → 1791747601.028 and the EGLD 1m candle → 1791747540.
+SQL:
+SELECT @@global.time_zone, @@session.time_zone, @@system_time_zone, NOW(6), UTC_TIMESTAMP(6);
+SELECT id, execution_price_observed_at, UNIX_TIMESTAMP(execution_price_observed_at) AS epoch_s FROM wallet_trade WHERE id IN (344,358,392,403,426,451);
+SELECT id, symbol, interval_code, open_time, UNIX_TIMESTAMP(open_time) AS epoch_s, close_price FROM candle WHERE symbol='EGLDUSDT' AND interval_code='1m' AND open_time BETWEEN '2026-10-11 22:39:00' AND '2026-10-11 22:43:00' ORDER BY open_time
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-002
+Purpose: Raw price-feed rows around the trade 143 crash (U-12′), including NON_CANONICAL/duplicate rows, plus the stored 1m candles. Times are the session-shown values.
+SQL:
+SELECT id, observed_at, created_at, price, source, delivery_status, outcome_reason, ordering_slot FROM market_price_event WHERE symbol='EGLDUSDT' AND observed_at BETWEEN '2026-10-11 22:43:15' AND '2026-10-11 22:43:45' ORDER BY observed_at, id;
+SELECT open_time, close_time, open_price, high_price, low_price, close_price, closed, ingestion_source, created_at, updated_at FROM candle WHERE symbol='EGLDUSDT' AND interval_code='1m' AND open_time BETWEEN '2026-10-11 22:40:00' AND '2026-10-11 22:44:00' ORDER BY open_time
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-003
+Purpose: Price-feed write lag by second within the minute during the six holds (U-19)
+SQL:
+SELECT SECOND(e.observed_at) AS sec_of_min, COUNT(*) AS n, ROUND(AVG(TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at))/1000,1) AS avg_lag_ms, ROUND(MAX(TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at))/1000,1) AS max_lag_ms
+FROM paper_position p JOIN market_price_event e ON e.symbol=p.symbol AND e.observed_at BETWEEN p.opened_at AND p.closed_at
+WHERE p.id IN (182,172,162,158,143,137)
+GROUP BY SECOND(e.observed_at) ORDER BY sec_of_min
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-004
+Purpose: Read the schemas of the audit tables before querying them (U-13, U-18)
+SQL:
+SELECT table_name, ordinal_position, column_name, column_type FROM information_schema.columns
+WHERE table_schema='crypto_ai' AND (table_name='buy_htf_assessment_audit' OR table_name LIKE '%execution%audit%' OR table_name LIKE '%decision%audit%' OR table_name LIKE '%signal_work%')
+ORDER BY table_name, ordinal_position
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-005
+Purpose: Why 1m BUYs 167646 and 176692 were not executed (F-28): all opportunity rows for DOGE and ACE around those minutes
+SQL:
+SELECT id, symbol, status, started_at, last_evidence_at, latest_signal_id, evidence_score, five_minute_decision, one_hour_decision, execution_source, decision_code, LEFT(decision_explanation,1500) AS expl, executed_at, updated_at
+FROM execution_opportunity
+WHERE (symbol='DOGEUSDT' AND updated_at BETWEEN '2026-10-12 03:58:00' AND '2026-10-12 04:03:00')
+   OR (symbol='ACEUSDT' AND updated_at BETWEEN '2026-10-12 09:54:00' AND '2026-10-12 09:58:00')
+ORDER BY symbol, updated_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-006
+Purpose: How often an entry's recorded 5m decision differs from the 5m signal for the same candle close (F-24 generalisation)
+SQL:
+SELECT p.id, p.symbol, o.execution_source, o.five_minute_decision AS used_5m, s5.id AS same_boundary_5m_id, s5.decision AS same_boundary_5m, TIMESTAMPDIFF(MICROSECOND, s1.generated_at, s5.generated_at) AS five_minus_one_us
+FROM paper_position p
+JOIN trade_signal s1 ON s1.id=p.signal_id
+JOIN execution_opportunity o ON o.symbol=p.symbol AND o.executed_at=p.opened_at
+LEFT JOIN trade_signal s5 ON s5.symbol=s1.symbol AND s5.interval_code='5m' AND s5.candle_open_time + INTERVAL 5 MINUTE = s1.candle_open_time + INTERVAL 1 MINUTE
+WHERE p.opened_at >= '2026-10-11 00:00:00'
+ORDER BY p.id
+### END_DB_REQUEST
+
+---
+
+**Self-review of Iteration 3:**
+- **Confirmed:**
+  - F-23: the time labels were wrong. Two independent sources prove it; still awaiting I3-001.
+  - F-24: trade 143's signal-selection race.
+  - F-25: trade 143's exit came from a real crash.
+- **Code-backed design gap:** F-26 (a rejected 5-minute signal counted as bullish).
+- **Open:** F-28 (skipped better BUYs), the Replay reproduction (U-14), and all log evidence.
+- **Corrections to my earlier iterations:** every absolute timestamp label in Iterations 1 and 2. U-12 is settled by F-25.
+- **Planned for Iteration 4:** decision audits, the FIX-154 assessment rows, and the Replay `evaluationTime` path.
+
+Sources:
+- [Binance klines, EGLDUSDT 1m, from 19:35 UTC](https://api.binance.com/api/v3/klines?symbol=EGLDUSDT&interval=1m&startTime=1791747300000&limit=12)
+- [Binance klines, EGLDUSDT 1m, from 22:35 UTC](https://api.binance.com/api/v3/klines?symbol=EGLDUSDT&interval=1m&startTime=1791758100000&limit=12)
+- [Binance klines, EGLDUSDT 1m, from 20:00 UTC](https://api.binance.com/api/v3/klines?symbol=EGLDUSDT&interval=1m&startTime=1791748800000&limit=20)

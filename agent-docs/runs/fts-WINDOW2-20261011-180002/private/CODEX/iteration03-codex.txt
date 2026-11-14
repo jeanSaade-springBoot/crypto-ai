@@ -1,0 +1,107 @@
+## FINDINGS
+
+- **[PROJECT EVIDENCE]** No Codex-side DB result exists yet; trade-specific DB timing, wallet linkage, and P&L remain unverified.
+
+- **[PROJECT EVIDENCE]** Runtime logs identify all frozen positions and show they were still being analysed:
+
+| Trade | Symbol | First attributable analysis log UTC | KSA |
+|---:|---|---|---|
+| 78 | SHIBUSDT | 2026-10-10 02:26:02.859 | 05:26:02.859 |
+| 82 | ICPUSDT | 2026-10-10 04:56:02.842 | 07:56:02.842 |
+| 91 | UNIUSDT | 2026-10-10 10:21:02.854 | 13:21:02.854 |
+| 96 | ENAUSDT | 2026-10-10 12:45:07.902 | 15:45:07.902 |
+| 101 | ICPUSDT | 2026-10-10 13:51:02.775 | 16:51:02.775 |
+| 104 | EDUUSDT | 2026-10-10 14:25:03.018 | 17:25:03.018 |
+
+These are activity anchors, not entry times.
+
+- **[PROJECT EVIDENCE — trade 104]** The direct live-protection path detected a profit-lock breach at `2026-10-10 14:45:22.035 UTC` / `17:45:22.035 KSA`: price `0.071000`, lock `0.071030966079`, target `0.071527415198`. It explicitly held because its contemporaneous context was `1h=BUY, 5m=WATCH, current=WATCH`.
+
+- **[PROJECT EVIDENCE — trade 104]** That direct-path hold repeated at least through `14:45:59.913 UTC` / `17:45:59.913 KSA`. Each corresponding EDUUSDT price event was committed as `APPLIED` with `PROTECTION_CALLBACK_COMPLETED`; this proves protection callback completion, not by itself a position close.
+
+- **[PROJECT EVIDENCE — trade 104]** At `14:46:01.300 UTC` / `17:46:01.300 KSA`, the 1m signal `115326` was saved. At `14:46:01.312 UTC` / `17:46:01.312 KSA`, the signal path logged `SIGNAL_TRIGGER` at `0.070900`, beneath the same profit lock.
+
+- **[PROJECT EVIDENCE]** Source confirms different handling in the two paths:
+  - direct protection evaluates `PositionExitPolicy` and may log a protected hold ([LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:216));
+  - signal processing closes immediately whenever its profit lock is triggered ([PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:175)).
+
+- **[AGENT INFERENCE — trade 104]** The evidence supports a roughly 39.3-second interval between the first live breach and the signal-path close trigger. This is a path-policy divergence, not established latency failure: the direct path intentionally held, then the fresh 1m signal path applied its unconditional profit-lock close branch.
+
+- **[PROJECT EVIDENCE — trade 104]** A symbol-lock wait of `207 ms` was logged at `14:46:02.227 UTC` / `17:46:02.227 KSA`, followed by a committed transaction at `14:46:02.235 UTC` / `17:46:02.235 KSA`. This is too small to explain the 39-second interval.
+
+- **[AGENT INFERENCE — trade 104]** The observed final segment is above the managed-position entry (`0.070700` to `0.070900`), yet the frozen selection requires negative `paper_position.realized_pnl`. This is not a contradiction yet: source adds any pre-existing realized P&L to the final remaining-position P&L. DB evidence must determine whether a prior partial effect or position/wallet price divergence produced the selected loss.
+
+## EVIDENCE
+
+- Local archive coverage: `logs/crypto-ai-trader*.log.gz`; targeted exact-position search completed.
+- Trade 104 key log records:
+  - `crypto-ai-trader.2026-10-10.9.log.gz`, lines `14163–14165`: first live profit-lock trigger.
+  - Same archive, lines `14164`, `14200`, `14226`, `14272`, `14288`, `14307`, `14468`: repeated live triggers.
+  - Same archive, line `14670`: signal-path trigger for signal `115326`.
+- Price-event completion log format: [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:94).
+- Signal-path close behavior: [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:175).
+- Direct protection’s conditional hold/exit behavior: [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:216).
+- **[EXTERNAL RESEARCH]** None.
+
+## UNKNOWNS
+
+- Exact entry, close, exit reason, realized P&L components, fees, wallet executions, and immutable exit audits for all six trades.
+- Whether trade 104’s signal-path close committed `paper_position`, `wallet_trade`, and `production_exit_audit` consistently.
+- Whether trades 78, 82, 91, 96, and 101 had comparable direct-versus-signal timing behavior.
+- Historical configuration/mode and full price-event continuity at each exit.
+- No timing conclusion for the other five trades is warranted yet.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Confirm actual `crypto_ai` schemas for the six-trade timing and exit-evidence chain before selecting fields or joining records.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'wallet_managed_position',
+      'production_exit_audit',
+      'market_price_event',
+      'position_analysis',
+      'position_management_event',
+      'trade_signal',
+      'signal_processing_work'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-002  
+Purpose: After schema confirmation, obtain the immutable exit-audit records for exactly the frozen paper positions and establish their recorded close trigger, source signal, managed-position link, and audit time.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.production_exit_audit
+WHERE paper_position_id IN (104, 101, 96, 91, 82, 78)
+ORDER BY paper_position_id, audited_at;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-003  
+Purpose: After schema confirmation, obtain bounded EDUUSDT protection evidence around trade 104’s demonstrated breach and signal-trigger interval; raw timestamps are UTC and must be rendered as KSA only by adding three hours.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.market_price_event
+WHERE symbol = 'EDUUSDT'
+  AND observed_at >= '2026-10-10 14:45:00'
+  AND observed_at <  '2026-10-10 14:47:00'
+ORDER BY observed_at, id;
+```
+### END_DB_REQUEST

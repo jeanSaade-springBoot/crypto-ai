@@ -1,0 +1,47 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The response correctly preserves the prior rejection: it explicitly says RPR-0.4 is not an implementation contract and requires a replacement revision, not an amendment ([RPR-0.4_REVIEW_RESPONSE.md](C:\workspace\crypto-ai-trader-mysql\agent-docs\RPR-0.4_REVIEW_RESPONSE.md:9)).
+
+- **PROJECT EVIDENCE:** Its core objections are source-aligned. Current Replay hard-codes 10,000 USDT, reads `WalletSettingsRepository`, is single-symbol/single-position, and labels any non-empty accepted-price stream `EXACT_PRICE_REPLAY` ([ShadowProductionReplayService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:43), [line 79](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:79), [line 95](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:95)).
+
+- **PROJECT EVIDENCE:** The identified live-HTTP escape is real. Replay’s near-TP path calls `BinanceMinimumExecutionPolicy`, whose evaluator requests Binance `/api/v3/exchangeInfo` ([ShadowProductionReplayService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:534), [BinanceMinimumExecutionPolicy.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\wallet\service\BinanceMinimumExecutionPolicy.java:39), [BinanceMarketDataClient.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\client\binance\BinanceMarketDataClient.java:164)).
+
+- **PROJECT EVIDENCE:** CR-03 is material and correctly expands beyond wallet parity. Production invokes position advisory before normal signal processing and can apply `POSITION_STOP_LOSS`; it separately performs live protection from price observations, while exact-price Replay bypasses much of the signal-path exit handling ([PaperTradingService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\service\PaperTradingService.java:113), [PositionManagementService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\position\service\PositionManagementService.java:129), [LivePositionProtectionService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\position\service\LivePositionProtectionService.java:54), [ShadowProductionReplayService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:232)).
+
+- **PROJECT EVIDENCE:** CR-05’s status distinction is correct: Replay consumes only `LEGACY`/`APPLIED`; `PENDING` aborts the current run, while `NON_CANONICAL` and `PROTECTION_NOT_APPLIED` are reported but deliberately excluded ([MarketPriceEventService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\market\service\MarketPriceEventService.java:118), [line 151](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\market\service\MarketPriceEventService.java:151)).
+
+- **PROJECT EVIDENCE:** The response correctly requires candle finality and lineage. The worker’s main candle load does not filter `closed=1`, although its dataset path does; a replacement contract must define the parity source unambiguously ([RegressionTestWorker.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\RegressionTestWorker.java:129), [line 509](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\RegressionTestWorker.java:509), [line 479](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\RegressionTestWorker.java:479)).
+
+- **PROJECT EVIDENCE:** CR-07 is necessary. The observed baseline is not frozen: `HEAD` is `0cb6a9a6cc64ba8ac9d33797bcc30af534fd46e3`, while the worktree contains extensive tracked and untracked changes, including V107–V109 migrations. No implementation contract may be approved against that unspecified state.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Historical derivatives are structurally unavailable in Replay, not merely unproven; `evaluateHistorical()` returns `UNAVAILABLE` because the application does not persist derivatives history ([DerivativesPositioningService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\service\DerivativesPositioningService.java:34)).
+
+- **PROJECT EVIDENCE:** Historical order-book evaluation is persisted/as-of, but missing snapshots yield `UNAVAILABLE` ([OrderBookLiquidityService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\service\OrderBookLiquidityService.java:109), [line 154](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\service\OrderBookLiquidityService.java:154)).
+
+- **PROJECT EVIDENCE:** Sentiment and fundamentals have only `observed_at` in their entities; no persisted availability/ingestion timestamp proves that a historical decision could have seen a late-arriving record ([SentimentSignal.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\domain\SentimentSignal.java:31), [MarketFundamental.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\domain\MarketFundamental.java:55)).
+
+- **PROJECT EVIDENCE:** Current production controls include configured `max-open-positions=3` and `max-daily-loss-percent=2.0`, while Replay’s shadow sizing does not reproduce the production global-open-position or daily-loss paths ([application.yml](C:\workspace\crypto-ai-trader-mysql\src\main\resources\application.yml:121), [PaperTradingService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\service\PaperTradingService.java:322)).
+
+## OBJECTIONS
+
+- **PROJECT EVIDENCE:** The response is directionally correct but still insufficient as the sole requirements source for the next revision. It must explicitly carry forward a complete, deny-by-default live-I/O inventory: Binance, other HTTP clients, websocket/bootstrap paths, and indirect service calls. A parity run requires a test proving zero outbound calls, not only a statement that particular historical evaluators do not call Binance.
+
+- **PROJECT EVIDENCE:** “Decision parity” needs a precise oracle registry. For each decision, the next specification must define the durable source record, its as-of timestamp, its availability timestamp, its lineage identity, the compared fields, and the result when those records are absent. A stored `trade_signal` alone does not prove processing, entry, protection, or committed exit.
+
+- **PROJECT EVIDENCE:** The next specification must define the exact event sequencing contract for both live-price and signal paths. Timestamp sorting alone is inadequate because Production has separate protection and close-analysis transactions ([BinanceKlineService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\service\BinanceKlineService.java:101)); equal-time ordering needs durable event IDs/commit lineage or parity refusal.
+
+- **PROJECT EVIDENCE:** The next revision must choose one first-release scope: single symbol/account with explicit multi-symbol refusal, or deterministic multi-symbol scheduling and atomic global-limit claims. RPR-0.4 proposes the latter without an executable design; the response appropriately identifies this but the replacement must settle it.
+
+- **PROJECT EVIDENCE:** Baseline parity must suppress, not merely describe, the replay-only observers. They currently run in ordinary Replay and write replay observation data ([ShadowProductionReplayService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:100), [line 173](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:173)). Retiring their data/UI remains a separate user product decision.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No read-only database/Flyway-history inspection was performed in this review. Therefore migration application state, checksums, and target-database compatibility remain unverified; the next specification must supply bounded read-only evidence.
+
+- **PROJECT EVIDENCE:** No current complete Production-versus-Replay scenario suite demonstrates equality through initial entry, add, partial harvest, wallet controls, price protection, and final exit. Current tests/comments cannot substitute for that evidence.
+
+- **AGENT INFERENCE:** Full lifecycle parity may be available only for a future evidence era, after availability-time capture and immutable configuration/version capture exist. Earlier windows should normally be simulation or explicit refusal, not a parity claim.
+
+VERDICT: REJECTED

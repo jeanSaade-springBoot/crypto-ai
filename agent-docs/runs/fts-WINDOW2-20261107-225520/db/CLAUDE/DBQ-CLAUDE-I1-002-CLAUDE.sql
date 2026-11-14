@@ -1,0 +1,6 @@
+DESCRIBE trade_signal;
+DESCRIBE wallet_trade;
+DESCRIBE wallet_managed_position;
+DESCRIBE production_exit_audit;
+DESCRIBE position_management_event;
+DESCRIBE execution_opportunity

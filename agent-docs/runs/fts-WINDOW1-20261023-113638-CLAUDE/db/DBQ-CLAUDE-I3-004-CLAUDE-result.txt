@@ -1,0 +1,24 @@
+TABLE_NAME	COLUMN_NAME	DATA_TYPE
+wallet_asset	id	bigint
+wallet_asset	symbol	varchar
+wallet_asset	quantity	decimal
+wallet_asset	average_buy_price_usdt	decimal
+wallet_asset	enabled	tinyint
+wallet_asset	created_at	timestamp
+wallet_asset	updated_at	timestamp
+wallet_snapshot	id	bigint
+wallet_snapshot	portfolio_value_usdt	decimal
+wallet_snapshot	net_invested_usdt	decimal
+wallet_snapshot	total_pnl_usdt	decimal
+wallet_snapshot	total_return_percent	decimal
+wallet_snapshot	realized_pnl_usdt	decimal
+wallet_snapshot	unrealized_pnl_usdt	decimal
+wallet_snapshot	available_usdt	decimal
+wallet_snapshot	captured_at	timestamp
+asset_rows	nonzero_rows
+20	1
+id	captured_at
+347	2026-10-11 21:00:12.117793
+360	2026-10-11 22:43:36.227165
+452	2026-10-12 09:57:06.473247
+455	2026-10-12 10:05:20.484004

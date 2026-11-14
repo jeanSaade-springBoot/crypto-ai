@@ -1,0 +1,66 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen scope is exactly `crypto_ai.paper_position` IDs `182, 172, 162, 158, 143, 137`, selected at the stated on-schedule WINDOW2 snapshot. I did not substitute or expand the population.
+
+- **PROJECT EVIDENCE:** No Codex-private DB result files exist for this run. Therefore no per-trade symbol, timestamps, entry/exit reason, signal linkage, price-event evidence, or P&L component has been independently confirmed yet.
+
+- **PROJECT EVIDENCE:** `paper_position` is designed to hold the entry signal, optional exit signal, entry/exit prices, SL/TP, close reason, realized P&L, and lifecycle timestamps. [PaperPosition.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:10)
+
+- **PROJECT EVIDENCE:** The implementation records fixed stop-loss exits with `status=STOPPED`; several other exit paths use `status=CLOSED`. [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:183) [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:178)
+
+- **AGENT INFERENCE:** Because this mandated study selects only `status=CLOSED`, it may exclude losses closed through the fixed stop-loss path. This is a scope limitation, not a reason to alter the frozen population. Actual status/close-reason distribution requires DB evidence.
+
+- **PROJECT EVIDENCE:** Net P&L cannot be inferred from `paper_position.realized_pnl` alone: the wallet execution model separately persists fees, execution timestamps, and realized P&L. [WalletTrade.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletTrade.java:40)
+
+- **PROJECT EVIDENCE:** Protection analysis must use accepted persisted price-event evidence where available; candle OHLC must not be substituted for missing intrabar protection evidence.
+
+## EVIDENCE
+
+- Charter: `agent-docs/runs/fts-WINDOW2-20261017-180002/CHARTER.md`
+- Required project context and Codex trade-investigation guidance were read.
+- Private evidence directory inspected: `agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX/` — empty.
+- **EXTERNAL RESEARCH:** None. This iteration requires project and database evidence only.
+
+## UNKNOWNS
+
+For each frozen trade, the following remain unverified:
+
+- symbol; raw UTC/KSA entry and exit timestamps;
+- entry/exit signal IDs and decisions;
+- close reason and whether protection, signal exit, or another path closed it;
+- wallet BUY/SELL executions, quantities, fees, and net P&L;
+- contemporaneous candle/indicator/data-quality context;
+- accepted price-event trigger evidence;
+- processing/work timing, runtime mode/version, logs, and Replay comparability.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Establish the actual `crypto_ai` schema and available columns before issuing any data query for the six frozen positions. This is bounded metadata-only evidence.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'wallet_managed_position',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'candle',
+      'technical_indicator',
+      'position_management_event'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation changes were made.

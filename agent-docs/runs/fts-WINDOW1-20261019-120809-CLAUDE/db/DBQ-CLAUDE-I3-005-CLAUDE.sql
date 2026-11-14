@@ -1,0 +1,1 @@
+SELECT id, symbol, interval_code, candle_open_time, generated_at, created_at, ROUND(TIMESTAMPDIFF(MICROSECOND, generated_at, created_at)/1000) AS commit_lag_ms, decision FROM crypto_ai.trade_signal WHERE id IN (156850,156852,156853,159487,159407,158388,166819,166821,166047,168277,168251,167617,172587,172588,172201,176927,176934,176791) ORDER BY generated_at LIMIT 20

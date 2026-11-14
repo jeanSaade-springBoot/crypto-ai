@@ -1,0 +1,9 @@
+exit_code=0
+duration_ms=497
+row_count=1
+--- stdout ---
+db	authenticated_user	trade_signal_count
+crypto_ai	ai_investigator@localhost	90139
+
+--- stderr ---
+

@@ -1,0 +1,16 @@
+﻿[22:17:58] [COORDINATOR] [STATUS] Launcher started Window=WINDOW2 TestMode=False Run=fts-WINDOW2-20261108-221758
+[22:18:03] [COORDINATOR] [EVIDENCE] Authoritative entity: paper_position CLOSED with closed_at and realized_pnl<0. Replay table wallet_position_test excluded. Ranking by closed_at not opened_at/signal.
+[22:18:03] [COORDINATOR] [STATUS] Frozen 6 trade IDs for both agents
+[22:18:03] [CODEX] [STATUS] Started ITERATION 1 - TRADE RECONSTRUCTION
+[22:18:19] [CODEX] [STATUS] Still working - elapsed 0m 15s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[22:18:34] [CODEX] [STATUS] Still working - elapsed 0m 30s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[22:18:49] [CODEX] [STATUS] Still working - elapsed 1m 45s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[22:19:04] [CODEX] [STATUS] Still working - elapsed 1m 1s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[22:19:19] [CODEX] [STATUS] Still working - elapsed 1m 16s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[22:19:34] [CODEX] [STATUS] Still working - elapsed 2m 31s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[22:19:49] [CODEX] [STATUS] Still working - elapsed 2m 45s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[22:20:04] [CODEX] [STATUS] Still working - elapsed 2m 0s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[22:20:06] [CODEX] [STATUS] Completed ITERATION 1 - TRADE RECONSTRUCTION
+[22:20:06] [CODEX] [DB] Executing DBQ-CODEX-I1-001
+[22:20:06] [CODEX] [DB] Completed DBQ-CODEX-I1-001
+[22:20:06] [CLAUDE] [STATUS] Started ITERATION 1 - TRADE RECONSTRUCTION

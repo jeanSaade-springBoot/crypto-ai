@@ -1,0 +1,3 @@
+SELECT @@session.time_zone AS session_tz, @@system_time_zone AS system_tz, NOW(6) AS session_now, UTC_TIMESTAMP(6) AS utc_now;
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME IN ('paper_position','wallet_trade','wallet_managed_position','market_price_event','candle','signal_processing_work','production_exit_audit','trade_signal') AND DATA_TYPE IN ('timestamp','datetime') ORDER BY TABLE_NAME, ORDINAL_POSITION;
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME IN ('production_exit_audit','position_analysis') ORDER BY TABLE_NAME, ORDINAL_POSITION;

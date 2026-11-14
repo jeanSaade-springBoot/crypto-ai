@@ -1,0 +1,192 @@
+# Claude: FTS WINDOW2, Iteration 6 (root cause and research, self-review)
+
+**Scope.** This covers the six frozen Production trades only: 182, 172, 162, 158, 143 and 137 in `crypto_ai.paper_position`. It is analysis only: no code, config, database, git or deploy changes. I did not read Codex's files, `LIVE_*` or `DATABASE_QUERY_LOG.md`. Write and ExitPlanMode were not available, so this report is inline, as in Iterations 3–5.
+
+**Time zone.** The prompt says the database timestamps are UTC. That conflicts with T1, which I confirmed in I3-001/002: the query wrapper shows `TIMESTAMP` columns in **KSA** time, and UTC is the shown value minus 3 h. I keep T1 and give both zones. The conflict still needs review by both agents.
+
+## Bottom line
+
+1. **The main root cause is structural: the stop/target geometry against trading costs.**
+   - The stop is `max(2×ATR, 0.50%)` and the target is `3×ATR`.
+   - On these low-volatility 1m coins, that gives a target of only **0.17–0.32%** against a stop of 0.50% for four of the six trades (137, 158, 162, 182).
+   - Paper trading records **zero fees**. At Binance's standard 0.1% per side, a full round trip costs about 0.2%, which wipes out most or all of those targets. For 158 the target is below the cost of the round trip.
+2. **None of the six was stopped out.** Five exited on a SELL signal after only a 0.06–0.18% favourable move. That is less than a round-trip fee, so there was no real profit to protect.
+3. **Trade 143 is still the only confirmed logic defect** (R1/R4/Q3). Its gap-through exit is partly explained by the price feed: the app only reads Binance kline streams, which Binance documents as pushing every 2,000 ms.
+4. **New design gap for trade 182.** Two guards built for the BALANCED_EARLY route skip its weaker sibling route, FIX-11G. Under either guard, 182 would not have been entered.
+5. **Correction to my own Iteration 5 claims (Q1/Q2).**
+   - The I5-003 population table showed most of the losses in the highest bands: R:R ≥ 1.5 and score ≥ 70.
+   - But that table can't be trusted as built. Its R:R comes from `paper_position` stop and target values that the code changes after entry, and its profit and loss is in USDT, so it is distorted by position size.
+   - I therefore downgrade Q1/Q2 to factors that matter for these six trades only, until I6-002 re-measures them properly.
+
+---
+
+## EVIDENCE
+
+### E1. Stop/target geometry (PROJECT EVIDENCE: code and config)
+
+- `AtrRiskService.java:34-45`: the stop distance is `max(ATR × stopLossMultiplier, price × minimumStopPercent)`, and the target is `ATR × takeProfitMultiplier`.
+- `application.yml:137-143`: the defaults are 2.0, 3.0 and 0.50%. They can be overridden by `ATR_*` environment variables, and the Production values were not verified.
+- The stored stops match the defaults: 137, 158, 162 and 182 sit at −0.50%, and 143 sits at 2×ATR (I1-004).
+- **What this means:** R:R falls below 1 whenever 3×ATR is under 0.5%, that is, whenever ATR is below about 0.167% of price.
+
+### E2. Price move per trade (PROJECT EVIDENCE: I1-004 and FTS-005, plus arithmetic)
+
+The fill price is back-calculated from `profit_lock_progress_percent`, the highest price and the target.
+
+| Trade | Fill | Target distance | Stop distance | Best favourable move | Target after 0.2% round-trip fees* | Exit |
+|---|---|---|---|---|---|---|
+| 137 EGLD | 3.9990 | +0.322% | −0.50% | +0.150% | +0.12% | SELL_CONFIRMED |
+| 143 EGLD | 4.0330 | +1.77% (target extended) | −0.57% | +1.69% | +1.57% | PROFIT_LOCK_HARD_EXIT |
+| 158 XRP | 1.4108 | +0.171% | −0.49% | +0.057% | **−0.03%** | SELL_CONFIRMED |
+| 162 DOGE | 0.087051 | +0.218% | −0.50% | +0.068% | +0.02% | STRONG_SELL |
+| 172 SHIB | 5.49e-6 | +3 ticks, about +0.36% | −3 ticks | +1 tick, +0.18% | about +0.16% | HTF_SELL_CONFIRMED |
+| 182 ACE | 0.1884 | +0.241% | −0.50% | 0% | +0.04% | SELL_CONFIRMED |
+
+\*This is a hypothetical cost. Paper trading charges no fees.
+
+### E3. Fees are zero in Production paper trading (PROJECT EVIDENCE)
+
+- Every automatic wallet trade sets `.feeUsdt(ZERO)` in `WalletAutoExecutionService.java:173, 260, 349, 443, 540, 653`.
+- `paper_position.realized_pnl` is calculated as (exit − entry) × quantity, with no cost (`PaperTradingService.java:458-465, 496-502`).
+
+### E4. Binance costs and stream speeds (EXTERNAL RESEARCH)
+
+- **Spot fee at VIP 0:** 0.100% maker and taker, or 0.075% when paid in BNB. This is the published **Binance.US** schedule. I could not confirm the Binance.com schedule, so the 0.2% round trip is an assumption.
+- **Stream speeds:** Binance documents that kline streams update every 2,000 ms on intervals other than 1s, while trade, aggTrade and bookTicker update in real time.
+- **What the app uses (PROJECT EVIDENCE):** it builds only `@kline_` streams (`BinanceStreamUrlBuilder.java:37`).
+- **What that means (AGENT INFERENCE):**
+  - Live price protection can't see the price more often than every 2 s.
+  - The I3-005 count of 19 events in a minute (below the full-cadence 30) fits a stream that only pushes when something changes. That points to the exchange side (T3 cause (a)), but is still not proof.
+
+### E5. Two BALANCED_EARLY guards skip the FIX-11G route (PROJECT EVIDENCE: code)
+
+- **The post-bearish recovery guard** returns early unless the route code is `"BALANCED_EARLY"` (`ExecutionIntelligenceService.java:2081`).
+  - It requires: health ≥ 60, evidence ≥ 4, two recovered 5m WATCH/BUY states, and a score ≥ 60 (`:179-183`).
+  - Unlike the FIX-11G check, it does read `original_decision` (`:2092`, `:2100`).
+- **The FIX-041 LATE_ENTRY block** also applies only to `"BALANCED_EARLY"` (`:672-673`).
+- **FIX-11G** uses the code `BALANCED_NEUTRAL_5M_WATCH_1H` (`TradeExecutionValidationService.java:278`) and reads only the stored 5m `decision` (`:263`).
+- **Counterfactual for 182 (AGENT INFERENCE on R6 evidence):**
+  - Its 5m signal's original decision was STRONG_SELL, so the guard would have counted zero recovered 5m states.
+  - Its score was 50, below the guard's 60.
+  - Either condition would have paused the entry.
+- **Population (I4-005):** the FIX-11G route had n=17, 9 wins and 8 losses, and a total of +0.003 USDT. It breaks even and adds no edge.
+
+### E6. Opportunity history for 137, 143 and 182 (PROJECT EVIDENCE, I5-001/002)
+
+- **The executing opportunity was 1–3 minutes old** each time: 35535, 36524 and 40290.
+- **Each had been preceded by a run of opportunities cancelled for BEARISH_REVERSAL:**
+  - Before 137: nine straight 1m STRONG_SELL signals from 20:45 to 20:53 KSA.
+  - Before 143: nine straight from 22:26 to 22:34 KSA.
+  - Before 182: sixteen straight from 09:39 to 09:54 KSA.
+- **Result:** the executing opportunity's health (85, 95 and 86) is built only from observations made after that reset.
+- **Caution (AGENT INFERENCE):** I have not proven that a guard should have used this history. FIX-11G's immediate path doesn't read opportunity memory. The guard in E5 is what would have carried the bearish context.
+
+### E7. Where each entry sat in its prior 30-minute range (PROJECT EVIDENCE, I5-004)
+
+Position is where the fill sat between the 30-minute low (0) and high (1).
+
+| Trade | 137 | 143 | 158 | 162 | 172 | 182 |
+|---|---|---|---|---|---|---|
+| Position in range | 0.38 | 0.75 | 0.80 | 0.90 | 1.00 | 0.45 |
+| Width of range | 0.53% | 2.1% | 0.25% | 0.45% | 2 ticks (0.37%) | 1.17% |
+
+- **On three coins the 0.50% stop is wider than the whole 30-minute range:** XRP, DOGE and SHIB.
+- **Q3 arithmetic for 143 holds:** the 30-minute low of 3.970 lies inside my inferred reference-low band of 3.9676–3.9724. The +1.56% rise is 6.83 ATR on the 5m ATR (a −30 penalty) and 5.69 ATR on the 1m ATR (a −20 penalty). That matches the scores of 60 and 70.
+- **Q4 for 137 is plausible but not proven:** 4.005 at 20:40 KSA (17:40 UTC), followed by closes at 3.997 and 3.992, is a rejected high within 0.5% of the fill.
+
+### E8. Problems with my Iteration 5 population table (PROJECT EVIDENCE)
+
+- **The table's R:R isn't the planned R:R.** `paper_position.take_profit` is overwritten when the target is extended (`LivePositionProtectionService.java:148`) and when it is synced (`PaperTradingService.java:165`). Stop, target and entry price are also changed by progressive adds (`:266-274`). Positions whose target was extended end up in the R:R ≥ 1.5 band.
+- **Its profit and loss is size-weighted.** `realized_pnl` is in USDT, and entries scoring ≥ 70 get larger size caps (`ExecutionIntelligenceService.java:1183`).
+- **The joins are clean:** the totals match the route table (n=95, −1.5557 USDT).
+- **The frozen six aren't where the window's money was lost:**
+  - Together they lost −0.273 USDT, about 18% of the net loss, and none was a STOP_LOSS.
+  - The biggest losers are elsewhere: the direct IMMEDIATE_VALIDATION route (excluding FIX-11G) has n=15, 4 wins and 11 losses, and −2.416 USDT. Examples are PEPE #123 at −0.698 and #169 at −0.355, both stop-outs.
+  - Of the six, only 172 is in that route.
+
+## FINDINGS: root cause by trade
+
+| Trade | Main root cause | Contributing causes | Classification |
+|---|---|---|---|
+| 143 | Entry-logic defect: the 5m race plus the 1m/5m risk-authority mismatch (R1, R4, Q3). Probable re-use of a single 5m BUY (R5). | Gap-through exit limited by the 2 s kline feed (E4, R8). It cannot be reproduced in Replay (R4). | **Defect** |
+| 182 | FIX-11G is missing the guards that BALANCED_EARLY has (E5), and it ignores the bearish `original_decision` (R6). | Target of 0.24% against a 0.50% stop (E2). Bought right after a 16-signal STRONG_SELL run (E6). | **Design gap.** Rules were followed, but the route is weaker than its sibling. |
+| 162 | FIX-119 is skipped when there is even one BUY observation (R7); the entry was a late breakout on a WATCH at the top of its range (0.90). | Target of 0.22% is about equal to fees (E2). | Weak rule |
+| 158 | Geometry: target 0.17% against stop 0.49%. **Can't be won net of fees.** | Weak WATCH (64), score 50, top of range (0.80). | Valid loss under a configuration that loses money |
+| 137 | Geometry: target 0.32%. | Bought after a STRONG_SELL run through a strict exception; probable rejected high (Q4). | Valid loss |
+| 172 | The price plan is only ±3 ticks, so it is mostly rounding noise (Q6). | Bought at the top of a 2-tick range. | Valid loss |
+
+**Shared mechanism (AGENT INFERENCE):** the TRADING_RULES question below asks whether a target must clear costs. On 1m signals for coins whose 1m ATR is about 0.06–0.11%, the 3×ATR target lands near or below realistic costs, while the 0.5% minimum stop is several times wider. The signal exits then cut each trade at a small loss before the stop. The paper ledger hides the cost problem completely because it charges no fees.
+
+**What the six trades show in Replay:** the five non-defect trades use shared code (R4, Q8), so Replay should reproduce them, provided the stored signals and opportunity state match. Because Replay also charges no fees, it would hide the cost problem too.
+
+## Correction proposals (proposals only; not authorised)
+
+| ID | Proposal | Regression check |
+|---|---|---|
+| P1 | Select the 5m authority signal by candle open time, as FIX-141 does, and compute R:R and the above-target check against the authority's own plan. | Trade 143 is not entered. Trades #356, #1702 and #1696 are unchanged. Replay matches Production on 143. |
+| P2 | Apply the BALANCED_EARLY post-bearish guard and LATE_ENTRY block to FIX-11G as well, using `strongerDecision(decision, original_decision)`. | Trade 182 is paused. Re-run all 17 FIX-11G entries and report the net result. |
+| P3 | Add a gate that the target must clear costs: target distance ≥ k × (round-trip fee + one tick). Separately, add a fee model to paper trading and Replay. | 158 and 162 are blocked. Re-measure the population net of fees by ATR% band. |
+| P4 | Make FIX-119's "has a BUY observation" exemption depend on the BUY share, or on a fresh BUY, rather than `buyCount > 0`. | Trade 162 is deferred. The FIX-119 good controls are unchanged. |
+| P5 | Persist the inputs behind each score, and the planned stop/target at entry, without changing them later. | The schema review shows they are stored once and never overwritten. |
+| P6 | Evaluate (research only) whether price protection should read a real-time stream such as bookTicker or aggTrade. | Re-check 143's exit timing. This needs its own design under AGENTS.md. |
+
+## UNKNOWNS
+
+- **U-I6-1:** the actual Production `ATR_*` overrides. The stored stops are consistent with the defaults.
+- **U-I6-2:** the Binance.com fee tier the live system would pay. The 0.2% round trip is an assumption.
+- **U-I6-3:** the population result by the R:R planned at entry, as a percentage return and net of fees. This decides P3 and replaces my I5-003 table (I6-002).
+- **U-I6-4:** the 5m `original_decision` around trade 137 (I6-004), and how far each losing trade moved in its favour compared with the winners (I6-003).
+- **U-I6-5:** each trade's actual exit price and percentage loss (I6-001).
+- **Carried over:** the T1 time-zone rule conflict; U-T3 (whether the 143 price gaps came from the exchange or the app, which needs the gzip logs); U8 (why trading stopped).
+
+## DB_REQUESTS
+
+All time literals below are KSA, matching the wrapper's session zone (T1).
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: Actual exit price, percentage return and the risk plan at signal time for the six frozen trades (E2, U-I6-5)
+SQL:
+SELECT pp.id, pp.symbol, pp.entry_price, pp.exit_price, pp.quantity, ROUND((pp.exit_price - pp.entry_price) / pp.entry_price * 100, 4) AS gross_ret_pct, ROUND((pp.exit_price - pp.entry_price) / pp.entry_price * 100 - 0.2, 4) AS net_ret_pct_assumed_fee, pp.stop_loss AS pp_stop_now, pp.take_profit AS pp_tp_now, ts.stop_loss AS sig_stop, ts.take_profit AS sig_tp, ts.risk_reward_ratio AS sig_rr, ts.atr_at_signal, ROUND(ts.atr_at_signal / ts.latest_price * 100, 4) AS atr_pct, pp.close_reason FROM crypto_ai.paper_position pp JOIN crypto_ai.trade_signal ts ON ts.id = pp.signal_id WHERE pp.id IN (137, 143, 158, 162, 172, 182) ORDER BY pp.id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: Population since 10-11 by the R:R planned at entry and by ATR% band, as percentage returns gross and net of an assumed fee. Replaces I5-003 (E8, P3)
+SQL:
+SELECT CASE WHEN ts.risk_reward_ratio < 0.5 THEN 'a_lt0.5' WHEN ts.risk_reward_ratio < 1 THEN 'b_0.5-1' WHEN ts.risk_reward_ratio < 1.5 THEN 'c_1-1.5' ELSE 'd_ge1.5' END AS sig_rr_band, CASE WHEN ts.atr_at_signal / ts.latest_price * 100 < 0.10 THEN 'atr_lt0.10' WHEN ts.atr_at_signal / ts.latest_price * 100 < 0.167 THEN 'atr_0.10-0.167' WHEN ts.atr_at_signal / ts.latest_price * 100 < 0.25 THEN 'atr_0.167-0.25' ELSE 'atr_ge0.25' END AS atr_band, COUNT(*) AS n, SUM(pp.exit_price > pp.entry_price) AS gross_wins, SUM((pp.exit_price - pp.entry_price) / pp.entry_price * 100 > 0.2) AS net_wins, ROUND(AVG((pp.exit_price - pp.entry_price) / pp.entry_price * 100), 4) AS avg_gross_ret_pct, ROUND(AVG((pp.exit_price - pp.entry_price) / pp.entry_price * 100 - 0.2), 4) AS avg_net_ret_pct, SUM(pp.close_reason = 'STOP_LOSS') AS stops FROM crypto_ai.paper_position pp JOIN crypto_ai.trade_signal ts ON ts.id = pp.signal_id WHERE pp.opened_at >= '2026-10-11 00:00:00' AND pp.status IN ('CLOSED', 'STOPPED') AND pp.exit_price IS NOT NULL GROUP BY sig_rr_band, atr_band ORDER BY sig_rr_band, atr_band;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: Distribution of the best favourable move (progress toward target), losers against winners, to test whether giving back gains is a population pattern (finding B)
+SQL:
+SELECT CASE WHEN pp.realized_pnl > 0 THEN 'win' ELSE 'loss' END AS outcome, CASE WHEN wmp.profit_lock_progress_percent IS NULL THEN 'unknown' WHEN wmp.profit_lock_progress_percent < 10 THEN 'p00-10' WHEN wmp.profit_lock_progress_percent < 30 THEN 'p10-30' WHEN wmp.profit_lock_progress_percent < 50 THEN 'p30-50' WHEN wmp.profit_lock_progress_percent < 70 THEN 'p50-70' ELSE 'p70+' END AS mfe_band, COUNT(*) AS n, ROUND(SUM(pp.realized_pnl), 6) AS sum_pnl FROM crypto_ai.paper_position pp LEFT JOIN crypto_ai.wallet_managed_position wmp ON wmp.entry_signal_id = pp.signal_id WHERE pp.opened_at >= '2026-10-11 00:00:00' AND pp.status IN ('CLOSED', 'STOPPED') GROUP BY outcome, mfe_band ORDER BY outcome, mfe_band;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-004
+Purpose: 5m decision and original_decision in the 20 minutes before the FIX-11G entries 137 and 182 (E5 counterfactual)
+SQL:
+SELECT symbol, id, generated_at, candle_open_time, decision, original_decision, total_score FROM crypto_ai.trade_signal WHERE interval_code = '5m' AND ((symbol = 'EGLDUSDT' AND generated_at BETWEEN '2026-10-11 20:35:00' AND '2026-10-11 20:55:02') OR (symbol = 'ACEUSDT' AND generated_at BETWEEN '2026-10-12 09:37:00' AND '2026-10-12 09:57:02')) ORDER BY symbol, generated_at LIMIT 20;
+### END_DB_REQUEST
+
+## Self-review (Iteration 6)
+
+- **Labels:**
+  - Code citations are from lines I read this iteration: `AtrRiskService:20-59`, `AtrRiskProperties`, `application.yml:135-146`, `PaperTradingService:140-289, 380-465`, `LivePositionProtectionService:120-229`, `ExecutionIntelligenceService:645-674, 2078-2129`, `TradeExecutionValidationService:225-298`, and the grep of `WalletAutoExecutionService` for `feeUsdt`.
+  - EXTERNAL RESEARCH is limited to the fee schedule and the stream speeds.
+  - Counterfactuals are labelled AGENT INFERENCE.
+- **Corrections:**
+  - Q1/Q2 are downgraded from causes across the population, because of the problems with the I5-003 table (E8).
+  - In Iteration 5 I wrote "+3 ticks" for 172's target without the reason; it is correct only because the 5.510418 target needs 5.52 to trigger.
+- **Not done:** no documentation updated (analysis only). The fee assumption must be confirmed before P3 is put to either agent.
+- **Plan for Iteration 7:**
+  - Apply I6-001 to I6-004.
+  - Confirm or withdraw the geometry-against-cost root cause at population level.
+  - Finalise how much each root cause contributes, and freeze the per-trade classification.
+
+**Sources (EXTERNAL RESEARCH):**
+- [Binance Spot WebSocket Streams (update speeds)](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)
+- [Binance.US fee discount and VIP program (VIP 0 at 0.1%, 0.075% with BNB)](https://support.binance.us/hc/en-us/articles/360047428113-Binance-US-Launches-Trading-Fee-Discount-and-VIP-Program-With-BNB)
+- [TradingView: strategies that look into the future (higher-timeframe lookahead), background for P1](https://es.tradingview.com/support/solutions/43000614705/)

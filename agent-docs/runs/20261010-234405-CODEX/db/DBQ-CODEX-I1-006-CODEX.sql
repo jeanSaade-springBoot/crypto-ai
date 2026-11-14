@@ -1,0 +1,1 @@
+SHOW COLUMNS FROM signal_processing_work

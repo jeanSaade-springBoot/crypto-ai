@@ -1,0 +1,1 @@
+SELECT id, symbol, side, quantity, price_usdt, decision_price_usdt, execution_price_observed_at, execution_reason, execution_key, signal_id, executed_at FROM crypto_ai.wallet_trade WHERE symbol='DOGEUSDT' AND executed_at BETWEEN '2026-10-12 04:25:50' AND '2026-10-12 04:26:20' LIMIT 10

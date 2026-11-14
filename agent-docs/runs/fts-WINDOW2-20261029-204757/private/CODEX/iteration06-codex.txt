@@ -1,0 +1,50 @@
+## FINDINGS
+
+- **Confirmed root cause for the six frozen losses: not yet determinable.** No permitted result exists in `db/CODEX/`; consequently, there is no trade-specific evidence for IDs `182, 172, 162, 158, 143, 137` covering symbol, entry/exit time, close trigger, wallet execution, or accepted protection price.
+
+- **PROJECT EVIDENCE — source-level accounting risk:** signal-path terminal close persists `paper_position` before attempting wallet liquidation. `executeSignalLinkedExit(...)` can return normally without selling when the managed position is absent, has zero quantity, or an execution already exists; its caller does not inspect an outcome. A caught wallet exception is also logged and not rethrown. Therefore, a closed negative `paper_position` can be financially unverified until matched to wallet/managed-position evidence. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487), [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:210)
+
+- **AGENT INFERENCE:** This is a plausible root cause only for a frozen trade whose terminal route was signal-driven or signal-linked. It is not evidence that any of the six selected losses is phantom, incorrectly exited, or mis-accounted.
+
+- **PROJECT EVIDENCE — direct protection differs:** the direct live-price path closes `paper_position` only after `executeMechanicalExit(...)` returns `true`; accepted price events are then marked `APPLIED`. This lowers the above risk for a direct stop/TP/profit-lock route, but an `APPLIED` event can still be a no-position callback, so wallet evidence remains required. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:53)
+
+- **PROJECT EVIDENCE:** `production_exit_audit.close_trigger` is the strongest available terminal-cause record because it distinguishes the true trigger from the contextual signal. It is diagnostic only, not proof of wallet execution. [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:29)
+
+- **PROJECT EVIDENCE:** Current source calculates `paper_position.realized_pnl` from position entry/exit prices and quantity; fees are not part of that calculation. Any comparison with net wallet P&L must include `wallet_trade` fees separately. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:495)
+
+- **EXTERNAL RESEARCH:** Spring’s default rollback handling depends on an exception escaping the transactional call; this supports the source-level concern that swallowed exceptions can allow the outer business transaction to continue. It does not establish what happened historically. [Spring transaction rollback documentation](https://docs.spring.io/spring-framework/reference/6.2/data-access/transaction/declarative/rolling-back.html)
+
+- **EXTERNAL RESEARCH:** MySQL documents that some failures roll back only the failing statement rather than the whole transaction. A nearby error log is therefore insufficient to infer whether a particular paper close or wallet mutation committed; the durable rows are necessary. [MySQL InnoDB error handling](https://dev.mysql.com/doc/refman/8.4/en/innodb-error-handling.html)
+
+## EVIDENCE
+
+- Frozen scope retained exactly: `182, 172, 162, 158, 143, 137`.
+- The supplied snapshot clocks remain contradictory: `2026-10-30 12:24:16 UTC` converts to `2026-10-30 15:24:16 KSA`, not the stated `2026-10-29 20:47:57 KSA`. This does not alter the frozen IDs, but prevents clock-window inference.
+- No external research can establish an individual trade’s cause without its durable database evidence.
+
+## UNKNOWNS
+
+- Each position’s symbol, opening and closing UTC timestamps (and KSA conversions), entry/exit signal IDs, close reason, and exit trigger.
+- Whether the six rows were direct-protection exits, signal exits, profit-lock exits, or another route.
+- Whether each paper close has a matching managed-position closure and executed wallet SELL.
+- Whether accepted `market_price_event` evidence crossed the recorded stop/target/profit-lock threshold.
+- Historical deployed revision/configuration and Replay comparability.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Establish the actual `crypto_ai` schema before issuing the bounded root-cause joins for the six frozen paper positions. This is required to distinguish paper-only closure, wallet execution, direct-price protection, and terminal audit evidence without assuming source mappings.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+SHOW CREATE TABLE crypto_ai.production_exit_audit;
+SHOW CREATE TABLE crypto_ai.wallet_managed_position;
+SHOW CREATE TABLE crypto_ai.wallet_trade;
+SHOW CREATE TABLE crypto_ai.trade_signal;
+SHOW CREATE TABLE crypto_ai.market_price_event;
+SHOW CREATE TABLE crypto_ai.position_analysis;
+SHOW CREATE TABLE crypto_ai.position_management_event;
+SHOW CREATE TABLE crypto_ai.signal_processing_work;
+```
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation state was changed.

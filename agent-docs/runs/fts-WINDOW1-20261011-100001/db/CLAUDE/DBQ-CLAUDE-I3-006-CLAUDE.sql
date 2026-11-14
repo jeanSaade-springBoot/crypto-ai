@@ -1,0 +1,1 @@
+SELECT id, paper_position_id, wallet_position_id, symbol, close_trigger, source_signal_id, source_signal_decision, exit_price_usdt, take_profit_usdt, stop_loss_usdt, audited_at, LEFT(close_explanation,300) AS explanation FROM production_exit_audit WHERE paper_position_id IN (104,101,96,91,82,78) ORDER BY paper_position_id

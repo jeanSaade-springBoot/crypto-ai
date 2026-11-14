@@ -1,0 +1,18 @@
+STUDY WINDOW: WINDOW1
+SNAPSHOT TIME UTC: 2026-10-27 07:37:44
+SNAPSHOT TIME KSA: 2026-10-27 10:37:42
+INTENDED WINDOW CLOCK KSA: 2026-10-27 10:00:00
+SNAPSHOT NOTE: SNAPSHOT CLOCK DRIFT: intended 2026-10-27 10:00:00 KSA; actual 2026-10-27 10:37:42 KSA. Exact window clock was not preserved.
+AUTHORITATIVE ENTITY: crypto_ai.paper_position
+SELECTION: status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0 ORDER BY closed_at DESC LIMIT 6
+EXCLUDED: OPEN/incomplete rows; NULL closed_at; non-negative realized_pnl; wallet_position_test (Replay)
+
+SELECTED TRADE IDS:
+1. 182
+2. 172
+3. 162
+4. 158
+5. 143
+6. 137
+
+PROOF QUERIES: DBQ-FTS-001 .. DBQ-FTS-005

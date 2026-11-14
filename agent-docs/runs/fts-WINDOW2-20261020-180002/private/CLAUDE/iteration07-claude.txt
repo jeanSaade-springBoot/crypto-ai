@@ -1,0 +1,279 @@
+# FTS WINDOW2 (2026-10-20), Claude, Iteration 7: self-challenge
+
+The most important correction this round is that **my population statistics and the frozen selection both leave out every stop-loss exit.** Stop-loss closes are saved with status `STOPPED`, not `CLOSED`, and both filter on `CLOSED`. The six per-trade analyses still hold. Every population-level conclusion from iterations 4–6 is now provisional until the requests below come back.
+
+Nothing was changed: no code, config, DB writes or git. I couldn't save a plan file because this session has no Write or ExitPlanMode tool, so this message is the whole deliverable.
+
+**Context loaded:**
+- AGENTS.md, CHARTER.md, and the iteration-7 prompt.
+- My iteration 2, 4, 5 and 6 outputs, plus the iteration-6 stderr (empty).
+- The I6-001…004 results and the coordinator's DBQ-FTS-002 and DBQ-FTS-005 results.
+- `AGREED_KNOWLEDGE.md` and `DECISIONS.md`: I only searched them for relevant terms, with no matches. I did not re-read `claude-docs/` or `DATABASE_INVESTIGATION_RULES.md` this iteration.
+- I did not read LIVE_TEAM_STATUS, LIVE_EVENTS, the other agent's folders or its memory.
+
+**Times:** UTC comes from epochs, and KSA = UTC + 3h. Raw `TIMESTAMP` output is shown in KSA (iteration-2 F0). FTS-005 is consistent with that: 182 shows `closed_at` 10:05:20, which is KSA (07:05:20 UTC).
+
+---
+
+## FINDINGS
+
+### F42. CRITICAL: stop-loss exits are `STOPPED`, not `CLOSED`, so every `status='CLOSED'` statistic leaves them out (PROJECT EVIDENCE)
+
+**Code:**
+- Every stop-loss close writes `PositionStatus.STOPPED`:
+  - `LivePositionProtectionService.java:174-181` (`STOP_LOSS` → `STOPPED`)
+  - `PaperTradingService.java:182-184`
+  - `PaperTradingService.java:433`
+- The enum is `{ OPEN, CLOSED, STOPPED, CANCELLED }` (`PositionStatus.java:2`).
+
+**Data (DBQ-FTS-002, all time):**
+
+| Status | Rows | With negative P&L |
+|---|---|---|
+| CLOSED | 118 | 26 |
+| STOPPED | 75 | **75** |
+
+**What this means:**
+- **For the frozen selection:** the charter picks from `status='CLOSED'` only. About 74% of all losing positions (75 of 101, all time) can never be chosen. I am not substituting trades, but the coordinator should record this as a charter-scope limitation.
+- **For my own work:** I4-003, I5-004 and I6-001…004 all filter `status='CLOSED'`. Their loss rates, net-of-fee P&L and gradients are biased upward and are now **provisional**.
+- **Withdrawn:**
+  - F38's "No trade hit its SL" is true by construction of the selection. It is not evidence.
+  - The absence of `STOP_LOSS` rows in I6-003 is an artefact of the filter, not proof that stops never fire.
+- **Still valid:** the per-trade forensic findings for 182, 172, 162, 158, 143 and 137. None of them is a `STOPPED` row.
+- **Open:** I don't yet know when the 75 `STOPPED` rows happened, or whether any closed after 2026-10-12 (I7-001, I7-002).
+
+### F43. RC1 re-tested with I6-002: R:R < 1 is net-negative under both fee tiers; the entry-quality = 50 bucket is not (PROJECT EVIDENCE + arithmetic; CLOSED rows only, so subject to F42)
+
+| R:R bucket | n | Gross (USDT) | Net at 0.10%/side | Net at 0.075%/side (BNB, my arithmetic) |
+|---|---|---|---|---|
+| <0.5 | 24 | +0.139 | **−0.951** | **−0.678** |
+| 0.5–1 | 32 | +0.999 | **−0.482** | **−0.111** |
+| 1–2 | 58 | +10.384 | +6.153 | +7.211 |
+
+- The entry-quality = 50 bucket is −0.206 at 0.10% but **+0.254 at 0.075%**.
+- **Correction to F39:** the "=50 is net-negative" claim depends on the fee tier and is withdrawn as a robust finding. R:R is the better discriminator.
+- **Correction to F39:** the notionals were wrong. Average notional runs 21–50 USDT by bucket, because of the size caps, not 15–25. Total estimated fees are 6.80 USDT at 0.10%, not about 5. The EQ and R:R tables in I6-002 both sum to 6.80, which checks.
+
+### F44. RC1 reframed: the problem is small gross wins against fees, not mainly the wide SL (PROJECT EVIDENCE from I6-003; inference flagged)
+
+**Where the CLOSED losses come from:**
+- Signal exits set the realized loss. Averages are −0.18% to −0.27%:
+  - SELL_CONFIRMED −0.24%
+  - HTF_SELL_CONFIRMED −0.26%
+  - STRONG_SELL −0.27%
+  - SELL −0.18%
+- The 0.5% SL is not where CLOSED losses happen.
+
+**The wins are small:**
+- `PROFIT_LOCK_EXIT` (41 rows) averages +0.248%, and the worst is +0.051%.
+- **AGENT INFERENCE:** a material share of the counted "wins" are net losses after a 0.15–0.20% round trip (I7-005 will count them).
+
+**Revised RC1:** the targets and profit locks harvest gross moves comparable to round-trip fees on low-ATR symbols. "R:R = 6 × ATR% < 1" is the signature of that, not the mechanism. The STOPPED rows (F42) will add the −0.5% tail on top.
+
+### F45. RC2 (first bounce after a bearish streak) is not confirmed at population level; I am downgrading it (PROJECT EVIDENCE from I6-001; self-contradiction found)
+
+**I6-001 loss rates by bearish-signal bucket:**
+
+| Bearish 1m signals in prior 15 min | n | Losses | Loss rate |
+|---|---|---|---|
+| ≥10 | 3 | 2 | 67% |
+| 5–9 | 16 | 4 | 25% |
+| 1–4 | 17 | 5 | 29% |
+| 0 | 78 | 14 | 18% |
+
+- There is no monotonic gradient, and the ≥10 bucket has only 3 trades.
+
+**Contradiction in my own work:**
+- F37 placed 137, 143 and 182 all at ≥10, and all three are losses. But the ≥10 bucket shows only 2 losses.
+- So at least one of my F37 streak counts does not match the query's strict 900-second window.
+- **AGENT INFERENCE:** 143's run 19:26–19:34 UTC (22:26–22:34 KSA) is probably 9 signals inside the window, which would put it in the 5–9 bucket.
+
+**Verdict:** RC2 drops from a systemic root cause to a per-trade contributing factor for 137 and 182. I7-004 will settle the membership.
+
+### F46. RC4 (continuation TP extension) is about P&L-neutral in aggregate, with a damaging tail tied to hard-floor gap fills (PROJECT EVIDENCE from I6-004 + code; arithmetic mine)
+
+**Code:**
+- An extension happens only when price is at or above the TP (`LivePositionProtectionService.java:100-107`).
+- The new TP adds 50% of the entry→TP distance (`:108-110`).
+
+**What happened to the 34 extended positions:**
+- **23 of 34 (68%)** finished below their first TP.
+- 11 finished above it.
+- Equal-weighted percentage-point deltas: +7.01 above against −6.83 below, net about **+0.19 pp across 34 trades**.
+- The "close at first TP" counterfactual is a lower bound, since a TP fill happens at or above the TP.
+
+**Four extended positions that had reached their TP ended as losses:**
+
+| Paper ID | Symbol | Realized |
+|---|---|---|
+| 17 | ACE | −0.31% |
+| 101 | AERO | −0.01% |
+| 131 | PEPE | −0.02% |
+| 143 | EGLD | −0.15% |
+
+- All four are `PROFIT_LOCK_HARD_EXIT`.
+- **AGENT INFERENCE:** their summed P&L (−0.140) fits I6-003's 4 `PROFIT_LOCK_HARD_EXIT` losses (that group of 6 totals −0.133, including 2 wins). If so, every hard-exit loss followed an extension. The floor at entry × 1.0005 is breached on a gapped tick, and the exit fills at that gapped price.
+
+**Verdict:** RC4 is a variance and gap-tail trade-off, not a proven negative edge. 143 is a tail case. I7-006 will confirm against the actual price at the first extension.
+
+### F47. NEW: trade 162 is a likely Replay-parity divergence on opportunity age (PROJECT EVIDENCE for code; outcome is AGENT INFERENCE, not executed)
+
+**Production:**
+- The opportunity's `started_at` is set to `signal.getGeneratedAt()` (`EIS:2541`).
+- Age is `Duration.between(startedAt, current.getGeneratedAt()).toMinutes()` (`EIS:948-951`, re-verified).
+- Opportunity 37952 started 00:41:02.837 UTC / 03:41:02.837 KSA.
+- The entry signal was generated 01:02:02.813 UTC / 04:02:02.813 KSA.
+- That is 20 min 59.976 s, which truncates to **20**, so no age penalty applied and the score was 50.
+
+**Replay:**
+- Evaluation time is the candle close (`RegressionTestWorker.java:584`).
+- The same pair of candle closes, 00:41:00 → 01:02:00, gives **21 min**.
+- Result: −5 → 45 → CHASE_ENTRY → **blocked**. There was no rejection penalty, so the floor would not rescue it.
+
+**Verdict:** F36's "24 ms margin" is not just fragility. Production and Replay disagree on this decision. Assumptions: Replay signals carry the candle-close `generatedAt`, and the opportunity sequence is the same. Confirming it needs an approved Replay run.
+
+### F48. F1 (trade 143) re-challenged and kept, now generalised together with F47 (PROJECT EVIDENCE)
+
+**Counter-argument considered:** the as-of bound is there to prevent look-ahead.
+
+**Why that fails here:**
+- 5m #159407 described a candle that closed at 19:40:00 UTC.
+- It was committed at 19:40:02.940614 UTC / 22:40:02.940614 KSA.
+- That is before 1m #159408's own commit (02.948700) and before the BUY (03.115).
+- Using it would have been information available at the moment, not look-ahead.
+
+**Unified defect candidate RC3′:** some decision inputs are keyed on wall-clock generation time instead of candle-close time:
+- 143: a 2 ms ordering difference changed which 5m signal was visible.
+- 162: a 24 ms jitter difference changed the truncated age.
+
+Both diverge from Replay's deterministic candle-time ordering. **Attribution:** F1 enabled 143's entry, but the loss itself came from the extension plus the 8 s gap (RC4).
+
+### F49. Revised root-cause ranking (provisional because of F42)
+
+| Rank | Cause | Status | Frozen trades |
+|---|---|---|---|
+| RC1′ | Small gross targets and wins against round-trip fees; R:R < 1 buckets net-negative at both fee tiers | Population-supported (CLOSED only) | 137, 158, 162, 172, 182 |
+| RC3′ | Decision inputs keyed on wall-clock time rather than candle time; Replay-parity defect candidate | Mechanism proven in code; not Replay-executed | 143 (F1), **162 (F47, new)** |
+| RC4 | TP extension, then hard-floor fill at a gapped tick | About neutral in aggregate; tail risk | 143 |
+| RC2 | Counter-trend first-bounce entry | **Downgraded** to contributing; not systemic | 137, 182 |
+| — | 1h WATCH counted twice (F30), FIX-041 route gap (F31) | Design gaps; unchanged | 182, 162 |
+
+- RC5 (threshold fragility) is folded into RC3′ for 162.
+- The remaining tight margins (182 by one tick, 158 seven minutes from a block) are fragility, not defects.
+- There is still no stale data, no data-quality defect and no costly execution delay in any of the six trades.
+
+---
+
+## EVIDENCE
+
+**PROJECT EVIDENCE:**
+- **Coordinator queries:** DBQ-FTS-002 (status counts), DBQ-FTS-005 (frozen rows).
+- **My queries:**
+  - I6-001 (bearish-streak buckets)
+  - I6-002 (EQ and R:R, net of fees)
+  - I6-003 (exit reasons)
+  - I6-004 (34 TP-extended positions)
+  - I5-002 (opportunity 37952 epochs)
+  - I1-005 (143 commit times)
+- **Code:**
+  - `LivePositionProtectionService.java:95-110, 165-183, 207-216`
+  - `PaperTradingService.java:182-184, 433`
+  - `PositionStatus.java:2`
+  - `ExecutionIntelligenceService.java:906-908, 948-951, 2541`
+  - `RegressionTestWorker.java:557-560, 584`
+
+**EXTERNAL RESEARCH:** none new. The Binance fee tiers (0.10% Regular, 0.075% with BNB) come from iteration 6 (https://www.binance.com/en/fee/schedule).
+
+**AGENT INFERENCE (flagged above):**
+- 143 sits in the 5–9 bearish bucket (F45).
+- Every hard-exit loss followed an extension (F46).
+- Replay would block 162 (F47).
+
+---
+
+## UNKNOWNS
+
+- **U29:** when the 75 `STOPPED` positions happened, and whether any are losses newer than the frozen set (I7-001, I7-002).
+- **U30:** the RC1′, EQ and R:R bucket results once `STOPPED` rows are included (I7-003).
+- **U31:** which trades are actually in the ≥10 and 5–9 bearish buckets (I7-004).
+- **U32:** how many gross "wins" are net-of-fee losses (I7-005).
+- **U33:** RC4 measured against the actual price at the first extension, and whether every hard-exit loss followed an extension (I7-006).
+- **U8/F22/F47:** Replay parity for 143, 158 and 162 is still unexecuted and needs an approved Replay run.
+- **Logs:** still no production log access. The log-search request from iteration 6 is unchanged.
+- **FIX-154 documentation contradiction (F34):** still open, pending dual-agent resolution.
+
+---
+
+## DB_REQUESTS
+
+All are read-only, bounded, and use epoch windows.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-001
+Purpose: F42/U29. Size and timing of `STOPPED` against `CLOSED`, by close reason, all time and last 14 days.
+SQL:
+SELECT p.status, p.close_reason, COUNT(*) AS n, SUM(p.realized_pnl<0) AS losses, ROUND(SUM(p.realized_pnl),4) AS pnl_usdt, ROUND(AVG((p.exit_price-p.entry_price)/p.entry_price*100),4) AS avg_ret_pct, MIN(p.id) AS min_id, MAX(p.id) AS max_id, MIN(UNIX_TIMESTAMP(p.closed_at)) AS first_close_epoch, MAX(UNIX_TIMESTAMP(p.closed_at)) AS last_close_epoch, SUM(p.closed_at >= FROM_UNIXTIME(UNIX_TIMESTAMP()-14*86400)) AS n_14d FROM crypto_ai.paper_position p WHERE p.status IN ('CLOSED','STOPPED') GROUP BY p.status, p.close_reason ORDER BY p.status, n DESC LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-002
+Purpose: F42. `STOPPED` losers closed at or after 137's close (about 18:00:12 UTC on 2026-10-11, epoch 1791741612). These are the trades the charter selection could not see.
+SQL:
+SELECT id, symbol, status, close_reason, realized_pnl, UNIX_TIMESTAMP(opened_at) AS open_epoch, UNIX_TIMESTAMP(closed_at) AS close_epoch, signal_id FROM crypto_ai.paper_position WHERE status='STOPPED' AND closed_at >= FROM_UNIXTIME(1791741612) ORDER BY closed_at DESC LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-003
+Purpose: U30. Re-run the R:R and EQ buckets with `STOPPED` included, net at both fee tiers, last 14 days.
+SQL:
+SELECT CASE WHEN s.risk_reward_ratio IS NULL THEN 'NULL' WHEN s.risk_reward_ratio < 0.5 THEN '<0.5' WHEN s.risk_reward_ratio < 1 THEN '0.5-1' WHEN s.risk_reward_ratio < 2 THEN '1-2' ELSE '>=2' END AS rr_bucket, COUNT(*) AS n, SUM(p.status='STOPPED') AS n_stopped, SUM(p.realized_pnl<0) AS losses, ROUND(SUM(p.realized_pnl),4) AS gross_pnl, ROUND(SUM(p.realized_pnl-0.001*p.quantity*(p.entry_price+p.exit_price)),4) AS net_010, ROUND(SUM(p.realized_pnl-0.00075*p.quantity*(p.entry_price+p.exit_price)),4) AS net_0075 FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id=p.signal_id WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at >= FROM_UNIXTIME(UNIX_TIMESTAMP()-14*86400) GROUP BY rr_bucket ORDER BY rr_bucket LIMIT 10;
+SELECT CASE WHEN m.entry_quality_score IS NULL THEN 'NO_WMP' WHEN m.entry_quality_score < 50 THEN '<50' WHEN m.entry_quality_score = 50 THEN '=50' WHEN m.entry_quality_score < 55 THEN '51-54' WHEN m.entry_quality_score < 70 THEN '55-69' WHEN m.entry_quality_score < 85 THEN '70-84' ELSE '85+' END AS eq_bucket, COUNT(*) AS n, SUM(p.status='STOPPED') AS n_stopped, SUM(p.realized_pnl<0) AS losses, ROUND(SUM(p.realized_pnl),4) AS gross_pnl, ROUND(SUM(p.realized_pnl-0.001*p.quantity*(p.entry_price+p.exit_price)),4) AS net_010, ROUND(SUM(p.realized_pnl-0.00075*p.quantity*(p.entry_price+p.exit_price)),4) AS net_0075 FROM crypto_ai.paper_position p LEFT JOIN crypto_ai.wallet_managed_position m ON m.entry_signal_id=p.signal_id WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at >= FROM_UNIXTIME(UNIX_TIMESTAMP()-14*86400) GROUP BY eq_bucket ORDER BY eq_bucket LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-004
+Purpose: U31/F45. Per-trade bearish-signal count for every position with ≥5, plus 137, 143 and 182, with `STOPPED` included.
+SQL:
+SELECT x.pid, x.symbol, x.status, x.close_reason, ROUND(x.realized_pnl,6) AS realized_pnl, x.bear15 FROM (SELECT p2.id AS pid, p2.symbol, p2.status, p2.close_reason, p2.realized_pnl, (SELECT COUNT(*) FROM crypto_ai.trade_signal s WHERE s.symbol=es.symbol AND s.interval_code='1m' AND s.decision IN ('SELL','STRONG_SELL') AND s.generated_at < es.generated_at AND s.generated_at >= FROM_UNIXTIME(UNIX_TIMESTAMP(es.generated_at)-900)) AS bear15 FROM crypto_ai.paper_position p2 JOIN crypto_ai.trade_signal es ON es.id=p2.signal_id WHERE p2.status IN ('CLOSED','STOPPED') AND p2.closed_at >= FROM_UNIXTIME(UNIX_TIMESTAMP()-14*86400)) x WHERE x.bear15 >= 5 OR x.pid IN (137,143,182) ORDER BY x.bear15 DESC, x.pid LIMIT 60;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-005
+Purpose: U32/F44. Gross-positive positions that are net-negative after fees, by close reason, last 14 days.
+SQL:
+SELECT t.close_reason, COUNT(*) AS n, SUM(t.ret>0) AS gross_wins, SUM(t.ret>0 AND t.ret<0.20) AS win_below_020, SUM(t.ret>0 AND t.ret<0.15) AS win_below_015 FROM (SELECT p.close_reason, (p.exit_price-p.entry_price)/p.entry_price*100 AS ret FROM crypto_ai.paper_position p WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at >= FROM_UNIXTIME(UNIX_TIMESTAMP()-14*86400)) t GROUP BY t.close_reason ORDER BY n DESC LIMIT 20;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-006
+Purpose: U33/F46. RC4 counterfactual using the actual market price at the first `TAKE_PROFIT_EXTENDED` event. This assumes the lowest event id per position is the earliest event.
+SQL:
+SELECT m.id AS wmp_id, p.id AS paper_id, p.symbol, p.status, p.close_reason, p.entry_price, f.market_price_usdt AS first_ext_price, UNIX_TIMESTAMP(f.occurred_at) AS first_ext_epoch, ROUND((f.market_price_usdt-p.entry_price)/p.entry_price*100,4) AS first_ext_pct, ROUND((p.exit_price-p.entry_price)/p.entry_price*100,4) AS realized_pct, ROUND(p.quantity*(f.market_price_usdt-p.entry_price),6) AS cf_pnl, ROUND(p.realized_pnl,6) AS realized_pnl FROM crypto_ai.position_management_event f JOIN (SELECT wallet_position_id, MIN(id) AS first_id FROM crypto_ai.position_management_event WHERE event_type='TAKE_PROFIT_EXTENDED' AND occurred_at >= FROM_UNIXTIME(UNIX_TIMESTAMP()-14*86400) GROUP BY wallet_position_id) fe ON fe.first_id=f.id JOIN crypto_ai.wallet_managed_position m ON m.id=f.wallet_position_id JOIN crypto_ai.paper_position p ON p.signal_id=m.entry_signal_id WHERE p.status IN ('CLOSED','STOPPED') ORDER BY p.id LIMIT 100;
+### END_DB_REQUEST
+
+**Log search request (needs SSH through the Coordinator, unchanged):** production log for 2026-10-11 17:50 – 2026-10-12 07:10 UTC (2026-10-11 20:50 – 2026-10-12 10:10 KSA). Search for `FIX-11G transitional BUY authority granted` and `FIX-11G post-guard result` with signalId 156723 or 176710.
+
+---
+
+## Self-review (Iteration 7)
+
+**Withdrawn or corrected:**
+- F38's "no SL hits" (selection artefact).
+- I6-003's zero STOP_LOSS rows (filter artefact).
+- F39's "=50 bucket net-negative" (depends on the fee tier).
+- F39's notional and fee-drag estimates.
+- F37 and RC2 as a systemic cause.
+- F37's streak count for 143.
+- RC5 as fragility only.
+
+**Strengthened:**
+- RC1, now reframed as RC1′, by the R:R buckets net of fees at both tiers.
+- F1, which survived the look-ahead counter-argument.
+
+**New:**
+- F42, the `STOPPED` exclusion. It affects the charter scope and all my population statistics.
+- F47, a Replay-parity candidate for 162.
+- RC3′, which unifies the wall-clock-versus-candle-time cases.
+- F46, the RC4 aggregate (neutral overall, with a gap tail).
+
+**Iteration 8:** apply the I7 results, freeze the final per-trade verdicts and the RC ranking, and state correction directions and regression checks as analysis only. Those would be candle-time-keyed as-of and age inputs, a fee-aware minimum-target gate, and a hard-floor behaviour review. No specification or implementation is implied.

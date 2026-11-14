@@ -1,0 +1,2 @@
+SELECT signal_id, symbol, interval_code, candle_open_time, origin, status, attempts, updated_at, completed_at, paper_position_id, failure_stage, source_event_id FROM crypto_ai.signal_processing_work WHERE signal_id IN (156723,159408,165412,167668,171589,176710) ORDER BY signal_id;
+SELECT id, interval_code, candle_open_time, generated_at, created_at, decision, original_decision, total_score, confidence_score, atr_entry_type, atr_immediate_entry_allowed, atr_recommended_position_percent FROM crypto_ai.trade_signal WHERE id IN (159285,159407,159408) ORDER BY id;

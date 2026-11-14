@@ -1,0 +1,16 @@
+version	description	success	installed_epoch
+103	fix 149 fresh admission indexes	1	1791153490
+104	fix 150 protection entry evidence	1	1791237533
+105	fix 151 delivery selection indexes	1	1791240651
+106	fix 153 local candle evidence	1	1791497520
+107	fix 154 trusted higher timeframe buy	1	1791580521
+108	fix 153 local candle reconciliation	1	1791580521
+109	fix 154 forward replay and audit columns	1	1791586365
+110	fix 156 replay owned tables	1	1792018698
+111	fix 156 replay profile evidence	1	1792195915
+id	reference_signal_id	evaluation_path	eval_epoch	replay_mode	five_minute_signal_id	five_minute_raw_decision	five_minute_effective_decision	five_minute_data_quality_valid	one_hour_signal_id	one_hour_raw_decision	one_hour_effective_decision	one_hour_data_quality_valid	assessment_band	max_initial_percent	legacy_veto_result	final_result
+1938	156723	DIRECT_BUY	1791741301.575650	0	156721	NEUTRAL	NEUTRAL	1	155320	WATCH	WATCH	1	NO_CONFLICT	NULL	NULL	BALANCED_NEUTRAL_5M_WATCH_1H
+2086	165415	SETUP_WAKEUP	1791761701.490485	0	165415	BUY	BUY	1	164516	NEUTRAL	NEUTRAL	1	NO_CONFLICT	NULL	NULL	BALANCED_STRONG
+2199	167668	ACCUMULATED_EVIDENCE	1791766922.813094	0	167616	WATCH	WATCH	1	167617	WATCH	WATCH	1	NO_CONFLICT	NULL	NULL	BALANCED_EARLY
+2284	171589	DIRECT_BUY	1791776161.506950	0	171559	BUY	BUY	1	170667	NEUTRAL	NEUTRAL	1	NO_CONFLICT	NULL	NULL	BALANCED_STRONG
+2425	176710	DIRECT_BUY	1791788221.850059	0	176655	NEUTRAL	NEUTRAL	1	175258	WATCH	WATCH	1	NO_CONFLICT	NULL	NULL	BALANCED_NEUTRAL_5M_WATCH_1H

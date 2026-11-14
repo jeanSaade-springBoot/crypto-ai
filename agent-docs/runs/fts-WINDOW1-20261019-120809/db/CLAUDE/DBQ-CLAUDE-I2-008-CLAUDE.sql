@@ -1,0 +1,1 @@
+SHOW TABLES FROM crypto_ai LIKE '%audit%'

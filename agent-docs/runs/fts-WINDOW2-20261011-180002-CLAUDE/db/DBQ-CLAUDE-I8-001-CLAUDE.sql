@@ -1,0 +1,1 @@
+SELECT c.open_time, c.low_price, c.close_price, c.closed, c.ingestion_source, p.stop_loss, p.exit_price, p.closed_at FROM candle c JOIN paper_position p ON p.id=80 AND c.symbol=p.symbol WHERE c.interval_code='1m' AND c.open_time BETWEEN '2026-10-10 17:55:00' AND '2026-10-10 18:16:00' ORDER BY c.open_time LIMIT 30;

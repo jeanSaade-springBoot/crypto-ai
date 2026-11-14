@@ -1,0 +1,47 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE — FIX-156 cannot safely be finished from the current code.** The active Replay path still invokes shared Production BUY authority, its repositories, and validation. This violates the documented Replay-local BUY/lifecycle requirement and can reintroduce wallet/configuration dependencies transitively.
+
+- **PROJECT EVIDENCE — The SQL allow-list is not an effective boundary.** `ReplayAccessPolicy` is called only by two new stores; the worker and shadow service execute many direct SQL statements without it. The policy cannot intercept or reject those paths.
+
+- **PROJECT EVIDENCE — A prohibited shared-table write remains reachable.** When `shared-market.mode=LIVE`, the Replay worker opens `CandleInputAudit`, whose capture method inserts into `shared_candle_input_audit`. This is outside the sole stated `fix122_evaluation` exception.
+
+- **PROJECT EVIDENCE — The new parity certificate, trace, output, and coverage tables are unused.** Source search found only their migration definitions and allow-list test references—not a writer, comparator, or lifecycle integration. The old `EXACT_PRICE_REPLAY` label still means merely “at least one event exists,” not complete price-path coverage.
+
+- **PROJECT EVIDENCE — Profile seeding is not wired.** Replay now calls `ReplayPolicyProfileStore.require(runId)` before execution, but no in-code caller creates/inserts a profile. A normal run will refuse unless data is externally pre-seeded; no qualified fixture-creation flow is evidenced.
+
+- **PROJECT EVIDENCE — The review package is internally inconsistent.** The Jean record says USR-REV-001/002 were accepted and explicitly closed, while the implementation status report still says both are open. The canonical change specification is also an unapproved RPR-0.4 draft, not RPR-0.9.12.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE — Shared Production BUY flow:** [ShadowProductionReplayService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:45) injects `ExecutionIntelligenceService`; it invokes `evaluateBuy` at [line 257](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:257) and `revalidateAtExecutionPrice` at [line 300](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:300). That service depends on `TradeExecutionValidationService` and repositories, including `WalletSettingsRepository` through validation.
+
+- **PROJECT EVIDENCE — Direct unguarded SQL:** the shadow service owns a `JdbcTemplate` at [line 45](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:45) and writes legacy replay tables directly, e.g. [wallet execution insert at line 868](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:868). The only Replay service calls to `ReplayAccessPolicy` are in the new profile/FIX-122 stores, not this lifecycle.
+
+- **PROJECT EVIDENCE — Shared audit write:** [RegressionTestWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:117) enables `CandleInputAudit` under LIVE shared-market mode. [CandleInputAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/shared/CandleInputAudit.java:47) issues `INSERT INTO shared_candle_input_audit`.
+
+- **PROJECT EVIDENCE — Incomplete price qualification:** [RegressionTestWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:190) explicitly permits degraded historical price behavior; [ShadowProductionReplayService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:97) defines “exact” as non-empty price events.
+
+- **PROJECT EVIDENCE — Unused new evidence model:** V111 creates certificates and coverage tables at [V111__fix_156_replay_profile_evidence.sql](/C:/workspace/crypto-ai-trader-mysql/src/main/resources/db/migration/V111__fix_156_replay_profile_evidence.sql:18), but no application writer was found. `ReplayAccessPolicyTest` only tests allow-list decisions at [lines 11–48](/C:/workspace/crypto-ai-trader-mysql/src/test/java/com/crypto/regression/replay/ReplayAccessPolicyTest.java:11), not static reachability or runtime interception.
+
+- **PROJECT EVIDENCE — No profile lifecycle:** Replay requires a profile at [ShadowProductionReplayService.java:65](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:65). `ReplayPolicyProfileStore.insert` exists at [line 51](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/replay/ReplayPolicyProfileStore.java:51), but no caller was found.
+
+- **PROJECT EVIDENCE — Artifact conflict:** [JEAN_REVIEW_FIX-156.md](/C:/workspace/crypto-ai-trader-mysql/agent-docs/JEAN_REVIEW_FIX-156.md:139) records closure, whereas [FIX-156_IMPLEMENTATION_STATUS_REPORT.md](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_STATUS_REPORT.md:7) and [line 155](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_STATUS_REPORT.md:155) report the same findings open. The canonical specification remains [RPR-0.4 draft](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:3) and is explicitly implementation-forbidden at [line 4](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:4).
+
+## OBJECTIONS
+
+- **AGENT INFERENCE — Boundary claims are presently unsound.** A hand-coded allow-list that no existing SQL lifecycle uses cannot establish table/operation isolation, and no T156-09/T156-09a/T156-09b-quality proof exists.
+
+- **AGENT INFERENCE — Parity results would be vulnerable to false positives.** Incomplete price coverage, current configuration dependencies, and production-service reachability permit look-ahead/configuration drift and Replay/Production divergence while retaining optimistic labels.
+
+- **AGENT INFERENCE — Do not treat Jean’s closure as technical completion.** It authorizes continued Replay-only work, but the current code does not satisfy the closure criteria described in the same record.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE — The exact `FIX-156-RPR-0.9.12-DRAFT.md` is not present in the workspace.** Its claimed hash cannot be independently verified, so exact registry reconciliation is impossible.
+
+- **PROJECT EVIDENCE — No tests, application, migration, database, or production system were run or accessed.** This preserves the requested read-only boundary; Java 21 and disposable-MySQL evidence remain unverified.
+
+- **EXTERNAL RESEARCH — None used.** This is a repository-bound implementation review; public research would not establish this project’s Replay correctness.
+
+VERDICT: REJECTED

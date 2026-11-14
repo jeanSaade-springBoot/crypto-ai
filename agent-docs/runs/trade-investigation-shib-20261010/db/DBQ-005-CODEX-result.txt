@@ -1,0 +1,9 @@
+exit_code=0
+duration_ms=267
+row_count=1
+--- stdout ---
+position_id	opened_ksa_in_this_mysql_session	opened_utc	closed_ksa_in_this_mysql_session	closed_utc	opened_epoch_seconds	query_session_time_zone
+35	2026-10-09 23:45:06.682175	2026-10-09 20:45:06.682175	2026-10-09 23:58:43.830735	2026-10-09 20:58:43.830735	1791578706.682175	SYSTEM
+
+--- stderr ---
+

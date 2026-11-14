@@ -1,0 +1,82 @@
+## Iteration 3 — Log and Timing Forensics
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+- Frozen subjects remain exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutes used.
+- The permitted `db/CODEX/` folder is still empty; `DBQ-FTS-001` through `DBQ-FTS-005` results are unavailable.
+- The local application log covers only **2026-10-17 00:11:41.424 UTC through 00:26:34.689 UTC**. Its Logback pattern explicitly formats application timestamps in UTC. It is therefore not a complete trade-log source up to the snapshot at **2026-10-18 15:00:04 UTC**.
+- No local-log line explicitly identifies any frozen `paper_position` ID. This is not exculpatory: normal protection logs identify symbol and sometimes managed-position ID, rather than paper-position ID.
+- The direct-price path records `observedUtc`, explicit `observedKsa`, event ID, outcome, and reason when its transaction commits. `APPLIED` means the protection callback transaction committed; it does not alone prove an exit occurred.
+- Timing instrumentation measures input, protection, observer, and close-dispatch transactions. It emits a stage record for failures or durations of at least one second; persisted `fix129_stage_timing` diagnostics are bounded/best-effort and can be dropped. It cannot be treated as a complete event ledger.
+- No `[FIX-129][STAGE_TIMING]`, `[FIX-129][BLOCK_BEGIN]`, mechanical-exit, or FIX-124 protection-failure entries appear in the available local application-log slice.
+
+**AGENT INFERENCE**
+
+- No timing, queueing, lock, stale-price, or protection-delay defect can be attributed to any of the six trades without their symbols, lifecycle timestamps, and corresponding durable event IDs.
+- Once position identity is available, the defensible exit-latency measure is:
+
+  `market_price_event.observed_at` → matching `wallet_trade.execution_price_observed_at` / `executed_at` → `paper_position.closed_at`
+
+  `paper_position.closed_at` is assigned from application `Instant.now()` during closure, so it is a lifecycle-record timestamp—not the exchange observation time.
+- The supplied snapshot metadata has a two-second inconsistency: `2026-10-18 15:00:04 UTC` converts to `2026-10-18 18:00:04 KSA`, whereas the supplied KSA snapshot is `18:00:02`. I retain both supplied values without normalization.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+### EVIDENCE
+
+- [logback-spring.xml](C:/workspace/crypto-ai-trader-mysql/src/main/resources/logback-spring.xml:24) formats application-file timestamps as UTC; the inspected log slice ends at `2026-10-17T00:26:34.689`.
+- [KlineTransactionCoordinator.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:38) preserves input → protection → observer → close-dispatch ordering, uses a 30-second transaction timeout, and permits only the initial position-lock deadlock retry.
+- [KlineTiming.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTiming.java:32) uses monotonic elapsed time and records failures/slow stages; [KlineTimingStore.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTimingStore.java:38) makes storage best-effort.
+- [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:112) records committed direct-price outcomes with both UTC and KSA observation timestamps.
+- [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:54) validates observation age/order under lock and atomically finalizes the price-event outcome; [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:391) records paper-position closure using current application time.
+- [WalletTrade.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletTrade.java:34) has execution price-observation and execution timestamps needed for reconciliation.
+
+### UNKNOWNS
+
+- Whether any frozen trade overlaps the available local-log interval.
+- Each trade’s symbol, entry/close UTC time, close reason, linked signal, wallet execution, and direct price-event ID.
+- Whether `fix129_stage_timing` exists and contains relevant rows.
+- Observation-to-protection completion, trigger-to-wallet-exit, and wallet-exit-to-paper-close latencies for every frozen trade.
+- Whether a missing relevant application log is due to unavailable coverage, asynchronous log loss, different runtime files, or no emitted event.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Establish deployed schema for timing/protection evidence and obtain the six authoritative position rows needed to form exact, bounded per-trade timing queries. Read-only; `crypto_ai` only.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'fix129_stage_timing',
+      'production_exit_audit',
+      'position_management_event',
+      'signal_processing_work',
+      'trade_signal'
+  )
+ORDER BY table_name, ordinal_position
+LIMIT 1000;
+
+SELECT p.*
+FROM crypto_ai.paper_position p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137)
+LIMIT 6;
+```
+### END_DB_REQUEST

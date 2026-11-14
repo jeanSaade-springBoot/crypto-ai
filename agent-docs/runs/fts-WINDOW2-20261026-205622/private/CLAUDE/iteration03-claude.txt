@@ -1,0 +1,220 @@
+# CLAUDE — WINDOW2 Failed-Trade Study — Iteration 3 (Log and Timing Forensics)
+
+Nothing was written to code, config, the database or git. File writes are off this session, so this message is the whole Iteration 3 output.
+
+**Scope and inputs**
+- Frozen `paper_position` IDs 182, 172, 162, 158, 143 and 137 (none substituted).
+- My own I1/I2 results in `db/CLAUDE/`.
+- Code, read only.
+- One public Binance market-data request (used in F-11).
+
+**Times:** every database value is UTC; KSA = UTC+3 is shown only where labelled.
+
+**No logs:** I have no access to application logs. Every timing claim below comes from database timestamps, code, or Binance public data.
+
+**In short:**
+- **Trade 143's protection did not fail.** Its exit came from a sell sweep through the order book after a quiet spell with no trades (F-11).
+- **Trade 143 should probably not have entered at all.** The entry used a 5-minute-old 5m BUY because the newer 5m signal was generated 2 ms after the 1m signal (F-12).
+- **Live exits waited for the next price update.** Delays were up to about 38 s on thinly traded symbols, with no price cost found (F-14).
+
+## FINDINGS
+
+**F-11 — Trade 143: the price swept past the lock; protection reacted correctly** (PROJECT EVIDENCE + EXTERNAL RESEARCH)
+
+*Recorded price observations (I2-003; all APPLIED, no rejected or pending rows):*
+
+| UTC time | Price | Note |
+|---|---|---|
+| 22:43:27.038 | 4.100 | last observation before the drop |
+| — | — | nothing recorded for 8 s |
+| 22:43:35.021 | 4.027 | first observation after the drop |
+
+- Wallet SELL #359 committed at 22:43:35.045, **24 ms** after that observation.
+- The exit went through the lock-trigger branch, then the hard-floor branch (`LivePositionProtectionService.java:207-215`):
+  - 4.027 is below the lock (4.07579).
+  - 4.027 is also below the hard floor, entry × 1.0005 = 4.0350165.
+
+*Binance public trades for EGLDUSDT, 22:43:27–22:43:36 UTC (= 01:43:27–01:43:36 KSA on 10-12):*
+- **No trades at all** from 22:43:27.000 to 22:43:34.341. That explains the empty gap: the app does not filter duplicate prices; every 1m kline message becomes a row (`BinanceKlineService.java:91-108`).
+- At 22:43:34.816 one batch of aggressive sells swept the book from 4.094 down to 4.073.
+- By 22:43:34.998 the price was 4.025–4.027.
+- The lock level was crossed inside that same ~200 ms sweep.
+
+*Caveats on the Binance data:*
+- Binance documents a 2000 ms update speed for kline streams. I did not confirm whether it skips pushes when there are no trades; the 2 s spacing seen here fits that pattern.
+- The trade list passed through a summarising fetch tool, so the individual rows should be re-pulled programmatically if they will be relied on.
+
+**Assessment:**
+- This is gap risk, not a protection defect or stale data.
+- With 2-second kline updates, no recorded price between 4.0758 and 4.035 ever existed.
+- An exit at exactly the lock price would not have been a realistic fill. This **resolves U-6** and withdraws the "possible defect" in Iteration 2 F-7.
+
+**F-12 — Trade 143's entry depended on a 2 ms race at the 5-minute boundary** (PROJECT EVIDENCE: code + DB; the counterfactual is AGENT INFERENCE)
+
+*How the route picks its 5m signal:*
+- `setupTimeframeAtrAuthoritySignal` takes the latest 5m signal with `generated_at ≤` the 1m signal's `generated_at`, up to 20 minutes old (`ExecutionIntelligenceService.java:66, 1485, 2455-2461`).
+
+*What it picked for trade 143:*
+
+| Signal | Interval | Candle (UTC) | Decision | Generated (UTC) |
+|---|---|---|---|---|
+| 159408 (the entry signal) | 1m | — | — | 22:40:01.633945 |
+| **159285 (used)** | 5m | 22:30 | BUY | 22:35:01.55 |
+| 159407 (newer, excluded) | 5m | 22:35, closed 22:40:00 | WATCH | 22:40:01.635944 — 2 ms later |
+
+- The route accepts only BUY or STRONG_BUY (`:2634-2636`).
+- **Inference:** had 159407 been visible, the route would have returned null and trade 143 would not have opened.
+- The entry used an ATR plan one bar out of date, while the newest 5m bar was already closed and no longer BUY.
+- This is not look-ahead; the code ordering is deliberate. It is a timing weakness at boundaries, not a confirmed bug.
+
+**F-13 — Which 5m signal is "latest" depends on commit timing, not `generated_at`** (PROJECT EVIDENCE)
+- For trade 137, 5m signal 156721 was generated at 20:55:01.558, which is 18 ms *before* the 1m signal (20:55:01.5757).
+- Even so, `confluence_higher_signal_generated_at` = 20:50:01.42 (signal 156594).
+- So the `≤ generated_at` query sees only committed rows; `generated_at` comes about 1.3 s before `created_at` (I2-001).
+- **Replay parity hazard (inference):** Replay sees all rows, so it would pick 156721 where Production picked 156594. Both were NEUTRAL, so there was no decision difference here.
+- For trade 143 both systems would agree, because 159407 is excluded by `generated_at` anyway.
+
+**F-14 — Live exits wait for the next price event** (PROJECT EVIDENCE; the cause is AGENT INFERENCE)
+
+| Trade | Last exit condition became true (UTC) | Wallet SELL (UTC) | Lag | Avg seconds between observations |
+|---|---|---|---|---|
+| 158 | 1m #166819 created 03:30:02.688 | 03:30:04.217 | 1.5 s | 3.8 |
+| 137 | 1m #156850 created 21:00:03.102 | 21:00:08.935 | 5.8 s | 9.3 |
+| 182 | 1m #176927 created 10:05:05.486 | 10:05:18.504 | 13.0 s | 15.4 |
+| 172 | 5m #172588 → NEUTRAL, generated 07:15:04.578 | 07:15:43.492 | 37.7 s | 11.8 |
+
+- `onPrice` runs only when a price event arrives (`LivePositionProtectionService.java:54-71`). Thinly traded symbols (SHIB, ACE) therefore wait longer.
+- Exit prices for 172 and 182 equalled their signal prices, so no price cost was found. For 137, 3.987 against 3.988.
+- The 5m `created_at` values are unknown; I3-002 checks them.
+
+**F-15 — Trade 158 entered through the wake-up route** (PROJECT EVIDENCE)
+- The 1m work item 165412 completed at 02:35:02.882 with `paper_position_id` NULL (I2-007).
+- 5m BUY #165415 was generated at 02:35:01.490, 21 ms after the 1m signal.
+- Wallet BUY #392 followed at 02:35:02.988 with `entry_stage` = SETUP_CONFIRMATION_WAKEUP.
+- So the wake-up route made up for the same boundary race as F-12, using a *fresh* 5m BUY. Trade 143 had no such correction because its fresh 5m was WATCH.
+
+**F-16 — Trade 182: the bearish 5m was downgraded to NEUTRAL** (PROJECT EVIDENCE)
+- From the 09:00 candle (generated 09:05) through the 09:55 candle, every 5m signal had `original_decision` SELL or STRONG_SELL but `decision` NEUTRAL (I2-005, 176655 and 176792).
+- Both the entry confluence ("5m=NEUTRAL") and the exit policy read the downgraded value.
+- The exit fired only when 5m #176934 kept STRONG_SELL (10:05:03.926).
+- The reason for the downgrade is unknown (I3-005 checks it).
+- **Entry assessment:** the entry was taken against 55 minutes of raw bearish 5m evidence that the system had available.
+
+**F-17 — Trade 143's target extensions fired on exact price events** (PROJECT EVIDENCE)
+- First extension, event 51 at 22:40:41.0497: on the 4.067 observation at 22:40:41.030, which was at or above the original target 4.0647.
+- Second extension, event 52 at 22:41:13.0356: on the 4.081 observation at 22:41:13.029.
+- **Outcome (inference):** without the continuation extension the trade would have exited at about 4.067, roughly +0.21 USDT before fees.
+- After the second extension, progress was about 67%, below the 70% activation level. By code, that should start a FIX-118 rebase. The final state was ACTIVE with no rebase timestamp, so a rebase may have started and cleared. Unconfirmed without the `[FIX-118]` logs.
+
+**F-18 — Rejected price observations leave no database row** (PROJECT EVIDENCE)
+- `recordPending` returns null on STALE_PRICE or FUTURE_TIMESTAMP and writes only a log line (`MarketPriceEventService.java:52-57`).
+- A rolled-back input transaction also leaves no row.
+- So the database alone cannot prove a gap had no dropped messages. For trade 143, the Binance trade data closes this off (F-11).
+
+**F-19 — Paper close lags the wallet SELL by 1.2–3.2 s** (PROJECT EVIDENCE; cause unknown)
+- `closePaper` stamps `closed_at` with `Instant.now()` after `executeMechanicalExit` returns, in the same `onPrice` call (`:391-406`).
+- The lag is therefore time spent inside the wallet exit path, not a separate commit. Its cause needs logs or a code trace (next iteration).
+- Trade 162 (signal path) shows the reverse order: paper close 04:26:04.116, then wallet SELL 04:26:04.134.
+
+**F-20 — Freshness at entry and exit confirmed** (PROJECT EVIDENCE)
+- Every 1m signal's `candle_open_time` is the minute before it was generated, so it analysed the just-closed candle, 1.4–2.8 s after close.
+- `data_quality_valid = 1` on all 12 entry and exit signals.
+- BTC context age was 1–3 s, except 60 s on the irrelevant NEUTRAL signal 159487.
+- DOGE 5m and 1h signals ran 5–10 s after the boundary, against about 1.5 s for the others. Minor.
+
+## Per-trade classification after Iteration 3
+
+| Trade | Classification |
+|---|---|
+| 137 | Valid losing trade. Stop wider than target, target below fees. The 5.8 s exit lag cost 0.001. |
+| 143 | Entry admitted on a 5m BUY one bar out of date (F-12); target extended twice; exit was gap risk (F-11). Not a protection defect. |
+| 158 | Stop/target design limitation (reward:risk 0.35, target below fees); correct wake-up entry. |
+| 162 | Valid exit through the signal path; stop/target design limitation. |
+| 172 | Valid HTF exit; 37.7 s lag with no price cost; price-step granularity issue. |
+| 182 | Entry against a hidden bearish 5m (F-16); stop/target design limitation. |
+
+## EVIDENCE
+
+| ID | Type | Reference |
+|---|---|---|
+| E-16 | DB | I2-001 (signal `generated_at`/`created_at`, candles, quality) |
+| E-17 | DB | I2-002 (events 51, 52) |
+| E-18 | DB | I2-003 (63 EGLD observations, IDs 1788473–1789430) |
+| E-19 | DB | I2-005 (5m/1h sequences); I2-007 (work rows, wallet schema) |
+| E-20 | Code | `LivePositionProtectionService.java:54-71, 100-171, 207-216, 391-411` |
+| E-21 | Code | `ExecutionIntelligenceService.java:66-71, 1472-1513, 2455-2461, 2634` |
+| E-22 | Code | `MarketPriceEventService.java:40-74`; `BinanceKlineService.java:91-111` |
+| E-23 | External | Binance `api/v3/aggTrades` EGLDUSDT, 1791747807000–1791747816000 ms; Binance WebSocket docs (kline update speed 2000 ms) |
+
+## UNKNOWNS
+
+- **U-13:** When the 5m and 1h signals were committed (`created_at`), needed to fix exactly when each exit condition became true. I3-002 checks this.
+- **U-14:** Why the 182 5m and 162 #167746 signals were downgraded (`original_decision` ≠ `decision`). I3-005 checks this.
+- **U-15:** Whether trade 143 went through a FIX-118 rebase after the second extension. Needs `[FIX-118][PRODUCTION][TP_EXTENSION]` logs.
+- **U-16:** What takes 1.2–3.2 s inside `executeMechanicalExit`. Needs logs or a code trace.
+- **U-17:** Whether any observations were rejected or rolled back during the exit windows. Needs `[FIX-153][PRICE_NOT_CANONICAL]` and `KLINE_PHASE_FAILED` logs.
+- **U-11** stays open; it is now narrowed to U-16.
+- **U-10** is partly answered: the I2-008 sample shows planned reward:risk of 0.68–3.98 for other positions, so a stop wider than the target is not universal.
+- **Side observation, not a frozen trade:** STOPPED trade 110 (EDU) lost about 0.78% of notional against a 0.29% stop. For the coordinator only.
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-001
+Purpose: Price observations, all statuses, from the last exit-signal candle close to just after each live exit, to test F-14 (U-17).
+SQL:
+SELECT p.id AS paper_id, m.id, m.observed_at, m.price, m.delivery_status, m.outcome_reason, m.created_at FROM crypto_ai.paper_position p JOIN crypto_ai.market_price_event m ON m.symbol = p.symbol AND m.observed_at BETWEEN (CASE p.id WHEN 137 THEN '2026-10-11 21:00:00' WHEN 158 THEN '2026-10-12 03:30:00' WHEN 172 THEN '2026-10-12 07:15:00' WHEN 182 THEN '2026-10-12 10:05:00' END) AND p.closed_at + INTERVAL 3 SECOND WHERE p.id IN (137,158,172,182) ORDER BY p.id, m.observed_at, m.id LIMIT 300;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-002
+Purpose: `generated_at` and `created_at` for the 5m/1h signals that sit on the entry and exit boundaries (F-12, F-13, F-14; U-13).
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, generated_at, created_at, TIMESTAMPDIFF(MICROSECOND, generated_at, created_at)/1000 AS commit_lag_ms, decision, original_decision, atr_immediate_entry_allowed, atr_recommended_position_percent, final_entry_allowed FROM crypto_ai.trade_signal WHERE id IN (156594,156721,156852,156853,159285,159407,165289,165415,166821,167616,167746,168251,172201,172588,176655,176792,176934) ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-003
+Purpose: Processing timing for the boundary 5m signals: did 165415 trigger the wake-up, and did 159407 run after the 143 entry?
+SQL:
+SELECT signal_id, symbol, interval_code, candle_open_time, origin, status, attempts, updated_at, completed_at, paper_position_id, failure_stage FROM crypto_ai.signal_processing_work WHERE signal_id IN (156721,156852,159285,159407,165415,166821,168251,172588,176934) ORDER BY signal_id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-004
+Purpose: Wallet execution timing and price lineage for all 12 rows (F-19, FIX-056 check).
+SQL:
+SELECT id, signal_id, execution_key, side, price_usdt, decision_price_usdt, execution_price_observed_at, execution_reason, executed_at, created_at FROM crypto_ai.wallet_trade WHERE id IN (344,346,358,359,392,401,403,407,426,429,451,454) ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-005
+Purpose: Why `original_decision` ≠ `decision` on the 182 5m signals and 162 #167746 (F-16, U-14). Schema-safe; long text is truncated.
+SQL:
+SELECT id, decision, original_decision, primary_blocking_stage, final_entry_allowed, LEFT(explanation, 700) AS expl_700 FROM crypto_ai.trade_signal WHERE id IN (175399,176655,176792,176934,167746) ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-006
+Purpose: 1m candles around the trade 143 drop, to cross-check the external trade data (F-11).
+SQL:
+SELECT * FROM crypto_ai.candle WHERE symbol = 'EGLDUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-11 22:39:00' AND '2026-10-11 22:44:00' ORDER BY open_time LIMIT 10;
+### END_DB_REQUEST
+
+## Self-review
+
+- **Revised:** Iteration 2's "possible lock-exit defect" on trade 143 is withdrawn because of the Binance trade data (F-11). That data came through a summarising fetch tool and should be re-pulled programmatically before anyone relies on it.
+- **Inferences, not facts:**
+  - That trade 143 would not have opened with 5m #159407 visible.
+  - That Replay would diverge on trade 137.
+  - That exit lags come from sparse price events.
+- **Entry judgements** (F-12, F-16) use only data that existed at the decision time. The post-entry price path is used only for outcomes.
+- **Plan for Iteration 4:**
+  - Trace `executeMechanicalExit` for the 1–3 s lag.
+  - Trace the source of the decision downgrade.
+  - Settle the Replay reproduction question for trade 143's entry using I3-002 and I3-003.
+
+Sources:
+- [Binance Spot WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)
+- [Binance Spot Testnet WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/testnet/web-socket-streams)
+- Binance public REST `api/v3/aggTrades` (EGLDUSDT, 2026-10-11 22:43:27–22:43:36 UTC)

@@ -1,0 +1,106 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen scope remains exactly `paper_position` IDs `182, 172, 162, 158, 143, 137`. No Replay/test table or substitute trade was used.
+
+- **PROJECT EVIDENCE:** The permitted `db/CODEX/` path has no result artifacts. Consequently, even the authoritative position rows have not been independently verified on this track. Root cause, entry quality, exit path, P&L reconciliation, and rule compliance for every frozen trade remain **UNDETERMINED**.
+
+- **PROJECT EVIDENCE — self-challenge of exit-temporal hypothesis:** Current source validates an observation timestamp, but then calls an overload that omits it. That overload reads the newest 1m/5m/1h signals without `generated_at <= observedAt` filtering. A delayed yet accepted price event could therefore evaluate profit-lock or normal signal-exit logic using later-generated signals.  
+  This is a code-level temporal-integrity concern, not evidence that it occurred in any frozen trade. It cannot explain a fixed SL or TP, because their threshold branches precede profit-lock and normal signal-exit evaluation. It also cannot be attributed without the recorded close reason, accepted price event, and source-signal/audit linkage.  
+  Sources: `LivePositionProtectionService.java:54-71, 95-97, 173-248`; `MarketPriceEventService.java:40-45`.
+
+- **PROJECT EVIDENCE — self-challenge of entry-quality hypothesis:** `assessEntryQuality` declares a 30-minute evidence window but obtains only the newest 20 1m signals, globally ordered by `generated_at`; future-to-reference rows are then skipped. Thus the code cannot guarantee that all 30 minutes of historical evidence were examined.  
+  This does **not** prove an erroneous entry score: a fresh opportunity anchor/best price can replace the rolling reference, signal cadence may vary, and the actual historical runtime/version is unknown. It is a candidate implementation defect only.  
+  Sources: `ExecutionIntelligenceService.java:871-925, 955-1029, 2601-2604`; `TradeSignalRepository.java:42`.
+
+- **PROJECT EVIDENCE:** A negative `paper_position.realized_pnl` establishes only that the frozen selection is intended to represent losses. It does not establish a strategy, execution, protection, data-quality, or accounting defect. Current reviewed routes persist gross-price paper P&L and paper automatic wallet fees are configured as zero; economic net P&L cannot be inferred without the rows.
+
+- **AGENT INFERENCE:** If a frozen position’s durable close route is `STOP_LOSS`, the exit-temporal hypothesis is excluded as its direct cause. If it is a profit-lock or normal signal exit, a later-than-observation signal only establishes exposure, not causation—the system lacks a durable record of exactly which three signal IDs the callback read.
+
+- **AGENT INFERENCE:** The supplied snapshot metadata has a two-second arithmetic inconsistency: `2026-10-25 15:00:04 UTC` converts to `2026-10-25 18:00:04 KSA`, while the supplied KSA snapshot is `18:00:02`. This is metadata only; it does not evidence a trading defect.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `MarketPriceEventService` accepts observations up to the configured 15-second age limit, persists the observation identity, and makes `APPLIED` an atomic protection-callback outcome—not proof of a position mutation by itself.  
+  Source: `MarketPriceEventService.java:25-102`.
+
+- **PROJECT EVIDENCE:** The entry path obtains a fresh canonical price, revalidates execution, executes the wallet BUY, and then creates the paper position. The entry signal’s price is therefore decision evidence, not necessarily the executed fill.  
+  Source: `PaperTradingService.java:342-408`.
+
+- **EXTERNAL RESEARCH:** None in this iteration.
+
+## UNKNOWNS
+
+- Actual symbol, open/close time, entry/exit price, quantity, P&L, stop/target, close reason, and entry/exit signal for each frozen ID.
+- Whether each close has matching wallet, audit, and accepted price-event evidence.
+- Whether any close was a fixed threshold route versus profit-lock/normal signal route.
+- Whether later-generated signals existed between an accepted observation and the relevant close.
+- Actual entry-quality score, selected reference source, historical signal set, and active application version/configuration.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Confirm the production schema before choosing exact forensic columns for the frozen positions and the two candidate hypotheses.  
+SQL:
+
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'market_price_event',
+      'production_exit_audit',
+      'wallet_managed_position',
+      'wallet_trade'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-002  
+Purpose: After DBQ-CODEX-I7-001 confirms these columns, obtain only the durable lifecycle, audit, and accepted near-close price evidence needed to falsify or retain the exit-temporal hypothesis for the six frozen IDs.  
+SQL:
+
+```sql
+WITH frozen AS (
+    SELECT id, symbol, signal_id, exit_signal_id, opened_at, closed_at
+    FROM crypto_ai.paper_position
+    WHERE id IN (182, 172, 162, 158, 143, 137)
+)
+SELECT
+    p.*,
+    a.*
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.production_exit_audit a
+    ON a.paper_position_id = p.id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137), a.audited_at, a.id;
+
+WITH frozen AS (
+    SELECT id, symbol, closed_at
+    FROM crypto_ai.paper_position
+    WHERE id IN (182, 172, 162, 158, 143, 137)
+)
+SELECT
+    f.id AS paper_position_id,
+    mpe.*
+FROM frozen f
+JOIN crypto_ai.market_price_event mpe
+    ON mpe.symbol = f.symbol
+   AND mpe.observed_at >= f.closed_at - INTERVAL 2 MINUTE
+   AND mpe.observed_at <= f.closed_at
+WHERE mpe.delivery_status IN ('LEGACY', 'APPLIED')
+ORDER BY f.id, mpe.observed_at, mpe.id;
+```
+
+### END_DB_REQUEST

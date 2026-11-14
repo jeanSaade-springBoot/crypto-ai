@@ -1,0 +1,92 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Scope remains exactly frozen `crypto_ai.paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitute trade was considered.
+
+- **PROJECT EVIDENCE:** The permitted `db/CODEX/` evidence directory is empty. No executed result for DBQ-FTS-001..005, schema read, position row, wallet record, price event, audit record, or runtime log has been supplied to this track.
+
+- **AGENT INFERENCE:** No trade-specific cause is established. The six losses cannot yet be classified as valid stops, poor entries, delayed exits, protection defects, or accounting defects.
+
+- **PROJECT EVIDENCE:** The prior source findings are only current-working-tree behavior, not proof of the historical deployed version/configuration for any frozen trade. This is material because entry, close, and audit paths have evolved.
+
+- **PROJECT EVIDENCE:** Current code has multiple terminal-ordering paths:
+  - Signal-route closing writes `paper_position` before attempting the wallet exit, while catching wallet exceptions.
+  - Live mechanical protection executes the wallet exit first and only then closes `paper_position`.
+  
+  Therefore a future paper/wallet mismatch is an investigation lead, not standalone proof of a failed or duplicated execution. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487) and [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:391).
+
+- **PROJECT EVIDENCE:** Current `paper_position.realized_pnl` close arithmetic is price difference × quantity, preserving any prior partial-harvest P&L; it does not itself establish fee-adjusted net P&L. The frozen selection is valid as the supplied study predicate, but must not be described as a confirmed net-of-fee loss without wallet-fee evidence. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487).
+
+- **PROJECT EVIDENCE:** An `APPLIED` `market_price_event` would establish a committed protection callback under current code, but not necessarily a position exit; the callback can be a no-op if no eligible open position exists. It must be joined to the affected position and wallet outcome. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:82).
+
+- **PROJECT EVIDENCE:** The snapshot labels differ by two seconds: UTC `2026-11-07 19:55:22` converts to KSA `2026-11-07 22:55:22`, while the supplied KSA label is `2026-11-07 22:55:20`. The frozen IDs remain authoritative; neither timestamp should be treated as a reconstructible exact intended-window clock.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** The Codex stderr artifacts contain client cache warnings and prior investigation output, not trader-runtime evidence.
+- **PROJECT EVIDENCE:** Current entry processing requires a canonical price observation no older than 15 seconds, but that rule is not historical compliance proof absent deployed-version and event records. [ExecutionPriceAuthorityService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionPriceAuthorityService.java:20).
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- Whether the six IDs satisfied the selection predicate at the actual snapshot moment; a present-day query cannot recreate that historical snapshot.
+- Each trade’s symbol, UTC/KSA lifecycle, entry/exit signals, close route, wallet BUY/SELL records, fees, partial exits, and P&L reconciliation.
+- Whether `production_exit_audit`, price-event evidence, and current code paths existed at each historical trade time.
+- Whether any accepted observation crossed stop/target/profit-lock thresholds before closure.
+- Historical runtime mode, application version, and configuration.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Establish actual schema before requesting joins; specifically determine which durable entry, wallet, protection, and exit-audit evidence is available for the frozen positions.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'position_management_event',
+      'position_analysis',
+      'execution_opportunity',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-002  
+Purpose: Read only the frozen authoritative position rows’ supplied selection fields. This verifies current durable state only; it must not be treated as recreation of the missed snapshot.  
+SQL:
+```sql
+SELECT
+    p.id,
+    p.status,
+    p.closed_at,
+    p.realized_pnl,
+    CASE
+        WHEN p.status = 'CLOSED'
+         AND p.closed_at IS NOT NULL
+         AND p.realized_pnl < 0
+        THEN 1
+        ELSE 0
+    END AS currently_matches_study_predicate
+FROM crypto_ai.paper_position AS p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST

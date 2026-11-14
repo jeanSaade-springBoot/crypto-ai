@@ -1,0 +1,143 @@
+I couldn't write the plan file or call ExitPlanMode because neither tool is available in this session, so the full review is below. Everything was read-only: I didn't edit the spec, code, configuration, database or git, and didn't access Production. I made no internet searches, so nothing below is EXTERNAL RESEARCH.
+
+**Scope.** I reviewed `agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.9.1.md` (its header says RPR-0.9.4-DRAFT) against the **current local working tree**, not the zip packages the spec cites. I loaded AGENTS.md and `agent-docs/memory/CLAUDE_LATEST.md` (my own, non-authoritative). `AGREED_KNOWLEDGE.md` and `DECISIONS.md` contain no Replay or FIX-156 entries. I read none of the other agent's findings.
+
+## FINDINGS
+
+### A. Spec claims confirmed in current code [PROJECT EVIDENCE]
+
+- D01, D02, D09, D21, D25 and the main D26 path all hold.
+- S14 holds.
+- D16's Production column is correct.
+- D17 holds: the default scope mode is `PRODUCTION_PARITY`.
+- The 15-second execution-price rule holds.
+- The price query already filters to `LEGACY`/`APPLIED` and orders by `(observed_at, id)`.
+- The `PriceEvent` and `ReplayPrice` records carry no event id.
+
+### B. Spec statements that are wrong compared with the code (material)
+
+**F-01 (BLOCKER): the "Production signal-path sequence" in §3.3 is wrong.**
+- [PROJECT EVIDENCE] The spec (line 66) gives: advisory, TP, stop loss, rebase floor, profit lock, SELL, near-TP, add.
+- The code runs: advisory, TP, **profit-lock trigger, then stop loss**, then rebase hard floor, then SELL (suppressed while the lock is active), then add. There is **no near-TP step on the signal path**.
+- §3.3 also contradicts the spec's own D16 row.
+- [AGENT INFERENCE] §3.3 is the sequence the tests must use, and §7.2 treats "stop-loss precedence" as a critical class. Freezing it would put the wrong precedence into the critical-safety fixtures.
+- Precedence also differs by path: on the price path stop loss comes before the profit lock. §7.2 must therefore state precedence per path.
+
+**F-02 (BLOCKER): the "same arguments" claim behind D14 is false.**
+- [PROJECT EVIDENCE] When the dynamic profit lock is disabled, Production returns "inactive" immediately. It updates no state, and the hard floor cannot fire. When enabled, it calls `ProfitLockPolicy.evaluate` with a literal `true`.
+- Replay passes the admin toggle instead. Even with the toggle off, it still runs its rebase branch and the rebase hard-floor exit, and it still updates the highest price.
+- The RPR-0.8.4 note says both paths call the policy "with the same arguments". That is wrong whenever the toggle is off. D14 needs a toggle-off fixture.
+
+**F-03 (BLOCKER): Replay makes a live Binance HTTP call that the spec does not register.**
+- [PROJECT EVIDENCE] Replay's near-TP harvest step (reachable in exact-price mode) calls `BinanceMinimumExecutionPolicy.evaluate`. That calls Binance REST `GET /api/v3/exchangeInfo`.
+- [AGENT INFERENCE] This breaks the §2 "no Binance/HTTP" rule. It applies today's exchange rules to historical decisions. A network failure changes the outcome (the harvest is skipped). The calls also use the same REST rate-limit budget as Production, which AGENTS.md requires to be shared.
+- D11 calls this only "quantity-driven non-comparable". Neither the register nor RPR7 lists the HTTP call.
+
+**F-04 (BLOCKER): FIX-122 stop-boundary input is missing from the register.**
+- [PROJECT EVIDENCE] Production reads its stop-loss boundary from `wallet_trade`, an account table. Inside a Replay scope it uses Replay's own recorded stops. Outside a scope it falls through to the Production read.
+- Every evaluation also writes a `fix122_evaluation` row. That happens during generation, which conflicts with §6.2 item 1.
+- `RegressionTestService.start` lets a request set `fix122Enabled=false`, a Replay-only switch that the spec does not retire.
+- [AGENT INFERENCE] With entries seeded from Production, Replay's own stops will diverge from Production's. That changes BUY eligibility. This must be added to D18 and E01, and the request-level FIX-122 switch must be retired from the baseline.
+
+**F-05 (BLOCKER): the wallet_settings rule contradicts itself.**
+- [PROJECT EVIDENCE] The shared Production `TradeExecutionValidationService` reads `wallet_settings`, with no scope check, for two settings: `requireNewBuyTransition` and `executionProfile` (CONSERVATIVE, BALANCED or AGGRESSIVE).
+- [AGENT INFERENCE] The spec requires all of these at once:
+  - §8.2: "remove all wallet_settings reads";
+  - §5: "no Production class modified";
+  - §3.4: Replay calls the shared validation code.
+- All three cannot be met together. E10 and the historical-configuration gate (§3.6) also leave out these two settings.
+
+**F-06 (BLOCKER): the seeded-entry lifecycle (Appendix C-1) is underspecified.**
+- [PROJECT EVIDENCE] Production progressive adds change the average entry price, raise the stop loss and raise the take profit. Replay currently opens positions only from its own decisions.
+- [AGENT INFERENCE] The spec does not define:
+  - how seeded entries are injected into Replay;
+  - whether Replay's own BUYs and adds are suppressed or only compared;
+  - how Production adds and partial harvests are seeded (E09 covers the entry only);
+  - which signal stream drives lifecycle context, Production-recorded or Replay-generated.
+- If Replay-generated signals drive the lifecycle, signal mismatches flow into lifecycle results. The two metrics would then not be "separate" as §7.1 claims.
+
+**F-07 (BLOCKER): the label model is inconsistent.**
+- [PROJECT EVIDENCE] §1 defines only `ANALYSIS_PARITY` as a positive label. §6.1 says the validator "may award only ANALYSIS_PARITY, never lifecycle". Yet §7.1 defines a lifecycle-parity acceptance metric.
+- Refusal is a run-level label ("no artifact published"), but D25 and §3.3 refuse per span.
+- [AGENT INFERENCE] There is no label that can certify a lifecycle result, and the granularity of a refusal is undefined.
+
+**F-08 (MATERIAL): D26 is incomplete.**
+- [PROJECT EVIDENCE] The proven-trade detail and list endpoints in `RegressionTestService` call `TradeInvestmentHistory.closedWallet`, which reads `wallet_trade`.
+- `/runs/{id}/fix127` reads Production `signal_processing_work`.
+- RPR7-10 and D26 name only `allTradesChart`. This second path must also be registered.
+
+### C. Moderate findings
+
+- **M-01.** D23 is confirmed, not "to verify". [PROJECT EVIDENCE] `PositionManagementService.analyze` can call `executePositionStopLoss`, which is a Production exit. [AGENT INFERENCE] `POSITION_STOP_LOSS` and the price-path normal HTF exit are missing from the §7.1 exit classes and the §7.2 critical classes.
+- **M-02.** The Production signal path updates the stored profit-lock state (highest price, lock price) from the signal price on every interval. [AGENT INFERENCE] Replay's reachable path never does this. It is a state-continuity difference separate from D03 and is not registered.
+- **M-03.** A fixture is missing from F3. [PROJECT EVIDENCE] When the signal price is not authoritative, Production treats the lock as inactive. It then allows SELL validation and adds even though a persisted lock is active.
+- **M-04.** Price-event status changes over time. [PROJECT EVIDENCE] `PENDING` later becomes `APPLIED` or `PROTECTION_NOT_APPLIED`, and Production entry-price resolution saw only committed rows at the time. `LEGACY` is just the column default for rows from before the delivery-status column was added (FIX-132), so their protection outcome is unknown. [AGENT INFERENCE] "Accepted now" is not the same as "visible to Production then". `LEGACY` spans need an explicit parity rule.
+- **M-05.** S07 can be resolved now. [PROJECT EVIDENCE] The signal timeline is built from the unfiltered `candles()` helper. This is a confirmed defect, not an open trace.
+- **M-06 (reduces scope).** D08 can be closed as decision-equivalent. [PROJECT EVIDENCE] Both wake-ups reject anything that is not a 5m signal, and `evaluateBuy` returns `CONTEXT_ONLY` for non-1m signals without saving an opportunity. The only difference is diagnostic: `fix122_evaluation` audit rows.
+- **M-07.** D20's description overstates its current effect. [PROJECT EVIDENCE] `entryTime` feeds `canUseSignalPrice` only inside the unreachable fallback block. [AGENT INFERENCE] It becomes material once D03 is implemented.
+- **M-08.** The spec does not fix a baseline data source. [PROJECT EVIDENCE] The request chooses between `DATABASE` (the default) and `DATASET`.
+- **M-09.** [AGENT INFERENCE] Judging 99% on a lower confidence bound needs roughly 300 or more comparable units per metric even with zero mismatches (rule of three). If the threshold applies per exit class, rare classes cannot be evaluated. The spec must say whether it applies per class or overall.
+- **M-10.** The §8 migration test references the V103 policy. [PROJECT EVIDENCE] The current tree also has a `B105` trader-only baseline migration, and V103 is a Java migration. The fresh-install and upgrade paths for RPR7-11 must cover both.
+
+### D. Governance and freeze-gate findings [PROJECT EVIDENCE]
+
+- **G-01.** The file name says 0.9.1 but the header says RPR-0.9.4-DRAFT. Appendix B is titled "Changes from RPR-0.7" and its item 1 is stale. The canonical `FINAL_CHANGE_SPECIFICATION.md` is still RPR-0.4-DRAFT.
+- **G-02.** The §8.1 table is broken: the D25 row (line 260) sits above the delimiter row (line 261), so GitHub Markdown will not render the table. The text says "ten deliverables" but there are 11 rows. This matters for the frozen PDF.
+- **G-03.** The spec was checked against zip packages. The current worktree has many uncommitted Java changes, and no SHA-256 of the reviewed tree is recorded. Source identity is not frozen.
+- **G-04.** Appendix C item 1 is still awaiting owner confirmation. Jean has approved nothing, and no Jean-review state was supplied.
+
+## EVIDENCE
+
+| Item | Location |
+|---|---|
+| F-01 | `PaperTradingService.java:113-121, 170-174, 176-180, 182-185, 190-195, 197-213, 217`; spec lines 66 and 89 |
+| F-01 (price path) | `LivePositionProtectionService.java:100-249` |
+| F-02 | `DynamicProfitLockService.java:78-81, 118-122, 164-166, 254-256`; `ShadowProductionReplayService.java:731-748, 479-487`; spec line 307 |
+| F-03 | `ShadowProductionReplayService.java:532-547`; `BinanceMinimumExecutionPolicy.java:39`; `BinanceMarketDataClient.java:159-171` |
+| F-04 | `StopLossEvidenceService.java:41-45, 73-75, 157`; `StopLossEvidenceStore.java:37-39, 52`; `RegressionTestService.java:230-232`; `ShadowProductionReplayService.java:113-116` |
+| F-05 | `TradeExecutionValidationService.java:66-67, 152, 400` |
+| F-06 | `PaperTradingService.java:263-275`; `ShadowProductionReplayService.java:305-366`; spec lines 270 and 316 |
+| F-07 | spec lines 18-24, 196, 232-238 |
+| F-08 | `RegressionTestService.java:549-558, 651, 695`; `TradeInvestmentHistory.java:67-74, 100-104`; `Fix127DiagnosticsController.java:16-36` |
+| M-01 | `PositionManagementService.java:129-139` |
+| M-02 | `PaperTradingService.java:133-135`; `DynamicProfitLockService.java:152-161` |
+| M-03 | `PaperTradingService.java:133-137, 199, 217` |
+| M-04 | `MarketPriceEventService.java:87, 109-111, 138, 173`; `V89__fix_132_shared_market_delivery.sql:24`; `LivePositionProtectionService.java:65-71` |
+| M-05 | `RegressionTestWorker.java:129-131, 509-512, 550-553` |
+| M-06 | `ExecutionIntelligenceService.java:293-296, 399-402, 470-472`; `StopLossEvidenceService.java:53-55` |
+| M-07 | `ShadowProductionReplayService.java:218, 569, 712` |
+| M-08 | `RegressionTestController.java:46-49`; `RegressionTestService.java:204` |
+| M-10 | `src/main/java/db/migration/V103__fix_149_fresh_admission_indexes.java`; `B105__fix_153_trader_only_baseline.sql`; latest migration is V109 |
+| Confirmed rows | `ShadowProductionReplayService.java:126-161, 232, 342-366, 360, 370-374`; `RegressionTestWorker.java:99, 195-198, 322-323`; `ExecutionPriceAuthorityService.java:25, 37-48`; `MarketPriceEventService.java:118-129`; `ExecutionReplayScope.java:33-34, 177` |
+
+## OBJECTIONS
+
+1. F-01 through F-07 each block a freeze. F-08 must be registered.
+2. [AGENT INFERENCE] The design has an assumption risk. "Replay-local mirrors, no Production change" cannot cover the wallet reads and fall-through branches inside shared Production classes (F-04, F-05) unless a JDBC- or AOP-level guard is specified. The spec gives no guard mechanism, and E01 is only planned.
+3. [AGENT INFERENCE] Statistics: thresholds per exit class are not defined, and the required sample sizes are not estimated (M-09). E06's "99% baseline on existing Production output" has no Replay implementation to compare against yet.
+4. [AGENT INFERENCE] Look-ahead risk: candle closure, price-event status, wallet settings and provider configuration are all read in their current state (M-04, F-05).
+
+## UNKNOWNS
+
+- How many seeded positions per symbol-window are available. This decides whether the 99% target can be evaluated at all.
+- Production's historical `wallet_settings` values (profit-lock settings, `executionProfile`, `requireNewBuyTransition`). Their storage location has not been checked.
+- How common `LEGACY` and `PENDING` price-event spans are, and how far Binance's historical minimum-notional rules differ from today's.
+- Whether the current worktree matches the cited zip packages. I didn't hash anything and didn't run git.
+- I did not re-verify the `ReplayParityValidator` 13-field claim (S13) or the S01–S06 and S08–S12 rows in this round.
+
+## FINDINGS FOR JEAN
+
+1. **Not freeze-ready.** The spec's own Production signal-path order is wrong: in the code the profit lock comes before stop loss, and there is no near-TP step. That error would flow straight into the critical stop-loss fixtures.
+2. **Replay calls live Binance today** (the near-TP minimum-order check). It breaks the "no HTTP" boundary, uses today's exchange rules, and shares Production's rate-limit budget. The spec doesn't register it.
+3. **Two Production account dependencies are missing from the spec:** the FIX-122 stop history read from `wallet_trade`, and the BUY-strategy settings in `wallet_settings`. Removing the second without changing a Production class isn't possible as the spec is written. You need to choose: allow a narrow Production change, use a guard or interceptor, or declare these cases non-comparable.
+4. **The profit-lock "identical calculation" claim (D14) is false when the lock is disabled.** Replay can fire a hard-floor exit that Production cannot.
+5. **The seeded-entry design you're asked to confirm (Appendix C-1) is missing its mechanics:** entry injection, adds and partial harvests, and which signals drive the lifecycle. It also has no label that can certify a lifecycle result.
+6. **Housekeeping before any freeze:**
+   - fix the revision label and the file name;
+   - copy the spec to the canonical path;
+   - fix the broken §8.1 table;
+   - record the SHA-256 of the exact source tree;
+   - add the proven-trade `wallet_trade` read to D26.
+7. **Good news:** D08 can be closed as equivalent from the code, and S07 is now a confirmed defect, not an open question. Both shrink the work.
+
+VERDICT: REJECTED

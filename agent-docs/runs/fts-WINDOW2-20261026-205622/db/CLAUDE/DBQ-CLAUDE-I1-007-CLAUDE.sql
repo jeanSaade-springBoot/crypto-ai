@@ -1,0 +1,1 @@
+SELECT p.id AS paper_id, m.* FROM crypto_ai.paper_position p JOIN crypto_ai.wallet_managed_position m ON m.symbol = p.symbol AND m.opened_at BETWEEN p.opened_at - INTERVAL 10 SECOND AND p.opened_at + INTERVAL 10 SECOND WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id LIMIT 20;

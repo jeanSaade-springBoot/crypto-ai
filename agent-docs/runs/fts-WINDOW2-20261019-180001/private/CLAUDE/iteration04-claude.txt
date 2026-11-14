@@ -1,0 +1,211 @@
+# Claude: Iteration 4, code and trade route (self-review only)
+
+**Run:** fts-WINDOW2-20261019-180001 · **Frozen trades:** 182, 172, 162, 158, 143, 137. None were substituted.
+
+**What I read:**
+- My iteration-3 output, the CHARTER, and results DBQ-CLAUDE-I3-001…006, plus I1-004 and I2-005.
+- Code: `ExecutionIntelligenceService`, `TradeExecutionValidationService`, `HigherTimeframeBuyAssessmentService`, `MultiTimeframeConfluenceService`, `BinanceWebSocketHandler`, `BinanceKlineService`, `WalletService`, `ShadowProductionReplayService`, and the candle-index migrations.
+- A grep of AGREED_KNOWLEDGE.md, DECISIONS.md, DATABASE_INVESTIGATION_RULES.md and claude-docs/ for these topics. None of them covers the findings below.
+
+I did not open any CODEX folder, LIVE_EVENTS.log or LIVE_TEAM_STATUS.md.
+
+**Limitations:**
+- No file is writable in this session (plan mode, and I have no Write tool), so this output is not saved to `private/CLAUDE/`. The coordinator must capture it.
+- There is no SSH or log access, so there is no log-file evidence.
+- No code, config, DB writes, git or deploy.
+
+**Time rule:** the session zone is SYSTEM = Arab Standard Time, proven by I2-001. **Displayed DB values are KSA, and UTC = displayed − 3h.** All times below are KSA unless marked UTC.
+
+---
+
+## FINDINGS
+
+### F4-1: Trade 143 entered on a 5m BUY that a newer 5m WATCH had replaced 2 ms later [PROJECT EVIDENCE + AGENT INFERENCE]
+
+**The data** [PROJECT EVIDENCE: I1-004, I2-005]:
+- The 1m signal 159408 (candle 22:39) was generated at 22:40:01.634.
+- The 5m candle 22:35–22:39:59.999 closed at the same instant. Its signal **159407 = WATCH** was generated at **22:40:01.636**, which is 2 ms later and 1.5 s before the fill at 22:40:03.115.
+- The entry message cites "the fresh 5m BUY". That is **159285**, the 5m candle of 22:30, generated at 22:35:01.553. Its data ends at 22:34:59.999, so it is one full candle older.
+
+**The code** [PROJECT EVIDENCE]:
+- **Route:** the entry came through `setupTimeframeAtrAuthoritySignal` (`ExecutionIntelligenceService.java:1472-1492`), then `setupTimeframeAtrAuthorityDecision` (`:1494-1514`), called at `:628-641`.
+- **Which 5m it sees:** the route uses `latestAtOrBefore(current, 5m, FIVE_MINUTE_MAX_AGE = 20 min)`. The as-of anchor is the **1m signal's `generated_at`** (`:2455-2462`), not the decision instant and not the 1m candle close.
+  - So whether the 5m candle that closed at the same boundary is visible depends on which analysis thread stamps `generated_at` first.
+  - 159407 was stamped after 159408, so it was invisible to the 1m decision.
+- **Counterfactual** [AGENT INFERENCE, needs a Replay run]:
+  - With 5m = WATCH, `isBullish(five.getDecision())` fails at `:1486` and the route returns null.
+  - The 1m signal had `atrImmediateEntryAllowed = false` (`WAIT_FOR_RETRACEMENT`, 0%). Execution would then hit `ATR_ENTRY_BLOCKED` (`:644-649`), so **trade 143 would most likely not have opened**.
+- **Scope:** every 1m candle that closes on a 5-minute boundary has this race. For the other five trades:
+  - 137: the 5m signal 156721 was stamped 18 ms before the 1m signal, so the current 5m was visible.
+  - 158: the 5m signal 165415 was stamped 20 ms after the 1m signal, but it entered through the wakeup path, which correctly consumed it.
+  - 162, 172 and 182 do not close on a 5-minute boundary.
+
+**Classification: candidate logic defect.** The higher-timeframe confirmation is admitted on an as-of timestamp that is not deterministic at the candle-close boundary. DBQ-CLAUDE-I4-003 measures how often this happens across all BUYs.
+
+### F4-2: The SETUP_TIMEFRAME_ATR route bypasses the FIX-154 higher-timeframe assessment and its audit entirely [PROJECT EVIDENCE]
+
+- **Audit rows (I3-001):** five of the six entries have a `buy_htf_assessment_audit` row: 137 and 182 `DIRECT_BUY`, 158 `SETUP_WAKEUP`, 162 `ACCUMULATED_EVIDENCE`, 172 `DIRECT_BUY`. **Signal 159408 (trade 143) has none.**
+- **Why:** the audit is written only from `TradeExecutionValidationService.validateBuy` (`:96,111`) or `validateBuyContext` (`:128ff`, via `audit()` `:437-439`), plus consolidation.
+  - The SETUP_TIMEFRAME_ATR route (`ExecutionIntelligenceService.java:628-641`) calls neither of them. It returns before the direct path at `:652-653`.
+  - The FIX-014 SETUP_TIMEFRAME wakeup (`:363`) also skips the validation service.
+  - By contrast, the FIX-023 confirmation wakeup does call it (`:435`).
+- **Its own 1h check is weaker:** the route rejects only when `isBearish(oneHour.getDecision())` (`:1490`). It does not check `getOriginalDecision()`, data quality, or the FIX-154 bands. Sibling routes do check these (`:337`, `:1425-1426`, `:1552-1553`).
+- **Classification: confirmed coverage gap.** This is not a cause of the 143 loss: the 1h was NEUTRAL, so any check would have passed. But it means FIX-154 evidence does not exist for this route, and its gate does not apply. Because of F3-5, FIX-154 is running in Production, so this is an actual Production behaviour.
+
+### F4-3: Trade 182's masking chain is now confirmed end to end [PROJECT EVIDENCE: I3-001, I3-002 + code]
+
+1. **The 1h signal 175258** was generated at 09:00:04.880. It was WATCH with trend 16/25, regime WEAK_UPTREND, and its own confluence UNAVAILABLE.
+2. **The 1h counts as bullish context.** `MultiTimeframeConfluenceService.isBullishContext` is `isBullish(decision) || trendScore >= BULLISH_TREND_MINIMUM (15)` (`:24`, `:337-339`). A trend score of 16 qualifies.
+3. **Every 5m STRONG_SELL becomes NEUTRAL.** Signals 176278, 176403, 176529, **176655** and 176792 all read `original_decision = STRONG_SELL` → `decision = NEUTRAL`, `CONFLICT`. The explanation reads "Bearish signal conflicts with bullish higher-timeframe structure … 1h=WATCH (trend 16/25)".
+4. **The FIX-154 assessment reads the masked value.** It uses `decision()`, which is `getDecision()` (`HigherTimeframeBuyAssessmentService.java:20,50`), so `5M_BEARISH_VETO` (`:22-25`) cannot fire.
+   - Audit row 2425 records `five_minute_raw_decision = NEUTRAL` for 176655, even though its original decision was STRONG_SELL.
+   - The result was `BALANCED_NEUTRAL_5M_WATCH_1H`, NO_CONFLICT, a 25% intent. The fill was 15% (wallet 451).
+5. **The mask lifts at 10:00.** The 1h signal 176791 has trend 13, which is below 15, so the status becomes MIXED. 5m signal 176934 is then an unmasked STRONG_SELL, and the trade exits through SELL_CONFIRMED at 10:05:18.504.
+
+**Two further defects:**
+- The audit column labelled "raw" stores the masked value. That defeats the AGENTS.md FIX-154 aim of immutable evidence.
+- Note that the 1m signal's own regime was WEAK_DOWNTREND (I2), while the 57-minute-old 1h said WEAK_UPTREND.
+
+**Classification: confirmed logic defect.** Confluence protection meant to stop a bearish 5m from shorting into a bullish 1h is reused as "5m is NEUTRAL" permission to go long. That contradicts the intent of `5M_BEARISH_VETO`. Trade 137 was checked for the same pattern: its 5m signal 156721 had original decision NEUTRAL (I1-004), so it is **not** affected.
+
+### F4-4: Confirmed: an exit transaction freezes price ingestion for every symbol for 0.8–3.2 s [PROJECT EVIDENCE: I3-003 + code]
+
+**Code:**
+- `BinanceWebSocketHandler.handleTextMessage` (`:42-67`) calls `service.processKline` synchronously on a single primary session. That call runs `livePositionProtectionService.onPrice` inside `transactions.process` (`BinanceKlineService.java:101-111`).
+- So a 1–3 s protection transaction blocks the WebSocket callback thread.
+
+**Data:**
+
+| Exit | Paper close | Events affected | Ingestion lag | Lag before / after |
+|---|---|---|---|---|
+| 137 | 21:00:12.122 | Every event observed 21:00:09.447–12.325 (ICP, AERO, BTC, ETH, BNB, SUI, PEPE, XRP, ENA, SOL, BICO, …) was written at 21:00:12.155–12.341 | Up to **2,708 ms** | −150 ms clock skew just before; it returns to that baseline at 12.577 |
+| 143 | 22:43:36.229 | Events observed 35.471–36.317 were written from 36.245 | Up to **774 ms** | 0–23 ms just before and after |
+
+**Impact:**
+- During those windows, **no other open position receives a protection evaluation**. The prices are not lost: they are delivered late, in a burst.
+- Of the frozen trades, only one position was open at a time on these occasions. So this did not cause any of the six losses [AGENT INFERENCE, based on I1/I2 open/close times].
+- It is an architectural risk for a cascade of exits. It also bears on the AGENTS.md "Binance observation timestamp, validate age" requirement: a late burst can be judged against stale-age limits.
+
+### F4-5: Where the 1.2–3.2 s goes inside the transaction [PROJECT EVIDENCE: I3-004 + code; cost attribution is AGENT INFERENCE]
+
+- **Snapshot timing:** `wallet_snapshot.captured_at` falls 2–5 ms **before** the paper close:
+
+  | Snapshot | captured_at | Paper close |
+  |---|---|---|
+  | 347 | 12.117793 | 12.122 |
+  | 360 | 36.227 | 36.229 |
+  | 402 | 06.637 | 06.638 |
+  | 455 | 20.484 | 20.486 |
+
+  `capturedAt(Instant.now())` is stamped **after** `overviewWithoutHistory()` (`WalletService.java:592-599`). So the delay lies between the wallet `executedAt` and the end of the snapshot computation.
+- **Query count:** there are 20 `wallet_asset` rows. `currentPortfolioValue()` (`:484-490`) and `overviewWithoutHistory()` (`:600-605`) each loop over all of them, calling `findFirstBySymbolAndIntervalCodeAndClosedTrueOrderByCloseTimeDesc` (`:607`). That is about 40 queries, plus `totalRealizedPnl` and `netInvested` aggregates.
+- **Likely cause:** the best index is `idx_candle_dashboard_closed_time (symbol, interval_code, closed, open_time)` (V58). The query orders by **`close_time`**, so MySQL probably sorts all closed 1m rows per symbol rather than reading the index in order. This is a hypothesis; DBQ-CLAUDE-I4-001 tests it with EXPLAIN.
+- **Classification:** a performance defect that amplifies F4-4. It did not cause any loss.
+
+### F4-6: Replay parity risk for F4-1 [PROJECT EVIDENCE: code + AGENT INFERENCE]
+
+- Replay orders its timeline by `generatedAt`, then by `intervalOrder` (`ShadowProductionReplayService.java:68-72`). It uses the same `evaluateBuy` (`:257`), so the same `latestAtOrBefore` as-of rule applies.
+- If Replay regenerates signals with deterministic or equal `generated_at` values, the 1m and 5m at the same boundary would be tied. Replay may then see 159407 (WATCH) and **not enter 143**. That would be a Replay/Production divergence caused by thread timing.
+- This has not been run. Proving it requires a Replay of EGLDUSDT on 2026-10-11, 22:35–22:45.
+
+### Updated classifications (iteration 4; may change)
+
+| ID | Classification |
+|---|---|
+| 137 | Valid loss. R:R < 1 by design (ATR stop floor). The 5m NEUTRAL was genuine, not masked. Timing is clean. |
+| 143 | **Entry: candidate logic defect (F4-1)**. It used a 5m BUY that had just been replaced; the current 5m was WATCH. The route is also outside FIX-154 (F4-2). **Exit:** followed the rules; the design limitation is a sweep through the order book that skipped the lock (F3-1). |
+| 158 | Valid loss. The TP was smaller than round-trip fees. The wakeup path was audited correctly. |
+| 162 | Valid loss. Late accumulated-evidence entry, audited `BALANCED_EARLY`. |
+| 172 | Valid loss. Tick-size degeneracy. The audit shows 5m BUY and 1h NEUTRAL, which is legitimate. |
+| 182 | **Confirmed logic defect (F4-3).** The confluence mask was reused as entry permission, and the "raw" audit column hides the mask. |
+
+**Cross-cutting (not causal for these six):**
+- F4-4: ingestion freezes during an exit transaction.
+- F4-5: per-asset snapshot queries inside the trading transaction.
+
+---
+
+## EVIDENCE
+
+- **DB results:**
+  - I3-001: audit rows 1938, 2086, 2199, 2284, 2425. There is none for 159408.
+  - I3-002: ACEUSDT 1h signals 175258 and 176791, and 5m signals 176278–176934.
+  - I3-003: ingestion lag per event.
+  - I3-004: snapshots 347/360/402/455; 20 wallet assets.
+  - I3-005: runtime days 10-12 and 10-13 (signals stop at 10-13 00:51:03).
+  - I3-006: wallet 344/426/451, with price observation ages at fill of 2.98 s, 1.48 s and 1.80 s (U13 closed).
+  - I1-004 and I2-005: 156721, 159285 and 159407.
+- **Code:**
+  - `ExecutionIntelligenceService.java:66-67,283-378,434-436,628-653,1472-1514,2455-2462`
+  - `TradeExecutionValidationService.java:62-113,123-139,437-439`
+  - `HigherTimeframeBuyAssessmentService.java:15-51`
+  - `MultiTimeframeConfluenceService.java:24-27,337-348`
+  - `BinanceWebSocketHandler.java:42-67`
+  - `BinanceKlineService.java:91-111`
+  - `WalletService.java:484-490,592-607`
+  - `V58__optimize_dashboard_candle_reads.sql:5-6`
+  - `ShadowProductionReplayService.java:68-72`
+
+## UNKNOWNS
+
+- **U14:** how often an executed BUY on a 5-minute boundary used a 5m signal that a same-boundary 5m with a different decision replaced (I4-003).
+- **U15:** the EXPLAIN plan and cost of the snapshot `currentPrice` query (I4-001).
+- **U16:** whether the ingestion freeze recurs on every entry or exit, and its worst-case length (I4-002).
+- **U17:** whether Replay runs and tables exist that could check F4-1 and F4-3 parity without running a new Replay (I4-004).
+- **U11 (narrowed):** runtime stopped at 2026-10-13 00:51:03 (I3-005). The cause needs process or systemd logs.
+- **U12:** application-log greps are still pending; this needs SSH through the coordinator. Markers:
+  - `[FIX-131][CANDLE_RECEIVED]` with `admissionWaitMicros`, around 21:00:09–12 and 22:43:35–36
+  - `[FIX-153][KLINE_PHASES_RETURNED]`, around 21:00:09–12 and 22:43:35–36
+  - the FIX-154 audit lines for 159408
+- **F3-5 governance contradiction** (FIX-153/154 are live in Production, contrary to AGENTS.md): still open, and it needs the dual-agent process.
+
+## Regression and Replay checks (draft, not authorized for implementation)
+
+- **R-F4-1:** a 1m and a 5m candle close on the same boundary. The 5m signal is stamped later than the 1m signal, and its decision is WATCH while the prior 5m is BUY. **Expected:** SETUP_TIMEFRAME_ATR must not use the earlier 5m candle. The Replay result must be identical when the stamp order is swapped.
+- **R-F4-2:** every BUY route that can open a position (SETUP_TIMEFRAME_ATR, the FIX-014 wakeup, BREAKOUT/REVERSAL retracement, DEFERRED, HTF_TRANSITION) writes exactly one `buy_htf_assessment_audit` row.
+- **R-F4-3:** a 5m signal with `original_decision = STRONG_SELL` and `decision = NEUTRAL` (CONFLICT), plus a 1h WATCH with trend ≥ 15. **Expected:** the FIX-154 assessment must not return NO_CONFLICT, and `five_minute_raw_decision` stores the original decision.
+- **R-F4-4:** a protection exit transaction for symbol A must not delay the ingestion or protection of symbol B by more than an agreed bound.
+- **Replay:**
+  - EGLDUSDT 2026-10-11 22:35–22:45: does 143 open?
+  - ACEUSDT 2026-10-12 09:50–10:06: does 182 open?
+  - Compare both against Production.
+
+---
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: U15. Get the plan, indexes and data size behind `currentPrice` (`WalletService.java:607`), which runs about 40 times inside every trading transaction.
+SQL:
+EXPLAIN SELECT c.close_price FROM crypto_ai.candle c WHERE c.symbol = 'EGLDUSDT' AND c.interval_code = '1m' AND c.closed = 1 ORDER BY c.close_time DESC LIMIT 1;
+SELECT index_name, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = 'crypto_ai' AND table_name = 'candle' ORDER BY index_name, seq_in_index LIMIT 40;
+SELECT COUNT(*) AS egld_1m_closed FROM crypto_ai.candle WHERE symbol = 'EGLDUSDT' AND interval_code = '1m' AND closed = 1;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: U16. How often price ingestion stalls (lag > 500 ms) per minute during the live trading period of the six trades.
+SQL:
+SELECT DATE_FORMAT(observed_at, '%Y-%m-%d %H:%i') AS minute_ksa, COUNT(*) AS stalled_events, MAX(TIMESTAMPDIFF(MICROSECOND, observed_at, created_at)) / 1000 AS max_lag_ms FROM crypto_ai.market_price_event WHERE observed_at BETWEEN '2026-10-11 18:00:00' AND '2026-10-12 12:00:00' AND TIMESTAMPDIFF(MICROSECOND, observed_at, created_at) > 500000 GROUP BY minute_ksa ORDER BY minute_ksa LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: U14 / F4-1. For every executed BUY, check whether the 5m signal from the same candle-close boundary was stamped after the 1m execution signal, and compare its decision with the previous 5m.
+SQL:
+SELECT wt.id AS wallet_trade_id, wt.symbol, wt.execution_reason, wt.executed_at, s1.id AS sig_1m, s1.candle_open_time AS c1_open, s1.generated_at AS gen_1m, s5.id AS sig_5m_same_close, s5.generated_at AS gen_5m, TIMESTAMPDIFF(MICROSECOND, s1.generated_at, s5.generated_at) / 1000 AS ms_5m_after_1m, s5.decision AS d5_same, s5.original_decision AS od5_same, p5.id AS prev_5m, p5.decision AS d5_prev, p5.original_decision AS od5_prev FROM crypto_ai.wallet_trade wt JOIN crypto_ai.trade_signal s1 ON s1.id = wt.signal_id AND s1.interval_code = '1m' JOIN crypto_ai.trade_signal s5 ON s5.symbol = s1.symbol AND s5.interval_code = '5m' AND s5.candle_open_time = s1.candle_open_time - INTERVAL 4 MINUTE LEFT JOIN crypto_ai.trade_signal p5 ON p5.symbol = s1.symbol AND p5.interval_code = '5m' AND p5.candle_open_time = s1.candle_open_time - INTERVAL 9 MINUTE WHERE wt.side = 'BUY' AND wt.executed_at BETWEEN '2026-10-09 00:00:00' AND '2026-10-19 18:00:00' ORDER BY wt.id LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: U17. Find existing Replay/regression tables and runs covering 2026-10-11/12, to check F4-1 and F4-6 parity without running a new Replay. This is a schema discovery step only.
+SQL:
+SELECT table_name, table_rows FROM information_schema.tables WHERE table_schema = 'crypto_ai' AND (table_name LIKE '%replay%' OR table_name LIKE '%regression%' OR table_name LIKE '%\_test') ORDER BY table_name LIMIT 60;
+### END_DB_REQUEST
+
+---
+
+**Plan for iteration 5:**
+- Use the I4 results to close U14–U17.
+- Quantify how often F4-1 occurs and whether it is systematic.
+- Request a bounded Replay comparison for 143 and 182 if the Replay tables allow it.
+- Finalize the defect list and the regression matrix.

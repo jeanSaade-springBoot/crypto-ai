@@ -1,0 +1,24 @@
+FIX-150 development candidate validation (not deployment acceptance)
+
+EXECUTED IN THIS SESSION:
+PASS: Java parser on all five changed/new Java files (syntax ONLY).
+PASS: new Fix150ProtectionRecovery + actual SharedCutoverPolicy type-compiled
+      using Java 17 and minimal Spring/JDBC/SLF4J API stubs. This is NOT a real
+      dependency compile, Spring wiring test or full Java 21 project build.
+PASS: 12 extracted recovery UPDATE/audit SQL guard and rollback assertions
+      using Python SQLite. Only CURRENT_TIMESTAMP(6) spelling adapted.
+PASS: application.yml YAML parse and recovery flag, Logback XML parse,
+      fix-registry.js Node syntax check.
+PASS: prior V1-V102 SQL and V103 Java migration byte-identical to FIX-149 archive.
+
+NOT EXECUTED:
+Java 21 Maven clean verify; all ten new JUnit/H2 regression methods;
+real MySQL inherited regressions, migration/EXPLAIN/lock races;
+actual JPA + JdbcTemplate transaction participation; Spring security/runtime wiring;
+Production/Replay strategy/protective-exit parity; full 21-symbol backlog/load test;
+protection entry-intent extra commit/round-trip and logging overhead measurement.
+
+No old database rows were edited here. Existing paper-position state is unknown;
+the automatic path checks it under the wallet fence at runtime. Legacy effects
+remain UNKNOWN_RETAINED/ABANDONED. Unknown entered attempts with an open position
+remain fenced. This candidate cannot certify that all stalls are prevented.

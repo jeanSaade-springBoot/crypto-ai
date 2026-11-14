@@ -1,0 +1,1 @@
+SELECT status, COUNT(*) AS n, MIN(opened_at) AS first_open, MAX(opened_at) AS last_open, MAX(closed_at) AS last_close, SUM(realized_pnl < 0) AS neg FROM crypto_ai.paper_position WHERE opened_at >= '2026-10-11 00:00:00' GROUP BY status;

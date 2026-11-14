@@ -1,0 +1,1 @@
+CREATE TABLE agent_forbidden_test(id INT)

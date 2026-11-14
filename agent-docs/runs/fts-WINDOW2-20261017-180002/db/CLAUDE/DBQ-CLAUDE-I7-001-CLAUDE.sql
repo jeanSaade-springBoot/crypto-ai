@@ -1,0 +1,1 @@
+SELECT id, symbol, interval_code, generated_at, original_decision, decision, final_entry_allowed, primary_blocking_stage, confluence_status, LEFT(decision_path, 2500) AS decision_path FROM crypto_ai.trade_signal WHERE id IN (176655, 176710, 171559, 171589, 165415, 165412, 159407, 159285) ORDER BY symbol, generated_at LIMIT 10;

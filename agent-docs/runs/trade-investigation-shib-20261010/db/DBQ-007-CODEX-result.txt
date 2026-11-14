@@ -1,0 +1,9 @@
+exit_code=0
+duration_ms=152
+row_count=1
+--- stdout ---
+id	symbol	interval_code	candle_open_time	decision	original_decision	total_score	confidence_score	latest_price	stop_loss	take_profit	risk_reward_ratio	atr_at_signal	atr_percent	atr_entry_type	atr_recommended_position_percent	atr_immediate_entry_allowed	market_regime	selected_strategy	final_entry_allowed	generated_at	final_decision_explanation	atr_explanation	confluence_explanation
+89469	SHIBUSDT	1m	2026-10-09 23:44:00.000000	WATCH	WATCH	60	74	0.000005410000	0.000005382950	0.000005433730	0.87726400	0.000000007910	0.14621072	STANDARD_ENTRY	100	1	WEAK_UPTREND	TREND_FOLLOWING	1	2026-10-09 23:45:03.498678	FinalDecisionService applied 8 ordered checks. Raw confidence 74/100, effective confidence 74/100. Entry allowed.	ATR14 is 0.00000000791 (0.15% of price). Volatility is LOW. Stop uses 2.0 ATR and target uses 3.0 ATR. Price is 0.51 ATR from SMA20. Strategy-aware entry type is STANDARD_ENTRY. Recommended position is 100%. Immediate entry remains allowed.	Higher-timeframe direction is mixed; no trend-following adjustment was applied. Strategy-aware confluence used TREND_FOLLOWING. Higher timeframes: 5m=NEUTRAL (trend 16/25, regime WEAK_UPTREND), 1h=NEUTRAL (trend 13/25, regime WEAK_DOWNTREND).
+
+--- stderr ---
+

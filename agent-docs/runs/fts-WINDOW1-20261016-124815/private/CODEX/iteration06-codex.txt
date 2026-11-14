@@ -1,0 +1,76 @@
+## FINDINGS — Iteration 6: Root Cause + Research
+
+- **PROJECT EVIDENCE:** The frozen scope remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutions were made.
+
+- **PROJECT EVIDENCE:** `db/CODEX/` contains no executed database evidence. Thus no trade-specific root cause—valid loss, bad entry, stale data, protection failure, or accounting issue—can be confirmed.
+
+- **PROJECT EVIDENCE:** Current source supports several distinct close paths: stop loss, take profit, profit-lock, confirmed multi-timeframe exit, position-analysis stop, and manual close. A null `exit_signal_id` is not proof of a manual or unexplained exit: live-price exits preserve context in `production_exit_audit`.
+
+- **PROJECT EVIDENCE:** A direct live-price exit is evidence-backed only when the relevant canonical `market_price_event` is `LEGACY` or `APPLIED`; `PENDING`, `NON_CANONICAL`, and `PROTECTION_NOT_APPLIED` cannot establish an accepted protection trigger. `APPLIED` proves the protection callback committed, but can still be a no-position no-op.
+
+- **PROJECT EVIDENCE:** The current source applies an absolute stop-loss before profit-lock and normal signal-exit logic. It closes on a live observed price at/below the managed stop, then records paper-position and exit-audit evidence. Whether this exact implementation/version ran for any frozen trade is unproven.
+
+- **EXTERNAL RESEARCH:** Binance documents that normal kline streams update current candles every two seconds for non-`1s` intervals and include both UTC close time and an explicit closed flag. Its historical kline endpoint identifies a candle by open/close time and interprets `startTime`/`endTime` in UTC. Therefore candle OHLC cannot replace missing accepted intrabar protection evidence for a stop/exit reconstruction. [Binance kline stream specification](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/ws-streams/~), [Binance kline API specification](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/ws-api/market)
+
+- **AGENT INFERENCE:** The only confirmed “root cause” at this stage is an evidence gap: the required authoritative rows and their linked audit/price-event records were not supplied. It would be unsound to label any of the six losses a strategy defect or protection defect.
+
+- **AGENT INFERENCE:** The leading mutually exclusive classifications to test once evidence arrives are:
+  1. valid loss: stop threshold reached on an accepted observation and exit committed promptly;
+  2. entry-quality/strategy loss: entry complied with rules but contemporaneous signal geometry was weak;
+  3. stale/coverage defect: unavailable or non-canonical price/candle evidence prevented timely analysis or protection;
+  4. execution/accounting defect: paper position, wallet ledger, managed position, and audit rows disagree.
+
+## EVIDENCE
+
+- `private/CODEX/iteration01-codex.txt` through `iteration05-codex.txt`
+- `src/main/java/com/crypto/position/service/LivePositionProtectionService.java`
+- `src/main/java/com/crypto/market/service/MarketPriceEventService.java`
+- `src/main/java/com/crypto/service/PaperTradingService.java`
+- `src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java`
+- `src/main/java/com/crypto/audit/service/ProductionExitAuditService.java`
+- `src/main/java/com/crypto/position/service/PositionExitPolicy.java`
+- `src/main/java/com/crypto/domain/PaperPosition.java`
+
+## UNKNOWNS
+
+For every frozen trade: symbol, entry/exit timestamps, entry and exit prices, stop/target geometry, close reason, entry/exit signal linkage, wallet and managed-position linkage, accepted trigger observation, protection timing, fees, realized-P&L reconciliation, and deployed version/configuration.
+
+No raw DB timestamp has been reported as KSA. The preserved snapshot was **2026-10-16 09:48:32 UTC / 12:48:15 KSA**; the intended 10:00 KSA window clock was not preserved.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Establish the actual current schema and retrieve the authoritative frozen-position rows without assuming unverified physical columns. This is the prerequisite to a bounded root-cause timeline and linkage query. All timestamps returned are UTC.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+SHOW CREATE TABLE crypto_ai.production_exit_audit;
+SHOW CREATE TABLE crypto_ai.wallet_managed_position;
+SHOW CREATE TABLE crypto_ai.wallet_trade;
+SHOW CREATE TABLE crypto_ai.trade_signal;
+SHOW CREATE TABLE crypto_ai.signal_processing_work;
+SHOW CREATE TABLE crypto_ai.market_price_event;
+SHOW CREATE TABLE crypto_ai.position_analysis;
+SHOW CREATE TABLE crypto_ai.candle;
+SHOW CREATE TABLE crypto_ai.technical_indicator;
+
+SELECT
+    p.id,
+    p.status,
+    p.closed_at,
+    p.realized_pnl
+FROM crypto_ai.paper_position p
+WHERE p.status = 'CLOSED'
+  AND p.closed_at IS NOT NULL
+  AND p.realized_pnl < 0
+ORDER BY p.closed_at DESC
+LIMIT 6;
+
+SELECT p.*
+FROM crypto_ai.paper_position p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST
+
+No implementation occurred. No documentation update is required because no new durable trade finding was confirmed.

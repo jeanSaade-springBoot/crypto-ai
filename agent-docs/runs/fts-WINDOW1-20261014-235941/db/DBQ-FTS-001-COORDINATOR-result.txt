@@ -1,0 +1,18 @@
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+symbol	varchar(30)	NO	MUL	NULL	
+side	varchar(10)	NO		NULL	
+status	varchar(20)	NO		NULL	
+quantity	decimal(30,12)	NO		NULL	
+entry_price	decimal(30,12)	NO		NULL	
+stop_loss	decimal(30,12)	NO		NULL	
+take_profit	decimal(30,12)	NO		NULL	
+exit_price	decimal(30,12)	YES		NULL	
+realized_pnl	decimal(30,12)	YES		NULL	
+close_reason	varchar(40)	YES		NULL	
+entry_reason	mediumtext	YES		NULL	
+exit_reason	mediumtext	YES		NULL	
+signal_id	bigint	NO	MUL	NULL	
+exit_signal_id	bigint	YES	MUL	NULL	
+opened_at	timestamp(6)	NO	MUL	NULL	
+closed_at	timestamp(6)	YES		NULL

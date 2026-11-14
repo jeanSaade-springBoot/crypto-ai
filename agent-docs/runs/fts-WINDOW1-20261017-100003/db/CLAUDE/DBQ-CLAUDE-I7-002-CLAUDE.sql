@@ -1,0 +1,1 @@
+SELECT DATE(opened_at) AS d_ksa, COUNT(*) AS n, SUM(realized_pnl<0) AS losers, SUM(status='STOPPED') AS stopped, ROUND(SUM(realized_pnl),6) AS gross_pnl, ROUND(SUM(quantity*entry_price),2) AS notional FROM crypto_ai.paper_position WHERE status IN ('CLOSED','STOPPED') GROUP BY d_ksa ORDER BY d_ksa LIMIT 60;

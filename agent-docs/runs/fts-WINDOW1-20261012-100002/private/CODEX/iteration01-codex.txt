@@ -1,0 +1,137 @@
+## Iteration 1/8 — Trade Reconstruction
+
+### Findings
+
+- **PROJECT EVIDENCE:** The frozen scope is exactly `paper_position` IDs **172, 162, 158, 143, 137, 131**. No substitutions will be made.
+- **PROJECT EVIDENCE:** The permitted `db/CODEX` evidence directory contains no query-result artifacts yet. Therefore no trade-specific timeline, entry rationale, exit trigger, or P&L reconciliation can be established in this iteration.
+- **PROJECT EVIDENCE:** Local source indicates the intended evidence chain is `paper_position → trade_signal → signal_processing_work`, with wallet/position and accepted `market_price_event` evidence needed to prove execution and protection behavior.
+- **AGENT INFERENCE:** The next safe reconstruction step is schema confirmation, then retrieving only the six frozen positions and their directly linked signals/work. Price-event and candle queries should wait for the actual symbol and UTC holding windows.
+
+### Evidence
+
+- **PROJECT EVIDENCE:** [PaperPosition.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java) defines entry-signal linkage and optional exit-signal linkage.
+- **PROJECT EVIDENCE:** [Trade Investigation Agent](C:/workspace/crypto-ai-trader-mysql/codex-docs/TRADE_INVESTIGATION_AGENT.md) requires actual schema verification and accepted price-event evidence; candle OHLC must not substitute for absent protection observations.
+- **EXTERNAL RESEARCH:** None used.
+
+### Unknowns
+
+- Symbol, side, quantity, entry/exit prices, UTC timestamps, close reason, and realized P&L for every frozen ID.
+- Entry and exit signal IDs and their contemporaneous eligibility/data-quality evidence.
+- Whether each position has durable processing-work, wallet-trade, managed-position, and accepted protection-event evidence.
+- Runtime mode/version active at each trade; current project documentation cannot prove historical runtime configuration.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual `crypto_ai` schemas before selecting reconstruction columns or joining records.  
+SQL:
+```sql
+SHOW COLUMNS FROM paper_position;
+SHOW COLUMNS FROM trade_signal;
+SHOW COLUMNS FROM signal_processing_work;
+SHOW COLUMNS FROM wallet_trade;
+SHOW COLUMNS FROM wallet_managed_position;
+SHOW COLUMNS FROM position_analysis;
+SHOW COLUMNS FROM market_price_event;
+SHOW COLUMNS FROM candle;
+SHOW COLUMNS FROM technical_indicator;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-002  
+Purpose: Retrieve the authoritative lifecycle records for only the six frozen positions, after DBQ-CODEX-I1-001 confirms the schema. Raw timestamps must remain labeled UTC in returned evidence.  
+SQL:
+```sql
+SELECT p.*
+FROM paper_position p
+WHERE p.id IN (172, 162, 158, 143, 137, 131)
+ORDER BY FIELD(p.id, 172, 162, 158, 143, 137, 131)
+LIMIT 6;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-003  
+Purpose: Retrieve the directly linked entry/exit signal and durable processing-work evidence for the six frozen positions, without fetching large explanation payloads. Execute after DBQ-CODEX-I1-001 confirms these columns.  
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    'ENTRY_SIGNAL' AS relation_type,
+    s.id AS signal_id,
+    s.symbol,
+    s.interval_code,
+    s.candle_open_time,
+    s.decision,
+    s.original_decision,
+    s.final_entry_allowed,
+    s.data_quality_valid,
+    s.total_score,
+    s.confidence_score,
+    s.latest_price,
+    s.stop_loss,
+    s.take_profit,
+    s.risk_reward_ratio,
+    s.selected_strategy,
+    s.strategy_version,
+    s.signal_mode,
+    s.generated_at,
+    s.created_at
+FROM paper_position p
+JOIN trade_signal s ON s.id = p.signal_id
+WHERE p.id IN (172, 162, 158, 143, 137, 131)
+
+UNION ALL
+
+SELECT
+    p.id AS paper_position_id,
+    'EXIT_SIGNAL' AS relation_type,
+    s.id AS signal_id,
+    s.symbol,
+    s.interval_code,
+    s.candle_open_time,
+    s.decision,
+    s.original_decision,
+    s.final_entry_allowed,
+    s.data_quality_valid,
+    s.total_score,
+    s.confidence_score,
+    s.latest_price,
+    s.stop_loss,
+    s.take_profit,
+    s.risk_reward_ratio,
+    s.selected_strategy,
+    s.strategy_version,
+    s.signal_mode,
+    s.generated_at,
+    s.created_at
+FROM paper_position p
+JOIN trade_signal s ON s.id = p.exit_signal_id
+WHERE p.id IN (172, 162, 158, 143, 137, 131)
+  AND p.exit_signal_id IS NOT NULL
+ORDER BY paper_position_id, relation_type;
+
+SELECT
+    p.id AS paper_position_id,
+    w.signal_id,
+    w.symbol,
+    w.interval_code,
+    w.candle_open_time,
+    w.origin,
+    w.status,
+    w.attempts,
+    w.failure_stage,
+    w.error_message,
+    w.paper_position_id,
+    w.created_at,
+    w.updated_at,
+    w.completed_at
+FROM paper_position p
+LEFT JOIN signal_processing_work w ON w.signal_id = p.signal_id
+WHERE p.id IN (172, 162, 158, 143, 137, 131)
+ORDER BY FIELD(p.id, 172, 162, 158, 143, 137, 131);
+```
+### END_DB_REQUEST

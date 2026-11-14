@@ -1,0 +1,1 @@
+SELECT id, wallet_position_id, symbol, event_type, old_value_usdt, new_value_usdt, market_price_usdt, LEFT(reason, 400) AS reason_400, occurred_at FROM crypto_ai.position_management_event WHERE wallet_position_id IN (166,171,172,187,201,211) OR (symbol = 'DOGEUSDT' AND occurred_at BETWEEN '2026-10-12 04:02:00' AND '2026-10-12 04:27:00') ORDER BY occurred_at, id LIMIT 150

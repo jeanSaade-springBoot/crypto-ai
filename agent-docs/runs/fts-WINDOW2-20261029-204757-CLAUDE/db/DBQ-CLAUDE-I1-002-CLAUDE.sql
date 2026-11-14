@@ -1,0 +1,1 @@
+SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = 'crypto_ai' AND table_name IN ('trade_signal','wallet_trade','wallet_managed_position','production_exit_audit','market_price_event','position_management_event','candle','signal_processing_work','execution_opportunity') ORDER BY table_name, ordinal_position

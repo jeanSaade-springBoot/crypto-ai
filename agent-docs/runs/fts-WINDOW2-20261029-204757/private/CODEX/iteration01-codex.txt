@@ -1,0 +1,79 @@
+## Iteration 1 — reconstruction intake
+
+### Findings
+
+- The mandatory frozen scope is exactly paper-position IDs `182, 172, 162, 158, 143, 137`; no substitute selection will be used.  
+  **PROJECT EVIDENCE:** WINDOW2 charter.
+
+- The snapshot’s stated UTC and KSA timestamps conflict: `2026-10-30 12:24:16 UTC` converts to `2026-10-30 15:24:16 KSA`, not the declared `2026-10-29 20:47:57 KSA`. I will treat the frozen IDs and selection predicate as authoritative and will not invent an exact clock-bound query window.  
+  **AGENT INFERENCE:** direct UTC+03:00 conversion.
+
+- Current source records the entry signal and optional exit signal on `paper_position`, while terminal fields include exit price, P&L, close reason, reasons, and UTC open/close times.  
+  **PROJECT EVIDENCE:** [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:10).
+
+- A terminal paper-position close is written before the corresponding wallet-exit attempt; therefore, a closed position alone does not prove that a wallet ledger exit committed. Each trade needs both position and wallet evidence.  
+  **PROJECT EVIDENCE:** [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:501).
+
+- Current code supports multiple exit mechanisms: take-profit, stop-loss, profit-lock, hard-profit-floor, and validated SELL / STRONG_SELL. The specific mechanism for each frozen trade is not yet established.  
+  **PROJECT EVIDENCE:** [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:170).
+
+- The local project logs contain no exact `positionId=<frozen ID>` matches in `crypto-ai-trader.log`, `database-timing.log`, or `replay_pid3568.log`. This is absence of this local log evidence only—not proof of no runtime event.  
+  **PROJECT EVIDENCE:** bounded exact-ID search, no matches.
+
+### Unknowns
+
+- Symbol, entry/exit UTC timestamps and KSA conversions, P&L, position status, entry/exit signal IDs, and close reasons for all six trades.
+- Whether each position has an executed and financially reconcilable wallet exit.
+- Which protection-price observation, if any, first crossed the active stop/target/profit-lock threshold.
+- Data freshness, signal-work lifecycle, data quality, strategy/risk gates, and Replay reproducibility.
+- Actual database schema/version; source mappings are not a substitute for database evidence.
+
+### External research
+
+None. This is a repository/database forensic study and no external claim is needed.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual `crypto_ai` schema before choosing linked-table columns for the six frozen paper positions.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'signal_processing_work',
+      'production_exit_audit',
+      'candle',
+      'technical_indicator',
+      'candle_analysis_outcome'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-002  
+Purpose: Obtain the authoritative lifecycle rows for the mandatory frozen positions and their exact signal linkage, without substituting trades. Raw timestamps remain UTC.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137)
+LIMIT 6;
+```
+### END_DB_REQUEST

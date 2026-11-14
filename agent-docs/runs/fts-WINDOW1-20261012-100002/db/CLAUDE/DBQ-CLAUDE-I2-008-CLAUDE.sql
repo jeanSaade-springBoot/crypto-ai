@@ -1,0 +1,4 @@
+SELECT id, signal_id, position_analysis_id, execution_key, side, price_usdt, execution_reason, executed_at, created_at, LEFT(execution_message, 1500) AS execution_message_1500
+FROM crypto_ai.wallet_trade WHERE id IN (329,330,334,338,344,346,357,358,359,392,401,403,407,426,429) ORDER BY id;
+SELECT id, symbol, status, entry_price, exit_price, realized_pnl, close_reason, signal_id, opened_at, closed_at
+FROM crypto_ai.paper_position WHERE symbol IN ('EGLDUSDT','PEPEUSDT','XRPUSDT','DOGEUSDT','SHIBUSDT') AND closed_at BETWEEN '2026-10-11 19:00:00' AND '2026-10-12 07:30:00' ORDER BY symbol, opened_at LIMIT 60;

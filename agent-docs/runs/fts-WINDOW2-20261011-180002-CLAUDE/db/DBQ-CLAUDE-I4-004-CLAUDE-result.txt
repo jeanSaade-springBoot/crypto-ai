@@ -1,0 +1,4 @@
+rr_bucket	n	losers	pnl_sum
+RR_1_TO_1.49	42	20	0.442565
+RR_GE_1.5	33	23	-2.794898
+RR_LT_1	44	21	-0.448498

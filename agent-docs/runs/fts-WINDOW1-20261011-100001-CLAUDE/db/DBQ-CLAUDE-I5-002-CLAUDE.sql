@@ -1,0 +1,1 @@
+SELECT id, symbol, interval_code, candle_open_time, generated_at, decision, original_decision, total_score, confidence_score, final_entry_allowed, market_regime, selected_strategy, atr_percent, risk_reward_ratio, data_quality_valid, signal_mode FROM trade_signal WHERE id IN (115050,121201,122356,133251,115556,128124,114160,120186,121720,132367,114163,127870,128274) ORDER BY id

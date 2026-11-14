@@ -1,0 +1,1 @@
+SELECT id, wallet_position_id, symbol, event_type, old_value_usdt, new_value_usdt, market_price_usdt, LEFT(reason, 400) AS reason, occurred_at FROM crypto_ai.position_management_event WHERE wallet_position_id IN (166,172,187,191,201,211) ORDER BY wallet_position_id, occurred_at LIMIT 300;

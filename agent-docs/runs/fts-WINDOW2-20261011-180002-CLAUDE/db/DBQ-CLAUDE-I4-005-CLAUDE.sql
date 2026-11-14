@@ -1,0 +1,1 @@
+SELECT o.symbol, o.interval_code, o.candle_open_time, o.outcome, o.reason_code, o.origin, o.created_at FROM candle_analysis_outcome o WHERE o.interval_code='1m' AND o.candle_open_time IN ('2026-10-10 18:00:00','2026-10-10 18:01:00') ORDER BY o.symbol, o.candle_open_time LIMIT 100;

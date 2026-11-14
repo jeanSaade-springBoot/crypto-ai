@@ -1,0 +1,2 @@
+SELECT id, symbol, entry_price, exit_price, realized_pnl, close_reason, signal_id, opened_at, closed_at FROM crypto_ai.paper_position WHERE status = 'STOPPED' ORDER BY closed_at DESC LIMIT 15;
+SELECT DATE(closed_at) AS utc_day, COUNT(*) AS n, SUM(realized_pnl) AS gross_pnl FROM crypto_ai.paper_position WHERE status = 'STOPPED' GROUP BY DATE(closed_at) ORDER BY utc_day DESC LIMIT 40

@@ -1,0 +1,1 @@
+SELECT symbol, open_time, open_price, high_price, low_price, close_price, volume, closed, ingestion_source FROM candle WHERE interval_code='1m' AND ((symbol='PEPEUSDT' AND open_time BETWEEN '2026-10-10 22:18:00' AND '2026-10-10 22:30:00') OR (symbol='ENAUSDT' AND open_time BETWEEN '2026-10-11 05:25:00' AND '2026-10-11 05:37:00')) ORDER BY symbol, open_time LIMIT 40;

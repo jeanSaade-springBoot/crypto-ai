@@ -1,0 +1,2 @@
+SELECT @@global.time_zone AS global_tz, @@session.time_zone AS session_tz, @@system_time_zone AS system_tz, NOW(6) AS now_session, UTC_TIMESTAMP(6) AS now_utc, TIMESTAMPDIFF(MINUTE, UTC_TIMESTAMP(), NOW()) AS offset_min;
+SELECT id, execution_price_observed_at, UNIX_TIMESTAMP(execution_price_observed_at) AS epoch_s FROM wallet_trade WHERE id = 358

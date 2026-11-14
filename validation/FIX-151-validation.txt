@@ -1,0 +1,13 @@
+FIX-151 DEVELOPMENT CANDIDATE VALIDATION
+EXECUTED:
+PASS Java syntax parsing: protocol and two changed test files (not type/build).
+PASS 486 exposure equivalence comparisons on 6000 rows, extracted Java SQL on SQLite.
+PASS oldest selector equivalence; 35 generated predicate transitions; SQLite index/no-sort check.
+PASS fix-registry.js Node syntax.
+PASS all previous migration files byte-identical to FIX-150 archive.
+NOT EXECUTED:
+Java 21 Maven clean verify, three new JUnit/H2 methods, real MySQL inherited suite,
+V105 on existing InnoDB data, actual SQL/lock duration and EXPLAIN, full load,
+wallet-lock cause elimination, Production/Replay protective-exit parity.
+LIMITS:
+No user DB changes executed. No retained analysis review cleared. No latency guarantee.

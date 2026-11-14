@@ -1,0 +1,69 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No Codex-side DB results exist yet. Therefore no entry/exit, execution, or protection latency can be measured for frozen positions `182, 172, 162, 158, 143, 137`.
+
+- **PROJECT EVIDENCE:** The available runtime logs contain enough fields to reconstruct close-candle analysis timing when signal identity is known:
+  - worker start/end include event, symbol, interval, candle times, outcome, and `elapsedMs`;
+  - saved-signal logs include signal ID plus live-close-to-generation/insertion milliseconds;
+  - signal-processing logs include signal ID, attempt, claim/completion/expiry.
+  [CandleClosedAnalysisWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java:79) [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:60)
+
+- **PROJECT EVIDENCE:** Protection timing must be reconstructed from durable `market_price_event` records, not candles. The code logs the committed event ID, symbol, UTC/KSA observation time, and outcome; it also preserves non-canonical and unresolved-evidence paths. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:94)
+
+- **PROJECT EVIDENCE:** Position-ID log correlation is incomplete by design: special protection paths log `positionId`, but ordinary stop-loss/profit-lock logs shown in the source use only symbol/price. Database linkage from `paper_position` to signals and managed position/executions is required before searching symbol/time-local log windows. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:168)
+
+- **PROJECT EVIDENCE:** I searched all 11 uncompressed runtime `.log` files for explicit frozen position-ID patterns; there were zero matches. This does not establish that the trades have no logs, because archived `.gz` logs require a position’s symbol/time to search reliably, and the sandbox could not decode them successfully.
+
+- **AGENT INFERENCE:** No latency defect, delayed protection, or execution-delay conclusion is justified for any frozen trade at this stage.
+
+- **PROJECT EVIDENCE:** The supplied snapshot metadata has a one-second arithmetic inconsistency: `2026-10-17 15:00:03 UTC` converts to `2026-10-17 18:00:03 KSA`, while the frozen text states `18:00:02 KSA`. I will preserve both labels until database evidence establishes the operative snapshot boundary.
+
+## EVIDENCE
+
+- Frozen scope retained exactly: `182, 172, 162, 158, 143, 137`.
+- Codex-private evidence directory: `agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX/` — empty.
+- Local runtime log inventory: 42 `crypto-ai-trader` files, approximately 75.8 MB total; only the 11 uncompressed files were conclusively searched.
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+For every frozen trade: symbol, UTC/KSA entry and close time, linked signal/work IDs, observed-price event IDs, claim/completion times, execution timestamps, close reason, and whether archived logs cover the relevant window.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Establish the actual timing/correlation columns before issuing a bounded, trade-specific latency query for only the six frozen positions. Raw returned timestamps are UTC.
+
+SQL:
+
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_managed_position',
+      'wallet_trade',
+      'market_price_event',
+      'position_management_event',
+      'candle'
+  )
+  AND (
+      column_name IN (
+          'id', 'symbol', 'signal_id', 'exit_signal_id',
+          'entry_signal_id', 'position_id', 'managed_position_id'
+      )
+      OR column_name REGEXP
+          '(^|_)(opened|closed|generated|created|updated|claimed|completed|executed|observed|processed|received|started|finished|candle_open|candle_close)(_at|_time|_utc)?$'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST

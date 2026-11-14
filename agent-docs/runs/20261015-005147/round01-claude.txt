@@ -1,0 +1,123 @@
+# FIX-156 preparation review — Round 1 (Claude, independent)
+
+The preparation is not ready to freeze or implement. Its claims about the current Java mostly hold up. But the document gives itself a design authority it doesn't have, and some of the fixtures it requires have no historical data to be built from.
+
+This was a read-only review. I changed no files, no database, no git and no configuration. I can't run a shell in this session, so I computed no hashes. I did no internet research, so nothing below is EXTERNAL RESEARCH.
+
+I reviewed the preparation file as it is on disk now. It already differs from the copy in your handoff: it adds §4.2a and §11, which the handoff copy doesn't have.
+
+## FINDINGS
+
+**Claims that are confirmed against the current code** [PROJECT EVIDENCE]
+- **D22:** confirmed. Production's TP-extension rebase passes a literal `true`; Replay passes your Administration toggle.
+  - In practice it matters only in one narrow case: Production rebases only when the lock state is already ACTIVE. So the difference shows up only if the toggle was switched off after a lock had activated. [AGENT INFERENCE]
+- **Replay reads `wallet_settings` row 1:** confirmed, in both `ShadowProductionReplayService` and `OneCandleContinuationGraceReplayObserver`.
+- **Live Binance call (D28 / RET-08):** confirmed. Replay calls `BinanceMinimumExecutionPolicy`, which sends a live `GET /api/v3/exchangeInfo`. I found no caching anywhere on that path.
+- **D49:** confirmed. The `shared_candle_input_audit` path opens only when shared-market mode is LIVE.
+- **D50:** confirmed. `EntryConsumptionPolicy` reads `wallet_trade` whenever the Replay scope is inactive. The scope is held per thread, so it is lost on any async hop. A null signal ID returns NOT_CONSUMED before the scope is even checked, which matches D56.
+- **D51:** confirmed. `StopLossEvidenceStore.latest` has no scope check at all.
+- **RET-04 (zero-price fallback):** confirmed.
+- **Price-tail gap (R156-08):** confirmed. Price events are only consumed up to each signal's timestamp, so the tail after the last signal is never drained.
+- **D39:** confirmed. Replay closes the opportunity on price-driven exits too.
+- **Price ordering (R156-06):** confirmed. Price events are sorted by `observedAt` only, with no ID tie-breaker.
+- **Chart `wallet_trade` read:** confirmed.
+- **Tests:** only the three Replay tests listed in §11.4 exist, as the document says.
+
+**Problems with the document itself**
+
+1. **F-1 (BLOCKER) — §4.2a quietly rewrites the canonical D48 decision.** [PROJECT EVIDENCE]
+   - The canonical RPR-0.9.11 says D48 must become "Replay-owned evidence output, or unreachable in baseline".
+   - §4.2a instead makes Replay's use of the shared `fix122_evaluation` table an allowed "transitional exception", and says the scoped purge "must not be reported as a boundary violation".
+   - At the same time, §11.5 item 4 says RPR-0.9.11 stays canonical.
+   - So the two documents now disagree, and the change was made in a preparation document that has no design authority.
+
+2. **F-2 (MATERIAL) — §4.2a is wrong about what the purge does.** [PROJECT EVIDENCE]
+   - §4.2a describes access as limited to "rows whose `test_run_id` identifies the active Replay run".
+   - The actual purge is the global "Delete Data" operation. It deletes Replay rows from every run, deletes all of `analysis_test_run`, and then resets the AUTO_INCREMENT counters, so run IDs can be reused.
+   - The code acknowledges this: a comment in `Fix122ProvenSnapshot` says run IDs can be reused after a purge.
+   - **Why it matters:** the plan makes `runId` the main correlation key in every log line, certificate and promoted artifact. Reused IDs make those ambiguous, and the plan never registers an identity that survives a purge.
+
+3. **F-3 (BLOCKER) — the dated policy-profile fixture (R156-04(b)) has no historical source.** [PROJECT EVIDENCE]
+   - `wallet_settings` is a single current row (id 1). I found no history or audit table for it in the migrations.
+   - The plan forbids falling back to current settings (T156-05a) but never says where dated settings will come from. The candidates are profile values in the `[FIX-118]` logs, or limiting runs to periods where the settings provably didn't change.
+   - [AGENT INFERENCE] Without a named source, the only way to build these fixtures is to backfill today's values with an old date. That would be look-ahead contamination, presented as historical evidence.
+
+4. **F-4 (BLOCKER) — the dated exchange-minimum fixture (D28 / R156-04(c)) has the same problem.** [PROJECT EVIDENCE]
+   - Production never stores the exchange minimum notional. It appears only in a log line (`WalletAutoExecutionService.java:613`), and probably only when the check fails.
+   - The plan names no source and no fallback rule, such as refusing the run or marking it non-comparable. E10 must state this before freeze.
+
+5. **F-5 (MATERIAL) — the canonical specification still isn't in the repository, and its identity is ambiguous.** [PROJECT EVIDENCE]
+   - `agent-docs/FINAL_CHANGE_SPECIFICATION.md` is still at revision RPR-0.4-DRAFT.
+   - Two RPR-0.9.11 copies sit in Downloads: `FIX-156-RPR-0.9.11-DRAFT.md` and `...DRAFT (1).md`. §11.1 names the "(1)" copy.
+   - The preparation document's own hash is still "Pending".
+   - The working tree is heavily modified, including shared Production classes the register depends on (git status).
+   - P01 can't be met in this state.
+
+6. **F-6 (MATERIAL) — §7 never says what happens when Replay is driven by the Production-built signal snapshot.** [PROJECT EVIDENCE + AGENT INFERENCE]
+   - D54 (the prior indicator snapshot) and D53 (sentiment provider state) make analysis parity depend on rows that Production saved.
+   - T156-08a covers the case where that evidence is missing, but no test covers evidence that is present but was written after the signal it supports. That is a look-ahead gap.
+   - E07 (signal availability time) needs to cover both D53 and D54, not only `generated_at`.
+
+7. **F-7 (MINOR) — D55 misdescribes where `paper_position_id` comes from.** [PROJECT EVIDENCE]
+   - It is shown by `Fix127DiagnosticsController`, which reads the Production table `signal_processing_work`. That controller labels itself a read-only `PRODUCTION_CURRENT_PROCESSING_STATE` overlay.
+   - RPR-0.9.11 already treats that table as allowed stored-outcome evidence.
+   - So D55 is a question of how that overlay is displayed, not a field leaking out of Replay output. The register should say whether the overlay sits inside the boundary.
+
+8. **F-8 (MATERIAL) — the 99% target may not be reachable with the data available.** [AGENT INFERENCE]
+   - With zero mismatches, a one-sided 99% lower confidence bound of at least 0.99 needs about 459 comparable units per metric (ln 0.01 / ln 0.99).
+   - Single-symbol lifecycle samples, after the wallet-driven, non-comparable and censored exclusions, may never reach that.
+   - P07 freezes the method only after E06. The plan needs a feasibility check before E06 runs, and a cap on how much can be excluded. Otherwise selective exclusion becomes the way the target gets met.
+
+9. **F-9 (MATERIAL) — the "mirror" approach has no mechanism for staying in sync with Production.** [AGENT INFERENCE + PROJECT EVIDENCE]
+   - O-1 and R156-09 replace shared policy calls with "version-matched" Replay-local mirrors.
+   - Nothing in the registry says how a mirror is tied to the Production source it copies, for example a source hash checked by a test.
+   - So any future Production change would silently invalidate parity. The original objective in RPR-0.4 §1 was shared policies, which can't drift; this is a real loss.
+
+## EVIDENCE
+
+| Claim | Location |
+|---|---|
+| D22 | `DynamicProfitLockService.java:79-81, 118-122, 217-256` (literal `true` at line 256; ACTIVE-only rebase at line 238); `ShadowProductionReplayService.java:746, 781` |
+| `wallet_settings` reads | `ShadowProductionReplayService.java:53, 79, 999-1000`; `OneCandleContinuationGraceReplayObserver.java:48, 195` |
+| Live Binance HTTP | `ShadowProductionReplayService.java:55, 534, 687`; `BinanceMinimumExecutionPolicy.java:39`; `BinanceMarketDataClient.java:159-198` |
+| Minimum notional never stored | No column found in the migrations; only a log line at `WalletAutoExecutionService.java:613` |
+| No settings history table | Only `V28__create_wallet_portfolio.sql:13` and `B105...sql:621` define `wallet_settings` |
+| `fix122_evaluation` access | `StopLossEvidenceStore.java:37-66`; `Fix122ProvenSnapshot.java:7-22`; `RegressionTestService.java:350-374, 401-407` |
+| Scope is per thread | `ExecutionReplayScope.java:31, 64, 85-87`; `EntryConsumptionPolicy.java:21-33` |
+| D49 | `RegressionTestWorker.java:42, 117` |
+| D56 regeneration | `RegressionTestWorker.java:616` |
+| Price ordering, tail, fallback, observers | `ShadowProductionReplayService.java:89-95, 100-101, 126-128, 133, 157, 171-183, 202, 232-250` |
+| D55 overlay | `Fix127DiagnosticsController.java:8-42` |
+| Canonical D48 wording | `Downloads\FIX-156-RPR-0.9.11-DRAFT (1).md:146` against preparation §4.2a and lines 229, 374 |
+| Canonical spec still RPR-0.4 | `agent-docs/FINAL_CHANGE_SPECIFICATION.md:3` |
+
+## OBJECTIONS
+
+1. §4.2a must be withdrawn, or moved into a reviewed RPR revision. Either way it must be rewritten to match the real purge (all runs, plus the ID reset) and must register a run identity that survives a purge (F-1, F-2).
+2. E10 must name the authoritative historical source for policy settings and exchange constraints, and the rule for refusing or marking a run non-comparable when no source exists (F-3, F-4).
+3. Before freeze, the plan needs a feasibility estimate for the sample sizes and an exclusion cap (F-8).
+4. Each mirror needs a drift guard tied to the Production source it copies (F-9).
+5. The specification must be copied to the canonical path under a single identity before P01 (F-5).
+
+## UNKNOWNS
+
+- The hashes of either RPR-0.9.11 copy and of the working tree. I couldn't compute any.
+- Whether the `[FIX-118]` and minimum-notional logs survive long enough to reconstruct historical settings.
+- Whether `fix122_replay_revision` and other Replay tables are reached in ways §4.2a doesn't list.
+- Register rows I didn't re-check this round: D30–D46 individually, and S01–S14.
+- The rest of the reachability audit (O-3): I traced only the paths listed above.
+
+## FINDINGS FOR JEAN
+
+1. **Not ready to freeze or implement.** The document is honest that every gate P01–P07 is still Pending, so this is consistent with its own status.
+2. **The code claims mostly hold up.** The wallet-settings reads, the live Binance call, the D22 toggle difference, the fall-through to account tables, the price-tail gap and the fallback path all match the current code.
+3. **§4.2a reverses the canonical D48 decision without authority.** It also understates the purge, which deletes every run's rows and resets run IDs. You need to decide whether a shared-table exception is acceptable at all; if it is, it belongs in a reviewed RPR revision.
+4. **Two of the required fixtures may be impossible to build honestly.** No history exists in the database for `wallet_settings` or for Binance minimum notional. Please decide the source, or decide that such runs are refused or marked non-comparable.
+5. **Replay-local mirrors need a drift guard.** Without one, any later Production change silently breaks parity.
+6. **The 99% target may need about 459 comparable units per metric.** Check that this is feasible before E06, and cap exclusions.
+7. **Housekeeping:**
+   - Put RPR-0.9.11 at `agent-docs/FINAL_CHANGE_SPECIFICATION.md`.
+   - Remove the duplicate Downloads copy.
+   - Record hashes once the working tree is clean.
+
+VERDICT: REJECTED

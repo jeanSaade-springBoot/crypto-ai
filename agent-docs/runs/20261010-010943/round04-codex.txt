@@ -1,0 +1,45 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** This is the earlier SHIBUSDT position: BUY wallet trade 106 / signal 89469, then SELL 107 / managed position 64. It is not the later 90192/65 trade. Entry: `2026-10-09T20:45:05.997Z` / `23:45:05.997 KSA`; exit: `2026-10-09T20:58:43.554Z` / `23:58:43.554 KSA`.
+
+- **PROJECT EVIDENCE — Q1:** It exited through the live-price `PROFIT_LOCK_EXIT` path because the triggering accepted observation was `0.000005420000`, below TP `0.000005433730` but below the active profit lock `0.000005421865`. The lock had armed at `2026-10-09T20:58:09.444Z` / `23:58:09.444 KSA` when price reached `0.000005430000`, 84.2815% of the entry-to-TP distance.
+
+- **PROJECT EVIDENCE:** At the lock breach, the current 1m signal was `WATCH` 89795, 5m was `WATCH` 89724, and 1h was `NEUTRAL` 88327. Neither protected-hold condition accepts a neutral 1h, so the default implemented result is `PROFIT_LOCK_EXIT`.
+
+- **PROJECT EVIDENCE — stale/rejected-price challenge resolved:** The original runtime archive covers `20:05–20:59Z`. It contains zero SHIBUSDT `PRICE_NOT_CANONICAL`, `EQUAL_TIMESTAMP_REJECTED`, or `outcome=NON_CANONICAL` entries. Therefore, there is no evidence that a received TP-level observation was rejected as stale, future, equal-timestamp, or out-of-order. Event 1085348 armed the lock and event 1085485 triggered the exit; both committed as `APPLIED`.
+
+- **PROJECT EVIDENCE — Q2:** Continuation is only evaluated in the live TP branch. This position never reached that branch in the evidenced protection path, and it was closed roughly 39 minutes before the preserved `00:38 KSA` candle on 10 October (`2026-10-09T21:38:00Z` / `2026-10-10T00:38:00 KSA`). Thus no position existed to extend then.
+
+- **PROJECT EVIDENCE — Q3:** At a lock breach, protection does not evaluate “remaining upside.” It evaluates the latest three decision labels once and executes the exit policy. It did re-evaluate lock arithmetic at four `0.000005430000` observations before the breach, but continuation is not part of that lock-breach branch. The later rise is outcome-only information.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** [DBQ-002](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-002-CODEX-result.txt:10) records BUY 106, SELL 107, and the exact `PROFIT_LOCK_EXIT` explanation. [DBQ-014](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-014-CODEX-result.txt:6) records managed position 64’s unchanged TP, highest price, and active lock.
+
+- **PROJECT EVIDENCE:** The runtime log records lock activation at line 45452, event 1085348 at line 45454, the breach at lines 45595–45597, the live profit-lock exit at line 45598, and event 1085485 committed at line 45599: [crypto-ai-trader.2026-10-09.14.log.gz](/C:/workspace/crypto-ai-trader-mysql/logs/crypto-ai-trader.2026-10-09.14.log.gz:45452).
+
+- **PROJECT EVIDENCE:** [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:52) defines the two holds and the default `PROFIT_LOCK_EXIT`. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:100) limits continuation to the TP branch; its lock-breach path invokes `PositionExitPolicy` at [line 219](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:219).
+
+- **PROJECT EVIDENCE:** [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:40) defines stale/future rejection and its required log; [line 70](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:70) defines equal-timestamp rejection. The runtime search above found neither for SHIBUSDT in the applicable archive.
+
+- **PROJECT EVIDENCE:** Protection consumes Binance kline close field `c`, not candle high `h`: [BinanceKlineService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BinanceKlineService.java:91). The later `00:38 KSA` candle is documented in [DBQ-009](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-009-CODEX-result.txt:10).
+
+## OBJECTIONS
+
+- **PROJECT EVIDENCE:** “TP was never reached” is too broad. The evidence supports only: no system-accepted or system-rejected TP-level observation is recorded. Because protection receives kline `c`, it cannot establish that Binance never traded at TP between received updates.
+
+- **PROJECT EVIDENCE:** A TP-branch execution failure can return `false` without a dedicated TP-failure log if no sellable wallet quantity exists: [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:490). No evidence indicates that occurred; 34 seconds later the profit-lock path sold the full position. The preserved bundle nevertheless lacks a wallet-asset history sufficient to prove that theoretical path impossible.
+
+- **PROJECT EVIDENCE:** Replay cannot support a claim that holding would improve this trade. Exact Replay skips signal-price mechanics, while fallback Replay applies continuation/lock-hold logic differently: [ShadowProductionReplayService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:183), [line 562](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:562).
+
+- **AGENT INFERENCE:** One subsequent upswing is not evidence for an improved exit rule. Any proposed hold/continuation change requires out-of-sample, fee/slippage-aware evaluation after Replay/Production exit parity is established.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** Whether Binance printed TP intraminute between received `c` observations remains unknown; it was not information this protection design necessarily received.
+
+- **PROJECT EVIDENCE:** No immutable deployed-binary hash is preserved. The current source is corroborated by matching runtime log formats and recorded behavior, not independently proven as the exact runtime artifact.
+
+- **PROJECT EVIDENCE:** The preserved evidence identifies `00:38 KSA` on 10 October. If “12:38 KSA” meant noon, it is outside this evidence window.
+
+VERDICT: APPROVED

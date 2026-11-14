@@ -1,0 +1,224 @@
+# Claude, FTS WINDOW1, Iteration 4: code and trade routes
+
+**Bottom line:**
+- **Every time I reported as UTC in Iterations 1–3 was actually KSA.** The real UTC is 3 hours earlier, so all my KSA conversions were 3 hours too late. Two Binance candles match the stored candles exactly, which proves this (F-I4-01).
+- **Trade 143 is now resolved as a valid loss, not a defect.** Binance trade history shows no trades for 8.3 s, then a sell-off of about 0.66 s took the price from 4.097 to 4.025. The price was between the profit lock and the hard floor for under 0.1 s, which a feed that updates every 2 s cannot see.
+- **The I3 idea that the price feed stalled around exits is refuted.** The gaps between price updates were simply periods with no trades.
+- **The I3 idea that bookkeeping after a sale holds up price intake is confirmed.** After every mechanical sale, price intake for all symbols is held up for 1.2–3.2 s.
+- **The code shows how the low risk/reward entries got through.** The four entry routes these trades used have no minimum risk/reward. A risk/reward below 1 only lowers the entry quality score by 30 points (100 to 70), and the cut-off is 50.
+
+This was analysis only: I changed no code, config, data or git state. I did not read the other agent's folders, LIVE_TEAM_STATUS.md or LIVE_EVENTS.log. I read the charter, my iteration 1–3 files and every result in `db/CLAUDE/`, including I3-001 to I3-008. All six frozen trades (182, 172, 162, 158, 143, 137) are covered.
+
+## FINDINGS
+
+**F-I4-01: The times in this run's database results are KSA, not UTC. This is a correction to Iterations 1–3.**
+- **Project evidence:**
+  - The timestamp columns are `TIMESTAMP(6)` (for example `B105__fix_153_trader_only_baseline.sql:21,80,188,656`). MySQL converts these to the session's time zone when it displays them.
+  - The application writes them in UTC (`application.yml:22`, `SET time_zone = '+00:00'`). So the stored values are correct.
+  - The study's query session uses `SYSTEM`, which is Arab Standard Time (I3-007: `now_session` 12:57:28 vs `now_utc` 09:57:28). So it displays every value in KSA.
+- **External research (Binance public klines):**
+  - The candles stored as "EGLD 22:41, 22:42, 22:43" match Binance's 19:41, 19:42 and 19:43 UTC candles exactly: same open, high, low, close, volume and trade counts (302, 86 and 433 trades).
+  - The XRP candle stored as "03:30" matches Binance 00:30 UTC (1.4089 / 1.4090 / 1.4078 / 1.4084, 244 trades).
+  - At the "22:43 UTC" I had assumed, the real EGLD price was about 3.97 with only 12 trades, so that reading is wrong.
+- **Impact:**
+  - Every time labelled "UTC" in my I1–I3 reports is KSA. The real UTC is that value minus 3 hours.
+  - Durations, the order of events, and the 1m/5m/1h candle boundaries are unaffected, because KSA is a whole-hour offset with no daylight saving.
+  - Query literals I copied from earlier results are read in the same session time zone, so the I1–I3 results stay internally consistent.
+  - Exception: `trade_signal.btc_context_evaluated_at` and `btc_signal_generated_at` are `DATETIME`, so they display true UTC. They must never be compared directly with the other timestamps.
+- **Contradiction to report:** `DATABASE_INVESTIGATION_RULES.md:35` says "Raw MySQL timestamps are UTC". That is only true for a session set to `+00:00`, and this harness's session is not. I flag it rather than rely on it, and recommend a dual-agent review.
+
+**Corrected timeline:**
+
+| Pos | Symbol | Open UTC → KSA | Close UTC → KSA | Close trigger |
+|---|---|---|---|---|
+| 137 | EGLD | 10-11 17:55:04 → 20:55:04 | 18:00:12 → 21:00:12 | SELL_CONFIRMED |
+| 143 | EGLD | 10-11 19:40:04 → 22:40:04 | 19:43:36 → 22:43:36 | PROFIT_LOCK_HARD_EXIT |
+| 158 | XRP | 10-11 23:35:04 → 10-12 02:35:04 | 10-12 00:30:06 → 03:30:06 | SELL_CONFIRMED |
+| 162 | DOGE | 10-12 01:02:06 → 04:02:06 | 01:26:04 → 04:26:04 | STRONG_SELL (signal path) |
+| 172 | SHIB | 10-12 03:36:05 → 06:36:05 | 04:15:45 → 07:15:45 | HTF_SELL_CONFIRMED |
+| 182 | ACE | 10-12 06:57:06 → 09:57:06 | 07:05:20 → 10:05:20 | SELL_CONFIRMED |
+
+**F-I4-02: Trade 143's 4.100 → 4.027 move was a real market sweep, not lost updates. It is a valid loss with a known design limitation.**
+- **External research (Binance EGLDUSDT trade history, 19:43:05–19:43:36 UTC):**
+  - Trades happened at :18.643–:19.646 and at :26.041 (4.100).
+  - Then there were no trades until :34.341, a gap of 8.3 s.
+  - From :34.341 to :35.0 a burst of 120 trades took the price from 4.097 to 4.025. One sell at :34.816 alone moved it from 4.094 to 4.073.
+- **Project evidence:**
+  - Each stored price update (I3-001) comes 0.4–1.0 s after a burst of trades: :19.021, :21.033, :27.038 and :35.021 (4.027).
+  - Every 1m kline message is stored (`BinanceKlineService.java:95,106`). Only invalid or stale prices are skipped (`MarketPriceEventService.java:53-57`).
+  - The lag between observation and storage stayed at 7–12 ms across the gap (I3-002, buckets 26–32).
+- **Conclusion:**
+  - The price sat between the lock (4.0758) and the hard floor (4.0350) only between :34.816 and about :34.88.
+  - Binance's kline stream only sends a ~2 s snapshot after trades, so the system could not have seen those prices.
+  - The system sold 25 ms after the first price it could see.
+  - This follows `LivePositionProtectionService` as designed. The limitation is that paper protection samples the price instead of holding a resting stop order.
+- **Outcome only (hindsight):** the 19:44 UTC candle closed at 4.058.
+
+**F-I4-03: The gaps after candle close were quiet markets, not a stalled feed. This refutes the F-I3-03 inference.**
+- **Project evidence:**
+  - In every gap window, other symbols kept being stored with low lag (I3-002): P172 buckets 2–42 at 11–17 ms, and P182 buckets 2–16 at 33–63 ms.
+  - The gap candles had very few trades (I3-004): EGLD 6 trades, SHIB **1** trade, ACE 10 trades. The XRP candle had 244 trades.
+- **Inference:** Binance only sends a kline update after a trade. That matches the EGLD trade-by-trade evidence above.
+- **Consequence for F-I3-02:**
+  - The 6–39 s delay before signal-driven exits happened because no trades occurred. With nothing trading, the last-trade price didn't change, so paper P&L couldn't change.
+  - I downgrade this from a latency defect to a design note: an exit decision waits for the next trade, and that wait has no upper limit.
+
+**F-I4-04: After each mechanical sale, price intake for all symbols is held up for 1.2–3.2 s. This confirms F-I3-04.**
+- **Project evidence (I3-003 and I3-002):**
+  - In each exit window, the only stored stages taking at least 1 s are the protection transactions of the six mechanical sales. They run on the WebSocket I/O thread (`WebSocketClient-SecureIO-*`).
+  - Each one lines up with the highest lag in that window:
+
+| Pos | Protection transaction | Highest lag in the same seconds |
+|---|---|---|
+| 137 | 3233 ms | 2708 ms |
+| 158 | 2455 ms | 2028 ms |
+| 182 | 2030 ms | 1950 ms |
+| 172 | 2020 ms | 1471 ms |
+| 143 | 1206 ms | 774 ms |
+
+  - Code path: `BinanceWebSocketHandler.java:62`, then `KlineTransactionCoordinator.java:57`. The protection transaction runs synchronously, and the post-sale work at `WalletAutoExecutionService.java:553-560` (statistics, portfolio value, snapshot) runs inside it.
+- **Impact:** in this window no price got older than 15 s, so none was dropped. The risk is to other open positions during fast markets.
+- **Separate problem:** in KSA hour 22:00 on 10-11 (19:00–20:00 UTC), 44 prices were stored more than 10 s late, the worst 15.2 s (I3-008). That is right at the 15 s stale limit, so prices may have been dropped. I don't yet know where in that hour it happened (I4-002).
+
+**F-I4-05: How the entries got through. None of the four routes used has a minimum risk/reward. This answers U-I2-05.**
+- **Project evidence, `ExecutionIntelligenceService.java`:**
+
+| Route | Trades | Code | Risk/reward floor |
+|---|---|---|---|
+| IMMEDIATE_VALIDATION | 137, 172, 182 | 651-710 | none |
+| SETUP_TIMEFRAME_ATR | 143 | 628-640, 1472-1514 | none |
+| SETUP_CONFIRMATION_WAKEUP | 158 | 397-456 | none |
+| ACCUMULATED_EVIDENCE | 162 | 777-785 | none |
+
+- All four only call `applyInitialEntryQualityGuard` (line 1171), which rejects a score below `CHASE_ENTRY_CUTOFF=50` (line 229).
+- In `assessEntryQuality`, a risk/reward below 1 only costs 30 points (line 991), so a risk/reward of 0.33 can still score 70 ("GOOD_ENTRY").
+- Hard minimums only exist on other paths:
+
+| Path | Minimum risk/reward | Line |
+|---|---|---|
+| SCOUT | 1.25 | 1055 |
+| CONFIRMATION_ADD | 1.15 | 1098 |
+| TREND_ADD | 1.20 | 1128 |
+| Breakout retracement | `BREAKOUT_RETRACEMENT_MIN_RR` | 1539 |
+| Retracement | `RETRACEMENT_MIN_CURRENT_RR` | 1631 |
+| Deferred continuation | 1.0 | 1757 |
+
+- The final check at the execution price (`revalidateAtExecutionPrice`, 1150-1168) also only rejects a price at or below the stop, or at or above the target.
+- **Recorded entry quality scores:** 137 = 58, 162 = 50, 172 = 60, 182 = 50, 143 = 60. Two trades sat exactly at the cut-off.
+- **Inference:** the design lets entries in the risk/reward 0.33–0.74 range through by intent: the penalty is soft, not a hard veto. The cause is a config/design gap, not a code bug. This confirms F-I2-04 in the code.
+
+**F-I4-06: Why 143 shows entry quality 70 and 60. This answers U-I2-06.**
+- **Project evidence:**
+  - The route's guard uses the 5m ATR and the signal price (`ExecutionIntelligenceService.java:634`).
+  - The stored `wallet_managed_position.entry_quality_score` is recalculated by `assessEntryQualityAtPrice` (`PaperTradingService.java:377-385`, then `WalletAutoExecutionService.java:139`). That uses the **1m** ATR (`ExecutionIntelligenceService.java:858`) and the execution price.
+  - The final check (`PaperTradingService.java:349` → line 1167) also uses the 1m ATR. So the comment at 1510-1511 ("evaluated with the authoritative 5m ATR") is not true at execution time.
+- **Impact:** low. It cannot block an entry that the 1m ATR would accept. It is an audit inconsistency.
+- **Unknown:** the exact factors behind the 70. That needs the execution-opportunity row.
+
+**F-I4-07: A signal-path exit uses the candle-close price, not the latest market price (trade 162).**
+- **Project evidence:**
+  - `closeFromSignal` sells at `signal.getLatestPrice()` (`PaperTradingService.java:449`, called from 207). The SELL branch (197-213) doesn't require a current price.
+  - Entries do use a fresh price (`PaperTradingService.java:342-350`, FIX-056).
+  - For 162, the exit price 0.08675 was the 01:25 UTC candle close. The latest live price was 0.08673 at 01:26:02.583 UTC (I3-001), and the sale happened about 1.5 s later.
+- **Impact here:** the paper exit was 1 tick better than the market (realised −0.0517; at 0.08673 it would be about 0.3 ticks worse per unit). This makes paper results less realistic, and the bias can go either way.
+- **Classification:** a minor logic inconsistency. It did not cause the loss.
+
+**F-I4-08: Replay and Production should produce the same P&L for all six trades. Exit time differs only for 158.**
+- **Project evidence:** I3-005 shows commit lags (from `generated_at` to `created_at`) of 1288–2278 ms. Replay makes a signal visible at `generatedAt` (`ShadowProductionReplayService.java:127-133`).
+- **For 158:**
+  - The 5m SELL was generated at 00:30:01.464 UTC and committed at 02.811.
+  - A price of 1.409 arrived at 02.320, between those two times.
+  - Replay would exit on that 02.320 price; Production exited at 04.319, at the same price.
+- **For 137, 172 and 182,** the next price after commit is the same in Replay and Production.
+- **For 143** (price only) and **162** (signal close price), Replay should match.
+- **Inference:** P&L should match for all six; the exit timestamp should differ by about 2 s for 158. Replay has not been run (U-I3-06).
+
+**F-I4-09: The fee check is done. This closes U-I2-07.**
+- **External research:** Binance VIP0 spot fee is 0.100% maker / 0.100% taker, or 0.075% if paid in BNB.
+- **Project evidence:** `fee_usdt=0` on the fills, so stored P&L is gross. F-I2-05 still stands: at 0.2% round trip, 158's take-profit (+0.164%) loses money after fees, and 162 and 182 are near zero.
+
+**F-I4-10: The server clock's offset from Binance changes over time. This is a measurement caveat that refines F-I3-06.**
+- **Project evidence (I3-001):** lag from observation to storage was about −150 ms at 18:00 UTC, about +5 ms at 19:43 UTC, about −130 ms at 00:30, and about +35 ms at 07:05 UTC.
+- **Conclusion:** cross-clock comparisons are only reliable to about ±200 ms. This is not a cause of any loss.
+
+**Updated classification:**
+
+| Pos | Classification | Cause |
+|---|---|---|
+| 137 | Valid loss | Structural risk/reward 0.64, allowed by the soft penalty (F-I4-05) |
+| 143 | Valid loss | Real liquidity sweep faster than a 2 s sampled feed can see (F-I4-02); a design limitation, not a defect |
+| 158 | Valid loss | Risk/reward 0.33, take-profit below fee break-even; Replay exit time differs by about 2 s (F-I4-08) |
+| 162 | Valid loss | Late entry (quality 50); exit priced at candle close (F-I4-07, minor) |
+| 172 | Valid loss | Tick size dominates; the 39 s exit wait was a no-trade period (F-I4-03) |
+| 182 | Valid loss, weak entry | Downtrend, CONFLICT, quality 50 at the cut-off; the wait was a no-trade period |
+
+## EVIDENCE
+
+| ID | Source | Content |
+|---|---|---|
+| E-I4-01 | I3-007; `application.yml:22`; B105 column types | Session time zone is SYSTEM (KSA); columns are `TIMESTAMP(6)` |
+| E-I4-02 | Binance `/api/v3/klines` EGLD 1791747660000+ and XRP 1791765000000 | Exact match with the stored candles 3 h apart |
+| E-I4-03 | Binance `/api/v3/aggTrades` EGLD 1791747785000–1791747816000 | 127 trades; none between :26.042 and :34.341; sweep 4.097 → 4.025 |
+| E-I4-04 | I3-002 / I3-003 | Other symbols flowed normally during the gaps; lag peaks line up with the post-sale protection transactions |
+| E-I4-05 | `ExecutionIntelligenceService.java:229,651-710,991,1055,1098,1128,1171,1472-1514` | Initial routes have no risk/reward floor; the penalty is soft |
+| E-I4-06 | `PaperTradingService.java:349,377-385,449`; `WalletAutoExecutionService.java:139` | Execution-time quality uses the 1m ATR; signal exits use the candle-close price |
+| E-I4-07 | I3-005 | Commit lag 1288–2278 ms |
+| EXT-02 | binance.com/en/fee/trading | VIP0 spot fee 0.1% / 0.1% |
+
+## UNKNOWNS
+- **U-I4-01:** Where and why prices were stored up to 15.2 s late in 19:00–20:00 UTC on 10-11, and whether any were dropped as stale. Dropped prices only appear in the logs (`[FIX-153][PRICE_NOT_CANONICAL]`), and those need SSH.
+- **U-I4-02:** The exact factors behind 143's stored quality score of 70.
+- **U-I4-03:** How common entries with risk/reward below 1 are on each entry route, across all trades.
+- **U-I4-04:** Replay has not been run. The parity results are inferred from code (to be planned in Iteration 5 or later).
+- **U-I4-05:** The time zone of the production log timestamps (still open from U-I3-05). The 3 h database display shift makes this more important before any log line is matched to the database.
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: Directly prove how the session displays times (F-I4-01). UNIX_TIMESTAMP does not depend on the session time zone. Expected epochs: 1791747815.021 (event 1789409) and 1791765004.319 (event 1862211).
+SQL:
+SELECT id, symbol, observed_at, UNIX_TIMESTAMP(observed_at) AS epoch_s, @@session.time_zone AS session_tz FROM crypto_ai.market_price_event WHERE id IN (1789409, 1862211) LIMIT 2
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: Find the stall of up to 15.2 s in 10-11 19:00–20:00 UTC (U-I4-01). The literals are written in KSA because this harness's session is SYSTEM (KSA); epoch_s is included so the output checks itself.
+SQL:
+SELECT m.id, m.symbol, m.observed_at, m.created_at, UNIX_TIMESTAMP(m.created_at) AS epoch_s, ROUND(TIMESTAMPDIFF(MICROSECOND, m.observed_at, m.created_at)/1000) AS lag_ms, m.delivery_status FROM crypto_ai.market_price_event m WHERE m.source='BINANCE_KLINE_DIRECT_FIX153' AND m.created_at BETWEEN '2026-10-11 22:00:00' AND '2026-10-11 23:00:00' AND TIMESTAMPDIFF(MICROSECOND, m.observed_at, m.created_at) > 5000000 ORDER BY m.created_at LIMIT 100
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: Stored slow stages (≥1 s) and protection incidents in that hour, to find the cause of the stall (U-I4-01).
+SQL:
+SELECT symbol, interval_code, stage, started_at, finished_at, elapsed_ms, outcome, thread_name FROM crypto_ai.fix129_stage_timing WHERE started_at BETWEEN '2026-10-11 22:00:00' AND '2026-10-11 23:00:00' AND elapsed_ms >= 1000 ORDER BY elapsed_ms DESC LIMIT 50
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: How often each entry route admits a risk/reward below 1, and the outcomes (U-I4-03, F-I4-05).
+SQL:
+SELECT SUBSTRING_INDEX(SUBSTRING_INDEX(p.entry_reason, 'Execution Intelligence [', -1), ']', 1) AS route, CASE WHEN s.risk_reward_ratio < 1 THEN 'rr_lt1' ELSE 'rr_ge1' END AS rr_bucket, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS wins, SUM(p.realized_pnl < 0) AS losses, ROUND(SUM(p.realized_pnl), 6) AS gross_pnl FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL GROUP BY route, rr_bucket ORDER BY route, rr_bucket LIMIT 60
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-005
+Purpose: The wallet sale for 162's signal-path exit (price and freshness fields), to quantify F-I4-07. Literals are in KSA.
+SQL:
+SELECT id, symbol, side, quantity, price_usdt, decision_price_usdt, execution_price_observed_at, execution_reason, execution_key, signal_id, executed_at FROM crypto_ai.wallet_trade WHERE symbol='DOGEUSDT' AND executed_at BETWEEN '2026-10-12 04:25:50' AND '2026-10-12 04:26:20' LIMIT 10
+### END_DB_REQUEST
+
+## Next (Iteration 5)
+1. With I4-001, confirm the KSA correction for the Coordinator and restate all I1–I3 timestamps in corrected UTC/KSA.
+2. With I4-002 and I4-003, find and classify the 19:00 UTC stall, then plan the bounded log search for `PRICE_NOT_CANONICAL` once the log time zone is known.
+3. Write the Replay reproduction plan for 143 and 158, checking exit price and exit time.
+4. With I4-004, quantify how much of the loss comes from each entry route.
+
+No write tool was available in this session, so this report is my whole output for the iteration.
+
+Sources:
+- [Binance klines EGLDUSDT 19:41–19:44 UTC](https://data-api.binance.vision/api/v3/klines?symbol=EGLDUSDT&interval=1m&startTime=1791747660000&limit=4)
+- [Binance aggTrades EGLDUSDT 19:43:05–19:43:36 UTC](https://data-api.binance.vision/api/v3/aggTrades?symbol=EGLDUSDT&startTime=1791747785000&endTime=1791747816000&limit=1000)
+- [Binance klines XRPUSDT 00:30 UTC](https://data-api.binance.vision/api/v3/klines?symbol=XRPUSDT&interval=1m&startTime=1791765000000&limit=1)
+- [Binance trading fees](https://www.binance.com/en/fee/trading)

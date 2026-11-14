@@ -24,6 +24,8 @@ import java.util.List;
 @RequiredArgsConstructor
 @Slf4j
 public class ScheduledAnalysisService {
+    @org.springframework.beans.factory.annotation.Value("${shared-market.mode:OFF}")
+    private String marketMode="OFF";
 
     @org.springframework.beans.factory.annotation.Autowired
     private com.crypto.shared.SharedRecoveryAuthority sharedRecoveryAuthority;
@@ -31,10 +33,10 @@ public class ScheduledAnalysisService {
 
     private static final int RECOVERY_BATCH_SIZE = 120;
 
-    /** FIX-131: make the effective operational toggle visible, including external overrides. */
+    /** FIX-153: expose overrides without advising operators to enable a competing analysis path. */
     @jakarta.annotation.PostConstruct
     public void logRecoverySetting() {
-        log.warn("[FIX-131][RECOVERY_CONFIGURATION] scheduledAnalysisEnabled={}; false is temporary, restore after diagnostic window", properties.scheduledAnalysisEnabled());
+        log.info("[FIX-153][RECOVERY_CONFIGURATION] scheduledAnalysisEnabled={}; local OFF mode uses the bounded closed-candle detector; inspect external overrides before enabling scheduled analysis", properties.scheduledAnalysisEnabled());
     }
 
 
@@ -70,6 +72,12 @@ public class ScheduledAnalysisService {
      */
     @Scheduled(fixedDelayString = "${trading.analysis-delay-ms:60000}")
     public void analyzeConfiguredSymbols() {
+        // FIX-153 has its own bounded detector. A configuration override must not
+        // reactivate legacy recovery in OFF mode, where it could execute backfill.
+        if ("OFF".equals(marketMode)) {
+            log.debug("[FIX-153][SCHEDULED_RECOVERY_BYPASSED] mode=OFF");
+            return;
+        }
         if (!properties.scheduledAnalysisEnabled()) {
             return;
         }

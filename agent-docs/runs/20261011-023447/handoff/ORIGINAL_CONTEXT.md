@@ -1,0 +1,335 @@
+# FIX-156 — Replay / Production Business-Logic Parity
+
+**Revision:** RPR-0.9.4-DRAFT (RPR-0.9.3-DRAFT with the second-review D26 account-table finding adopted and the censored-lifecycle row renumbered D27; changes listed in Appendix B)  
+**Status:** NOT APPROVED — IMPLEMENTATION FORBIDDEN  
+**Date:** 2026-10-10  
+**Code compared:** `d66c7a79-src.zip` (SHA-256 `cbdab04093a8a569c45ddb685ffcae082fab0df5ed928f50d2b185cbcdf5910f`, 651 files) and `cdbf3bd4-src.zip` (SHA-256 `a4a9c494117be24ff55e334bdbda175fe0e17aea2bbe510723519bc1163e9938`, 654 files). Directory comparison: all Java, SQL, resource and POM files are identical; the second package differs only in four script files (three new failed-trade study scripts and one changed status script). Every register row below therefore holds for both packages. Source read only.  
+**Review basis:** 12-round Codex/Claude review run `20261010-182733`.  
+**Baseline to freeze before approval:** source, configuration, migrations, and complete worktree SHA-256.  
+
+**Current-local-source amendment (2026-10-11):** D25 was verified in `ShadowProductionReplayService` in both `d66c7a79-src.zip` and `cdbf3bd4-src.zip`. It must be re-verified against the package frozen for implementation.
+
+## 1. Decision and non-negotiable scope
+
+This revision adopts the user's existing direction: **FIX-156 changes Replay only. Production source code, behaviour, database writes, account state, HTTP traffic, schedulers, and latency must remain unchanged.** No shared-service extraction is authorised in this fix.
+
+Replay is a manual, single-symbol research tool. It produces traceable decision, position, and exit output at a fixed notional—not a wallet, balance, cash reserve, sizing ledger, daily budget, or account simulation. It may reproduce only non-wallet Production business rules through Replay-local adapters which are version-matched and tested against Production fixtures. It must never claim that it reproduces historical wallet state, live scheduling, MySQL locks, Binance availability, or actual fills.
+
+Release labels are mutually exclusive:
+
+| Label | Meaning |
+|---|---|
+| `ANALYSIS_PARITY` | A stored Production signal/outcome is reproducible under the defined as-of evidence and oracle contract. It makes no account/lifecycle claim. |
+| `REFUSED_INSUFFICIENT_EVIDENCE` | Required evidence or lineage is absent, stale, ambiguous, or forbidden. No signal/trade artifact is published. |
+| `FAILED_REPLAY` | Internal error/cancellation after staging began. Staged artifacts are discarded. |
+
+Existing FIX-11K, FIX-11Q, pre-FIX-122, and `EXPERIMENTAL` paths remain displayable only; they cannot enter a baseline result.
+
+## 2. Explicit Replay boundary
+
+The boundary is the Regression Replay entry points: `RegressionTestService`, its controllers/requests, `RegressionTestWorker`, `ShadowProductionReplayService`, Replay observers, `/runs/**` output, and every asynchronous child task they start.
+
+They must not read or write any Production account table: `wallet_asset`, `wallet_trade`, `wallet_managed_position`, `paper_position`, `wallet_settings`, account snapshots, daily-account statistics, or live execution state. They must not invoke Binance/HTTP clients or call a Production fallback branch. A run-scoped guard propagates to all Replay child threads and fails closed with `REPLAY_FORBIDDEN_DEPENDENCY` before publication.
+
+`TradeReplayService.replay(positionId)` is an existing Production inspection view, not Regression Replay; it is explicitly outside this boundary and must not be changed by FIX-156.
+
+**Recorded-entry fixtures (review finding F1).** A lifecycle comparison is seeded from Production's recorded entries, which live in the account tables that Replay may not read. The recorded entries therefore reach Replay only as an **immutable entry-fixture dataset**, prepared by a separate read-only extraction that runs outside the Replay execution boundary and is never part of a Replay run. Each fixture holds: symbol, position identifier, recorded entry time, execution price and the observed-at time of that price, the entry signal identifier, the normalised fixed-notional basis (the recorded quantity is kept for audit and is not used for sizing), initial stop loss and take profit, entry scores, entry-consumption state, and the protection state at entry. The dataset has a content hash recorded in the run certificate. Replay reads the fixture file or Replay-owned fixture table only; the forbidden-dependency guard still applies to every account table. The extraction queries and their results are kept as evidence (E09).
+
+## 3. Evidence contract and time model
+
+### 3.1 Allowed evidence
+
+Replay reads only durable market/decision evidence, each with an as-of rule:
+
+| Evidence | Permitted use | Limitation / refusal rule |
+|---|---|---|
+| `candle` | indicator timeline | exact symbol/interval/open/expected-close identity; decision-time closure lineage required for parity; current `closed=1` alone is not proof. |
+| `trade_signal`, `candle_analysis_outcome`, `signal_processing_work` | stored outcome/oracle | compare only fields and signal modes explicitly versioned by Section 7. |
+| `market_price_event` | canonical execution/protection price timeline | accept only `LEGACY`/`APPLIED`; retain event id, `observed_at`, ordering slot and status. Coverage is per span, not a run-wide flag. |
+| `order_book_snapshot`, `fix122_evaluation`, `buy_htf_assessment_audit`, `execution_opportunity` | diagnostic/context only | best-effort, rollback-surviving, or overwritten evidence cannot prove parity unless an immutable as-of snapshot exists. |
+| sentiment/fundamental tables | analysis input only | require collection/availability time and versioned provider/config snapshot; otherwise refuse `ANALYSIS_PARITY`. |
+
+`NON_CANONICAL`, `PROTECTION_NOT_APPLIED`, `PENDING`, and uncertain price events are excluded. No future candle, price, signal, configuration, provider-health value, or account state may be used.
+
+### 3.2 Candle and signal eligibility
+
+For every requested candle, Replay must apply the same 210-closed-candle data-quality rule and validate snapshot identity **after** construction. Expected close is `open_time + interval - 1 ms`. Open, backfill-ambiguous, missing, or identity-mismatched rows refuse parity. BTC and higher-timeframe visibility use the same signal-mode-specific as-of clock as the stored Production decision; if ordering cannot be reconstructed, parity is refused.
+
+Recovery/backfill may make a candle present later. It cannot retroactively prove that it was available to Production at the original decision time.
+
+### 3.3 Price coverage and fill policy
+
+For a comparable decision output, each position-dependent decision span requires fresh accepted price evidence. Source check: Production resolves execution prices (entries and progressive adds) in `ExecutionPriceAuthorityService.resolve`, which accepts a price only if it is no older than `MAX_EXECUTION_PRICE_AGE`, 15 seconds. The Replay-scope branch of the same method applies the same 15-second limit to the Replay price timeline. That rule covers entry and add prices only. E02 must state which freshness rule governs protection (exit) spans, because the protection price stream is filtered by event status, not by this 15-second limit. A span with no usable price event is refused; it is never silently represented by one `EXACT_PRICE_REPLAY` flag for the entire run.
+
+No candle-price fill assumption is part of this parity baseline. A future counterfactual research run may introduce one only under a separately approved design and must not claim parity.
+
+The existing signal-price fallback is removed from the Replay baseline. It is reachable only for runs with **zero** price events, and does not execute the full Production exit order. Tests must use the actual Production signal-path sequence: advisory position management, TP, stop loss, rebase floor, profit lock, normal SELL validation, near-TP, then add suppression/handling as applicable. No rule order may be invented from the old Replay fallback.
+
+### 3.4 Known Production/Replay differences register (source comparison)
+
+Production's price path (`LivePositionProtectionService.onPrice`) and Replay's price path (`evaluateLivePrice`) follow the same exit order. The differences below are in the Production signal path (`PaperTradingService.processSignalBody`), in timing, and in Replay-only logic. Each row must be closed in E02 as **Replay change**, **Production-proven equivalent**, or **declared non-comparable**. Source note: Replay calls the shared `ExecutionIntelligenceService.evaluateBuy` and `TradeExecutionValidationService.validateSell`; it does not carry its own copies. The Replay-local parts are `evaluateExit` (the fallback), the profit-lock state wiring (`profitLockState`, `rebaseForExtendedTarget`), and the position and sizing bookkeeping.
+
+| ID | Difference | Production | Replay (current) | Required disposition |
+|---|---|---|---|---|
+| D01 | SELL signals that can close a position | SELL or STRONG_SELL on 1m, 5m or 1h, through `validateSell` | Only 1m SELL or STRONG_SELL | Replay change |
+| D02 | Profit-lock suppression of SELL signals | Active profit lock ignores the SELL and holds | No such check before `validateSell` (confirmed by two independent source reads) | Replay change |
+| D03 | Exits at the signal price | Signal path also checks TP, profit lock, stop loss, hard floor at the candle's signal price | Skipped in exact-price mode | Replay change, or proof that the price stream always acts first |
+| D04 | TP at signal price | Closes as TAKE_PROFIT directly, no continuation or extension | Not evaluated at signal price | Same as D03 |
+| D05 | Signal visibility to the price stream | Newest stored signal at processing time | Visible from `generatedAt` | Measure `created_at` minus `generated_at` per interval; use Production's availability time |
+| D06 | Near-TP clock | `Instant.now()` at processing | Price event `observedAt` | One declared rule plus measured outcome impact |
+| D07 | Entry price | Fresh price resolved at `Instant.now()` | Resolved at the signal's `generatedAt` | Same as D06 |
+| D08 | Entry wake-up | Setup and confirmed-setup wake-ups tried on every signal | Wake-ups only on 5m; 1m goes to `evaluateBuy` | Verify whether the wake-up can fire on 1m; Replay change if so |
+| D09 | Progressive adds | Only on 1m and only without an active profit lock (`PaperTradingService`); `evaluateBuy` is not called while the lock is active, so opportunity memory is not touched | No profit-lock check on the add path (confirmed by two independent source reads) | Replay change: skip the add evaluation while the lock is active |
+| D10 | Failed mechanical exit | `executeMechanicalExit` can return false and the position stays open | Always exits | Declared non-comparable (wallet-driven) |
+| D11 | Near-TP partial harvest skip | Skipped below Binance minimum for the real quantity | Same check, fixed-notional quantity | Declared non-comparable (quantity-driven) |
+| D12 | Replay-only logic | None | Zero-event signal-price fallback, FIX-11K and FIX-11Q observers, run-wide exact/fallback boolean | Remove (Section 5.1) |
+| D13 | Wallet inputs | Real wallet | `wallet_settings`, cash, daily budget, max positions, sizing | Remove (Section 4) |
+| D14 | Profit-lock calculation | `DynamicProfitLockService.evaluatePrice`, persists state | Replay-local `profitLockState` over `ProfitLockPolicy` | Not yet compared; E02 must show equal outputs on shared fixtures |
+| D15 | Same-timestamp signal order | Order of arrival at the processing queue | Sorted by `generatedAt`, then 1h, 5m, 1m (`intervalOrder`) | Declared rule; E07 measures how often signals share a timestamp and whether arrival order differed |
+| D16 | Fallback exit order (`evaluateExit`) | Signal path order: TP, profit lock, stop loss, hard floor, SELL (suppressed while the profit lock is active). No normal HTF exit on the signal path | Fallback order: TP, stop loss, rebase floor, profit lock, normal HTF exit, then 1m `validateSell` | Remove with D12; do not reuse this order anywhere in the baseline |
+| D17 | Experimental-only branches inside Production classes | `RegimeStateService.apply` returns the detected regime at once; `EntryAuthorityService.evaluate` always returns the normal decision | When an `EXPERIMENTAL` scope is active: N-candle regime persistence, and a breakout-transition probe capped near 25% | Not reachable today (both Replay entry points open the scope in `PRODUCTION_PARITY` mode; only a test opens `EXPERIMENTAL`). Keep unreachable and prove it with a guard test. Production cleanup is out of scope for FIX-156 |
+| D18 | Replay-aware as-of branches in shared Production classes | Read the database at decision time | Read the Replay timeline when a scope is active: `BtcMarketContextService`, `MultiTimeframeConfluenceService`, `OpportunityConsolidationService`, `ExecutionIntelligenceService` (opportunity memory), `TradeExecutionValidationService`, `ExecutionPriceAuthorityService`, `EntryConsumptionPolicy`, `BuyHtfAssessmentAuditStore` (skips writes) | Not retired. E02 must show equivalent output on shared fixtures. `EntryConsumptionPolicy` depends on whether a BUY executed in the wallet, so in a Replay seeded at Production's recorded entries it must follow Production's recorded executions, not Replay's own |
+| D19 | Replay-only profilers | None | `ReplayFreshSignalProfiler` (FIX-11L) and `analysisService.beginReplayAnalysisProfiling` (FIX-11M) | Declared observation-only. Baseline run must show identical output with them on and off, or disable them |
+| D20 | Entry time | `openedAt`, `executedAt` and the managed position's `openedAt` are `Instant.now()` at execution | In-memory `entryTime` is the signal's `generatedAt`; the stored Replay rows use the fresh price's `observedAt`. The two disagree, and for a 5m wake-up the in-memory time can be up to 45 seconds before the trigger. It feeds the rule that decides whether a signal price may be used after entry | Replay change: one entry time, taken from Production's recorded execution time |
+| D21 | Opportunity state after an add | `markExecuted` is called with the decision from before price revalidation | Called with the revalidated decision | Replay change (small): pass the same decision object as Production |
+| D22 | Profit-lock enable flag on TP extension | `onTakeProfitExtended` evaluates with the lock enabled | `rebaseForExtendedTarget` passes the admin toggle `isDynamicProfitLockEnabled()` | Replay change (edge case when the toggle is off) |
+| D23 | Advisory position management | `PositionManagementService.analyze(signal)` runs first on every signal and can apply a position stop loss | Not mirrored; Replay never calls it | Verify in E02 whether it can close a position that the price stream would not; Replay change if so |
+| D24 | Run-time configuration | Profit-lock percentages and toggles are read from `wallet_settings` row 1 at each evaluation | The same row is read at Replay time, so a settings change after the original decision silently changes Replay | Profile must carry the settings in force at the original decision time; refuse when the history is not available |
+| D25 | Final price-event tail | Production evaluates protection callbacks regardless of whether another signal is generated | Replay consumes price events only before each generated signal; after the final signal it marks an open position from the final signal price without processing remaining events through `executionEnd` | Replay change: drain the qualified canonical price-event tail through `executionEnd`, or refuse lifecycle parity for an incomplete final span |
+| D26 | Replay chart endpoint reads Production account table | Production `wallet_trade` is account state | `RegressionTestController` maps `/runs/{id}/all-trades-chart` to `RegressionTestService.allTradesChart(...)`, which queries executed `wallet_trade` rows by symbol/window and returns them as `productionExecutions` beside Replay output | Replay change: remove the account query from the Replay request path. Any comparison overlay comes only from a separately prepared immutable fixture/evidence dataset (E09), labelled non-Replay display evidence. Fixture test: the endpoint issues no query against `wallet_trade`, `paper_position`, or `wallet_settings`. |
+| D27 | Position still open when the window ends | The position continues and may exit after `executionEnd` | Replay does not close it; it marks the position to the last signal price in the run summary | Classify the lifecycle as censored (outcome unknown). Exclude it from exit-agreement metrics, count and report it separately, and never count it as a match. |
+
+### 3.5 Signal-generation differences register (source comparison)
+
+Replay and Production both call `AnalysisService.buildSignal`. The differences are in the inputs and the clock passed to it. Each row must be closed in E08 as **Replay change**, **equivalent on fixtures**, or **non-comparable (excluded from the 99% denominator and counted)**.
+
+| ID | Difference | Production | Replay (current) | Disposition |
+|---|---|---|---|---|
+| S01 | Signal clock | Live `generatedAt` is `Instant.now()` a short time after the candle close; recovery uses the close time | `evaluationTime = open time + interval` | Non-comparable for live-origin rows, or allow a measured latency tolerance |
+| S02 | Higher-timeframe and BTC context | Read from the database at processing time; which same-minute signals exist is a race between workers | Read from the Replay timeline; at a given close the 1m always sees the 5m, 1h and BTC signals of that close | Non-comparable; Replay is a deterministic idealisation |
+| S03 | Derivatives positioning | Live Binance futures call, not persisted | Historical mode returns unavailable or not applicable; error-path confidence adjustment is -10 in Production and 0 in Replay | Non-comparable |
+| S04 | Order book / liquidity | In-memory samples, live fetch when empty | Persisted observations in the window; unavailable when none, where Production returns insufficient-data hold | Equivalent only where persisted sample rate matches the live window; otherwise non-comparable |
+| S05 | Previous indicator snapshot | Stored `technical_indicator` row for the previous candle | Same query, but the current snapshot is recomputed and never stored | Replay change: pass a previous snapshot recomputed from the dataset; or equivalent on fixtures from the same code version |
+| S06 | Data-quality gate | Candle-close worker validates the latest 210 closed candles (gaps, invalid OHLC) and skips the signal; backfilled candles are not analysed | No such gate; Replay analyses every candle in the database | Replay change if row-set parity matters; otherwise report extra rows as non-comparable |
+| S07 | Open (unclosed) candles | Only closed candles | The helper that lists candles for the timeline has no closed filter; the dataset loader does filter. Which one feeds the timeline was not fully traced | Verify in E08; Replay change: filter to closed candles |
+| S08 | Signal metadata | `signal_mode` is LIVE, RECOVERY_EXECUTABLE or HISTORICAL_ONLY; `created_at` is set on insert | `analyzeForRegression` never sets `signal_mode`; test row has no `created_at` | Replay change, or exclude these columns from the comparison |
+| S09 | Sentiment | Provider health and configuration at decision time | Provider weights and flags read at Replay time; every Replay signal counts as historical | Non-comparable unless provider health and configuration history are persisted |
+| S10 | Intervals | Production analyses whatever intervals are configured, possibly including 15m, 4h and 1d | Replay timeline holds only 1m, 5m and 1h (verified); context from other intervals is missing | Verify the configured intervals in E08; Replay change or non-comparable |
+| S11 | Warm-up | Full signal history | 3 hours of seeded context | Compare only rows after the warm-up, or lengthen it |
+| S12 | Configuration | Scoring, BTC, sentiment, fundamental, derivatives and order-book properties as deployed at the time | The same properties as deployed now | Non-comparable unless configuration is versioned (profile fingerprint) |
+| S13 | Comparison tooling | n/a | `ReplayParityValidator` is not called anywhere in the source (verified). It compares 13 fields and omits scores, stop loss, take profit, price, decision path, time and quality fields. The worker's pass criteria are counts and cadence, not field parity against Production | New comparison component required; this is the 99% metric tool, not a refinement of an existing one |
+| S14 | Run pass condition | n/a | `RegressionTestWorker` computes `passed = cadencePass && authorityPass && generationPass && livePriceParityPass`, and `livePriceParityPass` is `!productionPriceEvents.isEmpty()` (verified, lines 319 to 323). One price event anywhere makes the price condition true | Replace with per-span coverage qualification (Section 3.3); the flag must never grant a parity label |
+
+### 3.6 Comparison trace, ordering, historical configuration and required fixtures
+
+**Availability contract (F4).** Every comparison trace records six timestamps: `candle_close_at`, `signal_generated_at`, `signal_persisted_at`, `signal_available_at`, `decision_evaluated_at` and `price_observed_at`. Each is shown in UTC as stored and with its KSA (+03:00) equivalent. Where `signal_available_at` cannot be reconstructed from stored evidence, the case is classified non-comparable. No timestamp is invented.
+
+**Price-event ordering (F6).** The price query already orders by `(observed_at, id)`, and Replay's later sort by `observed_at` is stable, so equal-time events keep the database order. The projection drops the id, so the order used cannot be audited; Section 6.1 requires the Replay projection to keep it. The team must also establish whether database id order matches Production's processing order. If it does not, equal-timestamp cases cannot claim exact historical ordering and are classified non-comparable.
+
+**Historical configuration gate (F7).** Replacing `wallet_settings` reads with a frozen profile does not reconstruct the settings in force at the original decision. A decision whose governing configuration (profit-lock activation, initial and trail percentages, enable toggles, scoring and context properties) cannot be established for its decision time is classified non-comparable. The current configuration is never substituted silently (E10).
+
+**Required profit-lock suppression fixtures (F3).** The register rows D02 and D09 are closed only with fixtures for: active lock with a 1m SELL; active lock with a 5m SELL; active lock with a 1h STRONG_SELL; active lock with price below the protection floor; active lock with a progressive-add opportunity; and the same cases in the TP-extension rebase state, where the lock is not active and Production does not suppress. The fixtures must show that a mechanical protection exit (price-based lock, stop loss, hard floor) is never suppressed merely because a normal SELL would be.
+
+**Final-tail fixtures (D25).** Lifecycle fixtures must cover, for a position open at the last comparable signal: a stop loss in the tail; a take profit in the tail; a profit-lock exit in the tail; a near-TP outcome in the tail; and an event after `executionEnd`, which must not run. Tail events are processed in canonical `(observed_at, id)` order.
+
+**Per-decision policy fingerprint (F8).** Each comparable decision records the deployed-policy fingerprint (source, configuration and profile hash) in force when Production made it, not only the run-level fingerprint. A decision whose fingerprint cannot be established is non-comparable.
+
+**Data-quality gate as-of (F9).** Replay's reproduction of the 210-closed-candle rule (S06) may use only candles that were historically available at the decision time. Backfilled or recovered candles do not count as available earlier than their persistence time.
+
+**Quantity- and wallet-dependent decisions (F10).** A fixed-notional comparison must not claim equivalence for decisions whose outcome depends on quantity or the wallet, such as the near-TP harvest minimum check (D11), sizing, daily limits and executed-BUY consumption. These are classified non-comparable and counted, never silently matched.
+
+## 4. Frozen Replay profile and fixed-notional output
+
+Every run stores an immutable Replay-owned profile: fixed notional, strategy/exit thresholds, instrument constraints needed by non-wallet decision rules, strategy toggles, FIX-154 policy version, and all version/config fingerprints. It contains no balance, wallet, cash reserve, sizing, daily-loss, or max-open-position state.
+
+The baseline profile mirrors current non-wallet paper-trading rules with fixed notional and current strategy/configuration snapshot. Any Production decision whose outcome depends on cash, daily limits, max-open-position cap, sizing, reserve, or account history is marked `WALLET_DRIVEN_NOT_COMPARABLE`, excluded from the 99% denominator, and counted in the certificate. Production wallet settings are never consulted.
+
+Replay-local mirrors may not add a second strategy engine. Each mirrored method has a named Production source, input/output fixture, policy-version fingerprint, and regression comparison. A source change invalidates the Replay profile until its fixtures and mirror are reviewed.
+
+## 5. Complete implementation registry
+
+| ID | Replay-only artifact/change |
+|---|---|
+| RPR7-01 | `RegressionTestService`, requests/controllers: profile/mode propagation, start/cancel/archive/purge lifecycle, no pre-worker business writes. |
+| RPR7-02 | `RegressionTestWorker`: bounded named Replay executor, pure qualification before artifacts, per-span evidence coverage, cancellation/restart cleanup. |
+| RPR7-03 | `ReplayEvidenceQualifier` + certificate store: frozen baseline/config/evidence hashes, refusal reasons, as-of rules. |
+| RPR7-04 | Replay profile + fixed-notional decision-state store: positions, entries, exits, protection levels and constraints; no wallet, balance, sizing or ledger. |
+| RPR7-05 | `ReplayExecutionScope`: stable run IDs, clock, price identity/slot, async propagation, forbidden-dependency guard, `finally` cleanup. |
+| RPR7-06 | `ShadowProductionReplayService`: remove zero-event signal-price fallback; implement Production-rule mirror order and Replay-only writes. |
+| RPR7-07 | Replay-local mirrors/fixtures for non-wallet validation, dynamic lock, protection, position management, exit/profit-lock and FIX-154 assessment. Wallet-driven sizing/admission is classified, not simulated. |
+| RPR7-08 | Replay observers: isolate FIX-11Q/defensive-risk observers; baseline never invokes experimental observers. |
+| RPR7-09 | `ReplayParityValidator`: earned-label algorithm, required field set/tolerances, signal-mode clocks, explicit mismatch/refusal output. |
+| RPR7-10 | run output/UI: correct `analysis_test_run` lifecycle, `analysis_test_signal`, `trade_signal_test`, Replay decision/position/exit output, `position_management_test`, `execution_opportunity_test`, observer output and display-only Production overlays. No `wallet_trade` or `paper_position` read for a Replay run. The `/runs/{id}/all-trades-chart` route must not query `wallet_trade` or any account table (D26); overlay data comes only from a prepared immutable fixture/evidence dataset. |
+| RPR7-11 | next verified Flyway migration: additive profiles, certificates, staging, price-span coverage, fixed-notional decision-output and archive columns; migration number is chosen only after Flyway preflight. |
+| RPR7-12 | configuration/logging/docs/tests listed in Sections 6 to 9. |
+
+No item may modify a Production class. Any discovered required shared-code change stops FIX-156 and returns to design approval.
+
+### 5.1 Retired Replay-only logic to remove from the baseline
+
+These are **not** Production rules. They are old Replay experiments or fallback routes that must not remain in the new baseline because they make Replay behave differently from Production. Their historical rows remain evidence; this change does not delete Production data or edit an applied migration.
+
+| Retired item | Current files / artifacts | Required disposition |
+|---|---|---|
+| FIX-11K defensive-risk-reduction counterfactual | `DefensiveRiskReductionReplayObserver`, its calls from `ShadowProductionReplayService`, controller endpoints, and `defensive_risk_reduction_observation_test` / archive display | Remove from the baseline execution graph. Preserve existing records as read-only historical research. If retained for future research, move it to a separately selected `EXPERIMENTAL` run type with its own label; it cannot start, observe, write, or affect a baseline run. |
+| FIX-11Q one-candle continuation-grace counterfactual | `OneCandleContinuationGraceReplayObserver`, its `startRun/onPrice/onSignal/finishRun` calls, controller/archive endpoints, and `one_candle_continuation_grace_test` / archive display | Remove from the baseline execution graph and fixed-notional output. Preserve historic observations read-only. A future experiment requires a separate approved design and explicit experimental profile. |
+| Pre-V64 / signal-price fallback execution | `ShadowProductionReplayService` fallback block, `evaluateNearTpAtSignalFallback`, `FallbackNearTpEvaluation`, and related fallback log messages | Delete/replace in the Replay redesign. It is a zero-price-event route, not a safe price-path substitute, and does not execute the full Production exit order. Do not remove Production FIX-11T; only remove the Replay-local legacy fallback. |
+| Run-wide `EXACT_PRICE_REPLAY` versus `SIGNAL_PRICE_FALLBACK` label | `ShadowProductionReplayService` and `RegressionTestWorker` replay-price-mode persistence | Retire these misleading run-wide labels. Replace them with the earned labels in Section 1 plus per-span `replay_price_coverage`. Existing historical labels remain visible as legacy metadata only. |
+| Replay `EXPERIMENTAL` scope as a baseline capability | `ExecutionReplayScope.ReplayLogicMode.EXPERIMENTAL` and automatic observer invocation | The enum value cannot be removed in FIX-156, because Production classes (`RegimeStateService`, `EntryAuthorityService`) read it. Instead: baseline entry points may open the scope only in `PRODUCTION_PARITY` mode; add a test that no baseline path can open `EXPERIMENTAL` and that both classes behave as Production while a `PRODUCTION_PARITY` scope is active. Remove automatic observer activation from the worker/service. If a future experimental scope survives, it must be a separately authorised entry point and cannot share baseline output/certificates. Deleting the dead branches is a separate Production change. |
+| Legacy continuation/defensive archive maintenance as core run behavior | `RegressionTestService` archive/purge lists and summary counts | Remove these objects from normal baseline run, archive, purge, and dashboard summaries. Keep a read-only legacy archive viewer until retention expires; delete tables only through a separate, approved forward migration and retention plan. |
+
+**Removal safety rules:** remove invocation and baseline write paths first; migrate/disable UI routes next; retain historical rows and read-only viewers; then consider schema cleanup only in a later approved migration. Never delete a table, archive, or prior run merely to make the new Replay route compile.
+
+## 6. Lifecycle, staging and resources
+
+### 6.1 Required technical change map
+
+| Area | Current technical issue | Required Replay-only change |
+|---|---|---|
+| `RegressionTestService.start(...)` and run controllers | A run and FIX-122 revision can be written before the async worker qualifies evidence. Chart output can read `wallet_trade`. | Persist only a request/certificate shell at start. Move all result writes after qualification. Route chart/timeline endpoints to Replay-owned output only; prohibit a Replay request from querying `wallet_trade` or `paper_position`. |
+| `RegressionTestWorker` | It creates generated artifacts before its late price-evidence check and uses an unspecified `@Async` executor. | Add `ReplayEvidenceQualifier.qualify(request)` before signal/result generation. Use a named bounded Replay executor. Carry profile, baseline hash, mode, scope and cancellation token into the worker. Enforce per-span rather than run-wide price coverage. |
+| `ReplayDataset` / candle loading | Replay can process an open row and can re-analyse the preceding closed candle with later context. | Load only exact closed identities. After every indicator snapshot build, compare returned candle symbol, interval, open and expected close with the requested identity. Apply `CandleDataQualityService` semantics as of that decision point. |
+| `ExecutionReplayScope` | Scope is a `ThreadLocal`; a missing scope can fall through to Production account reads/writes. It does not carry canonical price identity. | Add immutable run/profile/baseline/clock state, accepted price-event id/status/ordering-slot, cancellation marker and a scope-violation flag. Propagate it to every Replay-owned async task; `finally` clears it. Absence or an attempted account/HTTP dependency raises `ReplayForbiddenDependencyException`. |
+| `ShadowProductionReplayService` | It reads `wallet_settings`; `exactPriceReplay` is one run-level boolean; its signal-price fallback runs only when a run has no price events; price path omits some Production exits/lock suppression. | Replace settings with `ReplayProfile`. Replace the boolean with `ReplayPriceCoverage` per decision span. Remove the fallback and use the documented Production-rule mirror order. Never call a repository/service that reads an account table or HTTP. |
+| Replay policy mirrors | Production services such as validation, sizing, minimum execution, protection, paper trading and position exit have account/HTTP/transaction dependencies. | Introduce Replay-local `*PolicyMirror` classes with explicit inputs only: immutable profile, as-of market evidence and Replay decision-position state. Wallet-driven decisions are classified `WALLET_DRIVEN_NOT_COMPARABLE`, not mirrored. Each mirror names its Production source method and has recorded-Production-decision fixtures proving equivalent outputs for eligible inputs. No modification of the Production class is allowed. |
+| `OneCandleContinuationGraceReplayObserver` and other observers | The observer reads wallet settings and writes experimental output during baseline runs. | Supply the immutable Replay profile; isolate observer writes in Replay tables. Baseline profiles do not instantiate/invoke experimental observers. |
+| `ReplayParityValidator` | It compares a small, non-versioned field subset and has no earned-claim/refusal algorithm. | Require a versioned comparison schema, mandatory fields, tolerances, source/config identity, outcome/signal-mode timing, and a structured mismatch certificate. It may award only `ANALYSIS_PARITY`, never lifecycle/account parity. |
+| `MarketPriceEventService` projection / Replay price model | The current `PriceEvent` projection loses durable id/status/ordering slot needed for equal-time ordering and audit. | Add a Replay-owned projection/DTO retaining these fields. Do not change ingestion. Query accepted events in `(observed_at, id)` order and record the event id/slot used for every fixed-notional decision/protection evaluation. |
+| Sentiment/fundamental/context evidence | Current historical rows do not always retain collection time, provider health/config or immutable context. | Add a qualifier capability matrix. If an input cannot be reconstructed as of the decision time, refuse `ANALYSIS_PARITY`; the run is refused for `ANALYSIS_PARITY`. No substituted input is allowed in the baseline. |
+| FIX-154 integration | Source includes higher-timeframe BUY assessment, but historical inputs/audit counters must not be mutated by Replay. | Replay profile carries frozen FIX-154 policy/config identity. Read only the eligible stored evidence. Route counters/audit output to Replay-owned records; prove no Production counter/audit write occurs. |
+| Run lifecycle / archive / purge | Current run data can be incrementally visible and run IDs/output references can drift after purge. | Add immutable certificate/profile references, staging ownership key, terminal status, archive state, cancellation reason and retention policy. Promotion is atomic; purge never reuses a public run identity or deletes certificate lineage. |
+
+### 6.2 Required schema and configuration changes
+
+The next verified Flyway migration must be additive and contain, at minimum:
+
+- `replay_profile`: immutable fixed-notional decision-profile configuration, profile hash and source policy version; no balance/ledger fields.
+- `replay_run_certificate`: requested/earned label, baseline/config hashes, evidence counts/IDs, refusal/mismatch reasons, UTC timestamps and KSA display conversion metadata.
+- Replay staging/promotion ownership columns or dedicated staging tables for every Replay result table.
+- `replay_price_coverage`: one row per decision span, recording canonical event identity/order or the refusal reason. No price assumption exists in the baseline.
+- Replay-only audit tables for fixed-notional entries/exits, decision positions, policy decisions, experimental observers and FIX-154 equivalent assessment evidence.
+- Archive/retention indexes and unique keys that preserve run identity across cancellation/purge.
+
+Configuration must name: the bounded Replay executor, one-run capacity, queue capacity, connection/query budget, maximum window/candle count, supported profile modes, fixed notional, debug decision logging, and the numeric Production-protection health thresholds used by the load test.
+
+1. `start` creates only a minimal run request/certificate record; no FIX-122 revision, signal, trade, observer, or result write occurs before qualification.
+2. Qualification takes a read-consistent evidence snapshot and produces qualified spans or a terminal refusal.
+3. The worker writes only Replay staging rows. A cancellation, crash, invariant failure, or forbidden dependency discards staging and writes one terminal diagnostic.
+4. Promotion publishes all terminal Replay output atomically. Archive/purge preserve certificate/profile/baseline hashes and cannot reuse a run identity.
+
+Use a named, single-worker Replay executor with a bounded queue of one. Specify and test a database connection/query budget. A run is rejected when capacity is full. Under load, Production protection latency and `STALE_PRICE`/non-canonical rates must not worsen beyond an approved numeric threshold.
+
+## 7. Earned parity algorithm
+
+`ANALYSIS_PARITY` is earned only when the frozen source/config policy identity matches, all mandatory as-of evidence exists, candle/data-quality/signal-mode timing passes, and the validator compares the versioned mandatory field set (decision, raw/effective confidence, context/statuses, regime, strategy, entry permission, reason and outcome). Tolerances must be documented and versioned; missing liquidity, derivatives or sentiment uses the stored Production output, not a new live/historical approximation.
+
+The FIX-156 outcome target is **at least 99% agreement among qualified, comparable decisions, measured separately for signal parity and for lifecycle parity (Section 7.1); the two are never pooled**. A unit is one Production-recorded signal decision or position outcome. It passes only when the versioned comparison agrees on entry versus no entry, exit versus hold, exit reason, exit timestamp, and exit price within the frozen tolerance. Wallet-driven cases, insufficient-evidence cases and refused cases are excluded from the denominator and reported separately; none may be counted as a match. Every disagreement has a one-line classified cause. Average P&L is not a substitute for this decision-level metric.
+
+**Validity conditions (frozen before the first measured run):** (a) a minimum coverage, meaning comparable cases as a share of all Production decisions in the window, reported next to the agreement rate; (b) a minimum number of comparable cases; (c) a lower confidence bound on the agreement rate, and the 99% target is judged on that bound, not the raw percentage; (d) the numeric values are set by the team from E06 evidence and approved by the owner. A result that fails (a) or (b) is reported as **not evaluable**, never as a pass.
+
+**Unit of comparison — recorded in Appendix C, item 1, awaiting owner confirmation at freeze:** Replay is seeded at Production's recorded entries, so each position's lifecycle is compared from the same entry onward and a wallet-driven BUY rejection in Production cannot cascade into later differences. A free-running lifecycle is not permitted while Replay has no wallet evidence. Appendix C items 2 and 3 also bind this section: thresholds are frozen before the final evaluation window, and D14 is blocking.
+
+### 7.1 Separate acceptance metrics (F2, F5)
+
+| Metric | Compares | Acceptance |
+|---|---|---|
+| Signal parity | Production versus Replay signal generation and decision, per Section 3.5 | Own frozen threshold, coverage and lower confidence bound |
+| Lifecycle parity | Recorded-entry position management, protection and exit decisions, per Section 3.4 | Own frozen threshold, coverage and lower confidence bound; reported per exit class (stop loss, profit-lock, hard floor, take profit, normal SELL, near-TP) so that a small set of mechanical-exit mismatches cannot hide behind matching signals |
+| Overall coverage | Comparable decisions divided by all relevant Production decisions | Frozen minimum, reported next to both rates |
+
+Both parity metrics must meet their own criteria. Every lifecycle mismatch reports the **first divergent decision** (for example a profit-lock update at 10:05 KSA that leads to a different exit at 10:12 KSA), not only the final P&L difference. The first divergence is the defect to investigate.
+
+
+### 7.2 Critical-safety gate (independent review)
+
+A high overall agreement rate must not hide a protection failure: 990 matching and 10 mismatching decisions is 99%, and if the 10 are stop-loss or profit-lock exits the implementation is rejected. In addition to Section 7.1, the lifecycle comparison must show **zero unexplained critical mismatches** in these classes: stop-loss precedence; profit-lock protection (activation, lock price, trigger, hard floor, SELL suppression); take-profit execution (exit versus extension); FIX-11T near-TP ownership (it acts last and never races another sell or quantity change on the same tick); and duplicate exit authorisation. A critical mismatch counts as explained only when it carries an evidence-based classification (for example non-comparable because the governing configuration cannot be established), reviewed independently. Both the statistical targets and this gate must pass.
+
+The certificate records baseline source hash, deployed-policy/JAR hash when known, config/profile hash, migration range, evidence IDs/counts, per-span price coverage, selected label, refusals, duration, executor utilisation, and UTC/KSA display timestamps. A source/deployed-JAR mismatch prevents a claim about deployed Production.
+
+## 8. Mandatory validation
+
+Tests must cover: account/HTTP/fall-through guard; async guard propagation; open/missing/identity-mismatched/backfilled candle; as-of 210-candle quality; same-boundary BTC/HTF visibility; price id/slot/equal-time ordering; missing/partial price spans; Replay-only SELL versus Production signal-path TP/SL/floor/lock/SELL/add order; profit-lock suppression; wallet-driven exclusion; cancellation/crash/restart/staging/promotion/archive/purge; observer isolation; FIX-154 counters unaffected; API/UI overlay isolation; executor/DB/protection-load limits; MySQL migration fresh/upgrade/V103 policy; and baseline/config hash mismatch.
+
+Before any implementation approval, run bounded read-only measurements for price-event coverage by symbol/day, existing fallback-run count, warm-up sufficiency, and evidence-eligibility rate. If coverage is inadequate, refusal rates must be reported rather than hidden.
+
+### 8.1 Pre-implementation evidence package — required for approval
+
+The following ten deliverables must be attached to the next design-review request. They are read-only analysis artifacts, not implementation approval.
+
+| Deliverable | Required content | Acceptance condition |
+| D25 final-tail evidence | The E02 decision-order matrix and E03 coverage report must include the interval after the final comparable signal through `executionEnd`. | The matrix specifies canonical tail ordering. Lifecycle parity is refused if the final span lacks qualified evidence. Fixtures include final-tail stop loss, take profit, profit-lock exit, near-TP outcome, and an event after `executionEnd` that must not run. |
+|---|---|---|
+| E01 — dependency audit | A transitive dependency graph from every Regression Replay entry point and async child task to every Production service, repository, HTTP client, executor and table. Mark every direct/indirect account read/write and every possible fall-through when scope propagation is absent. | Each reachable dependency is classified: permitted evidence, Replay replacement, display-only, or forbidden. No unclassified account/HTTP path remains. |
+| E02 — Production decision-order matrix | Method-level order for BUY admission, sizing, entry-price revalidation, position management, TP, SL, rebase floor, profit lock, SELL validation, near-TP and add handling. Include the current Replay order and each difference. | For every decision, the matrix names source class/method, exact input evidence and timestamp, position/protection state, strategy/context, decision precedence, state transition, output (`BUY`/`SELL`/`HOLD`/rejection), transaction boundary, and required Replay-mirror fixture. Matching method names alone is insufficient. The matrix must close every row of Section 3.4 (D01–D27), cover both Production price and signal paths, and specify canonical final-tail ordering through `executionEnd` (D25). |
+| E03 — historical evidence coverage report | Canonical accepted (`LEGACY`/`APPLIED`) price-event coverage by symbol and position-dependent span; gap lengths; eligible/refused-rate projection; count of current `SIGNAL_PRICE_FALLBACK` runs and their trade count. Include the final tail from the last comparable signal through `executionEnd` (D25). | Results are bounded, reproducible, timestamped and stored with the design review. A non-empty event list is never used as a coverage proxy. Refuse lifecycle parity where the final tail lacks qualified canonical evidence. |
+| E04 — policy-version invalidation contract | How the frozen source/config/policy fingerprint is generated, stored in profile/certificate and per comparable decision (Section 3.6), compared at run start, and invalidated after a Production policy/config change. | A changed fingerprint refuses a parity-labelled run until the mirror fixtures and profile are explicitly re-approved. |
+| E05 — resource-isolation plan | Numeric maximums for Replay workers, queue, CPU/concurrency, duration/window, DB connections/queries, and measured Production protection-health thresholds. | Load validation proves Replay cannot exceed its budget or materially worsen protection latency, `STALE_PRICE`, or rejected/non-canonical price outcomes. |
+| E06 — 99% baseline measurement | Apply the frozen decision-level metric to existing Production output; include agreement, exclusions and mismatch classifications. | Reports comparable-case count, agreement rate, wallet-driven count, refused count and every mismatch cause; it never substitutes aggregate P&L. |
+| E07 — signal availability gap | For 1m, 5m and 1h signals: distribution of persistence time minus `generated_at`, per symbol and day, and the field-to-availability mapping for each timestamp. | Shows whether Replay's "visible at `generatedAt`" differs from what Production saw, and by how much. Needed to close D05. |
+| E08 — signal-input reconstructability | For every row of Section 3.5 (S01–S14): which inputs are persisted and at what rate (derivatives, order book, sentiment provider health, configuration history), the intervals Production actually analyses, which candle list feeds the Replay timeline, and the count of Production signals affected. | Each S row is closed as Replay change, equivalent, or non-comparable, with the share of Production decisions it removes from the 99% denominator. |
+| E09 — entry-fixture dataset | The read-only extraction queries, their results and the content hash of the immutable entry-fixture dataset (Section 2), including recorded execution time, price and its observed-at time, entry-consumption state and protection state at entry. | Dataset is reproducible from the stored queries; every fixture field maps to a source column; no account table is reachable from a Replay run. |
+| E10 — historical configuration evidence | For each setting listed in Section 3.6: where its history is stored, the values in force per day for the evaluated window, and the share of Production decisions with no recoverable value. | Decisions with no recoverable value are counted as non-comparable and removed from both denominators. |
+
+The review also confirms this implementation boundary: Replay-local mirrors are permitted only as a temporary, version-matched solution. A future shared, side-effect-free Production decision-policy layer may be designed separately, but is explicitly out of scope for FIX-156 and cannot be introduced during this implementation.
+
+Replay parity never asserts that a historical order would have filled at the Replay output price. This is especially important for a price-path-dependent continuation experiment such as FIX-155: FIX-155 remains Replay research only and cannot justify a Production trading-policy change until FIX-156's qualified baseline Replay has been implemented, validated and independently reviewed.
+
+### 8.2 Delivery stages
+
+**Stage 1 — decision-comparison baseline:** remove the zero-event signal-price fallback and automatic FIX-11K/FIX-11Q observers from baseline; remove all `wallet_settings` reads; introduce fixed-notional profile, per-span price coverage, price-event identity projection, Production-order mirror fixtures, 99% metric and mismatch report.
+
+**Release rule (review):** Stage 1 must not be released or labelled as a trusted parity implementation until the Stage 2 isolation, staging and resource-protection gates pass.
+
+**Stage 2 — operational hardening:** certificates, staging/promotion, archive/purge lifecycle, resource-isolation load validation, and UI/display-overlay conversion. Stage 2 is required before release; the split only makes the delivery order reviewable.
+
+## 9. Operational documentation
+
+Successful implementation must update `docs/ARCHITECTURE.md`, `docs/CHANGELOG_AI.md`, `docs/TRADING_RULES.md`, and `docs/INVESTIGATION_LOG.md` with the final implemented state. It must also correct the FIX registry only after the code and validation actually exist.
+
+## 10. Approval gate
+
+**Source identity.** The independent review names the package it inspected as `src(20261010-231020).zip`. A file name is not an identity. The team must record the SHA-256 of the package actually frozen. This specification has been checked against `d66c7a79-src.zip` and `cdbf3bd4-src.zip`, which are identical in all Java, SQL, resource and POM files. If the frozen package differs from both, rows D01 to D27 and S01 to S14 must be re-verified before the freeze.
+
+This file must be copied/reconciled to the canonical `agent-docs/FINAL_CHANGE_SPECIFICATION.md`, then dual-reviewed as the identical frozen revision. A user must explicitly approve the reviewed revision before implementation. No current source code, schema, runtime configuration, or production data is authorised to change by this document.
+
+## Appendix B — Changes from RPR-0.7-DRAFT
+
+1. Revision label changed to RPR-0.8-DRAFT.
+2. Removed leftover simulation and price-assumption wording (Section 5.1 baseline modes, Section 6.1 sentiment row, Section 6.2 price coverage, Section 8, E03).
+3. Price-authority freshness rule: located in `ExecutionPriceAuthorityService` (15 seconds, entries and adds only); Section 3.3 updated. Protection-span freshness still to be stated in E02.
+4. Added Section 3.4, the known-differences register D01–D14 (extended to D19 in item 10), from a source comparison of Production's price path and signal path with Replay.
+5. E02 extended to close every register row.
+6. Section 7: added validity conditions (coverage, minimum count, lower confidence bound, not-evaluable result) and an owner decision on the comparison unit.
+7. Added E07 (signal availability gap); evidence package is now seven deliverables.
+8. RPR-0.8.1: the circulated copy of 0.8 had lost the number after the section sign in several places and a block of text (end of Section 5.1 table, the "Removal safety rules" paragraph, the Section 6 and Section 6.1 headings and the first rows of the Section 6.1 table). Restored from the clean 0.8; Appendix C kept as written; Section 7 owner-decision wording aligned with Appendix C; E06 and E07 reordered.
+9. RPR-0.8.2: the section sign followed by a number was stripped again in the circulated 0.8.1 copy, in the same places (the content block itself arrived intact). All section references are now written as the word "Section", which survived transfer. No other text changed.
+10. RPR-0.8.3: source review of Replay-only logic not present in Production. Added D15–D19 to the register, corrected the `EXPERIMENTAL` row in Section 5.1 (the enum cannot be removed without editing Production classes), and recorded the 15-second rule's location and scope.
+11. RPR-0.8.4: three parallel source reviews (signal generation, BUY admission and entry, position and profit-lock state), with the main points spot-checked. Added Section 3.5 (S01–S13), D20–D24, confirmed D02 and D09 as real differences, and added E08. Finding: the profit-lock lock price and trigger arithmetic is the same in both paths (both call `ProfitLockPolicy.evaluate` with the same arguments), so D14 is lower risk than the other rows but stays blocking until fixtures show equal output.
+12. RPR-0.9: independent review findings F1 to F7 incorporated. F1 recorded-entry fixtures outside the Replay boundary (Section 2, E09); F2 separate signal, lifecycle and coverage metrics with first-divergence reporting (Section 7.1); F3 profit-lock suppression fixtures (Section 3.6); F4 six-timestamp availability contract (Section 3.6); F5 first divergent decision; F6 price-event ordering with an audit note (Section 3.6); F7 historical configuration gate (Section 3.6, E10). Added a Stage 1 release rule and a source-identity condition to Section 10. Source note added to Section 3.4: Replay calls the shared `evaluateBuy` and `validateSell`.
+13. RPR-0.9.1: re-checked against `cdbf3bd4-src.zip` (identical to `d66c7a79-src.zip` except four script files). Independent review line references verified: D01/D02 at the SELL path, run-wide price flag, price sort, `livePriceParityPass`, and the 13-field validator. Added S14 (run pass condition), Section 3.6 clauses F8 to F10, Section 7.2 critical-safety gate, per-decision fingerprint in E04, and a corrected source-identity condition. No architecture change.
+14. RPR-0.9.2 and RPR-0.9.3: D25 (final price-event tail) added and verified in both reviewed packages. E02/E03, source identity, S14 coverage, the full D01–D27 register, final-tail fixtures, and Appendix C were reconciled.
+15. RPR-0.9.4: adopted the verified account-table chart finding as D26. The earlier open-at-window-end finding is D27. The account-table scope is now explicit in D26, RPR7-10, and the required dependency audit.
+
+
+## Appendix C — Consolidated review decisions
+
+1. **Lifecycle comparison unit:** seed Replay from each Production-recorded entry, then compare that position's protection and exit lifecycle. Measure signal and BUY-decision parity separately. A free-running entry-to-exit lifecycle is not permitted while Replay has no wallet evidence, because wallet-driven entry differences would cascade into later results.
+2. **99% acceptance metric:** E06 may be a pilot used to propose coverage, comparable-count and confidence-interval thresholds. The numeric thresholds, the confidence-interval method and a separate final evaluation window must be frozen and owner-approved **before** the acceptance measurement; they may not be tuned after inspecting that final result.
+3. **D14 is blocking:** the dynamic profit-lock calculation/state must match Production on recorded shared fixtures before any lifecycle-parity result can pass.
+4. **Independent review F1 to F7:** accepted and incorporated in RPR-0.9; closure requires source evidence and fixtures, not text alone. Implementation approval remains withheld.
+5. **Critical-safety gate:** accepted. Zero unexplained critical mismatches in stop-loss, profit-lock, take-profit, near-TP ownership and duplicate-exit classes, in addition to the statistical targets (Section 7.2).
+6. **PDF/Markdown source:** this project copy is made from the owner-provided Markdown counterpart. The PDF is retained as the presentation artifact; no PDF layout change is implied here.
+7. **Final-tail rule (D25):** accepted as a critical-safety fixture requirement. Lifecycle parity is refused where the final tail lacks qualified canonical price evidence (E03).
+
+## Appendix D - RPR-0.9.4 local-source amendments
+
+RPR-0.9.2–RPR-0.9.4 add D25–D27 from read-only source reviews. D25 requires final-tail canonical price processing or a lifecycle-parity refusal. D26 removes Production account-table reads from the Replay chart endpoint. D27 classifies an open position at `executionEnd` as a censored lifecycle, never a successful exit match. The fixed-notional boundary remains binding: Replay must not use `wallet_settings`, cash, daily budget, position-cap, or wallet-sizing policy to decide its output; those current reads remain D13. All three are implementation blockers. No application code was changed.
+
+
+Jean direction (2026-10-11): Replay must match Production business logic so a simulated trade produces the same decision/exit output. Target 98-99% similarity is acceptable; 100% is not required where wallet/quantity/timing are declared non-comparable.
+
+FIX-126/FIX-156 intent: Replay uses Replay-owned output tables only as the final output. Production uses the wallet/paper account tables. Replay must not read or write wallet_trade, paper_position, wallet_settings, or other account state during a run.
+
+Agents must walk CURRENT workspace source (not only the zip hashes in the draft) and confirm whether RPR-0.9.1 / the text in FINAL_CHANGE_SPECIFICATION_RPR-0.9.1.md is complete and true against the code. Header currently labels itself RPR-0.9.4-DRAFT inside a 0.9.1 filename; resolve that.
+
+No implementation. No Production code change. No Git. Dual-agent independent Round 1, then evidence-backed challenge. VERDICT APPROVED only if the exact spec is complete and safe to freeze for later user authorization; otherwise REJECTED with missing code paths and register gaps.

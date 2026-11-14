@@ -1,0 +1,18 @@
+TABLE_SCHEMA	TABLE_NAME	CREATE_TIME	TABLE_ROWS
+crypto_ai	flyway_schema_history	2026-10-03 16:11:00	100
+crypto_ai	buy_htf_assessment_audit	2026-10-10 01:52:45	2297
+installed_rank	version	description	installed_on	success
+100	100	fix 144 paper position reason capacity	2026-10-04 00:15:43	1
+101	101	fix 145 operator work cancellation	2026-10-04 01:06:29	1
+102	102	fix 147 cutover approver account	2026-10-04 23:44:33	1
+103	103	fix 149 fresh admission indexes	2026-10-05 01:38:10	1
+104	104	fix 150 protection entry evidence	2026-10-06 00:58:53	1
+105	105	fix 151 delivery selection indexes	2026-10-06 01:50:51	1
+106	106	fix 153 local candle evidence	2026-10-09 01:12:00	1
+107	107	fix 154 trusted higher timeframe buy	2026-10-10 00:15:21	1
+108	108	fix 153 local candle reconciliation	2026-10-10 00:15:21	1
+109	109	fix 154 forward replay and audit columns	2026-10-10 01:52:45	1
+110	110	fix 156 replay owned tables	2026-10-15 01:58:18	1
+111	111	fix 156 replay profile evidence	2026-10-17 03:11:55	1
+n	dq_null
+6	0

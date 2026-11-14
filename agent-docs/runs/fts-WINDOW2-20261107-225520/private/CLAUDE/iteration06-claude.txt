@@ -1,0 +1,258 @@
+# CLAUDE: FTS WINDOW2, Iteration 6 (root cause and research, self-review only)
+
+## Summary
+
+One of the six frozen trades has a code defect behind it; the other five lost because of weak entry design.
+
+- **Trade 143: confirmed logic defect.** Two analyses race at each 5-minute boundary: the 1m (one-minute candle) analysis and the 5m one. The entry was approved on a 5m BUY from the previous 5-minute candle. A newer 5m WATCH already existed 3.2 s before the fill. Without that, 143 would not have opened.
+- **The other five (137, 158, 162, 172, 182): valid losing trades with weak entries.** Each bought into short-term noise, either at the top of a narrow 30-minute range or on a bounce inside a falling run. Each then closed on the next bearish signal. All five losses were between −0.13% and −0.34%, which is ordinary 1m noise.
+- **Ruled out:**
+  - Stale data: entries were made 3 s after the signal.
+  - Execution delay: the fill was within one tick of the decision price on all six.
+  - Stop-loss behaviour: none of the six hit its stop.
+  - Fees: paper fees are 0.
+
+There is also a new population-level finding. Across all completed paper trades, a higher Entry Quality score went with a higher loss rate, not a lower one. That fits the I5-005 per-symbol view: most losses come from stop-outs on more volatile symbols, and the study's selection rule (status `CLOSED` only, no `STOPPED`) can never pick those trades.
+
+Scope:
+- The six frozen IDs are unchanged and none was substituted.
+- No writes of any kind.
+- I did not read the Codex folders, LIVE_TEAM_STATUS.md or LIVE_EVENTS.log.
+- This session has no Write or ExitPlanMode tool, so this output exists only here.
+
+## Trade timeline (PROJECT EVIDENCE: I1-003, FTS-005, I5-001, I5-003)
+
+| ID | Symbol | Entry UTC → KSA | Exit UTC → KSA | Held | Entry → exit price | Move | Exit reason |
+|---|---|---|---|---|---|---|---|
+| 137 | EGLD | 10-11 20:55:04 → 23:55:04 | 21:00:12 → 10-12 00:00:12 | 5 m | 3.999 → 3.987 | −0.30% | SELL_CONFIRMED |
+| 143 | EGLD | 10-11 22:40:04 → 10-12 01:40:04 | 22:43:36 → 01:43:36 | 3.5 m | 4.033 → 4.027 | −0.15% | PROFIT_LOCK_HARD_EXIT |
+| 158 | XRP | 10-12 02:35:04 → 05:35:04 | 03:30:06 → 06:30:06 | 55 m | 1.4108 → 1.4090 | −0.13% | SELL_CONFIRMED |
+| 162 | DOGE | 10-12 04:02:06 → 07:02:06 | 04:26:04 → 07:26:04 | 24 m | 0.08705 → 0.08675 | −0.34% | STRONG_SELL |
+| 172 | SHIB | 10-12 06:36:05 → 09:36:05 | 07:15:45 → 10:15:45 | 40 m | 0.00000549 → 0.00000548 | −0.18% (1 tick) | HTF_SELL_CONFIRMED |
+| 182 | ACE | 10-12 09:57:06 → 12:57:06 | 10:05:20 → 13:05:20 | 8 m | 0.1884 → 0.1880 | −0.21% | SELL_CONFIRMED |
+
+---
+
+## FINDINGS
+
+### F-I6-01: Root-cause classification for each trade
+
+| ID | Primary cause | Category | Strength of evidence |
+|---|---|---|---|
+| 143 | Approved on a superseded 5m signal at the 5-minute boundary (F-I4-01, F-I5-04) | **Logic defect** | Confirmed: timestamps plus code |
+| 162 | Bought the 30-minute high on a WATCH 1m; a single BUY in the evidence bypassed the late-entry guard (F-I4-06) | Valid loss, weak exemption | Confirmed by rules and price |
+| 172 | Bought the top of a 3-tick range; 5m approval had `final_entry_allowed=0` (F-I4-04); ATR is smaller than one tick (F-I5-05) | Valid loss, design gaps | Confirmed by rules and price |
+| 182 | Bought a bounce after 16 straight 1m STRONG_SELLs; regime WEAK_DOWNTREND; the 5m STRONG_SELL was shown as NEUTRAL by a 1h trend score of 16 against a threshold of 15 (F-I4-05) | Valid loss, weak entry | Confirmed by rules and price |
+| 158 | Entered on a WATCH 1m through the 5m wakeup route, at 77% of a narrow range; reward:risk 0.35 | Valid loss; route diverges from Replay (F-I4-03) | Confirmed by rules; Replay inferred |
+| 137 | Bought a bounce after 10 consecutive 1m STRONG_SELLs on a 25% exploratory route; Entry Quality 58 | Valid loss | Confirmed by rules |
+
+### F-I6-02: Five of the six bought short-term noise and exited on the next bearish signal
+
+[PROJECT EVIDENCE: I5-003, I1-003. AGENT INFERENCE on the mechanism]
+
+The table places each entry inside the 30-minute range of 1m closing prices before it. These are `latest_price` close values, not candle highs and lows.
+
+| ID | 30-min close range | Entry position in range | Loss in 1m ATR multiples | Signals in the 30 min before entry |
+|---|---|---|---|---|
+| 172 | 0.00000547–0.00000549 | **100%** (top) | 1.5 | Mix of SELL and STRONG_SELL, then BUY |
+| 162 | 0.08672–0.08705 | **100%** (new window high) | 4.7 | SELL streak at 03:36–03:40 UTC, then WATCH |
+| 143 | 3.972–4.032 | **Above the range** | 0.55 | STRONG_SELL 22:26–22:34 UTC, then BUY, then a breakout |
+| 158 | 1.4084–1.4115 | 77% | 2.3 | NEUTRAL/WATCH, with 3 BUYs |
+| 182 | 0.1875–0.1895, falling | 45%, +0.48% off the low | 2.6 | **16 consecutive STRONG_SELLs** from 09:39 to 09:54 UTC |
+| 137 | 3.992–4.009 | 41% | 2.8 | **10 STRONG_SELLs** from 20:42 to 20:53 UTC |
+
+Three things the six entries share:
+- **Each loss was small next to the entry's own noise.** Losses were 0.13–0.34%, which is 0.55–4.7 × the 1m ATR.
+- **Half the entries were made while the current 1m signal was WATCH, not BUY:** 143, 158 and 162. The setup, wakeup and accumulated-evidence routes let execution go ahead without a current 1m BUY.
+- **The 1m decision flips within one or two minutes.**
+  - 137: STRONG_SELL at 20:53, WATCH at 20:54, STRONG_BUY at 20:55 UTC.
+  - 143: STRONG_SELL at 22:34, BUY at 22:35 UTC.
+  - 182: STRONG_SELL at 09:54, NEUTRAL at 09:55, BUY at 09:56 UTC.
+  - So a 1m "STRONG" label does not mean the move will persist (AGENT INFERENCE).
+
+Execution delay and stale data are ruled out (PROJECT EVIDENCE):
+- The decision price and the fill price matched to within one tick: 143 decided at 4.032 and filled at 4.033; 158 decided at 1.4109 and filled at 1.4108; the other four matched exactly.
+- Every fill came about 3 s after the 1m signal.
+
+### F-I6-03: Population data — higher Entry Quality went with *more* losses
+
+[PROJECT EVIDENCE: I5-004, n = 193 completed positions]
+
+| Entry Quality band | n | Loss rate | Stop-out rate | Average PnL (USDT) |
+|---|---|---|---|---|
+| 50–54 | 61 | 41% | 23% | +0.011 |
+| 55–59 | 18 | 44% | 28% | −0.029 |
+| 60–69 | 39 | 51% | 41% | −0.020 |
+| 70+ | 75 | **64%** | **53%** | −0.048 |
+
+The loss *rate* rises with the score, so this is not just bigger positions losing more USDT. Higher scores do get larger allowed sizes (`ExecutionIntelligenceService.java:1183`), but the rate comparison is independent of size.
+
+A likely mechanism (AGENT INFERENCE, consistent with I5-005; I6-002 and I6-003 test it):
+- The model's largest penalty is −30 points for reward:risk below 1 (`:991`).
+- That penalty hits low-volatility entries, where the 0.5% stop floor puts the stop well beyond 2 × ATR. Those entries are rarely stopped out.
+- More volatile entries escape the penalty and score 70+. Their stop sits at exactly 2 × the 1m ATR, close enough for normal noise to hit it.
+- I5-005 matches this pattern:
+  - The symbols where most entries had reward:risk below 1 are near breakeven (XLM, XRP, DOGE, SOL, ONG, ETH, SHIB).
+  - The worst symbols are the more volatile PEPE (−3.01 USDT, 13 of 26 stopped), EDU (−1.21, 17 of 29 stopped) and ENA (−1.16, 13 of 22 stopped). PEPE had no entries with reward:risk below 1.
+
+Caveats:
+- `wallet_managed_position` is matched to `paper_position` by symbol and opening time within 15 s. A scale-in could produce a wrong match.
+- The PnL figures are in USDT, not percent. I6-002 recomputes them in percent.
+
+### F-I6-04: Corrections to iteration 5 after I5-001 and I5-002
+
+[PROJECT EVIDENCE: I5-001, I5-002, I5-006, `PaperTradingService.java:349-384`]
+
+**Where the stored score comes from.** The stored `entry_quality_score` is recomputed at the fill price, on the 1m signal (`PaperTradingService.java:377-378`). It is not the decision-time score.
+
+**Execution-time scores:**
+
+| ID | Score |
+|---|---|
+| 137 | 58 |
+| 143 | 70 |
+| 158 | 50 |
+| 162 | 50 |
+| 172 | 60 |
+| 182 | 50 |
+
+**Correction to F-I5-04 (trade 143):**
+- At decision time, opportunity 36524 scored **60**, using the 5m ATR. The earlier, cancelled opportunity 36481 scored 50.
+- At execution, the score was 70, using the 1m ATR.
+- The code comment says the 5m ATR is used "so a tiny 1m ATR cannot manufacture" a chase verdict. Here the reverse happened. The 1m ATR at 22:40 UTC (0.010899) was **larger** than the ATR of the old 5m signal 159285 (0.009073).
+- So the reason the 5m ATR is preferred did not hold in this case. The point that two different ATR bases are used still stands.
+
+**Three of the six execution-time scores were exactly 50, the block threshold (158, 162 and 182).**
+- One way to get exactly 50 is the clamp at `:1000-1002`. When the recent-rejection penalty is applied to a score that was already 50 or more, the code lifts the result back to 50.
+- Whether that clamp is what happened here is AGENT INFERENCE. The score's components are not stored in the database (U-I6-2).
+
+**Allocation:**
+- The stored allocations of 15% for 162 and 182 come from `atrPercent × executionPercent` (`PaperTradingService.java:359-360`): a REDUCED_POSITION ATR plan at 60% times the 25% Entry Quality cap.
+- This is consistent with the code and is not a defect.
+
+### F-I6-05: Research context
+
+[EXTERNAL RESEARCH, weighted cautiously]
+
+- **Short-term reversals.** One-minute Bitcoin data shows systematic intraday reversals, larger after bigger moves ([Ledger: On the Intraday Behavior of Bitcoin](https://ledger.pitt.edu/ojs/ledger/article/view/213)).
+- **Bid-ask bounce.** Minute-level sampling picks up bid-ask bounce, which creates autocorrelation between consecutive prices ([arXiv 2004.00550](https://arxiv.org/pdf/2004.00550)).
+- **Asymmetry.** Reversion is stronger after negative returns ([Corbet & Katsiampa, SHU](https://shura.shu.ac.uk/23470/)).
+- **Possible artefact.** A recent cross-market preprint reports that apparent short-horizon crypto predictability largely disappears once a one-bar gap is enforced between inputs and outcome ([arXiv 2608.21888](https://arxiv.org/pdf/2608.21888)). Its date and peer-review status are unverified.
+- **Fees.** Binance's standard spot fee (VIP 0) is about 0.10% maker and 0.10% taker, with 25% off when paid in BNB. These figures come from third-party sources ([CryptoPotato](https://cryptopotato.com/binance-fees/), [Traders Union](https://tradersunion.com/brokers/crypto/view/binance/fees/), [Bitget Academy](https://www.bitget.cloud/academy/binance-fees-compare-1)). The tier for this account is still unverified (U-I2-7).
+
+What this means for the study (AGENT INFERENCE):
+- Buying the top of a micro-range (162, 172), or just after a 1m expansion (143), runs into exactly the reversal behaviour these studies describe.
+- Bounce entries (137, 182) are the opposite case: they bet on reversion after a decline. Both exits came as the 5m decline continued.
+- At a 0.2% round-trip fee, the six losses would roughly double. Population wins below 0.2% would become losses (sized by I6-005).
+
+### F-I6-06: Replay reproducibility (carried forward)
+
+[PROJECT EVIDENCE: code. Replay outcome is AGENT INFERENCE]
+
+- Replay most likely cannot reproduce 143 or 158, because it always processes the 5m signal before the 1m at a shared boundary (F-I4-03).
+- 137, 162, 172 and 182 do not depend on that ordering, so they are expected to reproduce. No Replay run has been executed to confirm this (U-I4-5).
+
+---
+
+## Root-cause verdict (draft, to be frozen in iterations 7–8)
+
+1. **Confirmed defect (143):** at the boundary, the 5m approval is chosen by analysis completion time, not by candle identity, and it is never re-read before execution.
+2. **Five valid losing trades.** The common cause is entry-timing weakness: the system admits entries with no edge against short-term noise. Four design conditions contribute:
+   - Execution is allowed while the current 1m signal is not a BUY.
+   - The higher-timeframe approvals are permissive: a masked 5m, a 5m with `final_entry_allowed=0`, a single-BUY exemption, and a 1h trend score one point above its threshold.
+   - Entry Quality cannot block, and it sat exactly at the threshold three times.
+   - The stop and target geometry, and the fee blindness, are design weaknesses but are not proven causes of these losses.
+3. **Study-level bias:** the `CLOSED`-only selection leaves out stop-outs, where the population's losses concentrate. The data so far points to tight 2 × ATR stops on more volatile symbols as the main population loss mechanism, which no frozen trade represents.
+
+## Remediation direction (recommendation only, not authorised)
+
+1. **Trade 143:** select the 5m approval by candle identity (the FIX-141 pattern) and re-check it before execution. Unchanged from iteration 4.
+2. **Require a non-bearish, current 1m BUY at execution** on the setup, wakeup and accumulated-evidence routes, or justify an exemption explicitly in a specification.
+3. **Rework Entry Quality** so the reward:risk penalty does not reward the volatility profile that gets stopped out. Add a range-location or recent-reversal term. Recalibrate after I6-002 and I6-003.
+4. **Base the stop distance on noise** for volatile symbols (for example, a stop measured on the 5m ATR, or a multiplier floor), and validate it in Replay. This is a trading-rule change and needs the governed specification process.
+5. **Widen future study selection** to `status IN ('CLOSED','STOPPED')`.
+
+Regression checks:
+- Same-boundary 1m-before-5m and 5m-before-1m cases on every route.
+- Entry Quality calibration against a held-out set of positions.
+- Production-parity Replay over EGLD 2026-10-11 22:30–22:45 UTC and XRP 2026-10-12 02:30–03:31 UTC.
+
+---
+
+## UNKNOWNS
+
+- **U-I6-1:** How far each frozen trade moved for and against itself between entry and exit (maximum favourable and adverse excursion). Only 143's peak of 4.101 is known. Fetched by I6-001.
+- **U-I6-2:** The components behind the three scores of exactly 50 (clamp versus coincidence). They are not stored; the Production logs for 10-11 and 10-12 are unavailable (U-I4-6).
+- **U-I6-3:** Whether the link between Entry Quality and losses survives once volatility (ATR %) is controlled for. Tested by I6-002.
+- **U-I6-4:** How far stops sit from entry in ATR multiples, for stopped versus closed positions. Tested by I6-003.
+- **U-I6-5:** Whether entries made with a WATCH 1m perform worse across the population. Tested by I6-004.
+- **Carried:** U-I2-7 (fee tier), U-I4-5 (no Replay run), U-I4-6 (Production logs), U-I5-5 (time zone of the Flyway install times).
+
+---
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: Maximum favourable and adverse price for each frozen trade between entry and exit (U-I6-1). The table and columns are proven by I3-003.
+SQL:
+SELECT pp.id AS paper_id, pp.symbol, pp.entry_price, pp.exit_price, MAX(e.price) AS max_price, MIN(e.price) AS min_price, COUNT(e.id) AS n_events, MIN(e.observed_at) AS first_obs, MAX(e.observed_at) AS last_obs FROM crypto_ai.paper_position pp LEFT JOIN crypto_ai.market_price_event e ON e.symbol = pp.symbol AND e.observed_at BETWEEN pp.opened_at AND pp.closed_at WHERE pp.id IN (137,143,158,162,172,182) GROUP BY pp.id, pp.symbol, pp.entry_price, pp.exit_price ORDER BY pp.id LIMIT 10
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: Entry Quality band by volatility band, with loss rate, stop-out rate and PnL as a percentage of cost (U-I6-3, F-I6-03). Uses the same 15 s match as I5-004.
+SQL:
+SELECT CASE WHEN w.entry_quality_score >= 70 THEN '70+' WHEN w.entry_quality_score >= 60 THEN '60-69' WHEN w.entry_quality_score >= 55 THEN '55-59' ELSE '50-54' END AS eq_band, CASE WHEN s.atr_percent < 0.1667 THEN 'ATR<0.1667' WHEN s.atr_percent < 0.25 THEN 'ATR0.1667-0.25' ELSE 'ATR>=0.25' END AS atr_band, COUNT(*) AS n, SUM(pp.realized_pnl < 0) AS losers, SUM(pp.status = 'STOPPED') AS stopped, AVG(pp.realized_pnl / NULLIF(pp.entry_price * pp.quantity, 0) * 100) AS avg_pnl_pct, SUM(pp.realized_pnl) AS net_pnl FROM crypto_ai.paper_position pp JOIN crypto_ai.wallet_managed_position w ON w.symbol = pp.symbol AND w.opened_at BETWEEN pp.opened_at - INTERVAL 15 SECOND AND pp.opened_at + INTERVAL 15 SECOND JOIN crypto_ai.trade_signal s ON s.id = pp.signal_id WHERE pp.status IN ('CLOSED','STOPPED') GROUP BY eq_band, atr_band ORDER BY eq_band, atr_band LIMIT 20
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: Stop distance in 1m ATR multiples for stopped versus closed positions (U-I6-4).
+SQL:
+SELECT pp.status, CASE WHEN (pp.entry_price - pp.stop_loss) / NULLIF(s.atr_at_signal, 0) < 2.5 THEN '<2.5ATR' WHEN (pp.entry_price - pp.stop_loss) / NULLIF(s.atr_at_signal, 0) < 4 THEN '2.5-4ATR' WHEN (pp.entry_price - pp.stop_loss) / NULLIF(s.atr_at_signal, 0) < 7 THEN '4-7ATR' ELSE '>=7ATR' END AS stop_atr_band, COUNT(*) AS n, SUM(pp.realized_pnl < 0) AS losers, SUM(pp.realized_pnl) AS net_pnl, AVG(TIMESTAMPDIFF(SECOND, pp.opened_at, pp.closed_at)) AS avg_hold_s FROM crypto_ai.paper_position pp JOIN crypto_ai.trade_signal s ON s.id = pp.signal_id WHERE pp.status IN ('CLOSED','STOPPED') AND s.atr_at_signal > 0 GROUP BY pp.status, stop_atr_band ORDER BY pp.status, stop_atr_band LIMIT 20
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-004
+Purpose: Outcome by the 1m decision and regime at execution, across the population (U-I6-5, F-I6-02).
+SQL:
+SELECT s.decision AS one_m_decision, s.market_regime, COUNT(*) AS n, SUM(pp.realized_pnl < 0) AS losers, SUM(pp.status = 'STOPPED') AS stopped, SUM(pp.realized_pnl) AS net_pnl, AVG(pp.realized_pnl / NULLIF(pp.entry_price * pp.quantity, 0) * 100) AS avg_pnl_pct FROM crypto_ai.paper_position pp JOIN crypto_ai.trade_signal s ON s.id = pp.signal_id WHERE pp.status IN ('CLOSED','STOPPED') GROUP BY s.decision, s.market_regime ORDER BY n DESC LIMIT 40
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-005
+Purpose: How many winning paper trades would turn into losses at the assumed 0.2% round-trip fee (F-I6-05), and how often the 1m decision flips from BUY to bearish in the following minute.
+SQL:
+SELECT 'winners_below_0.2pct' AS metric, COUNT(*) AS n, SUM(pp.realized_pnl) AS pnl FROM crypto_ai.paper_position pp WHERE pp.status IN ('CLOSED','STOPPED') AND pp.realized_pnl > 0 AND pp.realized_pnl / NULLIF(pp.entry_price * pp.quantity, 0) * 100 < 0.2 UNION ALL SELECT 'all_winners', COUNT(*), SUM(pp.realized_pnl) FROM crypto_ai.paper_position pp WHERE pp.status IN ('CLOSED','STOPPED') AND pp.realized_pnl > 0 UNION ALL SELECT 'buy_1m_then_bearish_next_1m', SUM(n.decision IN ('SELL','STRONG_SELL')), COUNT(*) FROM crypto_ai.trade_signal b JOIN crypto_ai.trade_signal n ON n.symbol = b.symbol AND n.interval_code = '1m' AND n.candle_open_time = b.candle_open_time + INTERVAL 1 MINUTE WHERE b.interval_code = '1m' AND b.decision IN ('BUY','STRONG_BUY') AND b.candle_open_time BETWEEN '2026-10-11 00:00:00' AND '2026-10-13 00:00:00' LIMIT 10
+### END_DB_REQUEST
+
+Note on I6-005, third row: the `n` column is the count of BUYs followed by a bearish 1m, and the `pnl` column holds the total number of BUY signals checked.
+
+---
+
+## Self-review (iteration 6)
+
+- **Time labels:** every timestamp is labelled UTC or KSA. 137's exit and all of 143 fall on the KSA date 2026-10-12.
+- **Evidence labels:**
+  - 143's defect is confirmed.
+  - The noise-entry mechanism (F-I6-02) is price evidence plus inference.
+  - The Entry Quality inversion (F-I6-03) is population evidence with a stated matching caveat and a possible volatility confounder.
+  - The research findings are external and weighted cautiously.
+- **Corrections this iteration:**
+  - F-I5-04: the decision-time score was 60, not "below 70" by inference.
+  - The 5m ATR basis was more lenient than the 1m in trade 143, not stricter.
+  - The stored score is the execution-time score.
+- **Not claimed:**
+  - That reward:risk below 1, fees, or the Entry Quality inversion caused the six frozen losses.
+  - That the Replay outcomes are confirmed.
+- **Plan for iteration 7:** fold in I6-001 to I6-005, test the volatility confounder, and freeze the per-trade verdicts and the root-cause hierarchy.
+
+Sources:
+- [On the Intraday Behavior of Bitcoin (Ledger)](https://ledger.pitt.edu/ojs/ledger/article/view/213)
+- [Time-varying volatility in Bitcoin market at minute-level frequency (arXiv 2004.00550)](https://arxiv.org/pdf/2004.00550)
+- [Asymmetric mean reversion of Bitcoin price returns (SHU)](https://shura.shu.ac.uk/23470/)
+- [Short-horizon mean reversion in cryptocurrency markets (arXiv 2608.21888)](https://arxiv.org/pdf/2608.21888)
+- [CryptoPotato: Binance fees](https://cryptopotato.com/binance-fees/)
+- [Traders Union: Binance fees](https://tradersunion.com/brokers/crypto/view/binance/fees/)
+- [Bitget Academy: Binance fees compared](https://www.bitget.cloud/academy/binance-fees-compare-1)

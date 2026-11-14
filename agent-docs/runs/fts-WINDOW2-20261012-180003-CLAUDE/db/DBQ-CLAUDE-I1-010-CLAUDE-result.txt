@@ -1,0 +1,16 @@
+installed_rank	version	description	success	installed_on
+109	109	fix 154 forward replay and audit columns	1	2026-10-10 01:52:45
+108	108	fix 153 local candle reconciliation	1	2026-10-10 00:15:21
+107	107	fix 154 trusted higher timeframe buy	1	2026-10-10 00:15:21
+106	106	fix 153 local candle evidence	1	2026-10-09 01:12:00
+105	105	fix 151 delivery selection indexes	1	2026-10-06 01:50:51
+104	104	fix 150 protection entry evidence	1	2026-10-06 00:58:53
+103	103	fix 149 fresh admission indexes	1	2026-10-05 01:38:10
+102	102	fix 147 cutover approver account	1	2026-10-04 23:44:33
+101	101	fix 145 operator work cancellation	1	2026-10-04 01:06:29
+100	100	fix 144 paper position reason capacity	1	2026-10-04 00:15:43
+99	99	fix 142 delivery ownership	1	2026-10-03 16:11:07
+98	98	fix 141 reconciliation scan index	1	2026-10-03 16:11:07
+97	97	fix 141 btc context freshness	1	2026-10-03 16:11:07
+96	96	fix 140 history retirement audit	1	2026-10-03 16:11:06
+95	95	fix 138 analysis dispatch ranges	1	2026-10-03 16:11:06

@@ -1,0 +1,2 @@
+SELECT 'trade_signal' AS src, MAX(generated_at) AS latest FROM trade_signal UNION ALL SELECT 'market_price_event', MAX(observed_at) FROM market_price_event UNION ALL SELECT 'paper_position_opened', MAX(opened_at) FROM paper_position UNION ALL SELECT 'wallet_trade', MAX(executed_at) FROM wallet_trade UNION ALL SELECT 'open_positions', NULL FROM DUAL WHERE (SELECT COUNT(*) FROM paper_position WHERE status='OPEN') >= 0;
+SELECT COUNT(*) AS open_paper FROM paper_position WHERE status='OPEN'

@@ -1,0 +1,47 @@
+exit_code=0
+duration_ms=134
+row_count=39
+--- stdout ---
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+entry_signal_id	bigint	YES	MUL	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+quantity	decimal(30,12)	NO		0.000000000000	
+average_entry_price_usdt	decimal(30,12)	NO		0.000000000000	
+total_cost_usdt	decimal(30,12)	NO		0.000000000000	
+entry_confidence	int	YES		NULL	
+entry_total_score	int	YES		NULL	
+entry_trend_score	int	YES		NULL	
+entry_structure_score	int	YES		NULL	
+entry_momentum_score	int	YES		NULL	
+entry_volume_score	int	YES		NULL	
+entry_sentiment_score	int	YES		NULL	
+entry_fundamental_score	int	YES		NULL	
+entry_decision	varchar(30)	YES		NULL	
+entry_decision_path_json	json	YES		NULL	
+entry_analysis_snapshot_json	json	YES		NULL	
+stop_loss_usdt	decimal(30,12)	YES		NULL	
+take_profit_usdt	decimal(30,12)	YES		NULL	
+status	varchar(20)	NO		OPEN	
+opened_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+updated_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+highest_price_usdt	decimal(30,12)	YES		NULL	
+profit_lock_active	tinyint(1)	NO		0	
+profit_lock_price_usdt	decimal(30,12)	YES		NULL	
+profit_lock_progress_percent	decimal(12,6)	YES		NULL	
+profit_lock_activated_at	timestamp(6)	YES		NULL	
+profit_lock_state	varchar(40)	NO		INACTIVE	
+profit_lock_rebase_started_at	timestamp(6)	YES		NULL	
+entry_stage	varchar(30)	NO		NONE	
+allocated_position_percent	int	NO		0	
+entry_quality_score	int	NO		0	
+last_scale_in_at	timestamp(6)	YES		NULL	
+near_tp_state	varchar(40)	NO		INACTIVE	
+near_tp_best_price	decimal(30,12)	YES		NULL	
+near_tp_bearish_streak	int	NO		0	
+near_tp_last_1m_signal_id	bigint	YES		NULL	
+near_tp_harvest_used	tinyint(1)	NO		0	
+near_tp_harvested_quantity	decimal(30,12)	YES		NULL	
+
+--- stderr ---
+

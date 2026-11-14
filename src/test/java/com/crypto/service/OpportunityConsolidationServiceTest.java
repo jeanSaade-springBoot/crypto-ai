@@ -26,7 +26,7 @@ class OpportunityConsolidationServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new OpportunityConsolidationService(signalRepository);
+        service = new OpportunityConsolidationService(signalRepository, new HigherTimeframeBuyAssessmentService());
         now = Instant.parse("2026-08-08T07:00:00Z");
     }
 
@@ -50,6 +50,23 @@ class OpportunityConsolidationServiceTest {
         assertThat(result.code()).isEqualTo("CONSOLIDATED_BUY");
         assertThat(result.consecutiveBuyCount()).isEqualTo(5);
         assertThat(result.positionPercent()).isEqualTo(50);
+    }
+
+    @Test
+    void softTrustedBearishOneHourCapsConsolidationAtTwentyFivePercent() {
+        TradeSignal current = signal(5L, "SOLUSDT", "1m", SignalDecision.BUY, now, 81, 84);
+        context("SOLUSDT", "5m", signal(50L, "SOLUSDT", "5m", SignalDecision.BUY, now.minusSeconds(60), 80, 80));
+        TradeSignal one = signal(60L, "SOLUSDT", "1h", SignalDecision.SELL, now.minusSeconds(1200), 60, 60);
+        one.setDataQualityValid(true); context("SOLUSDT", "1h", one);
+        when(signalRepository.findTop20BySymbolAndIntervalOrderByGeneratedAtDesc("SOLUSDT", "1m"))
+                .thenReturn(List.of(current,
+                        signal(4L, "SOLUSDT", "1m", SignalDecision.BUY, now.minusSeconds(300), 80, 82),
+                        signal(3L, "SOLUSDT", "1m", SignalDecision.BUY, now.minusSeconds(600), 79, 80),
+                        signal(2L, "SOLUSDT", "1m", SignalDecision.BUY, now.minusSeconds(900), 78, 79),
+                        signal(1L, "SOLUSDT", "1m", SignalDecision.BUY, now.minusSeconds(1200), 77, 78)));
+        var result = service.evaluate(current);
+        assertThat(result.allowed()).isTrue();
+        assertThat(result.positionPercent()).isEqualTo(25);
     }
 
     @Test

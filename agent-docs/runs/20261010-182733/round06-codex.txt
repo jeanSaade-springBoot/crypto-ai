@@ -1,0 +1,47 @@
+## FINDINGS
+
+- **[PROJECT EVIDENCE]** RPR-0.6 is not a valid approval artifact yet. Governance requires the approved contract at `agent-docs/FINAL_CHANGE_SPECIFICATION.md`, which remains RPR-0.4; RPR-0.6 is separate and no corresponding frozen PDF exists. Its plan to re-hash the dirty worktree only immediately before implementation cannot freeze the precise state reviewed for approval.
+
+- **[PROJECT EVIDENCE]** The read/write registry is inaccurate and incomplete. The current run table is `analysis_test_run`, not `regression_test_run`. Current Replay also creates `fix122_replay_revision`, writes `fix122_evaluation`, archives multiple tables, and its detail endpoint reads Production `wallet_trade`. The proposed boundary must explicitly classify each of these.
+
+- **[PROJECT EVIDENCE]** M04 cannot be safely approved as written. Replay currently publishes rows during candle processing, while `StopLossEvidenceStore.append` uses an independent `REQUIRES_NEW` transaction. “Discard staged artifacts” has no defined schema, publication transaction, terminal state model, recovery rule, or treatment of independent writes.
+
+- **[PROJECT EVIDENCE]** M05’s named-exception isolation mechanism is not fail-closed in the current call graph. `BinanceMinimumExecutionPolicy` catches HTTP failures and returns an ordinary policy result; the worker catches generic per-candle exceptions and continues. The design needs a run-level violation state checked before publication, plus tests through every swallowing boundary.
+
+- **[PROJECT EVIDENCE]** M02’s `closed=1` admission rule is too weak for Production-analysis parity. Runtime dispatch requires a close-transition token and excludes `BACKFILL`; authoritative recovery can close a candle without a token. RPR must distinguish history inputs from executable/live decision points and specify treatment of pre-V106 NULL provenance.
+
+- **[PROJECT EVIDENCE]** M06 does not reproduce either current ordered route completely. Live protection can extend TP before exit, then applies stop, profit-lock/rebase, normal exit, and near-TP logic. Signal processing has a different order: TP, lock, stop, rebase floor, lock-active SELL suppression, then add. The specification’s merged “price then signal” sentence omits required route-specific state transitions and reason-code behavior.
+
+- **[PROJECT EVIDENCE]** Price-event identity promised in §3/L03 is unavailable from the current `PriceEvent` object. SQL orders by `observed_at, id`, but the returned record exposes only timestamp, price, and source; it carries neither ID, status, nor `ordering_slot`. `MarketPriceEventService` is absent from the registry.
+
+- **[PROJECT EVIDENCE]** “Single symbol” is incomplete: Replay currently loads BTC candles and builds BTC signals for context. Qualification and ordering must include reference-symbol candles/signals and define same-close visibility across symbols.
+
+- **[PROJECT EVIDENCE]** Current source includes FIX-154 behavior in `TradeExecutionValidationService`; RPR does not register the higher-timeframe assessment, audit, metrics, or Replay evidence treatment. This conflicts with the repository instruction calling FIX-154 pending, so current source—not the documentation—must drive the revised parity scope.
+
+- **[AGENT INFERENCE]** V109 adds columns to `trade_signal_test` but not its archive, while archive uses positional `INSERT … SELECT ?, r.*`. A fully migrated database is likely to reject archive writes for column-count mismatch. RPR’s migration proof should explicitly validate active/archive column parity and archive new certificate/audit evidence.
+
+## EVIDENCE
+
+- Governance/canonical artifact: [AGENTS.md](/C:/workspace/crypto-ai-trader-mysql/AGENTS.md:327), [canonical RPR-0.4](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:3), [RPR-0.6 baseline rule](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:5).
+- Incorrect run-table boundary/current writes: [RPR §3](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:54), [run creation](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:213), [FIX-122 write](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:230), [wallet read](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:549).
+- Publication/transaction conflict: [incremental signal insert](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:636), [independent audit transaction](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/StopLossEvidenceStore.java:48).
+- Isolation/catch paths: [worker generic catch](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:690), [HTTP failure converted to result](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/BinanceMinimumExecutionPolicy.java:38).
+- Candle admission: [RPR M02](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:87), [live dispatch predicate](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/local/LocalClosedCandleDetector.java:50), [recovery close](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:132).
+- Order/identity gaps: [signal route](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:170), [live protection route](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:99), [price-event projection](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:121), [record shape](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:173).
+- BTC/FIX-154/archive: [BTC replay inputs](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:136), [FIX-154 dependency](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:54), [V109 active-table columns](/C:/workspace/crypto-ai-trader-mysql/src/main/resources/db/migration/V109__fix_154_forward_replay_and_audit_columns.sql:4), [positional archive](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:268).
+
+## OBJECTIONS
+
+- **[AGENT INFERENCE]** Replace RPR-0.6 with one canonical, hash-identified revision before review; include all mandatory class/method, state-machine, logging, database, observability, rollback, and master-registry detail required by governance.
+- **[AGENT INFERENCE]** Define separate analysis, signal, price-protection, virtual-account, publication, cancellation, and crash-recovery state machines; do not rely on generic “staging” language.
+- **[AGENT INFERENCE]** Define a capability boundary that blocks Production account access and HTTP across synchronous and asynchronous paths, including swallowed exceptions.
+- **[AGENT INFERENCE]** Define a versioned `ANALYSIS_PARITY` oracle: eligible Production signal modes, exact identity, field set/tolerances, dependency evidence source, clock/order rules, and refusal outcomes.
+- **[AGENT INFERENCE]** Register all affected components, including `RegressionTestService`, `StopLossEvidenceStore`, `MarketPriceEventService`, BTC/context services, FIX-154 components, archive handling, and both Replay-only observers.
+
+## UNKNOWNS
+
+- **[PROJECT EVIDENCE]** I did not access databases, logs, runtime services, production systems, credentials, or external websites.
+- **[AGENT INFERENCE]** Whether V109’s archive mismatch has failed in an actual environment remains unverified; schema comparison and a disposable-MySQL archive test are required.
+- **[AGENT INFERENCE]** The proportion of historical windows eligible for any strict claim is unknown until the revised qualifier evaluates token/provenance, price coverage, configuration/version, context availability, and cross-symbol ordering.
+
+VERDICT: REJECTED

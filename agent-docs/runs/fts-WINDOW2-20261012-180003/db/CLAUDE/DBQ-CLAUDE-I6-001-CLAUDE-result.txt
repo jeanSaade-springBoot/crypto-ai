@@ -1,0 +1,3 @@
+bucket	n	winners	pnl_sum
+MASKED_BEAR_5M	8	5	-0.431293
+NOT_MASKED	77	36	-1.566259

@@ -1,0 +1,35 @@
+﻿[10:00:01] START WINDOW1 TestMode=False
+[10:00:03] FROZEN 6 ids
+[10:00:03] START CODEX / iteration01-codex
+[10:02:15] DONE CODEX / iteration01-codex
+[10:02:15] START CLAUDE / iteration01-claude
+[10:04:20] DONE CLAUDE / iteration01-claude
+[10:04:30] START CODEX / iteration02-codex
+[10:06:36] DONE CODEX / iteration02-codex
+[10:06:37] START CLAUDE / iteration02-claude
+[10:10:58] DONE CLAUDE / iteration02-claude
+[10:11:30] START CODEX / iteration03-codex
+[10:16:33] DONE CODEX / iteration03-codex
+[10:16:34] START CLAUDE / iteration03-claude
+[10:25:41] DONE CLAUDE / iteration03-claude
+[10:26:18] START CODEX / iteration04-codex
+[10:31:34] DONE CODEX / iteration04-codex
+[10:31:34] START CLAUDE / iteration04-claude
+[10:36:51] DONE CLAUDE / iteration04-claude
+[10:40:26] START CODEX / iteration05-codex
+[10:45:07] DONE CODEX / iteration05-codex
+[10:45:08] START CLAUDE / iteration05-claude
+[10:50:27] DONE CLAUDE / iteration05-claude
+[10:50:29] START CODEX / iteration06-codex
+[10:54:43] DONE CODEX / iteration06-codex
+[10:54:43] START CLAUDE / iteration06-claude
+[10:57:18] DONE CLAUDE / iteration06-claude
+[10:57:20] START CODEX / iteration07-codex
+[11:01:19] DONE CODEX / iteration07-codex
+[11:01:20] START CLAUDE / iteration07-claude
+[11:04:26] DONE CLAUDE / iteration07-claude
+[11:04:27] START CODEX / iteration08-codex
+[11:06:07] DONE CODEX / iteration08-codex
+[11:06:07] START CLAUDE / iteration08-claude
+[11:08:10] DONE CLAUDE / iteration08-claude
+[11:08:10] DOCUMENT_READY C:\workspace\crypto-ai-trader-mysql\agent-docs\failed-trade-studies\11-10-26\failedtrade-window1-11-10-26.md

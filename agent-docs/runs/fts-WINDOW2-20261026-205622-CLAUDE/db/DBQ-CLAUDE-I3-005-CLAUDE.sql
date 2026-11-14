@@ -1,0 +1,1 @@
+SELECT id, decision, original_decision, primary_blocking_stage, final_entry_allowed, LEFT(explanation, 700) AS expl_700 FROM crypto_ai.trade_signal WHERE id IN (175399,176655,176792,176934,167746) ORDER BY id;

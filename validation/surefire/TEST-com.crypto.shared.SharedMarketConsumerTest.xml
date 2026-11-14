@@ -1,0 +1,1015 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report.xsd" version="3.0.2" name="com.crypto.shared.SharedMarketConsumerTest" time="4.116" tests="66" errors="0" skipped="0" failures="0" flakes="0">
+  <properties>
+    <property name="java.specification.version" value="21"/>
+    <property name="sun.jnu.encoding" value="UTF-8"/>
+    <property name="java.class.path" value="/workspace/scratch/c5f8d1b82fa2/fix153-local-candle/target/test-classes:/workspace/scratch/c5f8d1b82fa2/fix153-local-candle/target/classes:/root/.m2/repository/com/h2database/h2/2.4.240/h2-2.4.240.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-web/4.1.0/spring-boot-starter-web-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-tomcat/4.1.0/spring-boot-starter-tomcat-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-tomcat-runtime/4.1.0/spring-boot-starter-tomcat-runtime-4.1.0.jar:/root/.m2/repository/org/apache/tomcat/embed/tomcat-embed-core/11.0.22/tomcat-embed-core-11.0.22.jar:/root/.m2/repository/org/apache/tomcat/embed/tomcat-embed-websocket/11.0.22/tomcat-embed-websocket-11.0.22.jar:/root/.m2/repository/org/springframework/boot/spring-boot-tomcat/4.1.0/spring-boot-tomcat-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-http-converter/4.1.0/spring-boot-http-converter-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot/4.1.0/spring-boot-4.1.0.jar:/root/.m2/repository/org/springframework/spring-context/7.0.8/spring-context-7.0.8.jar:/root/.m2/repository/org/springframework/spring-web/7.0.8/spring-web-7.0.8.jar:/root/.m2/repository/org/springframework/boot/spring-boot-webmvc/4.1.0/spring-boot-webmvc-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-servlet/4.1.0/spring-boot-servlet-4.1.0.jar:/root/.m2/repository/org/springframework/spring-webmvc/7.0.8/spring-webmvc-7.0.8.jar:/root/.m2/repository/org/springframework/spring-expression/7.0.8/spring-expression-7.0.8.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-webflux/4.1.0/spring-boot-starter-webflux-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter/4.1.0/spring-boot-starter-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-logging/4.1.0/spring-boot-starter-logging-4.1.0.jar:/root/.m2/repository/ch/qos/logback/logback-classic/1.5.34/logback-classic-1.5.34.jar:/root/.m2/repository/ch/qos/logback/logback-core/1.5.34/logback-core-1.5.34.jar:/root/.m2/repository/org/apache/logging/log4j/log4j-to-slf4j/2.25.4/log4j-to-slf4j-2.25.4.jar:/root/.m2/repository/org/apache/logging/log4j/log4j-api/2.25.4/log4j-api-2.25.4.jar:/root/.m2/repository/org/slf4j/jul-to-slf4j/2.0.18/jul-to-slf4j-2.0.18.jar:/root/.m2/repository/org/springframework/boot/spring-boot-autoconfigure/4.1.0/spring-boot-autoconfigure-4.1.0.jar:/root/.m2/repository/jakarta/annotation/jakarta.annotation-api/3.0.0/jakarta.annotation-api-3.0.0.jar:/root/.m2/repository/org/yaml/snakeyaml/2.6/snakeyaml-2.6.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-reactor-netty/4.1.0/spring-boot-starter-reactor-netty-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-reactor-netty/4.1.0/spring-boot-reactor-netty-4.1.0.jar:/root/.m2/repository/io/projectreactor/netty/reactor-netty-http/1.3.6/reactor-netty-http-1.3.6.jar:/root/.m2/repository/io/netty/netty-codec-http/4.2.15.Final/netty-codec-http-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-buffer/4.2.15.Final/netty-buffer-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-transport/4.2.15.Final/netty-transport-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-base/4.2.15.Final/netty-codec-base-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-compression/4.2.15.Final/netty-codec-compression-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-handler/4.2.15.Final/netty-handler-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-http2/4.2.15.Final/netty-codec-http2-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-http3/4.2.15.Final/netty-codec-http3-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-transport-native-unix-common/4.2.15.Final/netty-transport-native-unix-common-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-resolver/4.2.15.Final/netty-resolver-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-classes-quic/4.2.15.Final/netty-codec-classes-quic-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-native-quic/4.2.15.Final/netty-codec-native-quic-4.2.15.Final-linux-x86_64.jar:/root/.m2/repository/io/netty/netty-codec-native-quic/4.2.15.Final/netty-codec-native-quic-4.2.15.Final-linux-aarch_64.jar:/root/.m2/repository/io/netty/netty-codec-native-quic/4.2.15.Final/netty-codec-native-quic-4.2.15.Final-osx-x86_64.jar:/root/.m2/repository/io/netty/netty-codec-native-quic/4.2.15.Final/netty-codec-native-quic-4.2.15.Final-osx-aarch_64.jar:/root/.m2/repository/io/netty/netty-codec-native-quic/4.2.15.Final/netty-codec-native-quic-4.2.15.Final-windows-x86_64.jar:/root/.m2/repository/io/netty/netty-resolver-dns/4.2.15.Final/netty-resolver-dns-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-dns/4.2.15.Final/netty-codec-dns-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-resolver-dns-native-macos/4.2.15.Final/netty-resolver-dns-native-macos-4.2.15.Final-osx-x86_64.jar:/root/.m2/repository/io/netty/netty-resolver-dns-classes-macos/4.2.15.Final/netty-resolver-dns-classes-macos-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-transport-native-epoll/4.2.15.Final/netty-transport-native-epoll-4.2.15.Final-linux-x86_64.jar:/root/.m2/repository/io/netty/netty-transport-classes-epoll/4.2.15.Final/netty-transport-classes-epoll-4.2.15.Final.jar:/root/.m2/repository/io/projectreactor/netty/reactor-netty-core/1.3.6/reactor-netty-core-1.3.6.jar:/root/.m2/repository/io/netty/netty-handler-proxy/4.2.15.Final/netty-handler-proxy-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-socks/4.2.15.Final/netty-codec-socks-4.2.15.Final.jar:/root/.m2/repository/org/springframework/boot/spring-boot-netty/4.1.0/spring-boot-netty-4.1.0.jar:/root/.m2/repository/io/netty/netty-common/4.2.15.Final/netty-common-4.2.15.Final.jar:/root/.m2/repository/org/springframework/boot/spring-boot-reactor/4.1.0/spring-boot-reactor-4.1.0.jar:/root/.m2/repository/io/projectreactor/reactor-core/3.8.6/reactor-core-3.8.6.jar:/root/.m2/repository/org/reactivestreams/reactive-streams/1.0.4/reactive-streams-1.0.4.jar:/root/.m2/repository/org/springframework/boot/spring-boot-webflux/4.1.0/spring-boot-webflux-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-http-codec/4.1.0/spring-boot-http-codec-4.1.0.jar:/root/.m2/repository/org/springframework/spring-webflux/7.0.8/spring-webflux-7.0.8.jar:/root/.m2/repository/org/springframework/boot/spring-boot-web-server/4.1.0/spring-boot-web-server-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-data-jpa/4.1.0/spring-boot-starter-data-jpa-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-jdbc/4.1.0/spring-boot-starter-jdbc-4.1.0.jar:/root/.m2/repository/com/zaxxer/HikariCP/7.0.2/HikariCP-7.0.2.jar:/root/.m2/repository/org/springframework/boot/spring-boot-data-jpa/4.1.0/spring-boot-data-jpa-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-data-commons/4.1.0/spring-boot-data-commons-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-persistence/4.1.0/spring-boot-persistence-4.1.0.jar:/root/.m2/repository/org/springframework/data/spring-data-commons/4.1.0/spring-data-commons-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-hibernate/4.1.0/spring-boot-hibernate-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-jpa/4.1.0/spring-boot-jpa-4.1.0.jar:/root/.m2/repository/jakarta/persistence/jakarta.persistence-api/3.2.0/jakarta.persistence-api-3.2.0.jar:/root/.m2/repository/org/hibernate/orm/hibernate-core/7.4.1.Final/hibernate-core-7.4.1.Final.jar:/root/.m2/repository/jakarta/transaction/jakarta.transaction-api/2.0.1/jakarta.transaction-api-2.0.1.jar:/root/.m2/repository/org/hibernate/models/hibernate-models/1.1.1/hibernate-models-1.1.1.jar:/root/.m2/repository/org/glassfish/jaxb/jaxb-runtime/4.0.9/jaxb-runtime-4.0.9.jar:/root/.m2/repository/org/glassfish/jaxb/jaxb-core/4.0.9/jaxb-core-4.0.9.jar:/root/.m2/repository/org/eclipse/angus/angus-activation/2.0.3/angus-activation-2.0.3.jar:/root/.m2/repository/org/glassfish/jaxb/txw2/4.0.9/txw2-4.0.9.jar:/root/.m2/repository/com/sun/istack/istack-commons-runtime/4.1.2/istack-commons-runtime-4.1.2.jar:/root/.m2/repository/jakarta/inject/jakarta.inject-api/2.0.1/jakarta.inject-api-2.0.1.jar:/root/.m2/repository/org/springframework/spring-orm/7.0.8/spring-orm-7.0.8.jar:/root/.m2/repository/org/springframework/data/spring-data-jpa/4.1.0/spring-data-jpa-4.1.0.jar:/root/.m2/repository/org/springframework/spring-tx/7.0.8/spring-tx-7.0.8.jar:/root/.m2/repository/org/antlr/antlr4-runtime/4.13.2/antlr4-runtime-4.13.2.jar:/root/.m2/repository/org/springframework/spring-aspects/7.0.8/spring-aspects-7.0.8.jar:/root/.m2/repository/org/aspectj/aspectjweaver/1.9.25.1/aspectjweaver-1.9.25.1.jar:/root/.m2/repository/org/springframework/boot/spring-boot-jdbc/4.1.0/spring-boot-jdbc-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-sql/4.1.0/spring-boot-sql-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-transaction/4.1.0/spring-boot-transaction-4.1.0.jar:/root/.m2/repository/org/springframework/spring-jdbc/7.0.8/spring-jdbc-7.0.8.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-validation/4.1.0/spring-boot-starter-validation-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-validation/4.1.0/spring-boot-validation-4.1.0.jar:/root/.m2/repository/org/apache/tomcat/embed/tomcat-embed-el/11.0.22/tomcat-embed-el-11.0.22.jar:/root/.m2/repository/org/hibernate/validator/hibernate-validator/9.1.0.Final/hibernate-validator-9.1.0.Final.jar:/root/.m2/repository/jakarta/validation/jakarta.validation-api/3.1.1/jakarta.validation-api-3.1.1.jar:/root/.m2/repository/org/jboss/logging/jboss-logging/3.6.3.Final/jboss-logging-3.6.3.Final.jar:/root/.m2/repository/com/fasterxml/classmate/1.7.3/classmate-1.7.3.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-security/4.1.0/spring-boot-starter-security-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-security/4.1.0/spring-boot-security-4.1.0.jar:/root/.m2/repository/org/springframework/security/spring-security-config/7.1.0/spring-security-config-7.1.0.jar:/root/.m2/repository/org/springframework/security/spring-security-core/7.1.0/spring-security-core-7.1.0.jar:/root/.m2/repository/org/springframework/security/spring-security-crypto/7.1.0/spring-security-crypto-7.1.0.jar:/root/.m2/repository/org/springframework/security/spring-security-web/7.1.0/spring-security-web-7.1.0.jar:/root/.m2/repository/org/springframework/spring-aop/7.0.8/spring-aop-7.0.8.jar:/root/.m2/repository/org/springframework/spring-beans/7.0.8/spring-beans-7.0.8.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-actuator/4.1.0/spring-boot-starter-actuator-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-micrometer-metrics/4.1.0/spring-boot-starter-micrometer-metrics-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-micrometer-metrics/4.1.0/spring-boot-micrometer-metrics-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-micrometer-observation/4.1.0/spring-boot-micrometer-observation-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-actuator-autoconfigure/4.1.0/spring-boot-actuator-autoconfigure-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-actuator/4.1.0/spring-boot-actuator-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-health/4.1.0/spring-boot-health-4.1.0.jar:/root/.m2/repository/io/micrometer/micrometer-observation/1.17.0/micrometer-observation-1.17.0.jar:/root/.m2/repository/org/jspecify/jspecify/1.0.0/jspecify-1.0.0.jar:/root/.m2/repository/io/micrometer/micrometer-commons/1.17.0/micrometer-commons-1.17.0.jar:/root/.m2/repository/io/micrometer/micrometer-jakarta9/1.17.0/micrometer-jakarta9-1.17.0.jar:/root/.m2/repository/io/micrometer/micrometer-core/1.17.0/micrometer-core-1.17.0.jar:/root/.m2/repository/org/hdrhistogram/HdrHistogram/2.2.2/HdrHistogram-2.2.2.jar:/root/.m2/repository/com/mysql/mysql-connector-j/9.7.0/mysql-connector-j-9.7.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-flyway/4.1.0/spring-boot-starter-flyway-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-flyway/4.1.0/spring-boot-flyway-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-restclient/4.1.0/spring-boot-starter-restclient-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-restclient/4.1.0/spring-boot-restclient-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-http-client/4.1.0/spring-boot-http-client-4.1.0.jar:/root/.m2/repository/org/flywaydb/flyway-mysql/12.4.0/flyway-mysql-12.4.0.jar:/root/.m2/repository/org/flywaydb/flyway-core/12.4.0/flyway-core-12.4.0.jar:/root/.m2/repository/tools/jackson/core/jackson-databind/3.1.4/jackson-databind-3.1.4.jar:/root/.m2/repository/tools/jackson/core/jackson-core/3.1.4/jackson-core-3.1.4.jar:/root/.m2/repository/org/projectlombok/lombok/1.18.46/lombok-1.18.46.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-test/4.1.0/spring-boot-starter-test-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-test/4.1.0/spring-boot-test-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-test-autoconfigure/4.1.0/spring-boot-test-autoconfigure-4.1.0.jar:/root/.m2/repository/com/jayway/jsonpath/json-path/2.10.0/json-path-2.10.0.jar:/root/.m2/repository/org/slf4j/slf4j-api/2.0.18/slf4j-api-2.0.18.jar:/root/.m2/repository/jakarta/xml/bind/jakarta.xml.bind-api/4.0.5/jakarta.xml.bind-api-4.0.5.jar:/root/.m2/repository/jakarta/activation/jakarta.activation-api/2.1.4/jakarta.activation-api-2.1.4.jar:/root/.m2/repository/net/minidev/json-smart/2.6.0/json-smart-2.6.0.jar:/root/.m2/repository/net/minidev/accessors-smart/2.6.0/accessors-smart-2.6.0.jar:/root/.m2/repository/org/ow2/asm/asm/9.7.1/asm-9.7.1.jar:/root/.m2/repository/org/assertj/assertj-core/3.27.7/assertj-core-3.27.7.jar:/root/.m2/repository/net/bytebuddy/byte-buddy/1.18.10/byte-buddy-1.18.10.jar:/root/.m2/repository/org/awaitility/awaitility/4.3.0/awaitility-4.3.0.jar:/root/.m2/repository/org/hamcrest/hamcrest/3.0/hamcrest-3.0.jar:/root/.m2/repository/org/junit/jupiter/junit-jupiter/6.0.3/junit-jupiter-6.0.3.jar:/root/.m2/repository/org/junit/jupiter/junit-jupiter-api/6.0.3/junit-jupiter-api-6.0.3.jar:/root/.m2/repository/org/opentest4j/opentest4j/1.3.0/opentest4j-1.3.0.jar:/root/.m2/repository/org/junit/platform/junit-platform-commons/6.0.3/junit-platform-commons-6.0.3.jar:/root/.m2/repository/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar:/root/.m2/repository/org/junit/jupiter/junit-jupiter-params/6.0.3/junit-jupiter-params-6.0.3.jar:/root/.m2/repository/org/junit/jupiter/junit-jupiter-engine/6.0.3/junit-jupiter-engine-6.0.3.jar:/root/.m2/repository/org/junit/platform/junit-platform-engine/6.0.3/junit-platform-engine-6.0.3.jar:/root/.m2/repository/org/mockito/mockito-core/5.23.0/mockito-core-5.23.0.jar:/root/.m2/repository/net/bytebuddy/byte-buddy-agent/1.18.10/byte-buddy-agent-1.18.10.jar:/root/.m2/repository/org/objenesis/objenesis/3.3/objenesis-3.3.jar:/root/.m2/repository/org/mockito/mockito-junit-jupiter/5.23.0/mockito-junit-jupiter-5.23.0.jar:/root/.m2/repository/org/skyscreamer/jsonassert/1.5.3/jsonassert-1.5.3.jar:/root/.m2/repository/com/vaadin/external/google/android-json/0.0.20131108.vaadin1/android-json-0.0.20131108.vaadin1.jar:/root/.m2/repository/org/springframework/spring-core/7.0.8/spring-core-7.0.8.jar:/root/.m2/repository/commons-logging/commons-logging/1.3.6/commons-logging-1.3.6.jar:/root/.m2/repository/org/springframework/spring-test/7.0.8/spring-test-7.0.8.jar:/root/.m2/repository/org/xmlunit/xmlunit-core/2.11.0/xmlunit-core-2.11.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-websocket/4.1.0/spring-boot-starter-websocket-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-webmvc/4.1.0/spring-boot-starter-webmvc-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-websocket/4.1.0/spring-boot-websocket-4.1.0.jar:/root/.m2/repository/org/springframework/spring-messaging/7.0.8/spring-messaging-7.0.8.jar:/root/.m2/repository/org/springframework/spring-websocket/7.0.8/spring-websocket-7.0.8.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-jackson/4.1.0/spring-boot-starter-jackson-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-jackson/4.1.0/spring-boot-jackson-4.1.0.jar:/root/.m2/repository/com/fasterxml/jackson/core/jackson-databind/2.21.4/jackson-databind-2.21.4.jar:/root/.m2/repository/com/fasterxml/jackson/core/jackson-annotations/2.21/jackson-annotations-2.21.jar:/root/.m2/repository/com/fasterxml/jackson/core/jackson-core/2.21.4/jackson-core-2.21.4.jar:/root/.m2/repository/com/fasterxml/jackson/datatype/jackson-datatype-jsr310/2.21.4/jackson-datatype-jsr310-2.21.4.jar:"/>
+    <property name="java.vm.vendor" value="Ubuntu"/>
+    <property name="sun.arch.data.model" value="64"/>
+    <property name="java.vendor.url" value="https://ubuntu.com/"/>
+    <property name="user.timezone" value="Europe/Istanbul"/>
+    <property name="os.name" value="Linux"/>
+    <property name="java.vm.specification.version" value="21"/>
+    <property name="sun.java.launcher" value="SUN_STANDARD"/>
+    <property name="sun.boot.library.path" value="/tmp/fix153-tools/java/usr/lib/jvm/java-21-openjdk-amd64/lib"/>
+    <property name="sun.java.command" value="/workspace/scratch/c5f8d1b82fa2/fix153-local-candle/target/surefire/surefirebooter-20261007015504468_3.jar /workspace/scratch/c5f8d1b82fa2/fix153-local-candle/target/surefire 2026-10-07T01-55-04_394-jvmRun1 surefire-20261007015504468_1tmp surefire_0-20261007015504468_2tmp"/>
+    <property name="jdk.debug" value="release"/>
+    <property name="surefire.test.class.path" value="/workspace/scratch/c5f8d1b82fa2/fix153-local-candle/target/test-classes:/workspace/scratch/c5f8d1b82fa2/fix153-local-candle/target/classes:/root/.m2/repository/com/h2database/h2/2.4.240/h2-2.4.240.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-web/4.1.0/spring-boot-starter-web-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-tomcat/4.1.0/spring-boot-starter-tomcat-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-tomcat-runtime/4.1.0/spring-boot-starter-tomcat-runtime-4.1.0.jar:/root/.m2/repository/org/apache/tomcat/embed/tomcat-embed-core/11.0.22/tomcat-embed-core-11.0.22.jar:/root/.m2/repository/org/apache/tomcat/embed/tomcat-embed-websocket/11.0.22/tomcat-embed-websocket-11.0.22.jar:/root/.m2/repository/org/springframework/boot/spring-boot-tomcat/4.1.0/spring-boot-tomcat-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-http-converter/4.1.0/spring-boot-http-converter-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot/4.1.0/spring-boot-4.1.0.jar:/root/.m2/repository/org/springframework/spring-context/7.0.8/spring-context-7.0.8.jar:/root/.m2/repository/org/springframework/spring-web/7.0.8/spring-web-7.0.8.jar:/root/.m2/repository/org/springframework/boot/spring-boot-webmvc/4.1.0/spring-boot-webmvc-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-servlet/4.1.0/spring-boot-servlet-4.1.0.jar:/root/.m2/repository/org/springframework/spring-webmvc/7.0.8/spring-webmvc-7.0.8.jar:/root/.m2/repository/org/springframework/spring-expression/7.0.8/spring-expression-7.0.8.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-webflux/4.1.0/spring-boot-starter-webflux-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter/4.1.0/spring-boot-starter-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-logging/4.1.0/spring-boot-starter-logging-4.1.0.jar:/root/.m2/repository/ch/qos/logback/logback-classic/1.5.34/logback-classic-1.5.34.jar:/root/.m2/repository/ch/qos/logback/logback-core/1.5.34/logback-core-1.5.34.jar:/root/.m2/repository/org/apache/logging/log4j/log4j-to-slf4j/2.25.4/log4j-to-slf4j-2.25.4.jar:/root/.m2/repository/org/apache/logging/log4j/log4j-api/2.25.4/log4j-api-2.25.4.jar:/root/.m2/repository/org/slf4j/jul-to-slf4j/2.0.18/jul-to-slf4j-2.0.18.jar:/root/.m2/repository/org/springframework/boot/spring-boot-autoconfigure/4.1.0/spring-boot-autoconfigure-4.1.0.jar:/root/.m2/repository/jakarta/annotation/jakarta.annotation-api/3.0.0/jakarta.annotation-api-3.0.0.jar:/root/.m2/repository/org/yaml/snakeyaml/2.6/snakeyaml-2.6.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-reactor-netty/4.1.0/spring-boot-starter-reactor-netty-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-reactor-netty/4.1.0/spring-boot-reactor-netty-4.1.0.jar:/root/.m2/repository/io/projectreactor/netty/reactor-netty-http/1.3.6/reactor-netty-http-1.3.6.jar:/root/.m2/repository/io/netty/netty-codec-http/4.2.15.Final/netty-codec-http-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-buffer/4.2.15.Final/netty-buffer-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-transport/4.2.15.Final/netty-transport-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-base/4.2.15.Final/netty-codec-base-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-compression/4.2.15.Final/netty-codec-compression-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-handler/4.2.15.Final/netty-handler-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-http2/4.2.15.Final/netty-codec-http2-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-http3/4.2.15.Final/netty-codec-http3-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-transport-native-unix-common/4.2.15.Final/netty-transport-native-unix-common-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-resolver/4.2.15.Final/netty-resolver-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-classes-quic/4.2.15.Final/netty-codec-classes-quic-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-native-quic/4.2.15.Final/netty-codec-native-quic-4.2.15.Final-linux-x86_64.jar:/root/.m2/repository/io/netty/netty-codec-native-quic/4.2.15.Final/netty-codec-native-quic-4.2.15.Final-linux-aarch_64.jar:/root/.m2/repository/io/netty/netty-codec-native-quic/4.2.15.Final/netty-codec-native-quic-4.2.15.Final-osx-x86_64.jar:/root/.m2/repository/io/netty/netty-codec-native-quic/4.2.15.Final/netty-codec-native-quic-4.2.15.Final-osx-aarch_64.jar:/root/.m2/repository/io/netty/netty-codec-native-quic/4.2.15.Final/netty-codec-native-quic-4.2.15.Final-windows-x86_64.jar:/root/.m2/repository/io/netty/netty-resolver-dns/4.2.15.Final/netty-resolver-dns-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-dns/4.2.15.Final/netty-codec-dns-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-resolver-dns-native-macos/4.2.15.Final/netty-resolver-dns-native-macos-4.2.15.Final-osx-x86_64.jar:/root/.m2/repository/io/netty/netty-resolver-dns-classes-macos/4.2.15.Final/netty-resolver-dns-classes-macos-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-transport-native-epoll/4.2.15.Final/netty-transport-native-epoll-4.2.15.Final-linux-x86_64.jar:/root/.m2/repository/io/netty/netty-transport-classes-epoll/4.2.15.Final/netty-transport-classes-epoll-4.2.15.Final.jar:/root/.m2/repository/io/projectreactor/netty/reactor-netty-core/1.3.6/reactor-netty-core-1.3.6.jar:/root/.m2/repository/io/netty/netty-handler-proxy/4.2.15.Final/netty-handler-proxy-4.2.15.Final.jar:/root/.m2/repository/io/netty/netty-codec-socks/4.2.15.Final/netty-codec-socks-4.2.15.Final.jar:/root/.m2/repository/org/springframework/boot/spring-boot-netty/4.1.0/spring-boot-netty-4.1.0.jar:/root/.m2/repository/io/netty/netty-common/4.2.15.Final/netty-common-4.2.15.Final.jar:/root/.m2/repository/org/springframework/boot/spring-boot-reactor/4.1.0/spring-boot-reactor-4.1.0.jar:/root/.m2/repository/io/projectreactor/reactor-core/3.8.6/reactor-core-3.8.6.jar:/root/.m2/repository/org/reactivestreams/reactive-streams/1.0.4/reactive-streams-1.0.4.jar:/root/.m2/repository/org/springframework/boot/spring-boot-webflux/4.1.0/spring-boot-webflux-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-http-codec/4.1.0/spring-boot-http-codec-4.1.0.jar:/root/.m2/repository/org/springframework/spring-webflux/7.0.8/spring-webflux-7.0.8.jar:/root/.m2/repository/org/springframework/boot/spring-boot-web-server/4.1.0/spring-boot-web-server-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-data-jpa/4.1.0/spring-boot-starter-data-jpa-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-jdbc/4.1.0/spring-boot-starter-jdbc-4.1.0.jar:/root/.m2/repository/com/zaxxer/HikariCP/7.0.2/HikariCP-7.0.2.jar:/root/.m2/repository/org/springframework/boot/spring-boot-data-jpa/4.1.0/spring-boot-data-jpa-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-data-commons/4.1.0/spring-boot-data-commons-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-persistence/4.1.0/spring-boot-persistence-4.1.0.jar:/root/.m2/repository/org/springframework/data/spring-data-commons/4.1.0/spring-data-commons-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-hibernate/4.1.0/spring-boot-hibernate-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-jpa/4.1.0/spring-boot-jpa-4.1.0.jar:/root/.m2/repository/jakarta/persistence/jakarta.persistence-api/3.2.0/jakarta.persistence-api-3.2.0.jar:/root/.m2/repository/org/hibernate/orm/hibernate-core/7.4.1.Final/hibernate-core-7.4.1.Final.jar:/root/.m2/repository/jakarta/transaction/jakarta.transaction-api/2.0.1/jakarta.transaction-api-2.0.1.jar:/root/.m2/repository/org/hibernate/models/hibernate-models/1.1.1/hibernate-models-1.1.1.jar:/root/.m2/repository/org/glassfish/jaxb/jaxb-runtime/4.0.9/jaxb-runtime-4.0.9.jar:/root/.m2/repository/org/glassfish/jaxb/jaxb-core/4.0.9/jaxb-core-4.0.9.jar:/root/.m2/repository/org/eclipse/angus/angus-activation/2.0.3/angus-activation-2.0.3.jar:/root/.m2/repository/org/glassfish/jaxb/txw2/4.0.9/txw2-4.0.9.jar:/root/.m2/repository/com/sun/istack/istack-commons-runtime/4.1.2/istack-commons-runtime-4.1.2.jar:/root/.m2/repository/jakarta/inject/jakarta.inject-api/2.0.1/jakarta.inject-api-2.0.1.jar:/root/.m2/repository/org/springframework/spring-orm/7.0.8/spring-orm-7.0.8.jar:/root/.m2/repository/org/springframework/data/spring-data-jpa/4.1.0/spring-data-jpa-4.1.0.jar:/root/.m2/repository/org/springframework/spring-tx/7.0.8/spring-tx-7.0.8.jar:/root/.m2/repository/org/antlr/antlr4-runtime/4.13.2/antlr4-runtime-4.13.2.jar:/root/.m2/repository/org/springframework/spring-aspects/7.0.8/spring-aspects-7.0.8.jar:/root/.m2/repository/org/aspectj/aspectjweaver/1.9.25.1/aspectjweaver-1.9.25.1.jar:/root/.m2/repository/org/springframework/boot/spring-boot-jdbc/4.1.0/spring-boot-jdbc-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-sql/4.1.0/spring-boot-sql-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-transaction/4.1.0/spring-boot-transaction-4.1.0.jar:/root/.m2/repository/org/springframework/spring-jdbc/7.0.8/spring-jdbc-7.0.8.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-validation/4.1.0/spring-boot-starter-validation-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-validation/4.1.0/spring-boot-validation-4.1.0.jar:/root/.m2/repository/org/apache/tomcat/embed/tomcat-embed-el/11.0.22/tomcat-embed-el-11.0.22.jar:/root/.m2/repository/org/hibernate/validator/hibernate-validator/9.1.0.Final/hibernate-validator-9.1.0.Final.jar:/root/.m2/repository/jakarta/validation/jakarta.validation-api/3.1.1/jakarta.validation-api-3.1.1.jar:/root/.m2/repository/org/jboss/logging/jboss-logging/3.6.3.Final/jboss-logging-3.6.3.Final.jar:/root/.m2/repository/com/fasterxml/classmate/1.7.3/classmate-1.7.3.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-security/4.1.0/spring-boot-starter-security-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-security/4.1.0/spring-boot-security-4.1.0.jar:/root/.m2/repository/org/springframework/security/spring-security-config/7.1.0/spring-security-config-7.1.0.jar:/root/.m2/repository/org/springframework/security/spring-security-core/7.1.0/spring-security-core-7.1.0.jar:/root/.m2/repository/org/springframework/security/spring-security-crypto/7.1.0/spring-security-crypto-7.1.0.jar:/root/.m2/repository/org/springframework/security/spring-security-web/7.1.0/spring-security-web-7.1.0.jar:/root/.m2/repository/org/springframework/spring-aop/7.0.8/spring-aop-7.0.8.jar:/root/.m2/repository/org/springframework/spring-beans/7.0.8/spring-beans-7.0.8.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-actuator/4.1.0/spring-boot-starter-actuator-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-micrometer-metrics/4.1.0/spring-boot-starter-micrometer-metrics-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-micrometer-metrics/4.1.0/spring-boot-micrometer-metrics-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-micrometer-observation/4.1.0/spring-boot-micrometer-observation-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-actuator-autoconfigure/4.1.0/spring-boot-actuator-autoconfigure-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-actuator/4.1.0/spring-boot-actuator-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-health/4.1.0/spring-boot-health-4.1.0.jar:/root/.m2/repository/io/micrometer/micrometer-observation/1.17.0/micrometer-observation-1.17.0.jar:/root/.m2/repository/org/jspecify/jspecify/1.0.0/jspecify-1.0.0.jar:/root/.m2/repository/io/micrometer/micrometer-commons/1.17.0/micrometer-commons-1.17.0.jar:/root/.m2/repository/io/micrometer/micrometer-jakarta9/1.17.0/micrometer-jakarta9-1.17.0.jar:/root/.m2/repository/io/micrometer/micrometer-core/1.17.0/micrometer-core-1.17.0.jar:/root/.m2/repository/org/hdrhistogram/HdrHistogram/2.2.2/HdrHistogram-2.2.2.jar:/root/.m2/repository/com/mysql/mysql-connector-j/9.7.0/mysql-connector-j-9.7.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-flyway/4.1.0/spring-boot-starter-flyway-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-flyway/4.1.0/spring-boot-flyway-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-restclient/4.1.0/spring-boot-starter-restclient-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-restclient/4.1.0/spring-boot-restclient-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-http-client/4.1.0/spring-boot-http-client-4.1.0.jar:/root/.m2/repository/org/flywaydb/flyway-mysql/12.4.0/flyway-mysql-12.4.0.jar:/root/.m2/repository/org/flywaydb/flyway-core/12.4.0/flyway-core-12.4.0.jar:/root/.m2/repository/tools/jackson/core/jackson-databind/3.1.4/jackson-databind-3.1.4.jar:/root/.m2/repository/tools/jackson/core/jackson-core/3.1.4/jackson-core-3.1.4.jar:/root/.m2/repository/org/projectlombok/lombok/1.18.46/lombok-1.18.46.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-test/4.1.0/spring-boot-starter-test-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-test/4.1.0/spring-boot-test-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-test-autoconfigure/4.1.0/spring-boot-test-autoconfigure-4.1.0.jar:/root/.m2/repository/com/jayway/jsonpath/json-path/2.10.0/json-path-2.10.0.jar:/root/.m2/repository/org/slf4j/slf4j-api/2.0.18/slf4j-api-2.0.18.jar:/root/.m2/repository/jakarta/xml/bind/jakarta.xml.bind-api/4.0.5/jakarta.xml.bind-api-4.0.5.jar:/root/.m2/repository/jakarta/activation/jakarta.activation-api/2.1.4/jakarta.activation-api-2.1.4.jar:/root/.m2/repository/net/minidev/json-smart/2.6.0/json-smart-2.6.0.jar:/root/.m2/repository/net/minidev/accessors-smart/2.6.0/accessors-smart-2.6.0.jar:/root/.m2/repository/org/ow2/asm/asm/9.7.1/asm-9.7.1.jar:/root/.m2/repository/org/assertj/assertj-core/3.27.7/assertj-core-3.27.7.jar:/root/.m2/repository/net/bytebuddy/byte-buddy/1.18.10/byte-buddy-1.18.10.jar:/root/.m2/repository/org/awaitility/awaitility/4.3.0/awaitility-4.3.0.jar:/root/.m2/repository/org/hamcrest/hamcrest/3.0/hamcrest-3.0.jar:/root/.m2/repository/org/junit/jupiter/junit-jupiter/6.0.3/junit-jupiter-6.0.3.jar:/root/.m2/repository/org/junit/jupiter/junit-jupiter-api/6.0.3/junit-jupiter-api-6.0.3.jar:/root/.m2/repository/org/opentest4j/opentest4j/1.3.0/opentest4j-1.3.0.jar:/root/.m2/repository/org/junit/platform/junit-platform-commons/6.0.3/junit-platform-commons-6.0.3.jar:/root/.m2/repository/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar:/root/.m2/repository/org/junit/jupiter/junit-jupiter-params/6.0.3/junit-jupiter-params-6.0.3.jar:/root/.m2/repository/org/junit/jupiter/junit-jupiter-engine/6.0.3/junit-jupiter-engine-6.0.3.jar:/root/.m2/repository/org/junit/platform/junit-platform-engine/6.0.3/junit-platform-engine-6.0.3.jar:/root/.m2/repository/org/mockito/mockito-core/5.23.0/mockito-core-5.23.0.jar:/root/.m2/repository/net/bytebuddy/byte-buddy-agent/1.18.10/byte-buddy-agent-1.18.10.jar:/root/.m2/repository/org/objenesis/objenesis/3.3/objenesis-3.3.jar:/root/.m2/repository/org/mockito/mockito-junit-jupiter/5.23.0/mockito-junit-jupiter-5.23.0.jar:/root/.m2/repository/org/skyscreamer/jsonassert/1.5.3/jsonassert-1.5.3.jar:/root/.m2/repository/com/vaadin/external/google/android-json/0.0.20131108.vaadin1/android-json-0.0.20131108.vaadin1.jar:/root/.m2/repository/org/springframework/spring-core/7.0.8/spring-core-7.0.8.jar:/root/.m2/repository/commons-logging/commons-logging/1.3.6/commons-logging-1.3.6.jar:/root/.m2/repository/org/springframework/spring-test/7.0.8/spring-test-7.0.8.jar:/root/.m2/repository/org/xmlunit/xmlunit-core/2.11.0/xmlunit-core-2.11.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-websocket/4.1.0/spring-boot-starter-websocket-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-webmvc/4.1.0/spring-boot-starter-webmvc-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-websocket/4.1.0/spring-boot-websocket-4.1.0.jar:/root/.m2/repository/org/springframework/spring-messaging/7.0.8/spring-messaging-7.0.8.jar:/root/.m2/repository/org/springframework/spring-websocket/7.0.8/spring-websocket-7.0.8.jar:/root/.m2/repository/org/springframework/boot/spring-boot-starter-jackson/4.1.0/spring-boot-starter-jackson-4.1.0.jar:/root/.m2/repository/org/springframework/boot/spring-boot-jackson/4.1.0/spring-boot-jackson-4.1.0.jar:/root/.m2/repository/com/fasterxml/jackson/core/jackson-databind/2.21.4/jackson-databind-2.21.4.jar:/root/.m2/repository/com/fasterxml/jackson/core/jackson-annotations/2.21/jackson-annotations-2.21.jar:/root/.m2/repository/com/fasterxml/jackson/core/jackson-core/2.21.4/jackson-core-2.21.4.jar:/root/.m2/repository/com/fasterxml/jackson/datatype/jackson-datatype-jsr310/2.21.4/jackson-datatype-jsr310-2.21.4.jar:"/>
+    <property name="sun.cpu.endian" value="little"/>
+    <property name="user.home" value="/root"/>
+    <property name="user.language" value="en"/>
+    <property name="java.specification.vendor" value="Oracle Corporation"/>
+    <property name="java.version.date" value="2024-04-16"/>
+    <property name="java.home" value="/tmp/fix153-tools/java/usr/lib/jvm/java-21-openjdk-amd64"/>
+    <property name="file.separator" value="/"/>
+    <property name="basedir" value="/workspace/scratch/c5f8d1b82fa2/fix153-local-candle"/>
+    <property name="java.vm.compressedOopsMode" value="Zero based"/>
+    <property name="line.separator" value="&#10;"/>
+    <property name="java.specification.name" value="Java Platform API Specification"/>
+    <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
+    <property name="surefire.real.class.path" value="/workspace/scratch/c5f8d1b82fa2/fix153-local-candle/target/surefire/surefirebooter-20261007015504468_3.jar"/>
+    <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
+    <property name="java.runtime.version" value="21.0.3+9-Ubuntu-1ubuntu1"/>
+    <property name="user.name" value="root"/>
+    <property name="stdout.encoding" value="UTF-8"/>
+    <property name="path.separator" value=":"/>
+    <property name="os.version" value="6.18.44"/>
+    <property name="java.runtime.name" value="OpenJDK Runtime Environment"/>
+    <property name="file.encoding" value="UTF-8"/>
+    <property name="java.vm.name" value="OpenJDK 64-Bit Server VM"/>
+    <property name="localRepository" value="/root/.m2/repository"/>
+    <property name="java.vendor.url.bug" value="https://bugs.launchpad.net/ubuntu/+source/openjdk-21"/>
+    <property name="java.io.tmpdir" value="/tmp"/>
+    <property name="java.version" value="21.0.3"/>
+    <property name="user.dir" value="/workspace/scratch/c5f8d1b82fa2/fix153-local-candle"/>
+    <property name="os.arch" value="amd64"/>
+    <property name="java.vm.specification.name" value="Java Virtual Machine Specification"/>
+    <property name="native.encoding" value="UTF-8"/>
+    <property name="java.library.path" value="/usr/java/packages/lib:/usr/lib/x86_64-linux-gnu/jni:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/lib/jni:/lib:/usr/lib"/>
+    <property name="java.vm.info" value="mixed mode, sharing"/>
+    <property name="stderr.encoding" value="UTF-8"/>
+    <property name="java.vendor" value="Ubuntu"/>
+    <property name="java.vm.version" value="21.0.3+9-Ubuntu-1ubuntu1"/>
+    <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
+    <property name="java.class.version" value="65.0"/>
+    <property name="argLine" value="-javaagent:/root/.m2/repository/net/bytebuddy/byte-buddy-agent/1.18.10/byte-buddy-agent-1.18.10.jar"/>
+  </properties>
+  <testcase name="unfinishedUnattributedWorkBlocksEvenWhenBoundaryApproved" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.289">
+    <system-out><![CDATA[01:55:09.400 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-132][SOURCE_CONFIGURATION] mode=LIVE, readPool=3, priceWorkers=2, pendingPerSymbol=200, publicationSource=collector
+]]></system-out>
+  </testcase>
+  <testcase name="fix138HigherSequenceRunningOwnerBlocksOldHistoricalAcrossInstances" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.093">
+    <system-out><![CDATA[01:55:09.489 [main] WARN com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][LANE_BLOCKED] lane=BTCUSDT|1m, reason=RUNNING_OWNER, event=2
+01:55:09.501 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=HISTORY, lanesChecked=6, submitted=0, active=0, elapsedMs=23, sourcePool={}
+]]></system-out>
+  </testcase>
+  <testcase name="fix141OwnerTimeoutReconciliationNeverMutatesStatusEvenWithNoEvidenceAfterQuietWindow" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.059">
+    <system-out><![CDATA[01:55:09.559 [main] WARN com.crypto.shared.SharedAnalysisDispatcher -- [FIX-141][OWNER_TIMEOUT_CANDIDATE] event=1; quietSeconds=3600, no durable evidence found; NOT isolated automatically - diagnostic only, pending real owner fencing
+01:55:09.560 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-141][OWNER_TIMEOUT_CANDIDATES] candidates=1, checked=1
+]]></system-out>
+  </testcase>
+  <testcase name="realWorkerExpiredHistoricalCloseNeverRegistersWalletWork" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.311">
+    <system-out><![CDATA[01:55:09.612 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:09.599619Z
+01:55:09.629 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:09.623813302Z endUtc=2026-10-06T22:55:09.627468307Z elapsedMs=2 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:09.634 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:09.631417143Z endUtc=2026-10-06T22:55:09.634079144Z elapsedMs=2 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:09.636 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:09.634196720Z endUtc=2026-10-06T22:55:09.636262916Z elapsedMs=2 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:09.638 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:09.636363097Z endUtc=2026-10-06T22:55:09.638147219Z elapsedMs=1 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:09.852 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=HISTORY, event=1, lane=BTCUSDT|1m, queueWaitMs=3, closeAgeMs=100253
+01:55:09.855 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-137][WORKER_START] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:59.599619Z, close=2026-10-06T22:53:29.599619Z, liveSource=false
+01:55:09.855 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:59.599619Z, stage=COORDINATION_LOCK, elapsedMs=0
+01:55:09.856 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- Processing committed CandleClosedEvent: symbol=BTCUSDT, interval=1m, openTime=2026-10-06T22:54:59.599619Z
+01:55:09.856 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:59.599619Z, stage=DATA_QUALITY, elapsedMs=0
+01:55:09.856 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:59.599619Z, stage=INDICATORS, elapsedMs=0
+01:55:09.856 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:59.599619Z, stage=EXISTING_SIGNAL_CHECK, elapsedMs=1
+01:55:09.857 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:59.599619Z, stage=HISTORICAL_SIGNAL, elapsedMs=1
+01:55:09.858 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-153][SIGNAL_SAVED] mode=HISTORY, event=1, signal=701, symbol=BTCUSDT, interval=1m, candleOpenUtc=2026-10-06T22:54:59.599619Z, candleCloseUtc=null, generatedUtc=null, rowCreatedUtc=null, serviceReturnedUtc=2026-10-06T22:55:09.858227734Z, serviceReturnedKsa=2026-10-07T01:55:09.858227734+03:00, liveCloseToGenerationMs=null; historical generatedUtc is an as-of clock, signal save does not imply a wallet trade
+01:55:09.858 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-137][WORKER_END] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:59.599619Z, outcome=HISTORICAL_ONLY, elapsedMs=2
+01:55:09.860 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=HISTORY, event=1, lane=BTCUSDT|1m, outcome=HISTORICAL_ONLY, outcomeCommitted=true, elapsedMs=11
+01:55:09.860 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=HISTORY, event=1, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:53:29.599619Z, claimMs=4
+01:55:09.871 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=HISTORY, lanesChecked=6, submitted=1, active=0, elapsedMs=28, sourcePool={}
+]]></system-out>
+  </testcase>
+  <testcase name="fix141OwnerTimeoutReconciliationDoesNothingWhenDisabled" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.041"/>
+  <testcase name="priorAuditPreventsSilentReapprovalOfResetObservationState" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.119"/>
+  <testcase name="fix138HistoricalSelectionRespectsNotBeforeAndCannotTakeFreshRecovery" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.049">
+    <system-out><![CDATA[01:55:10.076 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=HISTORY, lanesChecked=6, submitted=0, active=0, elapsedMs=8, sourcePool={}
+01:55:10.085 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=0, active=0, elapsedMs=7, sourcePool={}
+]]></system-out>
+  </testcase>
+  <testcase name="observerFailureDoesNotBlockFutureProtectionOrRetryObserver" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.048">
+    <system-out><![CDATA[01:55:10.118 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:10.112350Z
+01:55:10.122 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:10.121090645Z endUtc=2026-10-06T22:55:10.122601946Z elapsedMs=1 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.126 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:10.123869311Z endUtc=2026-10-06T22:55:10.126594087Z elapsedMs=2 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.128 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:10.126747708Z endUtc=2026-10-06T22:55:10.128823419Z elapsedMs=2 transactionReturned=false resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.130 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-132][OBSERVER_REVIEW_REQUIRED] event=1; protection retained, no observer retry
+java.lang.IllegalStateException: observer failure
+	at com.crypto.debug.monitor.service.PriceMoveMonitorService.onPrice(PriceMoveMonitorService.java:80)
+	at com.crypto.shared.SharedMarketConsumer.lambda$processNext$17(SharedMarketConsumer.java:524)
+	at org.springframework.transaction.support.TransactionOperations.lambda$executeWithoutResult$0(TransactionOperations.java:68)
+	at org.springframework.transaction.support.TransactionTemplate.execute(TransactionTemplate.java:137)
+	at org.springframework.transaction.support.TransactionOperations.executeWithoutResult(TransactionOperations.java:67)
+	at com.crypto.shared.SharedMarketConsumer.processNext(SharedMarketConsumer.java:463)
+	at com.crypto.shared.SharedMarketConsumerTest.observerFailureDoesNotBlockFutureProtectionOrRetryObserver(SharedMarketConsumerTest.java:152)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:701)
+	at org.junit.platform.commons.support.ReflectionSupport.invokeMethod(ReflectionSupport.java:502)
+	at org.junit.jupiter.engine.support.MethodReflectionUtils.invoke(MethodReflectionUtils.java:45)
+	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:61)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:124)
+	at org.junit.jupiter.engine.extension.SameThreadTimeoutInvocation.proceed(SameThreadTimeoutInvocation.java:51)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.intercept(TimeoutExtension.java:163)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestableMethod(TimeoutExtension.java:148)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestMethod(TimeoutExtension.java:86)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker$ReflectiveInterceptorCall.lambda$ofVoidMethod$0(InterceptingExecutableInvoker.java:123)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.lambda$invoke$0(InterceptingExecutableInvoker.java:105)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$InterceptedInvocation.proceed(InvocationInterceptorChain.java:99)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.proceed(InvocationInterceptorChain.java:66)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.chainAndInvoke(InvocationInterceptorChain.java:47)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.invoke(InvocationInterceptorChain.java:39)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:104)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:98)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invokeVoid(InterceptingExecutableInvoker.java:71)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.lambda$invokeTestMethod$0(TestMethodTestDescriptor.java:219)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.invokeTestMethod(TestMethodTestDescriptor.java:215)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:157)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:70)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$2(NodeTestTask.java:176)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$1(NodeTestTask.java:166)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$0(NodeTestTask.java:164)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:163)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:116)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:42)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$2(NodeTestTask.java:180)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$1(NodeTestTask.java:166)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$0(NodeTestTask.java:164)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:163)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:116)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:42)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$2(NodeTestTask.java:180)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$1(NodeTestTask.java:166)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$0(NodeTestTask.java:164)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:163)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:116)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.submit(SameThreadHierarchicalTestExecutorService.java:36)
+	at org.junit.platform.engine.support.hierarchical.HierarchicalTestExecutor.execute(HierarchicalTestExecutor.java:52)
+	at org.junit.platform.engine.support.hierarchical.HierarchicalTestEngine.execute(HierarchicalTestEngine.java:58)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.executeEngine(EngineExecutionOrchestrator.java:246)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.failOrExecuteEngine(EngineExecutionOrchestrator.java:218)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:179)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:108)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.lambda$execute$0(EngineExecutionOrchestrator.java:66)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.withInterceptedStreams(EngineExecutionOrchestrator.java:157)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:65)
+	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:125)
+	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:114)
+	at org.junit.platform.launcher.core.DelegatingLauncher.execute(DelegatingLauncher.java:58)
+	at org.junit.platform.launcher.core.InterceptingLauncher.lambda$execute$2(InterceptingLauncher.java:57)
+	at org.junit.platform.launcher.core.ClasspathAlignmentCheckingLauncherInterceptor.intercept(ClasspathAlignmentCheckingLauncherInterceptor.java:25)
+	at org.junit.platform.launcher.core.InterceptingLauncher.execute(InterceptingLauncher.java:56)
+	at org.junit.platform.launcher.core.DelegatingLauncher.execute(DelegatingLauncher.java:58)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.apache.maven.surefire.api.util.ReflectionUtils.invokeMethodWithArray(ReflectionUtils.java:125)
+	at org.apache.maven.surefire.junitplatform.LauncherAdapter.executeWithCancellationToken(LauncherAdapter.java:68)
+	at org.apache.maven.surefire.junitplatform.LauncherAdapter.execute(LauncherAdapter.java:54)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.execute(JUnitPlatformProvider.java:203)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invokeAllTests(JUnitPlatformProvider.java:168)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invoke(JUnitPlatformProvider.java:136)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:385)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
+01:55:10.132 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:10.131166811Z endUtc=2026-10-06T22:55:10.132650371Z elapsedMs=1 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+]]></system-out>
+  </testcase>
+  <testcase name="fix141OwnerTimeoutReconciliationLocksSymbolBeforeDeliveryDeterministic" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.038">
+    <system-out><![CDATA[01:55:10.172 [pool-18-thread-2] WARN com.crypto.shared.SharedAnalysisDispatcher -- [FIX-141][OWNER_TIMEOUT_CANDIDATE] event=1; quietSeconds=3600, no durable evidence found; NOT isolated automatically - diagnostic only, pending real owner fencing
+01:55:10.172 [pool-18-thread-2] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-141][OWNER_TIMEOUT_CANDIDATES] candidates=1, checked=1
+]]></system-out>
+  </testcase>
+  <testcase name="twoInstancesRecoveryFirstPersistOnlyLiveWorkOwner" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.114">
+    <system-out><![CDATA[01:55:10.205 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:10.197445Z
+01:55:10.209 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:10.207853405Z endUtc=2026-10-06T22:55:10.208931546Z elapsedMs=1 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.211 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:10.210045390Z endUtc=2026-10-06T22:55:10.211537944Z elapsedMs=1 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.213 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:10.211638234Z endUtc=2026-10-06T22:55:10.212955374Z elapsedMs=1 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.215 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:10.213071128Z endUtc=2026-10-06T22:55:10.215581011Z elapsedMs=2 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.219 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=2 phase=0 startUtc=2026-10-06T22:55:10.218144365Z endUtc=2026-10-06T22:55:10.219098589Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.221 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=2 phase=1 startUtc=2026-10-06T22:55:10.219805812Z endUtc=2026-10-06T22:55:10.221255511Z elapsedMs=1 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.222 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=2 phase=2 startUtc=2026-10-06T22:55:10.221345306Z endUtc=2026-10-06T22:55:10.222461584Z elapsedMs=1 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.224 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=2 phase=3 startUtc=2026-10-06T22:55:10.222544258Z endUtc=2026-10-06T22:55:10.224097012Z elapsedMs=1 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.228 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=3 phase=0 startUtc=2026-10-06T22:55:10.226442688Z endUtc=2026-10-06T22:55:10.228454833Z elapsedMs=1 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.230 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=3 phase=1 startUtc=2026-10-06T22:55:10.229263979Z endUtc=2026-10-06T22:55:10.230362030Z elapsedMs=1 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.231 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=3 phase=2 startUtc=2026-10-06T22:55:10.230456752Z endUtc=2026-10-06T22:55:10.231569355Z elapsedMs=1 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.232 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=3 phase=3 startUtc=2026-10-06T22:55:10.231671859Z endUtc=2026-10-06T22:55:10.232758813Z elapsedMs=1 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.239 [pool-22-thread-1] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=LIVE, event=2, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=1042
+01:55:10.240 [pool-22-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-137][WORKER_START] event=2, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.197445Z, close=2026-10-06T22:55:09.197445Z, liveSource=true
+01:55:10.240 [pool-22-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=2, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.197445Z, stage=COORDINATION_LOCK, elapsedMs=0
+01:55:10.240 [pool-22-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- Processing committed CandleClosedEvent: symbol=BTCUSDT, interval=1m, openTime=2026-10-06T22:55:00.197445Z
+01:55:10.240 [pool-22-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=2, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.197445Z, stage=DATA_QUALITY, elapsedMs=0
+01:55:10.241 [pool-22-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=2, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.197445Z, stage=INDICATORS, elapsedMs=0
+01:55:10.241 [pool-22-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=2, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.197445Z, stage=EXISTING_SIGNAL_CHECK, elapsedMs=0
+01:55:10.241 [pool-22-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=2, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.197445Z, stage=LIVE_SIGNAL_AND_REGISTRATION, elapsedMs=0
+01:55:10.243 [pool-22-thread-1] INFO com.crypto.execution.processing.SignalProcessingStore -- [FIX-132][PROCESSING_OWNER] event=2, signal=700
+01:55:10.247 [main] WARN com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][LANE_BLOCKED] lane=BTCUSDT|1m, reason=RUNNING_OWNER, event=2
+01:55:10.259 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=HISTORY, lanesChecked=6, submitted=0, active=0, elapsedMs=15, sourcePool={}
+01:55:10.261 [pool-22-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-153][SIGNAL_SAVED] mode=LIVE, event=2, signal=700, symbol=BTCUSDT, interval=1m, candleOpenUtc=2026-10-06T22:55:00.197445Z, candleCloseUtc=null, generatedUtc=null, rowCreatedUtc=null, serviceReturnedUtc=2026-10-06T22:55:10.261386670Z, serviceReturnedKsa=2026-10-07T01:55:10.261386670+03:00, liveCloseToGenerationMs=null; historical generatedUtc is an as-of clock, signal save does not imply a wallet trade
+01:55:10.261 [pool-22-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=2, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.197445Z, stage=SIGNAL_PROCESSING, elapsedMs=20
+01:55:10.267 [pool-22-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- Automatic candle flow completed: symbol=BTCUSDT, interval=1m, openTime=2026-10-06T22:55:00.197445Z, score=0, decision=null, paperPositionOpened=false
+01:55:10.267 [pool-22-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-137][WORKER_END] event=2, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.197445Z, outcome=COMPLETED, elapsedMs=27
+01:55:10.268 [pool-22-thread-1] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=LIVE, event=2, lane=BTCUSDT|1m, outcome=COMPLETED, outcomeCommitted=true, elapsedMs=28
+01:55:10.269 [pool-22-thread-1] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=LIVE, event=2, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:55:09.197445Z, claimMs=1
+01:55:10.273 [pool-22-thread-1] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=1, active=0, elapsedMs=36, sourcePool={}
+01:55:10.276 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=HISTORY, event=3, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=181079
+01:55:10.278 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-137][WORKER_START] event=3, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:51:10.197445Z, close=2026-10-06T22:52:09.197445Z, liveSource=false
+01:55:10.279 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=3, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:51:10.197445Z, stage=COORDINATION_LOCK, elapsedMs=0
+01:55:10.279 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- Processing committed CandleClosedEvent: symbol=BTCUSDT, interval=1m, openTime=2026-10-06T22:51:10.197445Z
+01:55:10.279 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=3, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:51:10.197445Z, stage=DATA_QUALITY, elapsedMs=0
+01:55:10.279 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=3, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:51:10.197445Z, stage=INDICATORS, elapsedMs=0
+01:55:10.279 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=3, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:51:10.197445Z, stage=EXISTING_SIGNAL_CHECK, elapsedMs=0
+01:55:10.279 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=3, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:51:10.197445Z, stage=HISTORICAL_SIGNAL, elapsedMs=0
+01:55:10.279 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-153][SIGNAL_SAVED] mode=HISTORY, event=3, signal=701, symbol=BTCUSDT, interval=1m, candleOpenUtc=2026-10-06T22:51:10.197445Z, candleCloseUtc=null, generatedUtc=null, rowCreatedUtc=null, serviceReturnedUtc=2026-10-06T22:55:10.279832402Z, serviceReturnedKsa=2026-10-07T01:55:10.279832402+03:00, liveCloseToGenerationMs=null; historical generatedUtc is an as-of clock, signal save does not imply a wallet trade
+01:55:10.280 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-137][WORKER_END] event=3, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:51:10.197445Z, outcome=HISTORICAL_ONLY, elapsedMs=1
+01:55:10.280 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=HISTORY, event=3, lane=BTCUSDT|1m, outcome=HISTORICAL_ONLY, outcomeCommitted=true, elapsedMs=4
+01:55:10.281 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=HISTORY, event=3, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:52:09.197445Z, claimMs=1
+]]></system-out>
+  </testcase>
+  <testcase name="approvedBoundaryWithAdequateSourceHistoryPassesStartup" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.041">
+    <system-out><![CDATA[01:55:10.325 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-132][SOURCE_CONFIGURATION] mode=LIVE, readPool=3, priceWorkers=2, pendingPerSymbol=200, publicationSource=collector
+]]></system-out>
+  </testcase>
+  <testcase name="fix138FreshCloseBypassesOldPendingWithoutExecutingOldWork" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.031">
+    <system-out><![CDATA[01:55:10.355 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=LIVE, event=2, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=1006
+01:55:10.356 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=LIVE, event=2, lane=BTCUSDT|1m, outcome=COMPLETED, outcomeCommitted=true, elapsedMs=1
+01:55:10.356 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=LIVE, event=2, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:55:09.348477Z, claimMs=1
+01:55:10.360 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=1, active=0, elapsedMs=8, sourcePool={}
+]]></system-out>
+  </testcase>
+  <testcase name="fix141ReconcileAnalysisOnlyReviewsAdvancesPastStuckRowsInsteadOfStarvingLaterOnes" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.097">
+    <system-out><![CDATA[01:55:10.449 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][ANALYSIS_REVIEW_ISOLATED] event=65; completed attempt, no processing work or wallet evidence; no retry; transaction pending commit
+01:55:10.449 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-141][REVIEW_BACKLOG_RECONCILED] isolated=1, checked=1
+]]></system-out>
+  </testcase>
+  <testcase name="formingPriceStillProtectsButNeverTriggersAnalysis" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.033">
+    <system-out><![CDATA[01:55:10.478 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:10.474202Z
+01:55:10.480 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:10.479551567Z endUtc=2026-10-06T22:55:10.480188935Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.482 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:10.480701856Z endUtc=2026-10-06T22:55:10.481544182Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.483 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:10.482885098Z endUtc=2026-10-06T22:55:10.483880354Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.487 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:10.483953784Z endUtc=2026-10-06T22:55:10.484503100Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.490 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=0, active=0, elapsedMs=5, sourcePool={}
+]]></system-out>
+  </testcase>
+  <testcase name="systemValidatedMarkerWithoutExactDurableAuditRemainsBlocked" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.097">
+    <system-out><![CDATA[01:55:10.584 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][SYMBOL_READINESS] symbol=BTCUSDT, reason=APPROVAL_AUDIT_MISSING, checkedUtc=2026-10-06T22:55:10.584387760Z, checkedKsa=2026-10-07T01:55:10.584387940+03:00; audited first-activation policy, no uncertain retry
+01:55:10.585 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][STARTUP_READINESS] {readySymbols=[], status=NO_READY_SYMBOLS, checkValiditySeconds=60, observedUtc=2026-10-06T22:55:10.585323496Z, managed=true, observedKsa=2026-10-07T01:55:10.585323496+03:00, blockedSymbols={BTCUSDT={checkedKsa=2026-10-07T01:55:10.584326407+03:00, checkedUtc=2026-10-06T22:55:10.584326407Z, reason=APPROVAL_AUDIT_MISSING}}}; process stays available, validated first cutovers may activate automatically, uncertain symbols receive no new shared attempts
+]]></system-out>
+  </testcase>
+  <testcase name="missingAuditDoesNotCrashAndRecheckRequiresActualRestoredAudit" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.051">
+    <system-out><![CDATA[01:55:10.631 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][SYMBOL_READINESS] symbol=BTCUSDT, reason=APPROVAL_AUDIT_MISSING, checkedUtc=2026-10-06T22:55:10.631322792Z, checkedKsa=2026-10-07T01:55:10.631322992+03:00; audited first-activation policy, no uncertain retry
+01:55:10.631 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][STARTUP_READINESS] {readySymbols=[], status=NO_READY_SYMBOLS, checkValiditySeconds=60, observedUtc=2026-10-06T22:55:10.631525086Z, managed=true, observedKsa=2026-10-07T01:55:10.631525086+03:00, blockedSymbols={BTCUSDT={checkedKsa=2026-10-07T01:55:10.631310744+03:00, checkedUtc=2026-10-06T22:55:10.631310744Z, reason=APPROVAL_AUDIT_MISSING}}}; process stays available, validated first cutovers may activate automatically, uncertain symbols receive no new shared attempts
+01:55:10.637 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][SYMBOL_READINESS] symbol=BTCUSDT, reason=READY, checkedUtc=2026-10-06T22:55:10.637358314Z, checkedKsa=2026-10-07T01:55:10.637358394+03:00; audited first-activation policy, no uncertain retry
+]]></system-out>
+  </testcase>
+  <testcase name="expiredNeverStartedObservationIsAuditedAndNotReplayedBeforeActivation" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.057">
+    <system-out><![CDATA[01:55:10.697 [main] INFO com.crypto.shared.SharedAutomaticActivation -- [FIX-148][AUTOMATIC_FIRST_CUTOVER] symbol=BTCUSDT, sequence=100, boundaryUtc=2026-10-06T22:55:10.692251Z, boundaryKsa=2026-10-07T01:55:10.692251+03:00, reference=FIX-148-AUTO-a1bcf055-2cd8-4ce0-84e9-03324d83bfba; no historical execution replay
+]]></system-out>
+  </testcase>
+  <testcase name="sequenceGapNeverAdvancesPastMissingEvent" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.023">
+    <system-out><![CDATA[01:55:10.721 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:10.717340Z
+01:55:10.721 [main] ERROR com.crypto.shared.SharedMarketConsumer -- [FIX-132][SEQUENCE_GAP] symbol=BTCUSDT, expected=1, found=2
+]]></system-out>
+  </testcase>
+  <testcase name="approvalMustMatchBoundaryAndImmutableAudit" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.023">
+    <system-out><![CDATA[01:55:10.743 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-132][SOURCE_CONFIGURATION] mode=LIVE, readPool=3, priceWorkers=2, pendingPerSymbol=200, publicationSource=collector
+01:55:10.744 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-132][SOURCE_CONFIGURATION] mode=LIVE, readPool=3, priceWorkers=2, pendingPerSymbol=200, publicationSource=collector
+]]></system-out>
+  </testcase>
+  <testcase name="twoInstancesLiveFirstPersistOnlyLiveWorkOwner" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.069">
+    <system-out><![CDATA[01:55:10.767 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:10.761882Z
+01:55:10.770 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:10.768948498Z endUtc=2026-10-06T22:55:10.769996573Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.772 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:10.770730506Z endUtc=2026-10-06T22:55:10.771950871Z elapsedMs=1 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.773 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:10.772067146Z endUtc=2026-10-06T22:55:10.772987619Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.773 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:10.773076934Z endUtc=2026-10-06T22:55:10.773922004Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.776 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=2 phase=0 startUtc=2026-10-06T22:55:10.775798284Z endUtc=2026-10-06T22:55:10.776648703Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.778 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=2 phase=1 startUtc=2026-10-06T22:55:10.777270177Z endUtc=2026-10-06T22:55:10.778238803Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.779 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=2 phase=2 startUtc=2026-10-06T22:55:10.778325223Z endUtc=2026-10-06T22:55:10.779200128Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.780 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=2 phase=3 startUtc=2026-10-06T22:55:10.779302943Z endUtc=2026-10-06T22:55:10.780171127Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.783 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=3 phase=0 startUtc=2026-10-06T22:55:10.782352636Z endUtc=2026-10-06T22:55:10.783167742Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.784 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=3 phase=1 startUtc=2026-10-06T22:55:10.783717178Z endUtc=2026-10-06T22:55:10.784588197Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.785 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=3 phase=2 startUtc=2026-10-06T22:55:10.784677051Z endUtc=2026-10-06T22:55:10.785492056Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.786 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=3 phase=3 startUtc=2026-10-06T22:55:10.785572206Z endUtc=2026-10-06T22:55:10.786484287Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.793 [pool-35-thread-1] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=LIVE, event=1, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=1031
+01:55:10.793 [pool-35-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-137][WORKER_START] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.761882Z, close=2026-10-06T22:55:09.761882Z, liveSource=true
+01:55:10.793 [pool-35-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.761882Z, stage=COORDINATION_LOCK, elapsedMs=0
+01:55:10.793 [pool-35-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- Processing committed CandleClosedEvent: symbol=BTCUSDT, interval=1m, openTime=2026-10-06T22:55:00.761882Z
+01:55:10.793 [pool-35-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.761882Z, stage=DATA_QUALITY, elapsedMs=0
+01:55:10.793 [pool-35-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.761882Z, stage=INDICATORS, elapsedMs=0
+01:55:10.793 [pool-35-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.761882Z, stage=EXISTING_SIGNAL_CHECK, elapsedMs=0
+01:55:10.794 [pool-35-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.761882Z, stage=LIVE_SIGNAL_AND_REGISTRATION, elapsedMs=0
+01:55:10.794 [pool-35-thread-1] INFO com.crypto.execution.processing.SignalProcessingStore -- [FIX-132][PROCESSING_OWNER] event=1, signal=700
+01:55:10.797 [main] WARN com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][LANE_BLOCKED] lane=BTCUSDT|1m, reason=RUNNING_OWNER, event=1
+01:55:10.800 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=HISTORY, lanesChecked=6, submitted=0, active=0, elapsedMs=5, sourcePool={}
+01:55:10.802 [pool-35-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-153][SIGNAL_SAVED] mode=LIVE, event=1, signal=700, symbol=BTCUSDT, interval=1m, candleOpenUtc=2026-10-06T22:55:00.761882Z, candleCloseUtc=null, generatedUtc=null, rowCreatedUtc=null, serviceReturnedUtc=2026-10-06T22:55:10.802036195Z, serviceReturnedKsa=2026-10-07T01:55:10.802036195+03:00, liveCloseToGenerationMs=null; historical generatedUtc is an as-of clock, signal save does not imply a wallet trade
+01:55:10.802 [pool-35-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.761882Z, stage=SIGNAL_PROCESSING, elapsedMs=8
+01:55:10.803 [pool-35-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- Automatic candle flow completed: symbol=BTCUSDT, interval=1m, openTime=2026-10-06T22:55:00.761882Z, score=0, decision=null, paperPositionOpened=false
+01:55:10.804 [pool-35-thread-1] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-137][WORKER_END] event=1, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:55:00.761882Z, outcome=COMPLETED, elapsedMs=10
+01:55:10.804 [pool-35-thread-1] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=LIVE, event=1, lane=BTCUSDT|1m, outcome=COMPLETED, outcomeCommitted=true, elapsedMs=11
+01:55:10.804 [pool-35-thread-1] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=LIVE, event=1, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:55:09.761882Z, claimMs=1
+01:55:10.806 [pool-35-thread-1] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=1, active=0, elapsedMs=15, sourcePool={}
+01:55:10.809 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=HISTORY, event=3, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=181047
+01:55:10.809 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-137][WORKER_START] event=3, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:51:10.761882Z, close=2026-10-06T22:52:09.761882Z, liveSource=false
+01:55:10.810 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=3, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:51:10.761882Z, stage=COORDINATION_LOCK, elapsedMs=0
+01:55:10.810 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- Processing committed CandleClosedEvent: symbol=BTCUSDT, interval=1m, openTime=2026-10-06T22:51:10.761882Z
+01:55:10.810 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=3, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:51:10.761882Z, stage=DATA_QUALITY, elapsedMs=0
+01:55:10.810 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=3, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:51:10.761882Z, stage=INDICATORS, elapsedMs=0
+01:55:10.810 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=3, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:51:10.761882Z, stage=EXISTING_SIGNAL_CHECK, elapsedMs=0
+01:55:10.810 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=3, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:51:10.761882Z, stage=HISTORICAL_SIGNAL, elapsedMs=0
+01:55:10.810 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-153][SIGNAL_SAVED] mode=HISTORY, event=3, signal=701, symbol=BTCUSDT, interval=1m, candleOpenUtc=2026-10-06T22:51:10.761882Z, candleCloseUtc=null, generatedUtc=null, rowCreatedUtc=null, serviceReturnedUtc=2026-10-06T22:55:10.810884385Z, serviceReturnedKsa=2026-10-07T01:55:10.810884385+03:00, liveCloseToGenerationMs=null; historical generatedUtc is an as-of clock, signal save does not imply a wallet trade
+01:55:10.811 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-137][WORKER_END] event=3, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:51:10.761882Z, outcome=HISTORICAL_ONLY, elapsedMs=1
+01:55:10.811 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=HISTORY, event=3, lane=BTCUSDT|1m, outcome=HISTORICAL_ONLY, outcomeCommitted=true, elapsedMs=2
+01:55:10.811 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=HISTORY, event=3, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:52:09.761882Z, claimMs=1
+]]></system-out>
+  </testcase>
+  <testcase name="closedLiveEventRegistersAnalysisOnlyAfterProtectionAndObserver" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.045">
+    <system-out><![CDATA[01:55:10.841 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:10.837848Z
+01:55:10.846 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=0, active=0, elapsedMs=3, sourcePool={}
+01:55:10.847 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:10.846872972Z endUtc=2026-10-06T22:55:10.847785063Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.849 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:10.848382451Z endUtc=2026-10-06T22:55:10.849325519Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.850 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:10.849418158Z endUtc=2026-10-06T22:55:10.850220344Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.851 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:10.850303359Z endUtc=2026-10-06T22:55:10.850954918Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.852 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=LIVE, event=1, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=1014
+01:55:10.853 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=LIVE, event=1, lane=BTCUSDT|1m, outcome=COMPLETED, outcomeCommitted=true, elapsedMs=1
+01:55:10.853 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=LIVE, event=1, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:55:09.837848Z, claimMs=0
+]]></system-out>
+  </testcase>
+  <testcase name="unapprovedCoinDoesNotAbortInitializationOrStopApprovedCoin" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.045">
+    <system-out><![CDATA[01:55:10.900 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][SYMBOL_READINESS] symbol=SOLUSDT, reason=CUTOVER_REQUIRED, checkedUtc=2026-10-06T22:55:10.900524350Z, checkedKsa=2026-10-07T01:55:10.900524531+03:00; audited first-activation policy, no uncertain retry
+01:55:10.903 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][SYMBOL_READINESS] symbol=BTCUSDT, reason=READY, checkedUtc=2026-10-06T22:55:10.903160263Z, checkedKsa=2026-10-07T01:55:10.903160443+03:00; audited first-activation policy, no uncertain retry
+01:55:10.903 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][STARTUP_READINESS] {readySymbols=[BTCUSDT], status=DEGRADED, checkValiditySeconds=60, observedUtc=2026-10-06T22:55:10.903293162Z, managed=true, observedKsa=2026-10-07T01:55:10.903293162+03:00, blockedSymbols={SOLUSDT={checkedKsa=2026-10-07T01:55:10.900506303+03:00, checkedUtc=2026-10-06T22:55:10.900506303Z, reason=CUTOVER_REQUIRED}}}; process stays available, validated first cutovers may activate automatically, uncertain symbols receive no new shared attempts
+01:55:10.904 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:10.880563Z
+01:55:10.905 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:10.905202142Z endUtc=2026-10-06T22:55:10.905790055Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.907 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:10.906254644Z endUtc=2026-10-06T22:55:10.906927475Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.907 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:10.907010810Z endUtc=2026-10-06T22:55:10.907560336Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.908 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:10.907668769Z endUtc=2026-10-06T22:55:10.908175771Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+]]></system-out>
+  </testcase>
+  <testcase name="orphanProcessingOwnershipCannotAuthorizeRestart" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.014">
+    <system-out><![CDATA[01:55:10.922 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-132][SOURCE_CONFIGURATION] mode=LIVE, readPool=3, priceWorkers=2, pendingPerSymbol=200, publicationSource=collector
+]]></system-out>
+  </testcase>
+  <testcase name="observationAutoSeedAdvancesWithoutGrantingLiveApproval" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.02">
+    <system-out><![CDATA[01:55:10.938 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:10.935452Z
+01:55:10.940 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:10.939508691Z endUtc=2026-10-06T22:55:10.939859879Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.940 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:10.939983284Z endUtc=2026-10-06T22:55:10.940235053Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.940 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:10.940297566Z endUtc=2026-10-06T22:55:10.940533802Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.940 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:10.940593672Z endUtc=2026-10-06T22:55:10.940845680Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:10.941 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-132][SOURCE_CONFIGURATION] mode=LIVE, readPool=3, priceWorkers=2, pendingPerSymbol=200, publicationSource=collector
+01:55:10.942 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-132][SOURCE_CONFIGURATION] mode=LIVE, readPool=3, priceWorkers=2, pendingPerSymbol=200, publicationSource=collector
+]]></system-out>
+  </testcase>
+  <testcase name="approvalRejectsUnprivilegedChangedQuarantinedAndUnfinishedState" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.068">
+    <system-out><![CDATA[01:55:11.002 [main] INFO com.fix132.approval.CutoverApprovalService -- [FIX-132][CUTOVER_PREVIEW] proposal=c7298c48-1d08-4bfd-954c-e62b07ae8446, symbol=BTCUSDT, operation=REAPPROVAL, actor=jean, sequence=0, cutoverUtc=2026-10-06T22:54:10.980918Z
+01:55:11.007 [main] INFO com.fix132.approval.CutoverApprovalService -- [FIX-132][CUTOVER_PREVIEW] proposal=af92e2b4-08c1-4348-93c4-b5b2e2cc22cc, symbol=BTCUSDT, operation=REAPPROVAL, actor=jean, sequence=0, cutoverUtc=2026-10-06T22:54:10.980918Z
+]]></system-out>
+  </testcase>
+  <testcase name="fix138BusyHistoricalPoolDoesNotOccupyLiveExecutorOrDuplicateLane" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.027">
+    <system-out><![CDATA[01:55:11.031 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=HISTORY, event=1, lane=BTCUSDT|1m, closeUtc=2026-10-06T21:55:11.027240Z, claimMs=0
+01:55:11.031 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=HISTORY, lanesChecked=1, submitted=1, active=1, elapsedMs=1, sourcePool={}
+01:55:11.033 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=LIVE, event=3, lane=BTCUSDT|5m, queueWaitMs=0, closeAgeMs=1006
+01:55:11.034 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=LIVE, event=3, lane=BTCUSDT|5m, outcome=COMPLETED, outcomeCommitted=true, elapsedMs=0
+01:55:11.034 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=LIVE, event=3, lane=BTCUSDT|5m, closeUtc=2026-10-06T22:55:10.027240Z, claimMs=0
+01:55:11.035 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=1, active=0, elapsedMs=3, sourcePool={}
+01:55:11.036 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=HISTORY, event=1, lane=BTCUSDT|1m, queueWaitMs=4, closeAgeMs=3600009
+01:55:11.037 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=HISTORY, event=1, lane=BTCUSDT|1m, outcome=COMPLETED, outcomeCommitted=true, elapsedMs=5
+01:55:11.038 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=LIVE, event=2, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=1010
+01:55:11.038 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=LIVE, event=2, lane=BTCUSDT|1m, outcome=COMPLETED, outcomeCommitted=true, elapsedMs=0
+01:55:11.038 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=LIVE, event=2, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:55:10.027240Z, claimMs=0
+]]></system-out>
+  </testcase>
+  <testcase name="activationAuditFailureRollsBackRetirementAndReadinessMutation" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.034"/>
+  <testcase name="malformedCopyRollsBackCheckpointAndEntireLocalBatch" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.022">
+    <system-out><![CDATA[01:55:11.094 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=2, lastFetchedObservationUtc=2026-10-06T22:55:11.091416Z
+01:55:11.096 [main] ERROR com.crypto.shared.SharedMarketConsumer -- [FIX-132][SOURCE_UNAVAILABLE] discovery failed; checkpoint not silently advanced
+org.springframework.dao.DataIntegrityViolationException: PreparedStatementCallback; SQL [INSERT INTO shared_market_event_delivery(source_event_id,symbol,symbol_sequence,interval_code,
+candle_open_time,candle_close_time,closed,observed_at,received_at,source_created_at,price,source,classification)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+]; NULL not allowed for column "price"; SQL statement:
+INSERT INTO shared_market_event_delivery(source_event_id,symbol,symbol_sequence,interval_code,
+candle_open_time,candle_close_time,closed,observed_at,received_at,source_created_at,price,source,classification)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) [23502-240]
+	at org.springframework.jdbc.support.SQLExceptionSubclassTranslator.doTranslate(SQLExceptionSubclassTranslator.java:106)
+	at org.springframework.jdbc.support.AbstractFallbackSQLExceptionTranslator.translate(AbstractFallbackSQLExceptionTranslator.java:102)
+	at org.springframework.jdbc.core.JdbcTemplate.translateException(JdbcTemplate.java:1549)
+	at org.springframework.jdbc.core.JdbcTemplate.execute(JdbcTemplate.java:689)
+	at org.springframework.jdbc.core.JdbcTemplate.update(JdbcTemplate.java:966)
+	at org.springframework.jdbc.core.JdbcTemplate.update(JdbcTemplate.java:1010)
+	at org.springframework.jdbc.core.JdbcTemplate.update(JdbcTemplate.java:1020)
+	at com.crypto.shared.SharedMarketConsumer.lambda$discover$12(SharedMarketConsumer.java:370)
+	at org.springframework.transaction.support.TransactionOperations.lambda$executeWithoutResult$0(TransactionOperations.java:68)
+	at org.springframework.transaction.support.TransactionTemplate.execute(TransactionTemplate.java:137)
+	at org.springframework.transaction.support.TransactionOperations.executeWithoutResult(TransactionOperations.java:67)
+	at com.crypto.shared.SharedMarketConsumer.discover(SharedMarketConsumer.java:352)
+	at com.crypto.shared.SharedMarketConsumerTest.malformedCopyRollsBackCheckpointAndEntireLocalBatch(SharedMarketConsumerTest.java:199)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:701)
+	at org.junit.platform.commons.support.ReflectionSupport.invokeMethod(ReflectionSupport.java:502)
+	at org.junit.jupiter.engine.support.MethodReflectionUtils.invoke(MethodReflectionUtils.java:45)
+	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:61)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:124)
+	at org.junit.jupiter.engine.extension.SameThreadTimeoutInvocation.proceed(SameThreadTimeoutInvocation.java:51)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.intercept(TimeoutExtension.java:163)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestableMethod(TimeoutExtension.java:148)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestMethod(TimeoutExtension.java:86)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker$ReflectiveInterceptorCall.lambda$ofVoidMethod$0(InterceptingExecutableInvoker.java:123)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.lambda$invoke$0(InterceptingExecutableInvoker.java:105)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$InterceptedInvocation.proceed(InvocationInterceptorChain.java:99)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.proceed(InvocationInterceptorChain.java:66)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.chainAndInvoke(InvocationInterceptorChain.java:47)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.invoke(InvocationInterceptorChain.java:39)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:104)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:98)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invokeVoid(InterceptingExecutableInvoker.java:71)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.lambda$invokeTestMethod$0(TestMethodTestDescriptor.java:219)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.invokeTestMethod(TestMethodTestDescriptor.java:215)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:157)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:70)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$2(NodeTestTask.java:176)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$1(NodeTestTask.java:166)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$0(NodeTestTask.java:164)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:163)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:116)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:42)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$2(NodeTestTask.java:180)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$1(NodeTestTask.java:166)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$0(NodeTestTask.java:164)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:163)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:116)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:42)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$2(NodeTestTask.java:180)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$1(NodeTestTask.java:166)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$0(NodeTestTask.java:164)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:163)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:116)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.submit(SameThreadHierarchicalTestExecutorService.java:36)
+	at org.junit.platform.engine.support.hierarchical.HierarchicalTestExecutor.execute(HierarchicalTestExecutor.java:52)
+	at org.junit.platform.engine.support.hierarchical.HierarchicalTestEngine.execute(HierarchicalTestEngine.java:58)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.executeEngine(EngineExecutionOrchestrator.java:246)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.failOrExecuteEngine(EngineExecutionOrchestrator.java:218)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:179)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:108)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.lambda$execute$0(EngineExecutionOrchestrator.java:66)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.withInterceptedStreams(EngineExecutionOrchestrator.java:157)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:65)
+	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:125)
+	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:114)
+	at org.junit.platform.launcher.core.DelegatingLauncher.execute(DelegatingLauncher.java:58)
+	at org.junit.platform.launcher.core.InterceptingLauncher.lambda$execute$2(InterceptingLauncher.java:57)
+	at org.junit.platform.launcher.core.ClasspathAlignmentCheckingLauncherInterceptor.intercept(ClasspathAlignmentCheckingLauncherInterceptor.java:25)
+	at org.junit.platform.launcher.core.InterceptingLauncher.execute(InterceptingLauncher.java:56)
+	at org.junit.platform.launcher.core.DelegatingLauncher.execute(DelegatingLauncher.java:58)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.apache.maven.surefire.api.util.ReflectionUtils.invokeMethodWithArray(ReflectionUtils.java:125)
+	at org.apache.maven.surefire.junitplatform.LauncherAdapter.executeWithCancellationToken(LauncherAdapter.java:68)
+	at org.apache.maven.surefire.junitplatform.LauncherAdapter.execute(LauncherAdapter.java:54)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.execute(JUnitPlatformProvider.java:203)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invokeAllTests(JUnitPlatformProvider.java:168)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invoke(JUnitPlatformProvider.java:136)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:385)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
+Caused by: org.h2.jdbc.JdbcSQLIntegrityConstraintViolationException: NULL not allowed for column "price"; SQL statement:
+INSERT INTO shared_market_event_delivery(source_event_id,symbol,symbol_sequence,interval_code,
+candle_open_time,candle_close_time,closed,observed_at,received_at,source_created_at,price,source,classification)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) [23502-240]
+	at org.h2.message.DbException.getJdbcSQLException(DbException.java:520)
+	at org.h2.message.DbException.getJdbcSQLException(DbException.java:489)
+	at org.h2.message.DbException.get(DbException.java:223)
+	at org.h2.message.DbException.get(DbException.java:199)
+	at org.h2.table.Column.validateConvertUpdateSequence(Column.java:406)
+	at org.h2.table.Table.convertInsertRow(Table.java:948)
+	at org.h2.command.dml.Insert.insertRows(Insert.java:167)
+	at org.h2.command.dml.Insert.update(Insert.java:135)
+	at org.h2.command.dml.DataChangeStatement.update(DataChangeStatement.java:77)
+	at org.h2.command.CommandContainer.update(CommandContainer.java:139)
+	at org.h2.command.Command.executeUpdate(Command.java:306)
+	at org.h2.command.Command.executeUpdate(Command.java:250)
+	at org.h2.jdbc.JdbcPreparedStatement.executeUpdateInternal(JdbcPreparedStatement.java:213)
+	at org.h2.jdbc.JdbcPreparedStatement.executeUpdate(JdbcPreparedStatement.java:172)
+	at org.springframework.jdbc.core.JdbcTemplate.lambda$update$0(JdbcTemplate.java:971)
+	at org.springframework.jdbc.core.JdbcTemplate.execute(JdbcTemplate.java:670)
+	... 91 common frames omitted
+]]></system-out>
+  </testcase>
+  <testcase name="fix138RejectedUnstartedTaskReleasesOnlyItsOwnClaim" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.02">
+    <system-out><![CDATA[01:55:11.115 [main] WARN com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][POOL_FULL] mode=LIVE, event=1, lane=BTCUSDT|1m; unsubmitted claim released
+01:55:11.117 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=0, active=0, elapsedMs=4, sourcePool={}
+]]></system-out>
+  </testcase>
+  <testcase name="sourceCheckFailureAndMissingActivationKeepProcessAvailableAndFailClosed" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.031">
+    <system-out><![CDATA[01:55:11.147 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][SYMBOL_READINESS] symbol=BTCUSDT, reason=SOURCE_HISTORY_MISSING, checkedUtc=2026-10-06T22:55:11.147745889Z, checkedKsa=2026-10-07T01:55:11.147746100+03:00; audited first-activation policy, no uncertain retry
+01:55:11.148 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][STARTUP_READINESS] {readySymbols=[], status=NO_READY_SYMBOLS, checkValiditySeconds=60, observedUtc=2026-10-06T22:55:11.147934933Z, managed=true, observedKsa=2026-10-07T01:55:11.147934933+03:00, blockedSymbols={BTCUSDT={checkedKsa=2026-10-07T01:55:11.147723075+03:00, checkedUtc=2026-10-06T22:55:11.147723075Z, reason=SOURCE_HISTORY_MISSING}}}; process stays available, validated first cutovers may activate automatically, uncertain symbols receive no new shared attempts
+01:55:11.148 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][SYMBOL_READINESS] symbol=BTCUSDT, reason=ACTIVATION_REQUIRED, checkedUtc=2026-10-06T22:55:11.148730990Z, checkedKsa=2026-10-07T01:55:11.148731100+03:00; audited first-activation policy, no uncertain retry
+01:55:11.149 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-132][SOURCE_CONFIGURATION] mode=LIVE, readPool=3, priceWorkers=2, pendingPerSymbol=200, publicationSource=collector
+]]></system-out>
+  </testcase>
+  <testcase name="higherSequenceWithPreCutoverObservationCannotExecute" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.019">
+    <system-out><![CDATA[01:55:11.164 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:11.161783Z
+01:55:11.166 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:11.165450212Z endUtc=2026-10-06T22:55:11.166162763Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:11.167 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:11.166684357Z endUtc=2026-10-06T22:55:11.167575607Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:11.168 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:11.167653774Z endUtc=2026-10-06T22:55:11.168233285Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:11.168 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:11.168301598Z endUtc=2026-10-06T22:55:11.168767038Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+]]></system-out>
+  </testcase>
+  <testcase name="reviewedApprovalHasAuthenticatedProvenanceAndAtomicAudit" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.045">
+    <system-out><![CDATA[01:55:11.199 [main] INFO com.fix132.approval.CutoverApprovalService -- [FIX-132][CUTOVER_PREVIEW] proposal=80d7b114-1ee0-4855-863e-9b78236be787, symbol=BTCUSDT, operation=FIRST_CUTOVER, actor=jean, sequence=10, cutoverUtc=2026-10-06T22:55:11.197800Z
+01:55:11.202 [main] INFO com.fix132.approval.CutoverApprovalService -- [FIX-132][CUTOVER_APPROVED] proposal=80d7b114-1ee0-4855-863e-9b78236be787, symbol=BTCUSDT, actor=jean, reference=review-132; activation remains separate
+01:55:11.207 [main] INFO com.fix132.approval.CutoverApprovalService -- [FIX-132][CUTOVER_PREVIEW] proposal=620b35b1-fb90-4e7e-9220-14b613741cd6, symbol=BTCUSDT, operation=REAPPROVAL, actor=jean, sequence=10, cutoverUtc=2026-10-06T22:55:11.197800Z
+01:55:11.209 [main] INFO com.fix132.approval.CutoverApprovalService -- [FIX-132][CUTOVER_APPROVED] proposal=620b35b1-fb90-4e7e-9220-14b613741cd6, symbol=BTCUSDT, actor=jean, reference=reapproval-preserves-history; activation remains separate
+01:55:11.211 [main] INFO com.fix132.approval.CutoverApprovalService -- [FIX-132][CUTOVER_PREVIEW] proposal=4cb950c3-c8cb-40d5-9c70-587208b7fc59, symbol=BTCUSDT, operation=REAPPROVAL, actor=jean, sequence=10, cutoverUtc=2026-10-06T22:55:11.197800Z
+]]></system-out>
+  </testcase>
+  <testcase name="fix138HistoricalClockYieldsToFreshSameLane" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.032">
+    <system-out><![CDATA[01:55:11.238 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=HISTORY, lanesChecked=6, submitted=0, active=0, elapsedMs=4, sourcePool={}
+01:55:11.240 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=LIVE, event=2, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=1009
+01:55:11.241 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=LIVE, event=2, lane=BTCUSDT|1m, outcome=COMPLETED, outcomeCommitted=true, elapsedMs=1
+01:55:11.242 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=LIVE, event=2, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:55:10.231406Z, claimMs=0
+01:55:11.245 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=1, active=0, elapsedMs=5, sourcePool={}
+]]></system-out>
+  </testcase>
+  <testcase name="fix141ReconcileAnalysisOnlyReviewsIsolatesClearRowDirectly" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.021">
+    <system-out><![CDATA[01:55:11.266 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][ANALYSIS_REVIEW_ISOLATED] event=1; completed attempt, no processing work or wallet evidence; no retry; transaction pending commit
+01:55:11.266 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-141][REVIEW_BACKLOG_RECONCILED] isolated=1, checked=1
+]]></system-out>
+  </testcase>
+  <testcase name="missingHistoryOrStaleClosedSourceContextDoesNotGrantAutomaticAuthority" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.056"/>
+  <testcase name="fix141ReconcileAnalysisOnlyReviewsSkipsFailedRowAndRevisitsItAfterWrapping" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.029">
+    <system-out><![CDATA[01:55:11.349 [main] WARN com.crypto.shared.SharedAnalysisDispatcher -- [FIX-141][REVIEW_RECONCILE_ROW_FAILED] event=1; left REVIEW_REQUIRED, will be retried after the cursor wraps
+org.springframework.dao.DataIntegrityViolationException: PreparedStatementCallback; SQL [UPDATE shared_market_event_delivery SET analysis_status='ANALYSIS_ONLY_REVIEW' WHERE source_event_id=? AND analysis_status='REVIEW_REQUIRED']; Check constraint violation: "test_fix141_reject_row1: "; SQL statement:
+UPDATE shared_market_event_delivery SET analysis_status='ANALYSIS_ONLY_REVIEW' WHERE source_event_id=? AND analysis_status='REVIEW_REQUIRED' [23513-240]
+	at org.springframework.jdbc.support.SQLExceptionSubclassTranslator.doTranslate(SQLExceptionSubclassTranslator.java:106)
+	at org.springframework.jdbc.support.AbstractFallbackSQLExceptionTranslator.translate(AbstractFallbackSQLExceptionTranslator.java:102)
+	at org.springframework.jdbc.core.JdbcTemplate.translateException(JdbcTemplate.java:1549)
+	at org.springframework.jdbc.core.JdbcTemplate.execute(JdbcTemplate.java:689)
+	at org.springframework.jdbc.core.JdbcTemplate.update(JdbcTemplate.java:966)
+	at org.springframework.jdbc.core.JdbcTemplate.update(JdbcTemplate.java:1010)
+	at org.springframework.jdbc.core.JdbcTemplate.update(JdbcTemplate.java:1020)
+	at com.crypto.shared.SharedAnalysisDispatcher.isolateAnalysisOnlyReview(SharedAnalysisDispatcher.java:259)
+	at com.crypto.shared.SharedAnalysisDispatcher.lambda$reconcileAnalysisOnlyReviews$5(SharedAnalysisDispatcher.java:344)
+	at org.springframework.transaction.support.TransactionTemplate.execute(TransactionTemplate.java:137)
+	at com.crypto.shared.SharedAnalysisDispatcher.reconcileAnalysisOnlyReviews(SharedAnalysisDispatcher.java:338)
+	at com.crypto.shared.SharedMarketConsumerTest.fix141ReconcileAnalysisOnlyReviewsSkipsFailedRowAndRevisitsItAfterWrapping(SharedMarketConsumerTest.java:887)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:701)
+	at org.junit.platform.commons.support.ReflectionSupport.invokeMethod(ReflectionSupport.java:502)
+	at org.junit.jupiter.engine.support.MethodReflectionUtils.invoke(MethodReflectionUtils.java:45)
+	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:61)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:124)
+	at org.junit.jupiter.engine.extension.SameThreadTimeoutInvocation.proceed(SameThreadTimeoutInvocation.java:51)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.intercept(TimeoutExtension.java:163)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestableMethod(TimeoutExtension.java:148)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestMethod(TimeoutExtension.java:86)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker$ReflectiveInterceptorCall.lambda$ofVoidMethod$0(InterceptingExecutableInvoker.java:123)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.lambda$invoke$0(InterceptingExecutableInvoker.java:105)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$InterceptedInvocation.proceed(InvocationInterceptorChain.java:99)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.proceed(InvocationInterceptorChain.java:66)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.chainAndInvoke(InvocationInterceptorChain.java:47)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.invoke(InvocationInterceptorChain.java:39)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:104)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:98)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invokeVoid(InterceptingExecutableInvoker.java:71)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.lambda$invokeTestMethod$0(TestMethodTestDescriptor.java:219)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.invokeTestMethod(TestMethodTestDescriptor.java:215)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:157)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:70)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$2(NodeTestTask.java:176)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$1(NodeTestTask.java:166)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$0(NodeTestTask.java:164)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:163)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:116)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:42)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$2(NodeTestTask.java:180)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$1(NodeTestTask.java:166)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$0(NodeTestTask.java:164)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:163)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:116)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:42)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$2(NodeTestTask.java:180)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$1(NodeTestTask.java:166)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$0(NodeTestTask.java:164)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:163)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:116)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.submit(SameThreadHierarchicalTestExecutorService.java:36)
+	at org.junit.platform.engine.support.hierarchical.HierarchicalTestExecutor.execute(HierarchicalTestExecutor.java:52)
+	at org.junit.platform.engine.support.hierarchical.HierarchicalTestEngine.execute(HierarchicalTestEngine.java:58)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.executeEngine(EngineExecutionOrchestrator.java:246)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.failOrExecuteEngine(EngineExecutionOrchestrator.java:218)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:179)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:108)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.lambda$execute$0(EngineExecutionOrchestrator.java:66)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.withInterceptedStreams(EngineExecutionOrchestrator.java:157)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:65)
+	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:125)
+	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:114)
+	at org.junit.platform.launcher.core.DelegatingLauncher.execute(DelegatingLauncher.java:58)
+	at org.junit.platform.launcher.core.InterceptingLauncher.lambda$execute$2(InterceptingLauncher.java:57)
+	at org.junit.platform.launcher.core.ClasspathAlignmentCheckingLauncherInterceptor.intercept(ClasspathAlignmentCheckingLauncherInterceptor.java:25)
+	at org.junit.platform.launcher.core.InterceptingLauncher.execute(InterceptingLauncher.java:56)
+	at org.junit.platform.launcher.core.DelegatingLauncher.execute(DelegatingLauncher.java:58)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.apache.maven.surefire.api.util.ReflectionUtils.invokeMethodWithArray(ReflectionUtils.java:125)
+	at org.apache.maven.surefire.junitplatform.LauncherAdapter.executeWithCancellationToken(LauncherAdapter.java:68)
+	at org.apache.maven.surefire.junitplatform.LauncherAdapter.execute(LauncherAdapter.java:54)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.execute(JUnitPlatformProvider.java:203)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invokeAllTests(JUnitPlatformProvider.java:168)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invoke(JUnitPlatformProvider.java:136)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:385)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
+Caused by: org.h2.jdbc.JdbcSQLIntegrityConstraintViolationException: Check constraint violation: "test_fix141_reject_row1: "; SQL statement:
+UPDATE shared_market_event_delivery SET analysis_status='ANALYSIS_ONLY_REVIEW' WHERE source_event_id=? AND analysis_status='REVIEW_REQUIRED' [23513-240]
+	at org.h2.message.DbException.getJdbcSQLException(DbException.java:520)
+	at org.h2.message.DbException.getJdbcSQLException(DbException.java:489)
+	at org.h2.message.DbException.get(DbException.java:223)
+	at org.h2.message.DbException.get(DbException.java:199)
+	at org.h2.constraint.ConstraintCheck.checkRow(ConstraintCheck.java:107)
+	at org.h2.table.Table.fireConstraints(Table.java:1208)
+	at org.h2.table.Table.fireBeforeRow(Table.java:1199)
+	at org.h2.command.dml.SetClauseList.prepareUpdate(SetClauseList.java:174)
+	at org.h2.command.dml.Update.update(Update.java:70)
+	at org.h2.command.dml.DataChangeStatement.update(DataChangeStatement.java:77)
+	at org.h2.command.CommandContainer.update(CommandContainer.java:139)
+	at org.h2.command.Command.executeUpdate(Command.java:306)
+	at org.h2.command.Command.executeUpdate(Command.java:250)
+	at org.h2.jdbc.JdbcPreparedStatement.executeUpdateInternal(JdbcPreparedStatement.java:213)
+	at org.h2.jdbc.JdbcPreparedStatement.executeUpdate(JdbcPreparedStatement.java:172)
+	at org.springframework.jdbc.core.JdbcTemplate.lambda$update$0(JdbcTemplate.java:971)
+	at org.springframework.jdbc.core.JdbcTemplate.execute(JdbcTemplate.java:670)
+	... 90 common frames omitted
+01:55:11.350 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][ANALYSIS_REVIEW_ISOLATED] event=2; completed attempt, no processing work or wallet evidence; no retry; transaction pending commit
+01:55:11.350 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-141][REVIEW_BACKLOG_RECONCILED] isolated=1, checked=2
+01:55:11.352 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][ANALYSIS_REVIEW_ISOLATED] event=1; completed attempt, no processing work or wallet evidence; no retry; transaction pending commit
+01:55:11.352 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-141][REVIEW_BACKLOG_RECONCILED] isolated=1, checked=1
+]]></system-out>
+  </testcase>
+  <testcase name="naturalIdentitySignalEvidencePreventsExpiryAndAutomaticActivation" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.038"/>
+  <testcase name="recoveryFirstDoesNotReserveSignalBeforeFreshLiveClose" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.035">
+    <system-out><![CDATA[01:55:11.406 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:11.404117Z
+01:55:11.408 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:11.407814759Z endUtc=2026-10-06T22:55:11.408486990Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:11.409 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:11.409020452Z endUtc=2026-10-06T22:55:11.409771401Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:11.410 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:11.409856739Z endUtc=2026-10-06T22:55:11.410509080Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:11.411 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:11.410618484Z endUtc=2026-10-06T22:55:11.411456394Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:11.415 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=0, active=0, elapsedMs=3, sourcePool={}
+01:55:11.417 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=2 phase=0 startUtc=2026-10-06T22:55:11.417028860Z endUtc=2026-10-06T22:55:11.417653399Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:11.419 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=2 phase=1 startUtc=2026-10-06T22:55:11.418165398Z endUtc=2026-10-06T22:55:11.419022426Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:11.419 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=2 phase=2 startUtc=2026-10-06T22:55:11.419130038Z endUtc=2026-10-06T22:55:11.419754016Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:11.420 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=2 phase=3 startUtc=2026-10-06T22:55:11.419834958Z endUtc=2026-10-06T22:55:11.420400798Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:11.421 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=LIVE, event=2, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=1017
+01:55:11.422 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=LIVE, event=2, lane=BTCUSDT|1m, outcome=COMPLETED, outcomeCommitted=true, elapsedMs=1
+01:55:11.422 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=LIVE, event=2, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:55:10.404117Z, claimMs=0
+]]></system-out>
+  </testcase>
+  <testcase name="automaticActivationJdbcTimesPreserveUtcAcrossDriverTypes" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.016"/>
+  <testcase name="fix140DeliveryReclaimsDueRetryResumesSameSignalAndNeverUsesHistoryPool" classname="com.crypto.shared.SharedMarketConsumerTest" time="1.125">
+    <system-out><![CDATA[01:55:11.539 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=LIVE, event=140, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=1079
+01:55:11.539 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-137][WORKER_START] event=140, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:10.459833Z, close=2026-10-06T22:55:10.459833Z, liveSource=true
+01:55:11.540 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=140, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:10.459833Z, stage=COORDINATION_LOCK, elapsedMs=0
+01:55:11.540 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- Processing committed CandleClosedEvent: symbol=BTCUSDT, interval=1m, openTime=2026-10-06T22:54:10.459833Z
+01:55:11.540 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=140, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:10.459833Z, stage=DATA_QUALITY, elapsedMs=0
+01:55:11.540 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=140, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:10.459833Z, stage=INDICATORS, elapsedMs=0
+01:55:11.540 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=140, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:10.459833Z, stage=EXISTING_SIGNAL_CHECK, elapsedMs=0
+01:55:11.540 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=140, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:10.459833Z, stage=LIVE_SIGNAL_AND_REGISTRATION, elapsedMs=0
+01:55:11.541 [main] INFO com.crypto.execution.processing.SignalProcessingStore -- [FIX-132][PROCESSING_OWNER] event=140, signal=740
+01:55:11.541 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-153][SIGNAL_SAVED] mode=LIVE, event=140, signal=740, symbol=BTCUSDT, interval=1m, candleOpenUtc=2026-10-06T22:54:10.459833Z, candleCloseUtc=null, generatedUtc=null, rowCreatedUtc=null, serviceReturnedUtc=2026-10-06T22:55:11.541522751Z, serviceReturnedKsa=2026-10-07T01:55:11.541522751+03:00, liveCloseToGenerationMs=null; historical generatedUtc is an as-of clock, signal save does not imply a wallet trade
+01:55:11.541 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-138][WORKER_STAGE] event=140, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:10.459833Z, stage=SIGNAL_PROCESSING, elapsedMs=1
+01:55:11.542 [main] INFO com.crypto.execution.processing.SignalProcessingCoordinator -- [FIX-127][ATTEMPT] signalId=740, symbol=BTCUSDT, interval=1m, candleOpenTime=2026-10-06T22:54:10.459833Z, origin=WORKER, attempt=1, background=false
+01:55:11.545 [main] WARN com.crypto.execution.processing.SignalProcessingCoordinator -- [FIX-140][SAFE_RETRY_RESULT] event=140, signal=740, attempt=1, outcome=SYMBOL_LOCK_RETRY, rollback=CONFIRMED
+01:55:11.546 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-137][WORKER_END] event=140, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:10.459833Z, outcome=EXECUTION_RETRY, elapsedMs=6
+01:55:11.546 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=LIVE, event=140, lane=BTCUSDT|1m, outcome=EXECUTION_RETRY, outcomeCommitted=true, elapsedMs=7
+01:55:11.546 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=LIVE, event=140, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:55:10.459833Z, claimMs=0
+01:55:11.549 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=1, active=0, elapsedMs=11, sourcePool={}
+01:55:11.552 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=HISTORY, lanesChecked=6, submitted=0, active=0, elapsedMs=2, sourcePool={}
+01:55:12.555 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=LIVE, event=140, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=2095
+01:55:12.555 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-137][WORKER_START] event=140, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:10.459833Z, close=2026-10-06T22:55:10.459833Z, liveSource=true
+01:55:12.557 [main] INFO com.crypto.execution.processing.SignalProcessingCoordinator -- [FIX-127][ATTEMPT] signalId=740, symbol=BTCUSDT, interval=1m, candleOpenTime=2026-10-06T22:54:10.459833Z, origin=WORKER, attempt=2, background=false
+01:55:12.558 [main] INFO com.crypto.execution.processing.SignalProcessingCoordinator -- [FIX-127][COMPLETED] signalId=740, symbol=BTCUSDT, interval=1m, attempt=2; processing committed (not necessarily a trade)
+01:55:12.559 [main] INFO com.crypto.indicator.event.CandleClosedAnalysisWorker -- [FIX-137][WORKER_END] event=140, symbol=BTCUSDT, interval=1m, open=2026-10-06T22:54:10.459833Z, outcome=COMPLETED, elapsedMs=3
+01:55:12.559 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=LIVE, event=140, lane=BTCUSDT|1m, outcome=COMPLETED, outcomeCommitted=true, elapsedMs=4
+01:55:12.559 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=LIVE, event=140, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:55:10.459833Z, claimMs=2
+]]></system-out>
+  </testcase>
+  <testcase name="reviewRequiredSymbolCannotStartQueuedAnalysis" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.028">
+    <system-out><![CDATA[01:55:12.584 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:12.580837Z
+01:55:12.586 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:12.585248372Z endUtc=2026-10-06T22:55:12.585883937Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.588 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:12.587859357Z endUtc=2026-10-06T22:55:12.588740030Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.589 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:12.588838719Z endUtc=2026-10-06T22:55:12.589536638Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.591 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:12.589617660Z endUtc=2026-10-06T22:55:12.591706399Z elapsedMs=2 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.595 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=0, active=0, elapsedMs=3, sourcePool={}
+]]></system-out>
+  </testcase>
+  <testcase name="observeModeHasNoPriceProtectionOrAnalysisEffects" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.014">
+    <system-out><![CDATA[01:55:12.608 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:12.606414Z
+01:55:12.609 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:12.609358293Z endUtc=2026-10-06T22:55:12.609756321Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.610 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:12.609839466Z endUtc=2026-10-06T22:55:12.610115712Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.610 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:12.610409724Z endUtc=2026-10-06T22:55:12.610638868Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.611 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:12.610725889Z endUtc=2026-10-06T22:55:12.610934522Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+]]></system-out>
+  </testcase>
+  <testcase name="discoveryDoesNotModifySourceAndRetriesDoNotDuplicateHistoryOrEffects" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.021">
+    <system-out><![CDATA[01:55:12.623 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:12.621322Z
+01:55:12.625 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:12.625028798Z endUtc=2026-10-06T22:55:12.625455971Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.626 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:12.625793658Z endUtc=2026-10-06T22:55:12.626345057Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.627 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:12.626441031Z endUtc=2026-10-06T22:55:12.627081864Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.630 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:12.627142686Z endUtc=2026-10-06T22:55:12.629876535Z elapsedMs=2 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+]]></system-out>
+  </testcase>
+  <testcase name="approvalFailureRollsBackStateAndAuditTogether" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.066">
+    <system-out><![CDATA[01:55:12.691 [main] INFO com.fix132.approval.CutoverApprovalService -- [FIX-132][CUTOVER_PREVIEW] proposal=aed7bf2d-9ea7-4025-b81c-e59053e33283, symbol=BTCUSDT, operation=REAPPROVAL, actor=jean, sequence=0, cutoverUtc=2026-10-06T22:54:12.672244Z
+]]></system-out>
+  </testcase>
+  <testcase name="fix138ReviewWithWalletEvidenceStillBlocksWithoutWorkRow" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.026">
+    <system-out><![CDATA[01:55:12.723 [main] WARN com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][LANE_BLOCKED] lane=BTCUSDT|1m, reason=UNRESOLVED_EXECUTION_REVIEW, event=1
+01:55:12.726 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=0, active=0, elapsedMs=5, sourcePool={}
+]]></system-out>
+  </testcase>
+  <testcase name="newlyEnabledMissingStateCanBootstrapAutomaticallyButSourceRegressionCannot" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.05">
+    <system-out><![CDATA[01:55:12.770 [main] INFO com.crypto.shared.SharedAutomaticActivation -- [FIX-148][AUTOMATIC_FIRST_CUTOVER] symbol=BTCUSDT, sequence=100, boundaryUtc=2026-10-06T22:55:12.760279Z, boundaryKsa=2026-10-07T01:55:12.760279+03:00, reference=FIX-148-AUTO-2a4d31cc-e575-49e5-9501-a19cb7e19a60; no historical execution replay
+]]></system-out>
+  </testcase>
+  <testcase name="automaticFirstCutoverAuditsAndAdmitsFutureFreshEventWithoutOperator" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.045">
+    <system-out><![CDATA[01:55:12.815 [main] INFO com.crypto.shared.SharedAutomaticActivation -- [FIX-148][AUTOMATIC_FIRST_CUTOVER] symbol=BTCUSDT, sequence=100, boundaryUtc=2026-10-06T22:55:12.812902Z, boundaryKsa=2026-10-07T01:55:12.812902+03:00, reference=FIX-148-AUTO-4eba8351-3286-49a2-a14f-a5871c803b1d; no historical execution replay
+01:55:12.817 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][SYMBOL_READINESS] symbol=BTCUSDT, reason=READY, checkedUtc=2026-10-06T22:55:12.817064513Z, checkedKsa=2026-10-07T01:55:12.817064583+03:00; audited first-activation policy, no uncertain retry
+01:55:12.817 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][STARTUP_READINESS] {readySymbols=[BTCUSDT], status=READY, checkValiditySeconds=60, observedUtc=2026-10-06T22:55:12.817141789Z, managed=true, observedKsa=2026-10-07T01:55:12.817141789+03:00, blockedSymbols={}}; process stays available, validated first cutovers may activate automatically, uncertain symbols receive no new shared attempts
+01:55:12.818 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=100, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:12.817644Z
+01:55:12.820 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=101 phase=0 startUtc=2026-10-06T22:55:12.819560956Z endUtc=2026-10-06T22:55:12.820106245Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.821 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=101 phase=1 startUtc=2026-10-06T22:55:12.820615400Z endUtc=2026-10-06T22:55:12.821337005Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.821 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=101 phase=2 startUtc=2026-10-06T22:55:12.821407711Z endUtc=2026-10-06T22:55:12.821841253Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.822 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=101 phase=3 startUtc=2026-10-06T22:55:12.821908013Z endUtc=2026-10-06T22:55:12.822319121Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+]]></system-out>
+  </testcase>
+  <testcase name="unknownWorkScopeKeepsDiagnosticsAvailableButGrantsNoSymbolAuthority" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.024">
+    <system-out><![CDATA[01:55:12.846 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][SYMBOL_READINESS] symbol=BTCUSDT, reason=UNSCOPED_WORK, checkedUtc=2026-10-06T22:55:12.846265357Z, checkedKsa=2026-10-07T01:55:12.846265657+03:00; audited first-activation policy, no uncertain retry
+01:55:12.846 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][STARTUP_READINESS] {readySymbols=[], status=NO_READY_SYMBOLS, checkValiditySeconds=60, observedUtc=2026-10-06T22:55:12.846397465Z, managed=true, observedKsa=2026-10-07T01:55:12.846397465+03:00, blockedSymbols={BTCUSDT={checkedKsa=2026-10-07T01:55:12.846215512+03:00, checkedUtc=2026-10-06T22:55:12.846215512Z, reason=UNSCOPED_WORK}}}; process stays available, validated first cutovers may activate automatically, uncertain symbols receive no new shared attempts
+]]></system-out>
+  </testcase>
+  <testcase name="discoveryIsBoundedAndDoesNotDropSourceBacklog" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.03">
+    <system-out><![CDATA[01:55:12.869 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=100, lastFetchedObservationUtc=2026-10-06T22:55:12.857808Z
+]]></system-out>
+  </testcase>
+  <testcase name="fix141LockOrderHarnessDetectsReversedOrderAsAGenuineConflict" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.019"/>
+  <testcase name="historicalDeferralExpiresWithoutAnyLiveExecution" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.021">
+    <system-out><![CDATA[01:55:12.908 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:12.906245Z
+01:55:12.909 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:12.909030024Z endUtc=2026-10-06T22:55:12.909466560Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.910 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:12.909767452Z endUtc=2026-10-06T22:55:12.910176687Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.910 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:12.910235916Z endUtc=2026-10-06T22:55:12.910560614Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.911 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:12.910618311Z endUtc=2026-10-06T22:55:12.911025633Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.913 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=0, active=0, elapsedMs=2, sourcePool={}
+01:55:12.915 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=HISTORY, event=1, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=100008
+01:55:12.916 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=HISTORY, event=1, lane=BTCUSDT|1m, outcome=COMPLETED, outcomeCommitted=true, elapsedMs=0
+01:55:12.916 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=HISTORY, event=1, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:53:32.906245Z, claimMs=0
+01:55:12.918 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=HISTORY, lanesChecked=6, submitted=1, active=0, elapsedMs=4, sourcePool={}
+]]></system-out>
+  </testcase>
+  <testcase name="symbolScopedLegacyReviewDoesNotAbortOrAutomaticallyCancelWork" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.023">
+    <system-out><![CDATA[01:55:12.941 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][SYMBOL_READINESS] symbol=BTCUSDT, reason=LEGACY_WORK_REVIEW, checkedUtc=2026-10-06T22:55:12.941177037Z, checkedKsa=2026-10-07T01:55:12.941177207+03:00; audited first-activation policy, no uncertain retry
+01:55:12.941 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-146][STARTUP_READINESS] {readySymbols=[], status=NO_READY_SYMBOLS, checkValiditySeconds=60, observedUtc=2026-10-06T22:55:12.941309866Z, managed=true, observedKsa=2026-10-07T01:55:12.941309866+03:00, blockedSymbols={BTCUSDT={checkedKsa=2026-10-07T01:55:12.941121363+03:00, checkedUtc=2026-10-06T22:55:12.941121363Z, reason=LEGACY_WORK_REVIEW}}}; process stays available, validated first cutovers may activate automatically, uncertain symbols receive no new shared attempts
+]]></system-out>
+  </testcase>
+  <testcase name="historicalRepairWithHigherSequenceNeverProtectsOrAnalyzesLive" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.028">
+    <system-out><![CDATA[01:55:12.963 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:12.961618Z
+01:55:12.964 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:12.964350030Z endUtc=2026-10-06T22:55:12.964699285Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.965 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:12.965293808Z endUtc=2026-10-06T22:55:12.965750275Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.966 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:12.965810265Z endUtc=2026-10-06T22:55:12.966183606Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.966 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:12.966255664Z endUtc=2026-10-06T22:55:12.966618119Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.967 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=HISTORY, event=1, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=100006
+01:55:12.968 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=HISTORY, event=1, lane=BTCUSDT|1m, outcome=COMPLETED, outcomeCommitted=true, elapsedMs=0
+01:55:12.968 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=HISTORY, event=1, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:53:32.961618Z, claimMs=0
+01:55:12.970 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=HISTORY, lanesChecked=6, submitted=1, active=0, elapsedMs=3, sourcePool={}
+]]></system-out>
+  </testcase>
+  <testcase name="twoConsumersCannotCommitTheSameProtectionEffect" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.02">
+    <system-out><![CDATA[01:55:12.982 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:12.980579Z
+01:55:12.985 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:12.984657615Z endUtc=2026-10-06T22:55:12.985323716Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.988 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:12.985756517Z endUtc=2026-10-06T22:55:12.987856904Z elapsedMs=2 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.988 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:12.987174303Z endUtc=2026-10-06T22:55:12.988118412Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.988 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:12.987925858Z endUtc=2026-10-06T22:55:12.988694934Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.989 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:12.988828830Z endUtc=2026-10-06T22:55:12.989041190Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.990 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:12.989807612Z endUtc=2026-10-06T22:55:12.990045439Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.990 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:12.989808819Z endUtc=2026-10-06T22:55:12.990346787Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:12.990 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:12.990096246Z endUtc=2026-10-06T22:55:12.990512521Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+]]></system-out>
+  </testcase>
+  <testcase name="unknownBusinessFailureRollsBackEffectAndRequiresReviewWithoutRetry" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.014">
+    <system-out><![CDATA[01:55:13.001 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:13.000062Z
+01:55:13.003 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:13.002636601Z endUtc=2026-10-06T22:55:13.003118956Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:13.004 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:13.003489273Z endUtc=2026-10-06T22:55:13.004303277Z elapsedMs=0 transactionReturned=false resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:13.004 [main] ERROR com.crypto.shared.SharedMarketConsumer -- [FIX-132][REVIEW_REQUIRED] symbol=BTCUSDT, event=1; no automatic wallet retry
+java.lang.IllegalStateException: controlled business failure
+	at com.crypto.shared.SharedMarketConsumerTest.lambda$unknownBusinessFailureRollsBackEffectAndRequiresReviewWithoutRetry$1(SharedMarketConsumerTest.java:93)
+	at org.mockito.internal.stubbing.StubbedInvocationMatcher.answer(StubbedInvocationMatcher.java:42)
+	at org.mockito.internal.handler.MockHandlerImpl.handle(MockHandlerImpl.java:103)
+	at org.mockito.internal.handler.NullResultGuardian.handle(NullResultGuardian.java:29)
+	at org.mockito.internal.handler.InvocationNotifierHandler.handle(InvocationNotifierHandler.java:34)
+	at org.mockito.internal.creation.bytebuddy.access.MockMethodInterceptor.doIntercept(MockMethodInterceptor.java:84)
+	at org.mockito.internal.creation.bytebuddy.MockMethodAdvice.handle(MockMethodAdvice.java:143)
+	at com.crypto.position.service.LivePositionProtectionService.onPrice(LivePositionProtectionService.java:73)
+	at com.crypto.shared.SharedMarketConsumer.lambda$processNext$17(SharedMarketConsumer.java:514)
+	at org.springframework.transaction.support.TransactionOperations.lambda$executeWithoutResult$0(TransactionOperations.java:68)
+	at org.springframework.transaction.support.TransactionTemplate.execute(TransactionTemplate.java:137)
+	at org.springframework.transaction.support.TransactionOperations.executeWithoutResult(TransactionOperations.java:67)
+	at com.crypto.shared.SharedMarketConsumer.processNext(SharedMarketConsumer.java:463)
+	at com.crypto.shared.SharedMarketConsumerTest.unknownBusinessFailureRollsBackEffectAndRequiresReviewWithoutRetry(SharedMarketConsumerTest.java:94)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:701)
+	at org.junit.platform.commons.support.ReflectionSupport.invokeMethod(ReflectionSupport.java:502)
+	at org.junit.jupiter.engine.support.MethodReflectionUtils.invoke(MethodReflectionUtils.java:45)
+	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:61)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:124)
+	at org.junit.jupiter.engine.extension.SameThreadTimeoutInvocation.proceed(SameThreadTimeoutInvocation.java:51)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.intercept(TimeoutExtension.java:163)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestableMethod(TimeoutExtension.java:148)
+	at org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestMethod(TimeoutExtension.java:86)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker$ReflectiveInterceptorCall.lambda$ofVoidMethod$0(InterceptingExecutableInvoker.java:123)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.lambda$invoke$0(InterceptingExecutableInvoker.java:105)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$InterceptedInvocation.proceed(InvocationInterceptorChain.java:99)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.proceed(InvocationInterceptorChain.java:66)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.chainAndInvoke(InvocationInterceptorChain.java:47)
+	at org.junit.jupiter.engine.execution.InvocationInterceptorChain.invoke(InvocationInterceptorChain.java:39)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:104)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:98)
+	at org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invokeVoid(InterceptingExecutableInvoker.java:71)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.lambda$invokeTestMethod$0(TestMethodTestDescriptor.java:219)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.invokeTestMethod(TestMethodTestDescriptor.java:215)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:157)
+	at org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:70)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$2(NodeTestTask.java:176)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$1(NodeTestTask.java:166)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$0(NodeTestTask.java:164)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:163)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:116)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:42)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$2(NodeTestTask.java:180)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$1(NodeTestTask.java:166)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$0(NodeTestTask.java:164)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:163)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:116)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:42)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$2(NodeTestTask.java:180)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$1(NodeTestTask.java:166)
+	at org.junit.platform.engine.support.hierarchical.Node.around(Node.java:138)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$0(NodeTestTask.java:164)
+	at org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:74)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:163)
+	at org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:116)
+	at org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.submit(SameThreadHierarchicalTestExecutorService.java:36)
+	at org.junit.platform.engine.support.hierarchical.HierarchicalTestExecutor.execute(HierarchicalTestExecutor.java:52)
+	at org.junit.platform.engine.support.hierarchical.HierarchicalTestEngine.execute(HierarchicalTestEngine.java:58)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.executeEngine(EngineExecutionOrchestrator.java:246)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.failOrExecuteEngine(EngineExecutionOrchestrator.java:218)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:179)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:108)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.lambda$execute$0(EngineExecutionOrchestrator.java:66)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.withInterceptedStreams(EngineExecutionOrchestrator.java:157)
+	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:65)
+	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:125)
+	at org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:114)
+	at org.junit.platform.launcher.core.DelegatingLauncher.execute(DelegatingLauncher.java:58)
+	at org.junit.platform.launcher.core.InterceptingLauncher.lambda$execute$2(InterceptingLauncher.java:57)
+	at org.junit.platform.launcher.core.ClasspathAlignmentCheckingLauncherInterceptor.intercept(ClasspathAlignmentCheckingLauncherInterceptor.java:25)
+	at org.junit.platform.launcher.core.InterceptingLauncher.execute(InterceptingLauncher.java:56)
+	at org.junit.platform.launcher.core.DelegatingLauncher.execute(DelegatingLauncher.java:58)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.apache.maven.surefire.api.util.ReflectionUtils.invokeMethodWithArray(ReflectionUtils.java:125)
+	at org.apache.maven.surefire.junitplatform.LauncherAdapter.executeWithCancellationToken(LauncherAdapter.java:68)
+	at org.apache.maven.surefire.junitplatform.LauncherAdapter.execute(LauncherAdapter.java:54)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.execute(JUnitPlatformProvider.java:203)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invokeAllTests(JUnitPlatformProvider.java:168)
+	at org.apache.maven.surefire.junitplatform.JUnitPlatformProvider.invoke(JUnitPlatformProvider.java:136)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:385)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
+01:55:13.005 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:13.005540366Z endUtc=2026-10-06T22:55:13.005682199Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+]]></system-out>
+  </testcase>
+  <testcase name="automaticActivationNeverResetsApprovedBoundaryOrDuplicatesAudit" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.025">
+    <system-out><![CDATA[01:55:13.031 [main] INFO com.crypto.shared.SharedAutomaticActivation -- [FIX-148][AUTOMATIC_FIRST_CUTOVER] symbol=BTCUSDT, sequence=100, boundaryUtc=2026-10-06T22:55:13.029428Z, boundaryKsa=2026-10-07T01:55:13.029428+03:00, reference=FIX-148-AUTO-404d8553-e24d-43dc-8f09-94483b6f09b7; no historical execution replay
+]]></system-out>
+  </testcase>
+  <testcase name="fix141ReconcileAnalysisOnlyReviewsSkipsRowsWithDurableEvidence" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.013"/>
+  <testcase name="fix138ReviewWithoutCompletionMarkerIsNeverBypassed" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.015">
+    <system-out><![CDATA[01:55:13.057 [main] WARN com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][LANE_BLOCKED] lane=BTCUSDT|1m, reason=UNRESOLVED_EXECUTION_REVIEW, event=1
+01:55:13.059 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=0, active=0, elapsedMs=2, sourcePool={}
+01:55:13.060 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=HISTORY, lanesChecked=6, submitted=0, active=0, elapsedMs=1, sourcePool={}
+]]></system-out>
+  </testcase>
+  <testcase name="symbolQuarantinedAfterClaimCannotRunWaitingTask" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.022">
+    <system-out><![CDATA[01:55:13.075 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:13.071647Z
+01:55:13.076 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:13.076458263Z endUtc=2026-10-06T22:55:13.076823382Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:13.077 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:13.077157915Z endUtc=2026-10-06T22:55:13.077649013Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:13.078 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:13.077728272Z endUtc=2026-10-06T22:55:13.078272720Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:13.078 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:13.078442125Z endUtc=2026-10-06T22:55:13.078840564Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:13.079 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=LIVE, event=1, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:55:12.071647Z, claimMs=0
+01:55:13.081 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=1, active=1, elapsedMs=2, sourcePool={}
+01:55:13.081 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=LIVE, event=1, lane=BTCUSDT|1m, queueWaitMs=1, closeAgeMs=1010
+01:55:13.082 [main] WARN com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_ABORTED] event=1, lane=BTCUSDT|1m, reason=OWNERSHIP_OR_CUTOVER
+01:55:13.082 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=LIVE, event=1, lane=BTCUSDT|1m, outcome=REVIEW_REQUIRED, outcomeCommitted=true, elapsedMs=2
+]]></system-out>
+  </testcase>
+  <testcase name="initialPositionLockRetryRetainsExistingFix124Boundary" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.02">
+    <system-out><![CDATA[01:55:13.096 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:13.094368Z
+01:55:13.098 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:13.097869989Z endUtc=2026-10-06T22:55:13.098483351Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:13.099 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:13.099014920Z endUtc=2026-10-06T22:55:13.099844297Z elapsedMs=0 transactionReturned=false resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:13.099 [main] WARN com.crypto.shared.SharedMarketConsumer -- [FIX-132][INITIAL_LOCK_RETRY] symbol=BTCUSDT, event=1
+01:55:13.100 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=1 startUtc=2026-10-06T22:55:13.100016265Z endUtc=2026-10-06T22:55:13.100822567Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:13.101 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=2 startUtc=2026-10-06T22:55:13.100945352Z endUtc=2026-10-06T22:55:13.101731573Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:13.102 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=3 startUtc=2026-10-06T22:55:13.101821589Z endUtc=2026-10-06T22:55:13.102416202Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+]]></system-out>
+  </testcase>
+  <testcase name="restartDoesNotRetryAnUnconfirmedStartedProtectionAttempt" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.026">
+    <system-out><![CDATA[01:55:13.117 [main] INFO com.crypto.shared.SharedMarketConsumer -- [FIX-138][DISCOVERY_PROGRESS] symbol=BTCUSDT, afterSequence=0, pendingPricePhases=0, fetched=1, lastFetchedObservationUtc=2026-10-06T22:55:13.114742Z
+01:55:13.119 [fix142-db-log-writer] INFO FIX142.DatabaseTiming -- [FIX-142][PHASE_DURATION] symbol=BTCUSDT event=1 phase=0 startUtc=2026-10-06T22:55:13.118551877Z endUtc=2026-10-06T22:55:13.118919280Z elapsedMs=0 transactionReturned=true resolutionSource=JDBC_TRANSACTION_EVENT
+01:55:13.128 [main] ERROR com.crypto.shared.SharedMarketConsumer -- [FIX-132][REVIEW_REQUIRED] symbol=BTCUSDT, event=1; previous protection attempt unconfirmed
+]]></system-out>
+  </testcase>
+  <testcase name="fix141ReconcileLocksSymbolBeforeDeliveryDeterministic" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.017">
+    <system-out><![CDATA[01:55:13.146 [pool-85-thread-2] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][ANALYSIS_REVIEW_ISOLATED] event=1; completed attempt, no processing work or wallet evidence; no retry; transaction pending commit
+01:55:13.146 [pool-85-thread-2] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-141][REVIEW_BACKLOG_RECONCILED] isolated=1, checked=1
+]]></system-out>
+  </testcase>
+  <testcase name="uncertainStartedProtectionRetainsFenceAndCannotBeExpiredOrActivated" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.027"/>
+  <testcase name="fix138ReviewWithProcessingWorkStillBlocks" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.019">
+    <system-out><![CDATA[01:55:13.189 [main] WARN com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][LANE_BLOCKED] lane=BTCUSDT|1m, reason=UNRESOLVED_EXECUTION_REVIEW, event=1
+01:55:13.192 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=0, active=0, elapsedMs=4, sourcePool={}
+]]></system-out>
+  </testcase>
+  <testcase name="fix138CompletedAnalysisOnlyReviewIsRetainedWithoutBlockingFreshCandle" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.02">
+    <system-out><![CDATA[01:55:13.208 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][ANALYSIS_REVIEW_ISOLATED] event=1; completed attempt, no processing work or wallet evidence; no retry; transaction pending commit
+01:55:13.208 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=LIVE, event=2, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=1003
+01:55:13.209 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=LIVE, event=2, lane=BTCUSDT|1m, outcome=COMPLETED, outcomeCommitted=true, elapsedMs=0
+01:55:13.209 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=LIVE, event=2, lane=BTCUSDT|1m, closeUtc=2026-10-06T22:55:12.204923Z, claimMs=1
+01:55:13.212 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=1, active=0, elapsedMs=4, sourcePool={}
+]]></system-out>
+  </testcase>
+  <testcase name="fix138ExpiredOriginallyLiveCloseIsForcedHistorical" classname="com.crypto.shared.SharedMarketConsumerTest" time="0.02">
+    <system-out><![CDATA[01:55:13.228 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=LIVE, lanesChecked=6, submitted=0, active=0, elapsedMs=2, sourcePool={}
+01:55:13.230 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_START] mode=HISTORY, event=1, lane=BTCUSDT|1m, queueWaitMs=0, closeAgeMs=3600006
+01:55:13.230 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][TASK_END] mode=HISTORY, event=1, lane=BTCUSDT|1m, outcome=COMPLETED, outcomeCommitted=true, elapsedMs=0
+01:55:13.231 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][CLAIM] mode=HISTORY, event=1, lane=BTCUSDT|1m, closeUtc=2026-10-06T21:55:13.223872Z, claimMs=1
+01:55:13.233 [main] INFO com.crypto.shared.SharedAnalysisDispatcher -- [FIX-138][DISPATCH] mode=HISTORY, lanesChecked=6, submitted=1, active=0, elapsedMs=4, sourcePool={}
+]]></system-out>
+  </testcase>
+</testsuite>

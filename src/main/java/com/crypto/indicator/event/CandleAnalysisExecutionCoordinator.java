@@ -32,6 +32,12 @@ public class CandleAnalysisExecutionCoordinator {
         return lock::unlock;
     }
 
+    /** FIX-153 low-priority detector must not wait behind a long worker/hash collision. */
+    public java.util.Optional<LockHandle> tryLock(String symbol,String interval,Instant openTime){
+        ReentrantLock lock=stripes[stripeIndex(symbol,interval,openTime)];
+        return lock.tryLock()?java.util.Optional.of(lock::unlock):java.util.Optional.empty();
+    }
+
     private int stripeIndex(String symbol, String interval, Instant openTime) {
         String normalizedSymbol = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
         String normalizedInterval = interval == null ? "" : interval.trim();

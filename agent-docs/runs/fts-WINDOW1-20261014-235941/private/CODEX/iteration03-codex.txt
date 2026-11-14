@@ -1,0 +1,88 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No database evidence exists in the permitted `db/CODEX/` folder, so no frozen trade can yet be conclusively reconstructed.
+- **PROJECT EVIDENCE:** Runtime log timestamps are UTC: `logback-spring.xml` explicitly formats them in UTC. Raw log time is therefore not labelled KSA below.
+- **PROJECT EVIDENCE:** The archived logs contain `positionId` records matching five frozen numeric IDs, but source proves these are `wallet_managed_position` IDs—not automatically `paper_position` IDs. Numeric equality is a candidate correlation only until DB evidence confirms it.
+
+Candidate timing anchors:
+
+| Frozen ID candidate | Raw log UTC | KSA | Symbol | Evidence |
+|---|---:|---:|---|---|
+| 137 | 2026-10-11 06:54:10.696 | 09:54:10.696 | AEROUSDT | Profit-lock progress 7.91%; inactive |
+| 143 | 2026-10-11 11:50:23.728 | 14:50:23.728 | AEROUSDT | Live profit-lock trigger at 0.981200, below lock 0.981391 |
+| 158 | 2026-10-11 17:00:13.494 | 20:00:13.494 | ENAUSDT | Profit-lock remained inactive; progress 35.06% |
+| 162 | 2026-10-11 17:33:38.455 | 20:33:38.455 | DOGEUSDT | Live profit-lock trigger at 0.087470, below lock 0.087506946830 |
+| 172 | 2026-10-11 19:43:35.036 | 22:43:35.036 | EGLDUSDT | Live profit-lock trigger at 4.027, below lock 4.075790299764 |
+| 182 | 2026-10-11 22:41:07.414 | 2026-10-12 01:41:07.414 | ICPUSDT | Early profit-lock evaluation only; inactive at 9.00% |
+
+- **AGENT INFERENCE:** IDs 143, 162, and 172 are plausible loss-path candidates because the log shows a protection threshold breach. This does not prove the corresponding frozen `paper_position` exited, its close reason, or realized P&L.
+- **PROJECT EVIDENCE:** For #143, a subsequent 1m signal path also recorded a profit-lock trigger with `signalId=147446`; source shows that this route closes the paper position through the profit-lock path. The durable `paper_position` and `wallet_trade` records remain required to prove commitment.
+- **PROJECT EVIDENCE:** #172 had TP extensions before its breach. Its original target moved from 4.064696518344 to 4.104317166274; interpretation must use the final persisted target, not the original target.
+- **PROJECT EVIDENCE:** Around 2026-10-14 20:53 UTC, logs show network/DNS failures for Binance and other market-data providers plus WebSocket closure/reconnect failure. This is after the candidate trade timing above and cannot be attributed as their cause.
+- **PROJECT EVIDENCE:** The logger time and exchange observation time can differ materially: a `PRICE_OUTCOME_COMMITTED` line at raw UTC `20:54:40.275` reports `observedUtc=20:54:44.611`. Therefore latency analysis must separately retain observation, application-log, transaction completion, and DB close timestamps.
+- **PROJECT EVIDENCE:** Snapshot inconsistency remains: `2026-10-14 20:59:44 UTC` converts to `23:59:44 KSA`, not the supplied `23:59:41 KSA`.
+
+## UNKNOWNS
+
+- Whether matching `wallet_managed_position.id` values are the six authoritative frozen `paper_position` records.
+- Each frozen trade’s committed close reason, exit signal, actual wallet execution, exit price, fees, P&L reconciliation, and price-event ID.
+- Whether a protection breach committed immediately, was superseded, or failed/rolled back.
+- Signal-to-entry and observation-to-close timing for all six trades.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Confirm authoritative `paper_position` identities and test the candidate wallet-position/log correlation before attributing any timing or protection event to a frozen trade.  
+SQL:
+```sql
+SELECT pp.*
+FROM crypto_ai.paper_position AS pp
+WHERE pp.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(pp.id, 182, 172, 162, 158, 143, 137);
+
+SELECT wmp.*
+FROM crypto_ai.wallet_managed_position AS wmp
+WHERE wmp.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(wmp.id, 182, 172, 162, 158, 143, 137);
+
+SELECT ts.*
+FROM crypto_ai.trade_signal AS ts
+WHERE ts.id IN (
+    SELECT pp.signal_id
+    FROM crypto_ai.paper_position AS pp
+    WHERE pp.id IN (182, 172, 162, 158, 143, 137)
+      AND pp.signal_id IS NOT NULL
+    UNION
+    SELECT pp.exit_signal_id
+    FROM crypto_ai.paper_position AS pp
+    WHERE pp.id IN (182, 172, 162, 158, 143, 137)
+      AND pp.exit_signal_id IS NOT NULL
+)
+ORDER BY ts.id;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-002  
+Purpose: Retrieve bounded accepted and non-accepted price-event evidence around each authoritative close, to establish the trigger observation and possible protection timing gap.  
+SQL:
+```sql
+SELECT
+    pp.id AS paper_position_id,
+    pp.symbol,
+    pp.closed_at AS position_closed_at_utc,
+    mpe.id AS market_price_event_id,
+    mpe.observed_at AS observed_at_utc,
+    mpe.created_at AS event_created_at_utc,
+    mpe.price,
+    mpe.source,
+    mpe.delivery_status,
+    mpe.outcome_reason
+FROM crypto_ai.paper_position AS pp
+LEFT JOIN crypto_ai.market_price_event AS mpe
+  ON mpe.symbol = pp.symbol
+ AND mpe.observed_at >= DATE_SUB(pp.closed_at, INTERVAL 2 MINUTE)
+ AND mpe.observed_at <= DATE_ADD(pp.closed_at, INTERVAL 30 SECOND)
+WHERE pp.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY pp.id, mpe.observed_at, mpe.id;
+```
+### END_DB_REQUEST

@@ -1,0 +1,217 @@
+# Daily failed-trade study, WINDOW1: Claude track, Iteration 5 (entry quality, self-review)
+
+**Bottom line:** none of the six entries was good when judged only on what the system knew at the time. The system's own Entry Quality score saw this and cut every one to 25% size, which kept each loss small. The score never blocked any of them, for three reasons:
+- **Reward/risk below 1 costs a flat −30 points.** That leaves a score of 70, well above the hard cut-off of 50.
+- **A floor on the rejected-high penalty can hold a score at exactly 50.** Trade 162 provably landed on it, and trade 182 probably did. The code's own FIX-119 comment calls this pattern a defect, but the fix covers only one route.
+- **Fees are not counted.** After about 0.2% round-trip fees, five of six entries had a net reward/risk of 0.24 or less. On trade 158 a take-profit win would itself have lost money.
+
+**Two Iteration 4 findings are withdrawn or downgraded:**
+- **F-33's explanation is wrong.** The skipped BUY 176692 passed the Entry Quality check with exactly 50; it did not score below 50.
+- **F-32's explanation is probably wrong.** The arithmetic says the skipped BUY 167646 was most likely *not* graded late, so the late-entry block (FIX-041) probably did not stop it.
+
+The real reason both earlier BUYs were skipped is still unknown. A new candidate is the limit of 3 open positions, which rejects a BUY without writing a log line.
+
+I made no changes to code, configuration, the database, git or deployments. No `Write` or `ExitPlanMode` tool was available, so there is no plan file and this message is the whole Iteration 5 output.
+
+**Inputs:**
+- Results DBQ-CLAUDE-I4-001…004, plus I3-005, I2-001, I2-002 and I2-003.
+- Code:
+  - `ExecutionIntelligenceService`: lines 47-66, 229-236, 397-457, 640-786, 848-1030, 1171-1223, 1807-1817, 2078-2144, 2601-2609.
+  - `PaperTradingService`: lines 296-379.
+  - `application.yml`: lines 121-122.
+- As required, I did not read `private/CODEX/`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md`, or the other agent's memory files.
+
+**Time convention:** the result files show KSA (F-23). Below, UTC = shown time − 3 h.
+
+---
+
+## How Entry Quality is scored [PROJECT EVIDENCE, `ExecutionIntelligenceService:865-1030`]
+
+The score starts at 100. These terms adjust it:
+
+| Term | Effect on the score |
+|---|---|
+| Distance above the recent low (%) | −10 above 1.5%, −22 above 3%, −35 above 5%, −50 above 8% |
+| Distance above the recent low, in ATRs | −10 above 2.5, −20 above 4, −30 above 6 |
+| Age of the opportunity | −5 above 20 min, −10 above 40 min, −15 above 60 min |
+| Reward/risk | **−30 below 1**, −15 below 1.25, +5 at 2 or more |
+| Near a recent rejected high | −12, but **never below 50** if the score was 50 or more before this penalty (lines 995-1002) |
+| `HIGH_VOLATILITY` regime | −10 |
+| `STOP_EXPOSED` liquidity | −15 |
+| `BREAKOUT` regime, if the distance is at most 3% and at most 2.5 ATR | +5 |
+
+- **Hard block:** below 50 (`CHASE_ENTRY_CUTOFF`, line 229).
+- **Size cap** (line 1183): 50% at 85 or more, 40% at 70 or more, otherwise 25%.
+- **Grades:** 85+ excellent, 70+ good, 55+ acceptable, 50-54 late, below 50 chase.
+
+## FINDINGS
+
+**F-38: Entry Quality broken down per trade.** [PROJECT EVIDENCE by exact arithmetic, using the stored inputs; any part not uniquely determined is marked as inference]
+
+| Trade | Signal | Score | Breakdown | Basis |
+|---|---|---|---|---|
+| 137 | 156723 | 58 | 100 −30 (reward/risk 0.644) **−12 (rejected high)** | **Forced.** The opportunity was 1 min old (started 20:54:00 KSA / 17:54 UTC), so no age penalty applies. No other combination of terms gives exactly −42. |
+| 172 | 171589 | 60 | 100 −30 (0.744) −10 | The −10 is one of: distance >1.5%, distance >2.5 ATR, `HIGH_VOLATILITY`, or `STOP_EXPOSED` plus the breakout bonus. Age was 14 min, so no age penalty. Most likely the ATR distance (F-43). [INFERENCE] |
+| 162 | 167668 | 50 | 100 −30 (0.438) −5 (age 21 min) −10 (2.5–4 ATR) **−12, held at 50** | **Forced.** Regime is BREAKOUT, so `HIGH_VOLATILITY` is impossible, and liquidity is BALANCED. Every other combination gives 70, 60, 55 or 45, never 50. |
+| 182 | 176710 | 50 | 100 −30 (0.482) −10 (3.97 ATR, against a low of 0.1878) **−12, held at 50**; *or* −20 (above 4 ATR, if the true recent low was below 0.1878) | Age was 2 min. Either way it lands exactly on the cut-off. Which path applied needs I5-001. |
+| 158 | 165412 | **not stored** | Score is ≤60: −30 (0.327), −10 (the opportunity was 53 min old) | The wake-up route always uses 25% (`basePercent=min(25,…)`, line 440). The size cap never changes it, so the score is never written (F-42). |
+| 143 | 159408 | 60 | −40 from distance and ATR terms; not uniquely determined | Scored with the ATR of the **superseded** 5-minute signal 159285 (F-24 / F-42). |
+
+- The skipped 176692 also scored 50 (audit row 2424). Its breakdown: −30 (0.494) and −10 (3.22 ATR) give 60, so reaching 50 required the rejected-high floor, unless the true recent low was at or below 0.18768.
+- **Self-check:** this reproduces every stored score, 58 / 60 / 50 / 50 / 60, with no conflicts.
+
+**F-39: Both trades that scored exactly 50 hit the defect FIX-119 describes, each through a route FIX-119 does not cover.** [PROJECT EVIDENCE] Severity: high, design gap.
+- The FIX-119 comment (lines 1232-1237) says that scores of 50-54 are still executable, "including cases where a recent rejection-zone penalty was deliberately floored at the 50-point chase cutoff". It cites BTCUSDT #1701, EDUUSDT #1716 and UNIUSDT #1731 as poorly timed entries caused by this.
+- FIX-119 only defers ACCUMULATED_EVIDENCE entries that have zero BUYs in their evidence and no fresh 5-minute BUY.
+- **162** went through ACCUMULATED_EVIDENCE with "1 BUY, 9 WATCH", which bypasses FIX-119. Its score of 50 was **provably** held up by the floor.
+- **182** went through IMMEDIATE_VALIDATION / FIX-11G, which only requires a score of at least 50 (`TradeExecutionValidationService:263-284`). So a held-up 50 passes there too.
+- This replaces part of F-31: reward/risk below 1 cannot block alone, and the floor then keeps an entry that is also extended and near a rejected high exactly at the cut-off.
+
+**F-40: Reward/risk counts as a flat penalty with no minimum, and fees are ignored.** [PROJECT EVIDENCE + EXTERNAL RESEARCH]
+- A reward/risk of 0.33 scores the same as 0.99 (line 991).
+- Paper fills record `fee_usdt=0` (F-12).
+- [EXTERNAL RESEARCH] The standard Binance spot fee is 0.1% per side, or 0.075% when paid in BNB. One unconfirmed report mentions a newer change to zero maker fees. I used 0.2% round trip:
+
+| Trade | Target / stop | Gross reward/risk | Net reward/risk after 0.2% fees | Win rate needed to break even after fees |
+|---|---|---|---|---|
+| 182 | 0.24% / 0.50% | 0.48 | ≈0.06 | ≈94% |
+| 172 | 0.37 / 0.50 | 0.74 | ≈0.24 | ≈81% |
+| 162 | 0.22 / 0.50 | 0.44 | ≈0.03 | ≈97% |
+| 158 | 0.16 / 0.50 | 0.33 | **<0** | no win rate breaks even |
+| 143 | 0.81 / 0.54 | 1.50 | ≈0.82 | ≈55% |
+| 137 | 0.32 / 0.50 | 0.64 | ≈0.17 | ≈85% |
+
+- **Caveat** [AGENT INFERENCE]: most exits in this system are profit-lock or signal exits, not take-profit or stop. So the planned reward/risk is an upper limit on edge, not the realised payoff.
+
+**F-41: Entry Quality ignores direction, so counter-trend entries are not penalised.** [PROJECT EVIDENCE for the code; how much it matters is AGENT INFERENCE]
+- Javadoc (line 845): "Entry quality is deliberately independent from signal quality."
+- 182 came after seven consecutive 1-minute STRONG_SELLs, in WEAK_DOWNTREND, with `confluence_status=CONFLICT`. Its only penalties were reward/risk, ATR distance and rejection.
+- 137 came after eight consecutive STRONG_SELLs, as a mean-reversion trade. Its only penalties were reward/risk and rejection.
+- No other gate on the FIX-11G route makes up for this (5m NEUTRAL + 1h WATCH is enough).
+
+**F-42: For trades 143 and 158, Entry Quality was scored more leniently and recorded less.** [PROJECT EVIDENCE]
+- **143:** the score uses the 5-minute ATR (lines 634-635). This is deliberate, to avoid a "false chase". But that ATR came from the superseded 5-minute BUY 159285, while the fresh 5-minute 159407 said `PULLBACK_ENTRY`, `atr_overextended=1`.
+- **158:** the score uses the 5-minute trigger's ATR (line 439). The explanation is fixed text and the score is never written (wallet trade 392 has no score text; DBQ-CLAUDE-I2-002). **Logging gap:** this route's entry quality cannot be reconstructed from stored data.
+
+**F-43: For SHIB, the ATR distance term moves in whole price ticks.** [PROJECT EVIDENCE + INFERENCE]
+- ATR is about 6.8e-9 and one price tick is 1e-8, so one tick above the recent low is 1.47 ATR and two ticks are 2.94 ATR, which is already penalised.
+- So 172's score swings by 10 points on one tick. This extends F-16 into entry scoring.
+
+**F-44: The "30-minute" look-back actually covers only the last 20 signals.** [PROJECT EVIDENCE] Severity: low, affects parity.
+- `recentSignals` returns `findTop20BySymbolAndIntervalOrderByGeneratedAtDesc` in Production (line 2603) and `recent(…, 20)` in Replay (line 2602).
+- For 1-minute signals that is about 19-20 minutes, not the 30 minutes in `EVIDENCE_WINDOW` (line 47).
+- The Production query is not tied to the evaluation time. It returns the newest 20 when it runs and drops later signals after the fetch. Replay limits the query itself to signals at or before the evaluation time. If any newer 1-minute signal for the same symbol is already stored when the query runs, Production's window shrinks and Replay's does not.
+
+**F-45: Every entry was held to 25% by the system's own checks, which is why the losses are small.** [PROJECT EVIDENCE]
+- All six have `recommended_position_percent=25` (I2-003).
+- The effective size is ATR% × 25%, for example 60 × 25% = 15% for 176710.
+- The scoring worked as a sizing control, but not as a quality filter.
+
+### Corrections to earlier iterations
+
+- **C-1, F-33 refuted:** audit row 2424 (09:56:02.946 KSA / 06:56:02.946 UTC) shows 176692 was FIX-11G-approved with a score of 50. It was **not** below 50.
+- **C-2, F-32 downgraded:**
+  - From 167668's score of 50, its recent low must lie in [0.086796, 0.086891).
+  - Using the same low for 167646 (price 0.08693, ATR 5.6157e-5) gives a distance of 2.39 ATR or less, so no ATR penalty. The opportunity age was exactly 20 min, so no age penalty either.
+  - So 167646 scored **58 or 70, not LATE**. FIX-041 would only have fired if a 1-minute price near 00:31 UTC was ≤0.08679. [INFERENCE until I5-001]
+- **Remaining candidates for both skipped BUYs:**
+  - `balancedEarlyPostBearishGuard`, lines 2078-2137 (167646 only).
+  - The limit of **3 open positions** (`application.yml:122`; `PaperTradingService:322-324`, which **returns without logging**).
+  - The daily-loss limit (line 326).
+  - No fresh execution price (lines 342-347).
+  - The FIX-056/FIX-122 recheck at execution price (lines 349-354).
+- **C-3, statistics withdrawn:** I4-002 and I4-003 filtered on `status='CLOSED'` and so excluded STOPPED positions (22 STOPPED losses in this window per F-20). Their loss rates by route and by reward/risk are **not valid** for the whole population; re-run as I5-003. The frozen selection also excludes stop-loss losers by construction, so "none of the six hit the stop" says nothing about the system.
+- **C-4, U-21 closed:** in all 7 audit rows the FIX-154 effective decision equals the raw one, so F-26 stands. F-36 is confirmed by Production audit rows dated 10-11 and 10-12: FIX-154 was running even though AGENTS.md describes it as not implemented. F-35 holds: there is no audit row for 159408.
+
+## EVIDENCE: Entry quality per trade, using only what was known at entry
+
+| Trade | Entry (UTC / KSA) | Assessment before the outcome | Outcome, judged separately |
+|---|---|---|---|
+| 182 | 06:57:06 / 09:57:06 | **Poor.** Counter-trend after 7 STRONG_SELLs; 1m flagged overextended (`REDUCED_POSITION 60`); score 50 at the cut-off; net reward/risk ≈0.06. The less-extended BUY 176692 a minute earlier was not executed, reason unknown. | Never traded above entry (F-15). |
+| 172 | 03:36:05 / 06:36:05 | **Mediocre.** Score 60; net reward/risk ≈0.24; "bullish" 5m support came from a signal its own checks rejected (F-26); SHIB tick problem (F-43). | Reached 49% of the way to the take-profit. |
+| 162 | 01:02:06 / 04:02:06 | **Poor.** 1m WATCH, BREAKOUT, overextended; score 50 provably held up by the floor; 21-min-old opportunity; net reward/risk ≈0.03. | Reached 31% of the way to the take-profit. |
+| 158 | 10-11 23:35:04 / 10-12 02:35:04 | **Poor.** 1m WATCH 64; target below round-trip fees; 53-min-old opportunity; score ≤60 but not stored. | Reached 33% of the way to the take-profit. |
+| 143 | 19:40:04 / 22:40:04 | **Poor on the fresh evidence.** 1m `WAIT_FOR_RETRACEMENT`, RSI 84.3; fresh 5m WATCH/pullback ignored (F-24); score 60 used the superseded signal's ATR. | **Passed the take-profit.** The loss came from the exit mechanics (F-14/F-25), not the entry. |
+| 137 | 17:55:04 / 20:55:04 | **Weak.** Counter-trend mean-reversion; score 58, proven to include the rejected-high penalty; net reward/risk ≈0.17. | Reached 47% of the way to the take-profit. |
+
+## UNKNOWNS
+
+- **U-18″:** Why 167646 (01:01:02 UTC) and 176692 (06:56:02 UTC) did not execute. The open-position limit is now a leading, untested hypothesis (I5-002).
+- **U-20′:** Which path set 182's score of 50 (rejected-high floor or above 4 ATR), and 172's −10 term (I5-001).
+- **U-22:** Whether a score of 50-54, reward/risk below 1 or counter-trend context predicts losses across all positions, including STOPPED ones (I5-003).
+- **Fee schedule:** the actual fee schedule that applies is unverified; the paper engine records fee 0.
+- **Logs:** the local logs exist only as `2026-10-12.*.gz`. Coverage of 10-11 UTC, which includes trades 137, 143 and 158, is unconfirmed.
+
+## LOG REQUEST (for the coordinator; log times are UTC)
+
+`rg -z` over `logs/crypto-ai-trader.2026-10-12.*.log.gz`:
+- `signalId=167646|signal 167646|signalId=176692|signal 176692`
+- `FIX-11G post-guard result: signalId=176692`
+- `BUY revalidation rejected signal (167646|176692)`
+- `no fresh canonical execution price`, between 01:01:02–01:01:15 and 06:56:02–06:56:15
+- `BALANCED_EARLY_POST_BEARISH_RECOVERY_REQUIRED|BALANCED_EARLY_LATE_ENTRY_BLOCKED` for DOGEUSDT, 01:01–01:02
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: Rebuild the Entry Quality reference (recent low), recent high and rejection count for each evaluated signal (F-38, U-20′, C-2). Includes the full 30-minute window; the code uses only the newest 20 signals (F-44). The filter uses a relative interval, so the session time zone does not matter.
+SQL:
+SELECT r.id AS ref_signal_id, s.id, s.symbol, s.generated_at, s.latest_price, s.decision,
+       TIMESTAMPDIFF(SECOND, s.generated_at, r.generated_at) AS secs_before_ref
+FROM trade_signal r
+JOIN trade_signal s ON s.symbol = r.symbol AND s.interval_code = '1m'
+ AND s.generated_at <= r.generated_at AND s.generated_at >= r.generated_at - INTERVAL 30 MINUTE
+WHERE r.id IN (156723,159408,165412,167646,167668,171589,176692,176710)
+ORDER BY r.id, s.generated_at DESC
+LIMIT 300
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: Test whether the limit of 3 open positions, which rejects without logging, stopped the skipped BUYs (U-18″). Also check whether a wallet trade was ever attempted for them.
+SQL:
+SELECT r.id AS ref_signal_id, p.id AS position_id, p.symbol, p.status, p.opened_at, p.closed_at
+FROM trade_signal r
+JOIN paper_position p ON p.opened_at <= r.generated_at + INTERVAL 10 SECOND
+ AND (p.closed_at IS NULL OR p.closed_at >= r.generated_at)
+WHERE r.id IN (167646,167668,176692,176710)
+ORDER BY r.id, p.opened_at;
+SELECT id, signal_id, symbol, side, status, executed_at FROM wallet_trade WHERE signal_id IN (167646,176692,167668,176710) ORDER BY id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: Entry Quality score, reward/risk and regime against the result for every position opened since 10-11, **including STOPPED** (C-3, U-22). The score is read from the stored opportunity explanation.
+SQL:
+SELECT p.id, p.symbol, p.status, p.close_reason, ROUND(p.realized_pnl,6) AS pnl,
+       o.execution_source, o.decision_code,
+       COALESCE(REGEXP_SUBSTR(REGEXP_SUBSTR(o.decision_explanation,'Entry Quality [0-9]+/100'),'[0-9]+'),
+                REGEXP_SUBSTR(REGEXP_SUBSTR(o.decision_explanation,'entryQuality=[0-9]+'),'[0-9]+')) AS entry_quality,
+       s.decision, s.risk_reward_ratio, s.atr_percent, s.market_regime, s.atr_overextended
+FROM paper_position p
+JOIN trade_signal s ON s.id = p.signal_id
+LEFT JOIN execution_opportunity o ON o.symbol = p.symbol AND o.executed_at = p.opened_at
+WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL
+  AND UNIX_TIMESTAMP(p.opened_at) >= UNIX_TIMESTAMP('2026-10-11 03:00:00')
+ORDER BY p.id
+LIMIT 200
+### END_DB_REQUEST
+
+---
+
+**Self-review of Iteration 5:**
+- **Confirmed by arithmetic:**
+  - 137's score includes the rejected-high penalty.
+  - 162's score of 50 is held up by the rejected-high floor.
+  - All six were capped at 25%.
+  - Fee-adjusted reward/risk is at or below 0.24 on five of six trades.
+- **Corrected:** F-33 refuted; F-32 downgraded; the I4-002/I4-003 statistics are invalid because STOPPED positions were excluded.
+- **Closed:** U-21.
+- **Open:** why the two earlier BUYs were skipped; 182's exact score path; whether the patterns hold across all positions.
+- **Planned for Iteration 6:** risk/reward, stop-loss and exit design, using the I5 results.
+
+Sources:
+- [Finhay: Binance trading fees (2026)](https://www.finhay.com.vn/en/phi-giao-dich-binance)
+- [FinanceFeeds: spot trading fee comparison](https://financefeeds.com/why-spot-trading-fees-matter-and-which-platforms-fees-are-the-lowest/)
+- [Traders Union: Binance fee structure change report](https://tradersunion.com/news/brokers-news/show/2241303-binance-revises-trading-fee-structure/)

@@ -1,0 +1,56 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE — Freeze blocker:** the reviewed file name is `FINAL_CHANGE_SPECIFICATION_RPR-0.9.1.md`, but its internal revision is `RPR-0.9.4-DRAFT`; canonical `agent-docs/FINAL_CHANGE_SPECIFICATION.md` is a different RPR-0.4 draft. This cannot satisfy the required “same exact revision” review/freeze gate.
+
+- **PROJECT EVIDENCE — Freeze blocker:** none of the mandatory E01–E10 pre-implementation evidence artifacts were present in the workspace search. The specification itself makes them prerequisites.
+
+- **PROJECT EVIDENCE — Freeze blocker:** the change registry is not implementation-complete. It defers the migration number and uses non-specific artifacts such as `*PolicyMirror`; it has no concrete logging registry or individually identified test/config/documentation items.
+
+- **PROJECT EVIDENCE — Current-code defect confirmed:** Regression Replay’s chart endpoint reads `wallet_trade`, violating the proposed Replay boundary.
+
+- **PROJECT EVIDENCE — Current-code defect confirmed:** the worker’s “price parity” pass condition is true when merely one accepted price event exists anywhere in the run; it does not establish coverage of every position-dependent span.
+
+- **PROJECT EVIDENCE — Current-code defect confirmed:** Replay currently reads `wallet_settings`, applies wallet daily-budget/sizing policy, automatically invokes experimental observers, and retains the zero-price signal fallback. These are materially incompatible with the proposed fixed-notional baseline.
+
+- **PROJECT EVIDENCE — Current-code defect confirmed:** Replay processes price events only before generated signals, then values an open position using the final signal’s price. It does not drain the qualified price-event tail through `executionEnd`.
+
+- **AGENT INFERENCE — Freeze blocker:** the specification has an unresolved outcome-model contradiction. It permits only `ANALYSIS_PARITY` as an earned label and says that label makes no lifecycle claim, yet requires lifecycle-parity acceptance, a 99% lifecycle threshold, and critical lifecycle safety gates. It needs an explicit non-label lifecycle-verification status/certificate rule, or a corrected label taxonomy.
+
+- **PROJECT EVIDENCE — Source identity:** `src.zip` hashes to `A4A9…E9938`, matching one package named by the draft. The relevant Replay Java files match that archive, aside from a non-business string-encoding difference in `RegressionTestService`. The live worktree is nevertheless materially dirty and no frozen source/config/migration/worktree manifest is recorded.
+
+## EVIDENCE
+
+- [FINAL_CHANGE_SPECIFICATION_RPR-0.9.1.md](C:\workspace\crypto-ai-trader-mysql\agent-docs\FINAL_CHANGE_SPECIFICATION_RPR-0.9.1.md:1) identifies itself internally as RPR-0.9.4 while its filename is RPR-0.9.1; [the approval gate](C:\workspace\crypto-ai-trader-mysql\agent-docs\FINAL_CHANGE_SPECIFICATION_RPR-0.9.1.md:289) requires reconciliation to the canonical specification.
+- [FINAL_CHANGE_SPECIFICATION.md](C:\workspace\crypto-ai-trader-mysql\agent-docs\FINAL_CHANGE_SPECIFICATION.md:1) is instead RPR-0.4-DRAFT.
+- The required E01–E10 package is specified at [lines 255–271](C:\workspace\crypto-ai-trader-mysql\agent-docs\FINAL_CHANGE_SPECIFICATION_RPR-0.9.1.md:255); no corresponding artifacts were found by workspace file search.
+- The incomplete registry is at [lines 153–164](C:\workspace\crypto-ai-trader-mysql\agent-docs\FINAL_CHANGE_SPECIFICATION_RPR-0.9.1.md:153), including an unspecified next Flyway migration and generic mirrors.
+- The label/lifecycle conflict is at [line 22](C:\workspace\crypto-ai-trader-mysql\agent-docs\FINAL_CHANGE_SPECIFICATION_RPR-0.9.1.md:22), [line 196](C:\workspace\crypto-ai-trader-mysql\agent-docs\FINAL_CHANGE_SPECIFICATION_RPR-0.9.1.md:196), and [lines 224–244](C:\workspace\crypto-ai-trader-mysql\agent-docs\FINAL_CHANGE_SPECIFICATION_RPR-0.9.1.md:224).
+- The chart route is exposed at [RegressionTestController.java:109](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\controller\RegressionTestController.java:109) and queries `wallet_trade` at [RegressionTestService.java:549](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\RegressionTestService.java:549).
+- The weak run-wide price condition is at [RegressionTestWorker.java:322](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\RegressionTestWorker.java:322).
+- Replay’s account-state dependencies are visible at [ShadowProductionReplayService.java:79](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:79) and [line 318](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:318).
+- Experimental observer invocation is at [lines 100–101](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:100); the zero-event fallback begins at [line 183](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:183).
+- Tail omission is shown by the pre-signal-only consumption loop at [lines 117–161](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:117) and final-signal-price marking at [lines 370–374](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:370).
+- Current replay scope is only a `ThreadLocal` at [ExecutionReplayScope.java:31](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\execution\service\ExecutionReplayScope.java:31); the replay worker is generic `@Async` at [RegressionTestWorker.java:99](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\RegressionTestWorker.java:99).
+- Price-event SQL orders by `observed_at, id`, but the projection omits both id and status at [MarketPriceEventService.java:118](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\market\service\MarketPriceEventService.java:118) and [line 173](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\market\service\MarketPriceEventService.java:173).
+
+## OBJECTIONS
+
+- **AGENT INFERENCE:** Do not freeze a revision whose identity, canonical location, and content hash are not one unambiguous artifact.
+- **AGENT INFERENCE:** Do not approve implementation before E01–E10 exist and are independently reviewable; otherwise price coverage, as-of availability, historical configuration, dependency fall-through, and lifecycle fixtures remain assertions rather than evidence.
+- **AGENT INFERENCE:** A 99% statistic is not meaningful until the specification freezes the denominator, coverage floor, minimum count, confidence-bound method, and lifecycle-status semantics before measuring outcomes.
+- **AGENT INFERENCE:** The draft correctly rejects candle-price assumptions, but must ensure the eventual per-span rule prevents selective exclusion of difficult exits from inflating apparent parity.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No database, production system, runtime, or external service was accessed.
+- **AGENT INFERENCE:** Historical price-span coverage, signal availability lag, entry-fixture completeness, and historical configuration reconstructability are unknown until E03, E07, E09, and E10 are produced.
+- **AGENT INFERENCE:** Whether a replay-only guard can fail closed across every asynchronous and shared-service route without changing Production code is unproven until E01 and the guard design are completed.
+- **EXTERNAL RESEARCH:** None used.
+
+## FINDINGS FOR JEAN
+
+- Do not freeze this specification yet.
+- First create one canonical, content-hashed RPR revision; resolve the analysis-versus-lifecycle outcome model; complete the precise registry/logging/config/test definitions; then attach E01–E10 for a new independent review.
+- The current-code defects cited above support the redesign’s motivation, but they are not proof that the proposed design is implementable or statistically valid.
+
+VERDICT: REJECTED

@@ -1,0 +1,2 @@
+SELECT id, status, started_at, last_evidence_at, latest_signal_id, evidence_count, buy_count, watch_count, evidence_score, decision_code, executed_at, updated_at
+FROM execution_opportunity WHERE symbol='EGLDUSDT' AND started_at BETWEEN '2026-10-11 21:30:00' AND '2026-10-11 22:45:00' ORDER BY started_at LIMIT 20;

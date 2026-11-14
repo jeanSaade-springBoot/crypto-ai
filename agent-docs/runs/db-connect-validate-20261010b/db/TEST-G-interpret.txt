@@ -1,0 +1,13 @@
+Here are the three values from the wrapper result (exit_code=0, row_count=1, stderr empty):
+
+| Item | Value |
+|---|---|
+| Authenticated database | `crypto_ai` |
+| Authenticated DB user | `ai_investigator@localhost` |
+| `trade_signal` row count | `90139` |
+
+**Limits of this result:**
+- The column header is `authenticated_user`, but the result doesn't show which SQL function filled it. With `CURRENT_USER()` it's the account MySQL matched you to; with `USER()` it's the user and host the client presented. Those two can differ, so I can't tell which one this is.
+- The `@localhost` host part could mean a local connection or a tunnel, such as SSH, that ends on the database server. The result doesn't say which.
+- 90139 is the count at the moment the query ran. The result has no timestamp.
+- The result says nothing about the account's privileges, so it doesn't confirm the account is read-only.

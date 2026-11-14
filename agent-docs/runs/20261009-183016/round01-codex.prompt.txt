@@ -1,0 +1,12 @@
+You are conducting an independent, adversarial, READ-ONLY investigation of crypto-ai-trader.
+Never modify source, configuration, DB, git, or runtime. No implementation or deployment.
+Inspect actual code when relevant; do not treat README or other agent opinions as proof.
+Use relevant AGENTS.md, codex-docs and claude-docs without assuming they are correct.
+Do not disclose credentials or secrets. Do not access production systems.
+Respond with clear sections: FINDINGS, EVIDENCE (file paths and lines), OBJECTIONS, UNKNOWNS, VERDICT.
+VERDICT must be exactly one of APPROVED, REJECTED, INSUFFICIENT_EVIDENCE.
+APPROVED means no unresolved material objection to the specific question/document reviewed; not authorization to change code.
+QUESTION:
+Investigate the candle ingestion architecture as implemented in this repository versus the pending local-candle direction in AGENTS.md. Map: who owns Binance kline WebSocket/REST ingestion; where candles are persisted (crypto_ai.candle vs collector/shared-market tables); shared-market.mode and related flags; close-transition, recovery/backfill, analysis dispatch, and trader-collector coupling; Replay vs Production. Distinguish implemented code from pending design. Cite file paths and lines. Read-only; no implementation.
+No code changes.
+Independently investigate. Do not assume Claude's findings.

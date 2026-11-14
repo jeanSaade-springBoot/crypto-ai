@@ -1,0 +1,20 @@
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+symbol	varchar(30)	NO	MUL	NULL	
+interval_code	varchar(10)	NO		NULL	
+open_time	timestamp(6)	NO		NULL	
+close_time	timestamp(6)	NO		NULL	
+open_price	decimal(30,12)	NO		NULL	
+high_price	decimal(30,12)	NO		NULL	
+low_price	decimal(30,12)	NO		NULL	
+close_price	decimal(30,12)	NO		NULL	
+volume	decimal(38,12)	NO		NULL	
+quote_asset_volume	decimal(38,12)	YES		NULL	
+number_of_trades	bigint	YES		NULL	
+taker_buy_base_volume	decimal(38,12)	YES		NULL	
+taker_buy_quote_volume	decimal(38,12)	YES		NULL	
+closed	tinyint(1)	NO	MUL	NULL	
+created_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+updated_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+ingestion_source	varchar(16)	YES		NULL	
+close_transition_token	varchar(36)	YES		NULL

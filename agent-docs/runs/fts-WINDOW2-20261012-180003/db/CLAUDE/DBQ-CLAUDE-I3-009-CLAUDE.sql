@@ -1,0 +1,2 @@
+EXPLAIN SELECT * FROM candle WHERE symbol='EGLDUSDT' AND interval_code='1m' AND closed=1 ORDER BY close_time DESC LIMIT 1;
+SELECT COUNT(*) AS assets, SUM(quantity > 0) AS nonzero_assets FROM wallet_asset

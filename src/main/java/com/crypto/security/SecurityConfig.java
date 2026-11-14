@@ -30,6 +30,10 @@ public class SecurityConfig {
                     "/error"
                 ).permitAll()
                 .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                // FIX-142: evidence-based marker mutations are restricted to administrators.
+                .requestMatchers("/api/fix142/**").hasRole("ADMIN")
+                // FIX-153: a drain stops price protection; deployment identity only.
+                .requestMatchers("/api/local/drain").hasRole("ADMIN")
                 .anyRequest().authenticated()
             )
             .formLogin(form -> form

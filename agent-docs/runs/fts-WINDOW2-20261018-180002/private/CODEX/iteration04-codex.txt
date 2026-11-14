@@ -1,0 +1,101 @@
+## Iteration 4 — Code / Trade Route
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+- Frozen subjects remain exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutions.
+- Permitted `db/CODEX/` remains empty. No `DBQ-FTS-001`…`005` result is available; therefore no trade-specific route, entry/exit cause, or defect is confirmed.
+- Current Production entry route is:
+
+  `trade_signal` → `SignalProcessingCoordinator` claim/freshness/locks → `PaperTradingService` → execution-intelligence and validation gates → fresh canonical price → wallet BUY → `paper_position` OPEN.
+
+  The paper position is created only after `WalletAutoExecutionService.executeBuy(...)` returns true. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:301)
+
+- Entry uses a fresh canonical market-price event, not `trade_signal.latest_price`, for final revalidation, sizing, wallet execution, and `paper_position.entry_price`. [ExecutionPriceAuthorityService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionPriceAuthorityService.java:25) [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:340)
+
+- The coordinator claims durable work, obtains position locks, rechecks signal freshness, executes the business route transactionally, and records the work outcome. A completed work record does not itself prove a trade was opened. [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:43)
+
+- Live-price protection route is:
+
+  canonical price event persisted → protection transaction → TP / absolute stop / profit-lock / normal multi-timeframe exit / near-TP partial-harvest evaluation.
+
+  Input commits before protection; close-candle dispatch occurs afterward. [KlineTransactionCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:32)
+
+- For direct live-price exits, a canonical `APPLIED` price event proves the protection callback transaction committed, but it can be a no-op where no position was open. The corresponding wallet and paper-position mutation must be independently established. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:112)
+
+- Live mechanical exit priority is take-profit/continuation, stop-loss, profit-lock, normal exit policy, then near-TP partial harvest. A stop-loss is not softened by continuation logic. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:173)
+
+- On a profit-lock breach, the route may hold only with specified supportive higher-timeframe conditions; otherwise it produces a `PROFIT_LOCK_*` exit reason. [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:45)
+
+- `paper_position` carries entry/exit signal links, position lifecycle, prices, P&L, close reason, explanation, and open/close timestamps. [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:10)
+
+- `wallet_trade` is signal-linked execution evidence, but has no direct `paper_position` foreign key in current source. Mechanical exits may have no signal link. Exact linkage must use deployed records, symbol, reason, quantity, price, and bounded timestamps. [WalletTrade.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletTrade.java:11)
+
+- Current paper calculations preserve prior partial-harvest realized P&L and then add remaining-quantity P&L on terminal close. Current paper wallet executions set fees to zero, so any historical fee discrepancy requires record-level evidence and historical-version confirmation. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:391) [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:533)
+
+**AGENT INFERENCE**
+
+- Every selected loss needs two independent reconciliations:  
+  1. `paper_position` lifecycle versus entry/exit signals; and  
+  2. paper lifecycle versus wallet execution(s) and, where applicable, canonical price-event evidence.  
+  A matching symbol alone is insufficient.
+- The current route supports several distinct loss paths—stop-loss, signal SELL, multi-timeframe exit, profit-lock exit, take-profit/continuation outcome, manual close, or a partial-harvest plus terminal close. No one path can be assigned to a frozen trade without DB evidence.
+- Source is current-project evidence, not proof that the same version/configuration was deployed when these six historical trades executed.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+### EVIDENCE
+
+- No trade-specific DB artifact exists in the permitted Codex evidence location.
+- No frozen-ID line was available in the local log slice in Iteration 3.
+- No raw trade timestamp is available to convert to KSA in this iteration.
+
+### UNKNOWNS
+
+- Each position’s symbol, entry/exit signal IDs, open/close UTC timestamps, close reason, and realized P&L.
+- Whether the six losses used live mechanical protection, signal-path closure, manual closure, or a mixed partial-harvest lifecycle.
+- Matching wallet BUY/SELL rows, fees, quantities, price-observation timestamps, execution keys, and financial reconciliation.
+- Accepted price-event identity and trigger order for any claimed stop-loss, profit-lock, or take-profit exit.
+- Signal freshness, data quality, validation decisions, configuration/version, and Replay comparability at each entry.
+- Whether current source behavior was the deployed behavior for the historical trades.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Establish the deployed schema for the exact entry/exit route and retrieve only the six authoritative positions before requesting route-specific signal, wallet, protection, and audit records. Read-only, bounded, `crypto_ai` only.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'position_management_event',
+      'position_analysis',
+      'signal_processing_work'
+  )
+ORDER BY table_name, ordinal_position
+LIMIT 1000;
+
+SELECT p.*
+FROM crypto_ai.paper_position p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137)
+LIMIT 6;
+```
+### END_DB_REQUEST

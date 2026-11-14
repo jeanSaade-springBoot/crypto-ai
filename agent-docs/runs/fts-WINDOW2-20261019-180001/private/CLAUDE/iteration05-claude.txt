@@ -1,0 +1,257 @@
+# Claude: Iteration 5, entry quality (self-review only)
+
+**Run:** fts-WINDOW2-20261019-180001 · **Frozen trades:** 182, 172, 162, 158, 143, 137. None were substituted.
+
+**What I read:**
+- The CHARTER, my iteration 1–4 outputs, and results DBQ-CLAUDE-I4-001…004, I1-002, I2-002, I2-006 and I3-006.
+- Code: `ExecutionIntelligenceService` (`:47-71`, `:226-236`, `:283-378`, `:560-786`, `:848-1030`, `:1145-1223`, `:1257-1330`, `:1472-1514`, `:1807-1817`, `:2455-2462`, `:2606-2614`) and `PaperTradingService.java:292-389`.
+
+I did not open any CODEX folder, `LIVE_EVENTS.log` or `LIVE_TEAM_STATUS.md`.
+
+**Limitations:**
+- This session is in plan mode and has no Write, ExitPlanMode or AskUserQuestion tool. So this output is not saved to `private/CLAUDE/` and the plan file was not written. The coordinator must capture it from here.
+- There is no SSH or log access.
+- No code, config, DB writes, git or deploy.
+
+**Time rule (proven in I2-001):** displayed DB values are already KSA, and UTC = displayed − 3h. All times below are KSA unless marked UTC.
+
+---
+
+## SELF-REVIEW CORRECTIONS
+
+**C5-1: Correction to F4-1's scope** [PROJECT EVIDENCE]
+- `wallet_trade.execution_reason` stores `decision.source()` (`PaperTradingService.java:384` → `WalletAutoExecutionService.java:176`).
+- The FIX-014 wakeup keeps source `SETUP_TIMEFRAME_ATR` and only changes the code to `SETUP_TIMEFRAME_WAKEUP` (`ExecutionIntelligenceService.java:363,373-374`). So `execution_reason = SETUP_TIMEFRAME_ATR` covers two routes.
+- In I4-003:
+  - **Wallet 371 (XLM) and 435 (TAO)** look like counterexamples: the 5m BUY was stamped 17 ms and 1,402 ms after the 1m signal, while the previous 5m was WATCH or NEUTRAL. They are consistent with FIX-014 wakeups, where the 5m signal is passed in explicitly as the trigger. They do not contradict F4-1.
+  - **Wallets 119, 255 and 358 (trade 143)** are cases where the direct route admitted a 5m BUY that a newer same-boundary non-bullish 5m signal had replaced.
+- Confirming direct route versus wakeup needs the execution messages (I5-004).
+
+**C5-2: F4-1 is broader than one race** [PROJECT EVIDENCE: I4-003]
+- 83 executed BUYs had a 1m candle closing on a 5-minute boundary.
+- In 77 of them (93%), the same-boundary 5m signal was stamped *after* the 1m signal, by 1 ms to 1,659 ms.
+  - Only 5 had the 5m first: wallets 314, 344, 430, 453, 461.
+  - One had equal timestamps (wallet 144), which `LessThanEqual` includes.
+- **So at 5-minute boundaries the 1m decision normally sees the previous 5m candle**, not the one that has just closed.
+- A "superseded bullish" flip happened 6 times out of 83 (7%): the same-boundary 5m was non-bullish, the previous one bullish, and the new one stamped later.
+  - **SETUP_TIMEFRAME_ATR:** wallets 119, 255, 358. This route requires a bullish 5m (`:1486`).
+  - **ACCUMULATED_EVIDENCE:** wallet 72.
+  - **CONFIRMATION_ADD:** wallet 199.
+  - **IMMEDIATE_VALIDATION:** wallet 305.
+  - For the last three, whether the route depended on the 5m signal is not yet verified.
+- In every flip case the newer 5m was already in the DB before the fill (for example, wallet 119 had the 5m at 04:40:07.218 and the fill at 08.150). The execution-time revalidation (`:1150-1169`) does not re-check higher-timeframe context.
+
+**C5-3: Iteration 1's KSA labels were wrong.** This was already corrected in I2 (F-0). I restate it so the coordinator does not reuse the iteration-1 times.
+
+---
+
+## FINDINGS
+
+### F5-1: The Entry Quality model cannot block an R:R < 1 entry on its own [PROJECT EVIDENCE: code; arithmetic is AGENT INFERENCE]
+
+**How the score works (`ExecutionIntelligenceService.java:976-1022`):**
+- The score starts at 100.
+- An R:R below 1 subtracts 30 (`:991`). That leaves 70, which is GOOD_ENTRY.
+- The hard block is only a score below 50 (`CHASE_ENTRY_CUTOFF`, `:229`, `:1173`).
+- The FIX-091 rejection-zone penalty is clamped at 50 (`:1000-1001`).
+- The guard can only *reduce* the size (`:1213-1214`).
+
+**What happened in the frozen set:**
+- Five of the six entries had R:R < 1 at the fill price, computed with `currentRewardRisk` (`:1811-1817`).
+- All five executed, and three scored exactly 50, which is the inclusive cutoff.
+
+| ID | Fill | R:R at fill | Gross breakeven win rate | Fee-inclusive R:R (0.1%/side) | Fee-inclusive breakeven | Stored entry-quality score |
+|---|---|---|---|---|---|---|
+| 137 | 3.999 | 0.64 | 61% | 0.17 | 85% | 58 |
+| 143 | 4.033 | **1.39** | 42% | 0.77 | 57% | 70 (message says 60, see F5-3) |
+| 158 | 1.4108 | 0.35 | 74% | **< 0**: the TP 0.171% is below the fees | not achievable | 50 |
+| 162 | 0.08705 | 0.44 | 70% | 0.03 | 97% | 50 (LATE_ENTRY) |
+| 172 | 5.49e-6 | 0.74 nominal, **1.00 at tick resolution** (see F5-4) | 50% | 0.46 | 68% | 60 |
+| 182 | 0.1884 | 0.48 | 68% | 0.06 | 94% | 50 |
+
+- **Sources:** the fills are from I1-003, I2-006 and I3-006, the SL/TP from I1-002, and the stored scores from I2-002.
+- **Fees:** the fee rate is EXTERNAL RESEARCH from I2. Paper fills record `fee_usdt = 0`.
+- **Classification: design gap, not a code defect.** The rules allowed these entries. Combined with I2 F-2 (the 0.5% stop floor makes R:R < 1 whenever ATR is below 0.1667%), the system routinely opens trades with negative expectancy at a reduced 15–25% size. Nothing in the entry-quality score accounts for fees.
+
+### F5-2: What each stored score is made of [AGENT INFERENCE from code constants; I5-001/002 will verify]
+
+**137 = 58.** The only decomposition that fits is 100 − 30 (R:R) − 12 (rejection zone), since the regime was RANGE and so no BREAKOUT or HIGH_VOLATILITY terms apply.
+- This means the entry price was within 0.5% of a recent 30-minute high, with at least 2 lower prints after it.
+- So a RANGE_MEAN_REVERSION STRONG_BUY bought next to a high that had just been rejected.
+- That is a weak buy location known before entry, and the rule floor softened it.
+
+**143.** The R:R of 1.39 carries no penalty, so the remaining penalty of 30–40 must come from expansion, ATR extension or age. Per the code, that is roughly 1.5–3% above the 30-minute reference and 4–6 ATR.
+- The model still rated this ACCEPTABLE or GOOD, even though the 1m signal's own ATR policy said `WAIT_FOR_RETRACEMENT` at 0% and RSI was 84 (I2 F-4).
+- Entry Quality does not use RSI or distance from SMA20.
+
+**172 = 60**, that is 70 − 10.
+- SHIB's ATR (6.8e-9) is smaller than one tick (1e-8), so one tick is about 1.47 ATR.
+- Two ticks above the 30-minute low therefore exceed 2.5 ATR and trigger the −10 penalty (`:985`).
+- The penalty is a resolution artefact, not a real measure of extension.
+
+**158, 162 and 182 = 50.** After the −30 R:R penalty, each needs another −20. Several combinations of expansion, ATR extension, age and STOP_EXPOSED fit.
+- The 162 message confirms LATE_ENTRY 50 (I2-006).
+- Which terms applied is UNKNOWN (U18).
+
+### F5-3: Trade 143 had two different Entry Quality scores, computed on different ATR bases, for the same route [PROJECT EVIDENCE: code + I2-006 + I2-002]
+
+- **Decision time:** the SETUP_TIMEFRAME_ATR route scores Entry Quality with the **5m ATR** (`:634`, "the authoritative 5m ATR so a tiny 1m ATR cannot manufacture a false … chase"). The wallet message shows **60/100 ACCEPTABLE_ENTRY**.
+- **Execution time:** both `revalidateAtExecutionPrice` (`:1167`) and the persisted score (`PaperTradingService.java:377-378`) use `assessEntryQualityAtPrice`. That method scores with **`current.getAtrAtSignal()`, the 1m ATR** (`:857-858`). `wallet_managed_position` 172 stores **70**.
+- **Consequences:**
+  1. The persisted audit score does not match the score that sized the trade.
+  2. The execution-time guard uses the ATR basis that the route was written to avoid. When the 1m ATR is tiny, the case the comment describes, the revalidation can turn a decision-approved entry into CHASE_ENTRY_BLOCKED. That is a hidden Production/Replay behaviour difference from the route's stated intent.
+  3. Here the 1m score was *higher*, which implies the 1m ATR was larger than the 5m ATR for 159285. If so, the route's premise did not hold in this case (I5-001 will confirm).
+- **Classification: confirmed inconsistency in code and data.** It did not cause the 143 loss, because the guard only reduces size and the size stayed 25%.
+
+### F5-4: Trade 172's real geometry at tick resolution [PROJECT EVIDENCE + AGENT INFERENCE]
+
+- **Nominal levels:** TP 5.5104e-6 and SL 5.46255e-6 around the fill at 5.49e-6.
+- **Levels the price can actually trade at:**
+  - The TP needs 5.52 (+3 ticks, +0.546%).
+  - The SL needs 5.46 (−3 ticks, −0.546%).
+- So the effective R:R is 1.00, not the stored 0.74, and all ATR-based measures (risk plan, entry quality, extension) are below the instrument's resolution.
+- **Classification:** valid loss under the current rules. The design gap is that nothing checks tick size or price resolution (the tick size is assumed from Binance; it is not stored).
+
+### F5-5: Trade 162. A single BUY observation lifted the FIX-119 deferral, and the FIX-041 "BALANCED_EARLY requires an early price" block does not cover this route [PROJECT EVIDENCE: code + I2-006]
+
+- **FIX-119 deferral** (`:1275-1280`) only defers when `buyCount == 0` and the 5m is not bullish. The evidence was "1 BUY, 9 WATCH", so one BUY among ten observations lifted it.
+- **The FIX-041 block** (`:672-684`) stops BALANCED_EARLY + LATE_ENTRY only on the direct IMMEDIATE_VALIDATION path. Trade 162 reported "HTF authority = BALANCED_EARLY" at LATE_ENTRY 50 through ACCUMULATED_EVIDENCE, which is excluded by design (`:668-671`).
+- **Classification: rule-compliant entry, with a deliberate design exclusion.** It is a weak entry known before entry, not a code defect.
+
+### F5-6: Entry assessment per trade. Before entry vs. outcome [PROJECT EVIDENCE for facts; verdicts are AGENT INFERENCE]
+
+| ID | Known at entry | Entry verdict | Outcome (separate) |
+|---|---|---|---|
+| 137 | STRONG_BUY 91; RANGE_MEAN_REVERSION; a genuine 5m NEUTRAL; 1h WATCH; R:R 0.64; entered at a recently rejected high (F5-2); 25% exploratory size | **Poor location, rule-allowed** | Maximum gain +0.15% against a 0.32% TP; exited at the low on a 5m SELL |
+| 143 | 1m WATCH; ATR said WAIT_FOR_RETRACEMENT at 0%; RSI 84; a re-entry 22 s after the prior EGLD exit at 3.996, filled 0.93% higher; the 5m BUY it relied on had been replaced by a WATCH stored 1.5 s before the fill (F4-1/C5-2) | **Low-quality chase, admitted through a timing race** (candidate defect) | Went well in the right direction first: +1.69%, 95% of the extended TP. The loss came from the order-book sweep at exit (F3-1) |
+| 158 | 1m WATCH; a fresh, valid 5m BUY transition (wakeup, correctly consumed); BALANCED_STRONG; R:R 0.35 | **Structurally unprofitable after fees** (TP below round-trip fees), rule-allowed | Maximum gain +0.057%; 55 minutes in range |
+| 162 | ACCUMULATED_EVIDENCE with 1 BUY / 9 WATCH; BALANCED_EARLY at LATE_ENTRY 50; BREAKOUT 2.82 ATR above SMA20; R:R 0.44 | **Late entry, rule-allowed** (F5-5) | Maximum gain +0.069%; closed by a STRONG_SELL on the signal path |
+| 172 | 1m BUY; 5m bullish; 1h NEUTRAL; effective R:R 1.0 at tick resolution (F5-4) | **Geometry meaningless at this resolution**, rule-allowed | Moved ±1 tick for 39 minutes, then the HTF SELL closed it |
+| 182 | TREND_FOLLOWING BUY in a WEAK_DOWNTREND regime; the 5m STRONG_SELL was masked as NEUTRAL; 1h WATCH counted as bullish context because its trend score was 16, just above the threshold of 15 (F4-3); R:R 0.48 | **Invalid entry: the confirmed masking defect** | Maximum gain ≤ 0; exited when the mask lifted |
+
+**Pattern across the six:**
+- None was entered on stale data or with execution delay (I3 F3-2).
+- None scored above 70 on Entry Quality, and five scored 60 or less.
+- The system marked all six as weak, then executed them at reduced size instead of rejecting them.
+
+### F5-7: Closing the iteration-4 unknowns
+
+**U15 confirmed (F4-5)** [PROJECT EVIDENCE: I4-001]
+- `currentPrice` uses `uk_candle_symbol_interval_open_time` with "Using where; **Using filesort**", estimated at about 15,904 rows. There are 9,221 closed EGLD 1m rows.
+- No index covers `close_time`, so each of the roughly 40 per-transaction calls sorts the whole per-symbol 1m history.
+- The cost in milliseconds has not been measured.
+
+**U16** [PROJECT EVIDENCE: I4-002]
+- Ingestion lag above 500 ms occurred in about 145 separate minutes during 2026-10-11 18:00 to 10-12 12:00.
+- The worst cases:
+
+  | When | Events affected | Maximum lag |
+  |---|---|---|
+  | 2026-10-11 22:18 | 68 | **15.2 s** |
+  | 2026-10-11 22:32 | 61 | **14.8 s** |
+  | 2026-10-12 09:55 | 68 | 7.3 s |
+  | 2026-10-12 00:09 | — | 5.2 s |
+
+- The two worst approach the 15 s `price-max-age` limit.
+- The stalls are much more frequent than the frozen exits, so exit transactions are not the only cause. The cause is UNKNOWN (U19).
+- None of these stalls was on a frozen trade's entry or exit path. The 09:55 stall ended before trade 182's 09:57 signal.
+
+**U17** [PROJECT EVIDENCE: I4-004]
+- Every Replay and regression table shows `TABLE_ROWS = 0`. That is an InnoDB estimate; I5-006 confirms it.
+- So there is **no existing Replay evidence**, and F4-1/F4-3/F4-6 parity cannot be checked without a new Replay run.
+
+**Governance:** the F3-5 contradiction is still open. FIX-153 and FIX-154 were live in Production, contrary to AGENTS.md.
+
+---
+
+## EVIDENCE
+
+- **DB results:**
+  - I4-001: EXPLAIN, index list, row count.
+  - I4-002: stall minutes.
+  - I4-003: 83 boundary BUYs.
+  - I4-004: Replay tables.
+  - I1-002: entry signals.
+  - I2-002: `entry_quality_score` and stage per managed position.
+  - I2-006 and I3-006: execution messages (143 = 60, 162 = 50 LATE_ENTRY, 137 = 58, 172 = 60, 182 = 50).
+- **Code:**
+  - `ExecutionIntelligenceService.java:65,226-236,363-374,600-641,672-684,777-780,848-1030,1150-1223,1257-1280,1472-1514,1811-1817,2455-2462`
+  - `PaperTradingService.java:296-311,349,377-385`
+
+## UNKNOWNS
+
+- **U18:** the exact Entry Quality terms for 158, 162, 182 and 143: the reference source, expansion, ATR extension, age, STOP_EXPOSED and the rejection zone. Covered by I5-001/002.
+- **U19:** the cause of the ingestion stalls that do not line up with the frozen exits (I5-005).
+- **U20:** whether the superseded-5m cases (wallets 72, 119, 199, 255, 305) ended in losses, which would show whether the race is costly (I5-004).
+- **U12:** still pending. The log greps need SSH: `FIX-105 chase reference` is debug-level only, plus `FIX-11G post-guard result` for 137/182.
+
+---
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: U18 / F5-2 / F5-3. Entry Quality inputs for the entry signals and the relevant 5m signals (ATR basis, liquidity, regime, authority cap), plus the 30-minute 1m price window before each entry (reference low, recent high and when it printed).
+SQL:
+SELECT id, symbol, interval_code, generated_at, decision, market_regime, liquidity_status, atr_at_signal, atr_percent, atr_entry_type, atr_recommended_position_percent, atr_immediate_entry_allowed, entry_authority, entry_authority_max_position_percent, latest_price, stop_loss, take_profit, rsi_score, sma20_score FROM crypto_ai.trade_signal WHERE id IN (156723, 159408, 165412, 167668, 171589, 176710, 159285, 159407, 165415, 176655) ORDER BY id LIMIT 12;
+SELECT p.id AS position_id, COUNT(*) AS n, MIN(s.latest_price) AS ref_low_30m, MAX(s.latest_price) AS high_30m, SUBSTRING_INDEX(GROUP_CONCAT(DATE_FORMAT(s.generated_at, '%H:%i:%s') ORDER BY s.latest_price DESC, s.generated_at DESC), ',', 1) AS high_at FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal e ON e.id = p.signal_id JOIN crypto_ai.trade_signal s ON s.symbol = e.symbol AND s.interval_code = '1m' AND s.generated_at BETWEEN e.generated_at - INTERVAL 30 MINUTE AND e.generated_at WHERE p.id IN (182,172,162,158,143,137) GROUP BY p.id ORDER BY p.id LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: U18. The opportunity anchor and best price that can override the 30-minute reference (`:898-926`), and the evidence counts, for each frozen entry.
+SQL:
+SELECT o.id, o.symbol, o.status, o.started_at, o.last_evidence_at, o.anchor_entry_price, o.best_entry_price, o.evidence_count, o.buy_count, o.watch_count, o.neutral_count, o.bearish_count, o.evidence_score, o.opportunity_health, o.five_minute_decision, o.one_hour_decision, o.execution_source, o.recommended_position_percent, o.decision_code, o.executed_at FROM crypto_ai.execution_opportunity o JOIN crypto_ai.paper_position p ON p.symbol = o.symbol AND o.executed_at BETWEEN p.opened_at - INTERVAL 10 SECOND AND p.opened_at + INTERVAL 5 SECOND WHERE p.id IN (182,172,162,158,143,137) ORDER BY o.executed_at LIMIT 12;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: F5-1. Does Entry Quality or R:R predict the outcome? Outcomes by entry-quality band and R:R band for all terminal positions from 2026-10-09 to the snapshot.
+SQL:
+SELECT CASE WHEN w.entry_quality_score >= 70 THEN '70+' WHEN w.entry_quality_score >= 60 THEN '60-69' WHEN w.entry_quality_score >= 55 THEN '55-59' ELSE '50-54' END AS eq_band, CASE WHEN s.risk_reward_ratio < 0.5 THEN '<0.5' WHEN s.risk_reward_ratio < 1 THEN '0.5-1' ELSE '>=1' END AS rr_band, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS wins, SUM(p.status = 'STOPPED') AS stopped, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum, ROUND(AVG(p.realized_pnl), 6) AS pnl_avg FROM crypto_ai.paper_position p JOIN crypto_ai.wallet_managed_position w ON w.entry_signal_id = p.signal_id JOIN crypto_ai.trade_signal s ON s.id = p.signal_id WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL AND p.opened_at BETWEEN '2026-10-09 00:00:00' AND '2026-10-19 18:00:00' GROUP BY eq_band, rr_band ORDER BY eq_band, rr_band LIMIT 30;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: C5-1 / U20. Separate direct-route entries from FIX-014 wakeups (the message contains "FIX-014 wake-up"), and get the outcome of each superseded-5m entry.
+SQL:
+SELECT wt.id, wt.symbol, wt.execution_reason, wt.executed_at, wt.signal_id, (wt.execution_message LIKE '%FIX-014 wake-up%') AS is_wakeup, LEFT(wt.execution_message, 300) AS msg, p.id AS paper_id, p.status, p.close_reason, p.realized_pnl FROM crypto_ai.wallet_trade wt LEFT JOIN crypto_ai.paper_position p ON p.signal_id = wt.signal_id WHERE wt.id IN (72, 119, 199, 255, 276, 305, 358, 371, 435, 461) ORDER BY wt.id LIMIT 12;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-005
+Purpose: U19. Correlate the worst ingestion stalls with wallet transactions that were running at the same moment.
+SQL:
+SELECT 'STALL' AS kind, MIN(observed_at) AS t_first, MAX(created_at) AS t_last, COUNT(*) AS n, MAX(TIMESTAMPDIFF(MICROSECOND, observed_at, created_at)) / 1000 AS max_lag_ms, NULL AS info FROM crypto_ai.market_price_event WHERE observed_at BETWEEN '2026-10-11 22:17:30' AND '2026-10-11 22:19:00' AND TIMESTAMPDIFF(MICROSECOND, observed_at, created_at) > 500000
+UNION ALL SELECT 'STALL', MIN(observed_at), MAX(created_at), COUNT(*), MAX(TIMESTAMPDIFF(MICROSECOND, observed_at, created_at)) / 1000, NULL FROM crypto_ai.market_price_event WHERE observed_at BETWEEN '2026-10-11 22:31:30' AND '2026-10-11 22:33:00' AND TIMESTAMPDIFF(MICROSECOND, observed_at, created_at) > 500000
+UNION ALL SELECT 'WALLET', executed_at, executed_at, id, NULL, CONCAT(symbol, ' ', side, ' ', execution_reason) FROM crypto_ai.wallet_trade WHERE executed_at BETWEEN '2026-10-11 22:17:00' AND '2026-10-11 22:19:30' OR executed_at BETWEEN '2026-10-11 22:31:00' AND '2026-10-11 22:33:30'
+ORDER BY t_first LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-006
+Purpose: U17. Exact row counts behind the 0 estimates for the Replay tables.
+SQL:
+SELECT (SELECT COUNT(*) FROM crypto_ai.replay_run_output) AS replay_run_output, (SELECT COUNT(*) FROM crypto_ai.replay_decision_trace) AS replay_decision_trace, (SELECT COUNT(*) FROM crypto_ai.replay_run_certificate) AS replay_run_certificate, (SELECT COUNT(*) FROM crypto_ai.trade_signal_test) AS trade_signal_test, (SELECT COUNT(*) FROM crypto_ai.wallet_position_test) AS wallet_position_test;
+### END_DB_REQUEST
+
+---
+
+## Updated classifications (iteration 5; may change)
+
+| ID | Entry | Overall |
+|---|---|---|
+| 137 | Poor location: R:R 0.64 and a rejection zone (F5-2). Rule-allowed. | Valid loss |
+| 143 | Low-quality chase, admitted through the 5m supersession race (F4-1/C5-2). Its Entry Quality is inconsistent between decision and execution (F5-3). | **Candidate logic defect (entry).** The exit followed the rules but has a design limitation |
+| 158 | The TP is below the fees (F5-1). Valid wakeup. | Valid loss, structurally negative expectancy |
+| 162 | Late entry; one BUY lifted FIX-119; FIX-041 excludes this route by design (F5-5) | Valid loss |
+| 172 | Tick-resolution geometry (F5-4) | Valid loss; design gap |
+| 182 | Masked 5m STRONG_SELL (F4-3) | **Confirmed logic defect** |
+
+**Draft regression checks (not authorized for implementation):**
+- **R-F5-1:** an entry with R:R < 1 and no other penalty. The test should record whether it is allowed. This documents current behaviour and is a decision for the design owner.
+- **R-F5-3:** a SETUP_TIMEFRAME_ATR entry where the 1m ATR differs from the 5m ATR. The execution revalidation and the persisted score must use the same ATR basis as the decision guard.
+- **R-F5-4:** a symbol whose ATR is below one tick. Report the effective tick-level R:R.
+
+**Plan for iteration 6:**
+- Use the I5 results to close U18–U20.
+- Test whether Entry Quality has any predictive value (I5-003).
+- Then move on to risk/reward, fees and stop geometry at the population level.

@@ -1,0 +1,311 @@
+## FINDINGS — Iteration 5: Entry Quality
+
+- **PROJECT EVIDENCE:** No trade-row result for frozen IDs `182, 172, 162, 158, 143, 137` exists in the permitted Codex DB evidence. Entry quality for every selected loss is therefore **unverifiable**, not weak or defective.
+- **PROJECT EVIDENCE:** The current entry route requires an allowed signal, execution-time validation, a fresh canonical execution price, successful wallet BUY, then creation of `paper_position`. Current source alone does not prove the historical runtime/configuration or that each historical entry met those conditions.
+- **PROJECT EVIDENCE:** The available schema supports a contemporaneous assessment without look-ahead: entry signal fields, linked BUY execution prices/timestamps, the most recent same-symbol 5m/1h signals at or before entry-signal generation, and closed 1m candles ending at the entry candle.
+- **AGENT INFERENCE:** A later loss does not establish poor entry quality. Classification must use only the requested as-of-entry evidence.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `paper_position` is the authoritative lifecycle entity; it links `signal_id`, entry price, stop, target, and UTC opening time.
+- **PROJECT EVIDENCE:** `trade_signal` persists strategy, score/confidence, risk/reward, ATR, BTC, liquidity, derivatives, regime, data-quality, and decision-explanation evidence.
+- **PROJECT EVIDENCE:** `wallet_trade` records decision price, executed price, execution-observation time, fee, and execution timestamp, allowing entry-price-gap analysis.
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- Exact symbols, entry UTC/KSA times, signals, execution prices, and price gaps for all six frozen trades.
+- Whether entry data quality, BTC, liquidity, derivatives, risk/reward, strategy, and freshness gates supported each entry.
+- Whether each entry occurred near a local extension, retracement, or structure break using only then-closed candles.
+- Historical runtime mode/configuration and Replay comparability.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Collect bounded, contemporaneous entry-quality evidence for exactly frozen positions `182, 172, 162, 158, 143, 137`. All returned timestamps are UTC. Context and candles are restricted to information available no later than each entry signal; no post-entry outcome data is requested.
+
+SQL:
+```sql
+WITH frozen AS (
+    SELECT
+        p.id AS paper_position_id,
+        p.symbol,
+        p.quantity,
+        p.entry_price,
+        p.stop_loss,
+        p.take_profit,
+        p.signal_id,
+        p.opened_at
+    FROM crypto_ai.paper_position p
+    WHERE p.id IN (182, 172, 162, 158, 143, 137)
+),
+entry_wallet_ranked AS (
+    SELECT
+        f.paper_position_id,
+        wt.id,
+        wt.signal_id,
+        wt.quantity,
+        wt.price_usdt,
+        wt.decision_price_usdt,
+        wt.execution_price_observed_at,
+        wt.fee_usdt,
+        wt.execution_type,
+        wt.execution_reason,
+        wt.status,
+        wt.executed_at,
+        ROW_NUMBER() OVER (
+            PARTITION BY f.paper_position_id
+            ORDER BY wt.executed_at ASC, wt.id ASC
+        ) AS rn
+    FROM frozen f
+    JOIN crypto_ai.wallet_trade wt
+      ON wt.signal_id = f.signal_id
+     AND wt.side = 'BUY'
+),
+context_ranked AS (
+    SELECT
+        f.paper_position_id,
+        ts.id,
+        ts.interval_code,
+        ts.candle_open_time,
+        ts.generated_at,
+        ts.decision,
+        ts.original_decision,
+        ts.total_score,
+        ts.confidence_score,
+        ts.final_entry_allowed,
+        ts.data_quality_valid,
+        ts.latest_price,
+        ts.risk_reward_ratio,
+        ts.market_regime,
+        ts.selected_strategy,
+        ROW_NUMBER() OVER (
+            PARTITION BY f.paper_position_id, ts.interval_code
+            ORDER BY ts.generated_at DESC, ts.id DESC
+        ) AS rn
+    FROM frozen f
+    JOIN crypto_ai.trade_signal es
+      ON es.id = f.signal_id
+    JOIN crypto_ai.trade_signal ts
+      ON ts.symbol = f.symbol
+     AND ts.interval_code IN ('5m', '1h')
+     AND ts.generated_at <= es.generated_at
+     AND (ts.candle_open_time IS NULL
+          OR es.candle_open_time IS NULL
+          OR ts.candle_open_time <= es.candle_open_time)
+)
+SELECT
+    f.paper_position_id,
+    f.symbol,
+    f.quantity AS position_quantity,
+    f.entry_price AS paper_entry_price,
+    f.stop_loss AS paper_stop_loss,
+    f.take_profit AS paper_take_profit,
+    f.opened_at AS paper_opened_at,
+
+    es.id AS entry_signal_id,
+    es.interval_code AS entry_interval,
+    es.candle_open_time AS entry_candle_open_time,
+    es.generated_at AS entry_signal_generated_at,
+    es.decision AS entry_decision,
+    es.original_decision AS entry_original_decision,
+    es.final_entry_allowed,
+    es.primary_blocking_stage,
+    es.data_quality_valid,
+    es.signal_mode,
+    es.latest_price AS entry_signal_price,
+    es.stop_loss AS entry_signal_stop_loss,
+    es.take_profit AS entry_signal_take_profit,
+    es.risk_reward_ratio,
+    es.atr_at_signal,
+    es.atr_percent,
+    es.atr_overextended,
+    es.atr_entry_type,
+    es.atr_recommended_position_percent,
+    es.atr_immediate_entry_allowed,
+    es.atr_retracement_entry_price,
+    es.total_score,
+    es.confidence_score,
+    es.raw_confidence_score,
+    es.effective_confidence_score,
+    es.trend_score,
+    es.volume_score,
+    es.momentum_score,
+    es.market_regime,
+    es.detected_regime,
+    es.confirmed_regime,
+    es.market_regime_confidence,
+    es.selected_strategy,
+    es.strategy_version,
+    es.strategy_entry_allowed,
+    es.entry_authority,
+    es.entry_authority_max_position_percent,
+    es.btc_context_status,
+    es.btc_context_entry_allowed,
+    es.btc_context_interval,
+    es.btc_context_decision,
+    es.btc_context_age_seconds,
+    es.btc_context_freshness_threshold_seconds,
+    es.liquidity_status,
+    es.liquidity_entry_allowed,
+    es.order_book_spread_percent,
+    es.order_book_target_blocked,
+    es.order_book_stop_exposed,
+    es.derivatives_status,
+    es.derivatives_entry_allowed,
+    es.final_decision_explanation,
+    es.strategy_explanation,
+    es.atr_explanation,
+    es.btc_context_explanation,
+    es.liquidity_explanation,
+    es.derivatives_explanation,
+
+    ew.id AS entry_wallet_trade_id,
+    ew.quantity AS wallet_buy_quantity,
+    ew.price_usdt AS wallet_execution_price,
+    ew.decision_price_usdt,
+    ew.execution_price_observed_at,
+    ew.fee_usdt AS wallet_buy_fee_usdt,
+    ew.execution_type AS wallet_execution_type,
+    ew.execution_reason AS wallet_execution_reason,
+    ew.status AS wallet_execution_status,
+    ew.executed_at AS wallet_executed_at,
+
+    c5.id AS context_5m_signal_id,
+    c5.candle_open_time AS context_5m_candle_open_time,
+    c5.generated_at AS context_5m_generated_at,
+    c5.decision AS context_5m_decision,
+    c5.original_decision AS context_5m_original_decision,
+    c5.total_score AS context_5m_total_score,
+    c5.confidence_score AS context_5m_confidence_score,
+    c5.final_entry_allowed AS context_5m_entry_allowed,
+    c5.data_quality_valid AS context_5m_data_quality_valid,
+    c5.latest_price AS context_5m_price,
+    c5.risk_reward_ratio AS context_5m_risk_reward_ratio,
+    c5.market_regime AS context_5m_regime,
+    c5.selected_strategy AS context_5m_strategy,
+
+    c1h.id AS context_1h_signal_id,
+    c1h.candle_open_time AS context_1h_candle_open_time,
+    c1h.generated_at AS context_1h_generated_at,
+    c1h.decision AS context_1h_decision,
+    c1h.original_decision AS context_1h_original_decision,
+    c1h.total_score AS context_1h_total_score,
+    c1h.confidence_score AS context_1h_confidence_score,
+    c1h.final_entry_allowed AS context_1h_entry_allowed,
+    c1h.data_quality_valid AS context_1h_data_quality_valid,
+    c1h.latest_price AS context_1h_price,
+    c1h.risk_reward_ratio AS context_1h_risk_reward_ratio,
+    c1h.market_regime AS context_1h_regime,
+    c1h.selected_strategy AS context_1h_strategy
+FROM frozen f
+JOIN crypto_ai.trade_signal es
+  ON es.id = f.signal_id
+LEFT JOIN entry_wallet_ranked ew
+  ON ew.paper_position_id = f.paper_position_id
+ AND ew.rn = 1
+LEFT JOIN context_ranked c5
+  ON c5.paper_position_id = f.paper_position_id
+ AND c5.interval_code = '5m'
+ AND c5.rn = 1
+LEFT JOIN context_ranked c1h
+  ON c1h.paper_position_id = f.paper_position_id
+ AND c1h.interval_code = '1h'
+ AND c1h.rn = 1
+ORDER BY f.paper_position_id;
+
+WITH frozen AS (
+    SELECT
+        p.id AS paper_position_id,
+        p.symbol,
+        es.candle_open_time AS entry_candle_open_time
+    FROM crypto_ai.paper_position p
+    JOIN crypto_ai.trade_signal es ON es.id = p.signal_id
+    WHERE p.id IN (182, 172, 162, 158, 143, 137)
+),
+ranked_candles AS (
+    SELECT
+        f.paper_position_id,
+        c.id,
+        c.symbol,
+        c.interval_code,
+        c.open_time,
+        c.close_time,
+        c.open_price,
+        c.high_price,
+        c.low_price,
+        c.close_price,
+        c.volume,
+        c.closed,
+        c.ingestion_source,
+        ROW_NUMBER() OVER (
+            PARTITION BY f.paper_position_id
+            ORDER BY c.open_time DESC, c.id DESC
+        ) AS rn
+    FROM frozen f
+    JOIN crypto_ai.candle c
+      ON c.symbol = f.symbol
+     AND c.interval_code = '1m'
+     AND c.closed = 1
+     AND c.open_time <= f.entry_candle_open_time
+)
+SELECT
+    paper_position_id,
+    id AS candle_id,
+    symbol,
+    interval_code,
+    open_time,
+    close_time,
+    open_price,
+    high_price,
+    low_price,
+    close_price,
+    volume,
+    ingestion_source
+FROM ranked_candles
+WHERE rn <= 21
+ORDER BY paper_position_id, open_time, candle_id;
+
+WITH frozen AS (
+    SELECT
+        p.id AS paper_position_id,
+        p.symbol,
+        p.opened_at
+    FROM crypto_ai.paper_position p
+    WHERE p.id IN (182, 172, 162, 158, 143, 137)
+),
+ranked_prices AS (
+    SELECT
+        f.paper_position_id,
+        mpe.id,
+        mpe.observed_at,
+        mpe.price,
+        mpe.source,
+        mpe.delivery_status,
+        mpe.ordering_slot,
+        mpe.outcome_reason,
+        ROW_NUMBER() OVER (
+            PARTITION BY f.paper_position_id
+            ORDER BY mpe.observed_at DESC, mpe.id DESC
+        ) AS rn
+    FROM frozen f
+    JOIN crypto_ai.market_price_event mpe
+      ON mpe.symbol = f.symbol
+     AND mpe.observed_at <= f.opened_at
+     AND mpe.observed_at >= DATE_SUB(f.opened_at, INTERVAL 3 MINUTE)
+)
+SELECT
+    paper_position_id,
+    id AS market_price_event_id,
+    observed_at,
+    price,
+    source,
+    delivery_status,
+    ordering_slot,
+    outcome_reason
+FROM ranked_prices
+WHERE rn <= 20
+ORDER BY paper_position_id, observed_at, market_price_event_id;
+```
+
+No documentation update is required: this is analysis only.

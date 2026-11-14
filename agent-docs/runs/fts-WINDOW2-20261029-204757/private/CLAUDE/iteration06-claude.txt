@@ -1,0 +1,246 @@
+# Claude: Daily Failed-Trade Study, WINDOW2, Iteration 6: Root Cause and Research (self-review)
+
+**Scope:** run `fts-WINDOW2-20261029-204757`, frozen trades 182, 172, 162, 158, 143 and 137. Nothing was substituted.
+
+This iteration was analysis only. I changed no code, config, database or git state and deployed nothing. Plan mode was on, but this session has no Write or ExitPlanMode tool, so everything is in this response.
+
+**Inputs:** my iteration 1–5 outputs, the `db/CLAUDE/` results up to I5-006, the current source tree, and one web search. I did not read the Codex folders, LIVE_TEAM_STATUS or LIVE_EVENTS.
+
+**Time:** the result files show stored UTC values converted to KSA (I4-F01). Every clock time below is KSA; UTC is 3 hours earlier. Ages and gaps are differences, so the time zone does not affect them.
+
+---
+
+## Summary
+
+- **I6-F01, the main new root cause:** in low volatility, a 0.50% minimum stop combined with an unscaled 3-ATR target makes reward/risk equal **6 × ATR%**. This reproduces the planned reward/risk of 5 of the 6 trades exactly. No route these trades used checks the persisted `risk_reward_ratio`.
+- **I6-F02:** Entry Quality does not predict outcomes across the population. Loss rates rise with the score band: 41%, then 49%, 64% and 64%.
+- **I6-F03, closes U5-05:** Defect B (the missing evidence boundary after a profit-lock exit) did **not** decide trade 143. Defect A (the outdated 5m signal) is the only decisive defect.
+- **I6-F04:** the timing-jitter parity gap only ever runs one way: Production is more lenient than Replay. Of 8 boundary cases, 4 changed the age bucket and 2 would most likely have been blocked in Replay. Both of those were losses (162 and 127).
+- **I6-F05, closes U5-01 and U5-03:** every remaining Entry Quality input is now verified, and both range-location passes are explained.
+- **I6-F06, a scope observation:** the frozen selection (`status=CLOSED`) excludes every stop-loss loss (`STOPPED`, 75 rows). The six trades are a biased subset.
+
+---
+
+## FINDINGS
+
+### I6-F01: The 0.50% stop floor with an unscaled target sets reward/risk to 6 × ATR% (ROOT CAUSE, configuration/design; PROJECT EVIDENCE + arithmetic)
+
+**Code:**
+- `AtrRiskService.java:34-45` sets `stopDistance = max(2·ATR, 0.50%·price)` (capped at 8%) and `rewardDistance = 3·ATR`, with no floor.
+- `application.yml:137-143` sets `stop-loss-multiplier 2.0`, `take-profit-multiplier 3.0` and `minimum-stop-percent 0.50`.
+
+**Effect:** whenever ATR% is below 0.25%, the stop is held at 0.50% while the target shrinks with ATR. Reward/risk then equals 3·ATR% / 0.5 = **6 × ATR%**, and it falls below 1 once ATR% is under 0.1667%.
+
+| ID | ATR% (I5-003) | 6 × ATR% | Stop below entry | Reward/risk at fill (I5-F01) |
+|---|---|---|---|---|
+| 137 | 0.1073 | **0.644** | 0.50% | 0.644 ✓ |
+| 158 | 0.0545 | 0.327 | 0.49% | 0.346 (fill price ≠ signal price) ✓ |
+| 162 | 0.0730 | **0.438** | 0.50% | 0.438 ✓ |
+| 172 | 0.1240 | **0.744** | 0.50% | 0.744 ✓ |
+| 182 | 0.0803 | **0.482** | 0.50% | 0.482 ✓ |
+| 143 | 0.2703 | 2 ATR = 0.54% > floor | 0.54% | 1.50 at signal ✓ |
+
+Stop distances were computed from the I1-005 stops and the I1-004 fills.
+
+**No gate uses it:**
+- `getRiskRewardRatio()` is read only by the dashboard and inspector (`DashboardApiController:1203,1312,1373`, `TradeInspectorService:1099`).
+- The only reward/risk floor in execution is `BREAKOUT_RETRACEMENT_MIN_RR = 1.15` (`EIS:212,1539`), on a route none of the six trades used.
+- Entry Quality applies a flat, non-blocking −30 (I5-F02).
+
+This explains *why* I4-F07 and I5-F02 found reward/risk below 1. It is configured arithmetic, not a code defect: the floor protects against stop-hunting noise but silently inverts the payoff.
+
+**Classification:** configuration and design root cause, shared by 137, 158, 162, 172 and 182.
+
+**Break-even win rate** (arithmetic; fee rate from EXTERNAL RESEARCH, below):
+
+| ID | Win rate needed, no fees | Win rate needed, 0.1% fee per side |
+|---|---|---|
+| 158 | 75% | impossible: the target is 0.164%, below the 0.2% round trip |
+| 162 | 69% | about 97% |
+| 182 | 67% | about 94% |
+| 137 | 61% | about 85% |
+| 172 | 57% | about 80% |
+
+### I6-F02: Entry Quality has no demonstrated predictive value (PROJECT EVIDENCE: I5-005)
+
+| Entry Quality band | n | Losses | Loss rate | Net P&L (USDT) |
+|---|---|---|---|---|
+| 50–54 | 61 | 25 | **41%** | +0.687 |
+| 55–69 | 57 | 28 | 49% | −1.284 |
+| 70–84 | 47 | 30 | **64%** | −2.460 |
+| 85+ | 28 | 18 | **64%** | −1.114 |
+
+- This refutes my I5 small-sample impression that higher scores went further toward target.
+- Larger P&L in the higher bands partly reflects larger allocations. The loss rate does not depend on size, so the inverse relationship stands (AGENT INFERENCE: possible confounders are breakout or chase entries scoring high; ATR% is not yet separated).
+- **Consequence:** raising the Entry Quality floor or removing the FIX-091 clamp (I5-F03) is unlikely to fix the losses alone. Reward/risk (I6-F01) is the more direct lever, to be tested by DBQ-CLAUDE-I6-001.
+
+### I6-F03: Defect B was not decisive for trade 143 (closes U5-05; PROJECT EVIDENCE: code + I1-003)
+
+**The 1m signal qualified on its own:**
+- #159408 was WATCH with score 73 and confidence 78 (I1-003).
+- `isSupportiveCurrentSignal` accepts a WATCH with score ≥ 60 and confidence ≥ 60 (`EIS:73-74, 2214-2219`).
+- So `setupTimeframeAtrAuthoritySignal` passes **without** the `healthyNeutralTiming` evidence test (`EIS:1479-1483`). The evidence score of 8 (inflated by pre-exit signals) was never consulted.
+
+**A boundary would not have removed the 5m setup either:**
+- FIX-122 `eligible()` filters only evidence, deferred-origin and previous-health inputs (`EIS:1604, 1697, 1802, 2258, 2333`).
+- The 5m setup is chosen by `latestAtOrBefore` (`EIS:1485, 2455`), which has no lineage filter.
+- So even with a boundary at 22:39:41, 5m #159285 (22:35) would still have been selected.
+
+**Conclusion:** trade 143's decisive defect is **Defect A**, the outdated or reused 5m signal (I3-F02/F03). Defect B is a confirmed intent mismatch (FIX-020 versus stop-loss-only boundaries) that had no effect here.
+
+### I6-F04: The wall-clock age gap only ever runs one way (PARITY DEFECT candidate; PROJECT EVIDENCE: I5-006 + AGENT INFERENCE)
+
+**Mechanism:**
+- Replay age is always a whole number of minutes, N (candle-close timestamps).
+- Production age is N + δ, where δ = lag at the current signal − lag at the opportunity start.
+- `toMinutes()` rounds down, so Production reads N − 1 whenever δ < 0. Penalties apply at N ≥ 21, 41 or 61.
+- So Production can be **more lenient, never stricter**, than Replay.
+
+**Population evidence (I5-006, 8 executions near a boundary):**
+
+| Opportunity | Age (s) | Candle-close N | Production bucket | Replay bucket | Entry Quality, Production → Replay | Outcome |
+|---|---|---|---|---|---|---|
+| 14674 ENA | 1259.91 | 21 | 20 | 21 | 78 → 73 | +0.350 |
+| 24105 AERO | 3656.78 | 61 | 60 | 61 | 60 → 55 | +0.363 |
+| **35305 TAO** | 1259.96 | 21 | 20 | 21 | **50 → 45, blocked** | **−0.126 (paper 127, STOPPED)** |
+| **37952 DOGE** | 1259.98 | 21 | 20 | 21 | **50 → 45, blocked** | **−0.052 (frozen trade 162)** |
+| 14490, 15734, 30238, 38377 | — | — | same | same | no change | — |
+
+**Not yet proven:** that Replay builds the opportunity starting at the same candle. DBQ-CLAUDE-I5-004 came back as an **empty file** (not even a header), so I cannot tell zero rows from a failed run. I6-003 checks this.
+
+### I6-F05: Remaining Entry Quality inputs verified (closes U5-01 and U5-03; PROJECT EVIDENCE: I5-001, I5-002, I5-003)
+
+**Anchor and best prices (I5-001):**
+- None falls below the reference lows used in I5-F01, except trade 158's best price of 1.4082.
+- Using 1.4082 gives an ATR extension of 3.38, which carries the same −10 penalty, and it is above the 1.40772 threshold. The score of 50 stands.
+
+**Liquidity and regime (I5-003):**
+- No trade was STOP_EXPOSED or HIGH_VOLATILITY.
+- Trades 143 and 162 were BREAKOUT, but the +5 bonus needs an ATR extension ≤ 2.5 (`EIS:1014-1015`). Theirs were 5.6 and 4.72, so no bonus applied. All six scores are confirmed.
+
+**Trade 137:**
+- #156695 was vetoed at 63.07% of the Bollinger range (limit 55%) and also downgraded by an order-book TARGET_BLOCKED ask wall at 4.007.
+- #156723 passed at 68.28% through the strict expansion exception (score ≥ 90, RVOL ≥ 2). Its score was 91.
+- So a **higher** price passed on a 2-point score difference. This followed the code as written.
+
+**Trade 172:**
+- #171462 and #171484 (RANGE_MEAN_REVERSION) were vetoed at 94.5% and 90.3% of the Bollinger range.
+- #171589 at the same price, 0.00000549, was relabelled TREND_FOLLOWING / WEAK_UPTREND. Its decision path says "Range entry-location guard is not applicable".
+- The **guard was bypassed by a change of strategy label** (design weakness, confirmed).
+
+### I6-F06: The frozen selection excludes stop-loss losses (SCOPE OBSERVATION; PROJECT EVIDENCE: I5-005)
+
+- All 75 `STOPPED` positions are losses, totalling −15.88 USDT.
+- The 26 losing `CLOSED` positions are mostly small exits on a sell signal or profit-lock exit.
+- The charter's `status=CLOSED` filter therefore samples only the milder failures. I have **not** substituted any trades. I flag this for the coordinator only.
+
+---
+
+## Root-cause ranking across the six frozen trades
+
+| Rank | Root cause | Type | Trades | Proof strength |
+|---|---|---|---|---|
+| 1 | Stop floor 0.50% with an unscaled 3-ATR target, and no reward/risk gate (I6-F01) | Configuration/design | 137, 158, 162, 172, 182 | Exact arithmetic reproduction |
+| 2 | Weak Entry Quality guard: floor of 50, FIX-091 clamp, flat −30 (I5-F02/F03); no predictive value (I6-F02) | Design | 158, 162, 182 at the floor; all six scored | Reproduced and measured on the population |
+| 3 | 5m check reads only the final label (I3-F05) | Design inconsistency | 172, 182 | Code + data |
+| 4 | Weakest direct-BUY authority accepted at Entry Quality 50 (I4-F05) | Design inversion | 137, 182 | Code + data |
+| 5 | Counter-trend single-candle reversal after a run of SELL signals | Design pattern (AGENT INFERENCE) | 137, 162, 182 | Signal sequences I1-007 / I4-004 |
+| 6 | Range-location guard bypassed by strategy label (I6-F05) | Design weakness | 172 | Decision paths |
+| 7 | Late-entry guard escaped on a single BUY (I4-F06) | Design weakness | 162 | Code + data |
+| 8 | Wall-clock age jitter (I6-F04) | **Parity defect candidate** | 162 | Arithmetic; Replay unproven |
+| 9 | Outdated 5m signal (Defect A, I3-F02) | **Logic defect** | 143 | Confirmed; decisive |
+| — | Missing exit boundary (Defect B) | Intent mismatch | 143 | Confirmed, **not decisive** (I6-F03) |
+
+**Final per-trade classification:**
+
+| ID | Classification |
+|---|---|
+| 137 | Valid loss under coded rules; root causes 1 and 4 |
+| 143 | Logic defect at entry (A); valid exit on a one-second gap |
+| 158 | Valid under coded rules; root cause 1 at its worst (target below round-trip fees) |
+| 162 | Root causes 1, 2 and 7, plus a parity candidate |
+| 172 | Root causes 1, 3 and 6 |
+| 182 | Root causes 1 to 5 |
+
+No stale-data or execution-delay cause was found in any of the six (I3/I4).
+
+---
+
+## EXTERNAL RESEARCH
+
+- **Binance spot fee:** several secondary guides give 0.10% maker and taker at the regular (VIP 0) tier, or 0.075% when paid in BNB. I found no official Binance fee page in this search, so the figure stays *secondary* evidence. Paper trading stores `fee_usdt = 0` (I1-004), so fees caused none of the stored losses, but they matter for real trading (I6-F01 table).
+- **Break-even arithmetic:** the win rate needed is risk / (reward + risk). This is standard arithmetic, not a citation.
+
+## UNKNOWNS
+
+- **U6-01:** whether low reward/risk predicts losses across the population. DBQ-CLAUDE-I6-001.
+- **U6-02:** whether Replay builds the same opportunities for 162 and TAO 35305, and whether I5-004's empty file means zero rows or a failed query. DBQ-CLAUDE-I6-003 and I6-004.
+- **U6-03:** loss rate by entry route. DBQ-CLAUDE-I6-002.
+- **U6-04:** whether ATR% explains the inverse Entry Quality relationship (I6-F02). Covered by the I6-001 ATR% column.
+- **Logs:** still none searched; there is still no log access (I3-F07).
+
+## Recommended corrections (for a future spec only; NOT authorised, no implementation)
+
+1. Scale the target when the stop floor applies, for example `reward = max(3·ATR, minRR × stopDistance)`, **or** reject or wait when the planned reward/risk is below a floor, on every initial-entry route.
+2. Compute opportunity age from candle open/close times, the same way in Production and Replay.
+3. Use the raw 5m decision, not only the final label, in the 5m check.
+4. Apply the range-location guard independent of the strategy label.
+
+**Regression checks:**
+- Replay frozen trades 137, 158, 162, 172 and 182 and expect a reward/risk block.
+- An age test at exactly 21 minutes with negative δ.
+- The trade 143 Defect A scenario.
+
+---
+
+## DB_REQUEST blocks
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: Population outcome by planned signal reward/risk bucket, with average ATR% (U6-01, U6-04; tests I6-F01 against I6-F02). Schema check: confirm `trade_signal.risk_reward_ratio` first.
+SQL:
+SELECT CASE WHEN s.risk_reward_ratio < 0.75 THEN 'a<0.75' WHEN s.risk_reward_ratio < 1 THEN 'b0.75-1' WHEN s.risk_reward_ratio < 1.5 THEN 'c1-1.5' ELSE 'd>=1.5' END AS rr_band, p.status, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losses, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum, ROUND(AVG(s.atr_percent), 4) AS avg_atr_pct, ROUND(AVG(m.entry_quality_score), 1) AS avg_eq, ROUND(AVG(m.profit_lock_progress_percent), 2) AS avg_progress_pct FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id LEFT JOIN wallet_managed_position m ON m.entry_signal_id = p.signal_id WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL GROUP BY rr_band, p.status ORDER BY rr_band, p.status
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: Population outcome by entry route (`wallet_managed_position.entry_stage`) (U6-03; ranks root causes 3 and 4).
+SQL:
+SELECT m.entry_stage, p.status, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losses, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum, ROUND(AVG(s.risk_reward_ratio), 3) AS avg_rr FROM paper_position p JOIN wallet_managed_position m ON m.entry_signal_id = p.signal_id JOIN trade_signal s ON s.id = p.signal_id WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL GROUP BY m.entry_stage, p.status ORDER BY m.entry_stage, p.status
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: Diagnose the empty I5-004 file and read the Replay table schemas before any Replay-parity query (U6-02).
+SQL:
+SELECT 'fix122_replay_rows' AS k, COUNT(*) AS v FROM fix122_evaluation WHERE test_run_id IS NOT NULL UNION ALL SELECT CONCAT('col:', table_name, '.', column_name), NULL FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name IN ('wallet_position_test','execution_opportunity_test','trade_signal_test') ORDER BY 1 LIMIT 200
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-004
+Purpose: Confirm the I6-F01 mechanism on the stored signal plan: stop distance %, target distance % and persisted reward/risk for the six entry signals.
+SQL:
+SELECT s.id, s.symbol, s.latest_price, s.stop_loss, s.take_profit, s.risk_reward_ratio, s.atr_percent, ROUND((s.latest_price - s.stop_loss) / s.latest_price * 100, 4) AS stop_pct, ROUND((s.take_profit - s.latest_price) / s.latest_price * 100, 4) AS tp_pct, ROUND(6 * s.atr_percent, 4) AS six_atr_pct FROM trade_signal s WHERE s.id IN (156723,159408,165412,167668,171589,176710) ORDER BY s.id
+### END_DB_REQUEST
+
+---
+
+## Self-review (iteration 6)
+
+- **Frozen set:** 182, 172, 162, 158, 143 and 137, unchanged with no substitutions. I6-F06 flags the selection bias only.
+- **Labels:**
+  - **PROJECT EVIDENCE:** code lines, DB results, I6-F01 reproduction, I6-F02/F04 population figures.
+  - **AGENT INFERENCE:** confounders, counter-trend pattern, Replay outcome.
+  - **EXTERNAL RESEARCH:** fee rate (secondary sources).
+- **Corrections:**
+  - I4-F07's "all six below 1" is wrong: it was five of six (trade 143 was 1.39–1.50).
+  - My I5 "higher Entry Quality goes further toward target" is refuted.
+  - Defect B is downgraded to not decisive.
+- **Defect claims:** trade 143 Defect A (confirmed) and the trade 162 jitter parity defect (candidate). Everything else is configuration or design.
+- **Open contradiction:** FIX-154 runs in Production, contrary to AGENTS.md and claude-docs. It still awaits dual-agent review; I edited no shared documents.
+- **Plan for iteration 7:** use the I6 results to test I6-F01 across the population and settle Replay reachability for 162. Then produce the final evidence-backed classification.
+
+Sources:
+- [Binance fees guide (BitDegree)](https://www.bitdegree.org/crypto/tutorials/binance-fees)
+- [Binance Trading Fees Explained (CryptoPotato)](https://cryptopotato.com/binance-fees/)
+- [Binance support: check your trading fee rate](https://www.binance.com/bn/amp/support/faq/360033544231)

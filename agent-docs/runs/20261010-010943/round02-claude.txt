@@ -1,0 +1,141 @@
+**Round 2 position: I'm keeping INSUFFICIENT_EVIDENCE and I don't accept Codex's APPROVED.** We agree on the core mechanics of this exit, and they reproduce exactly from code and stored values. But both of us missed a second production exit path in Round 1. Codex's "TP was never reached" is also only proven for what protection sampled, not for the market.
+
+Labels: **[PE]** = PROJECT EVIDENCE · **[ER]** = EXTERNAL RESEARCH · **[AI]** = AGENT INFERENCE.
+
+How I worked: everything was read-only. I had no shell, so I couldn't run the query wrapper. I used the current DBQ files, the source code, and `logs/crypto-ai-trader.log`, which starts at 21:00:00.030Z (after this exit). `CODEX_LATEST.md` and `CLAUDE_LATEST.md` both say "Status: NONE". I didn't query `crypto_ai_v2`.
+
+## FINDINGS
+
+### Agreed with Codex (I re-checked each one)
+
+- **Identity and result.** Signal 89469, paper position 35, managed position 64, BUY 106 at 0.00000541, SELL 107 at 0.00000542, +0.046211 USDT gross [PE].
+- **Timeline.**
+  - BUY 20:45:05.997Z (23:45:05.997 KSA).
+  - Lock armed 20:58:09.534Z (23:58:09.534 KSA).
+  - SELL 20:58:43.554Z (23:58:43.554 KSA).
+- **The time-zone conversion is now proven, not inferred.** Codex's rerun of DBQ-004 shows the query session uses the server's system zone, and `NOW()` reads 3 hours ahead of `UTC_TIMESTAMP()` [PE]. Every column used in the timeline is `timestamp(6)`, so all of them shift by 3h when displayed [PE]. One trap for later queries: `trade_signal.btc_signal_generated_at` is `datetime(6)` and would not shift [PE].
+- **Q1 mechanics.**
+  - Take-profit 0.00000543373, so it needed a print at 0.00000544 [PE].
+  - Best sampled price 0.00000543 = 84.2815% of the way to TP. That passes the 70% activation and one 10% step, giving a 50% lock at 0.000005421865 [PE, recomputed].
+  - Then 0.00000542 breached the lock while staying above the 0.000005412705 hard floor [PE].
+  - Signals in force: 1m 89795 WATCH, 5m 89724 WATCH, 1h 88327 NEUTRAL. Neither hold rule applies to a NEUTRAL 1h, so the default is `PROFIT_LOCK_EXIT` [PE].
+- **Q2.** "12:38" means 00:38 KSA (21:38Z), the 0.00000549 candle. The position had closed 40 minutes earlier, and continuation only runs at a take-profit [PE+AI].
+- **Outcome.** The later rise to 0.0000055 is outcome only; the exit couldn't have known it [PE+AI].
+
+### New in Round 2 (missed by both of us in Round 1)
+
+**N1. Production has a second take-profit and profit-lock exit path: the signal path.** After every live candle-close analysis, `PaperTradingService` processes the new signal for any open position [PE].
+- If the signal price is at or above TP, it closes `TAKE_PROFIT` with **no continuation check** [PE].
+- If the signal price breaches an active lock, it closes `PROFIT_LOCK` with **no higher-timeframe hold** [PE].
+- It only uses signal prices from candles that closed after the position opened [PE].
+
+For this trade, the live path closed first [PE]:
+- The `PROFIT_LOCK_EXIT` code is produced only by `PositionExitPolicy`, and its only production caller is `LivePositionProtectionService`.
+- The signal path never fired. No signal price reached TP, the lock wasn't active until 20:58:09Z, and the next signal (89815) arrived at 20:59:02.742Z, after the close.
+
+**N2. A hold would only have bought about 19 seconds.** Suppose the live path had held (for example with a WATCH 1h). Signal 89815 (20:58Z candle, close 0.00000542, below the lock) would still have closed the position at the same price at about 20:59:03Z (23:59:03 KSA) through `closeFromProfitLock` [AI, based on the code and DBQ-010/011].
+- So a change made only to the live breach rule would not have changed this trade.
+- This corrects my Round-1 statement that "with WATCH, the second hold path would have held".
+
+**N3. Replay doesn't match production on the signal path** [PE]:
+- Exact-price Replay skips signal-path mechanical exits entirely. It only models the bearish 1m SELL.
+- Fallback Replay does apply continuation and the higher-timeframe hold, which production's signal path does not.
+- No effect on this exit [AI]. But any A/B test of a hold or upside rule in Replay would overstate the benefit [AI].
+
+**N4. Protection only looks at the kline close price, never the high** [PE].
+- `BinanceKlineService.java:91,108` feeds protection the kline close; the high is stored (`:104`) but never evaluated.
+- So managed position 64's `highest_price` (0.00000543) is the best sampled close, not the market high [PE].
+- Market highs for 20:55–20:58Z were all ≤ 0.00000543 (DBQ-011) [PE].
+- **Highs for 20:45–20:54Z (23:45–23:54 KSA) are not in evidence** [PE]. The lock arming at 20:58:09Z only proves that no *sampled* price reached 0.00000543 before then [AI].
+
+**N5. The breach rule reads only three decision labels** [PE].
+- It doesn't use scores, signal age, or distance to TP. The live path takes the newest 1m/5m/1h rows, and the breach rule reads only their `decision` fields.
+- The per-signal advisory analysis (`PositionManagementService` → `position_analysis`) isn't consulted by either profit-lock path. It wasn't queried for position 64 [PE].
+
+### Corrected answers to the three questions
+
+1. **Why profit lock instead of take-profit:** protection never sampled a price at or above TP. One tick, 0.00000543, armed the 50% lock, and the next tick down, 0.00000542, breached it. With a NEUTRAL 1h, the label-only rule exits [PE]. Whether the market briefly printed 0.00000544 between samples during 20:45–20:54Z is unknown. If it did, protection couldn't have seen it, because it only evaluates the close price [PE+AI].
+2. **Why no continuation around 00:38 KSA:** continuation runs only at a take-profit on the live path. TP was never sampled, and the position closed at 23:58:43 KSA. Nothing extends a closed position [PE]. The production signal path would have skipped continuation even at TP; that didn't happen here [PE].
+3. **Why no re-check of remaining upside:** the breach rule did re-evaluate, but only from three labels; the upside tools aren't wired into either profit-lock path [PE]. Even a hold would most likely have been overridden by the signal path about 19s later at the same price [AI]. For context, at the exit the TP was +2 ticks away and the hard-floor exit −1 tick [AI]. That says nothing about probabilities.
+
+### Self-corrections to my Round 1
+
+- I missed N1–N3. My "would have held" counterfactual was incomplete.
+- "Replay uses the same shared policies in the same order" was too broad (N3).
+- I withdraw my citations of DBQ-004 (as a schema source) and DBQ-006. Both files were overwritten after Round 1 (see O5). The `paper_position` column types are now anchored to `B105__fix_153_trader_only_baseline.sql:187-188` [PE].
+- The tooling time-zone defect is upgraded to direct PROJECT EVIDENCE.
+
+## EVIDENCE
+
+- **Records:**
+  - `DBQ-002:10-11`: trades 106/107 and the exit message.
+  - `DBQ-014:6`: managed position 64 (TP, highest price, lock, `profit_lock_activated_at`, `updated_at`).
+  - `DBQ-010:8,13,16,17`: signals 88327, 89724, 89795, 89815.
+  - `DBQ-011:6-15`: 1m candles 20:55–21:04Z.
+  - `DBQ-007:6`: ATR 0.00000000791, TP, stop loss.
+  - `DBQ-004:6` and `DBQ-005:6` (the current reruns): session time zone, `UNIX_TIMESTAMP`.
+  - Column types: `DBQ-001:25`, `DBQ-003:9,37,38,80`, `DBQ-013:26-34`.
+- **Code** (all under `src/main/java/com/crypto/`):
+  - `position/service/LivePositionProtectionService.java:95-107, 185-231`
+  - `position/service/PositionExitPolicy.java:52-115`
+  - `position/service/ProfitLockPolicy.java:39-51`
+  - `position/service/DynamicProfitLockService.java:100-138, 179-195`
+  - `position/service/PositionContinuationPolicy.java:47, 72-73`. Its only production caller is `LivePositionProtectionService.java:103`.
+  - `service/PaperTradingService.java:115-121, 133-180, 452-485`
+  - `position/service/PositionPriceAuthorityPolicy.java:23-30`
+  - `wallet/service/WalletAutoExecutionService.java:381-401, 475-499`
+  - `indicator/event/CandleClosedAnalysisWorker.java:169-176`
+  - `service/BinanceKlineService.java:91, 95, 104-108`
+  - `regression/service/ShadowProductionReplayService.java:122-161, 183-186, 232-255, 562-650`
+- **Config and tooling:**
+  - `application.yml:20-26`: the app's own DB session is UTC.
+  - `scripts/agent-db-query.ps1:77, 111-116, 139, 147, 172`
+  - `agent-docs/DATABASE_INVESTIGATION_RULES.md:35`
+  - `agent-docs/runs/.../DATABASE_QUERY_LOG.md:62-117` vs `:271-326`
+- **Logs:** `crypto-ai-trader.log:1` shows the file starts at 21:00:00.030Z. Line 14326 shows the restart at 21:15:15.852Z, running from `target\classes`.
+- **External research:** carried over from Round 1, no new searches. Binance's SHIBUSDT tick size is 0.00000001 (a current snapshot, not the value at entry). Kline updates arrive about every 2000 ms (the docs' wording is inconsistent). The argument in N4 doesn't depend on the exact interval.
+
+## OBJECTIONS (to Codex's Round 1)
+
+- **O1.** APPROVED contradicts Codex's own UNKNOWNS. It admits the trigger observation ID and the running binary revision are unverified, yet the bar is "complete with file/ID evidence".
+- **O2.** It omits the production signal-path take-profit and profit-lock exits (N1). That leaves Q3 incomplete, and any correction implied by Codex's answer would not have changed this trade (N2).
+- **O3.** "TP was never reached" overclaims. It is proven only at the sampled-protection level, plus market highs for 20:55–20:58:43Z (N4).
+- **O4.** "Continuation is evaluated only upon price ≥ takeProfit" is true only for the live path. Production's signal-path take-profit bypasses continuation, and exact Replay doesn't model it (N3).
+- **O5. Evidence handling.** Query IDs DBQ-004, 005 and 006 were reused, and the wrapper overwrote the original results. The `paper_position` schema, the bounded position evidence and the 11:44-window results are gone. Codex also labelled the time-zone conversion as inference although its own rerun proves it.
+- **O6. Exit-context signal IDs.** The SELL message records only the labels. Mapping them to 89795, 89724 and 88327 relies on `generated_at` ordering, so it is plausible but not recorded [AI].
+- **O7. Statistics.** One trade with a later rise proves nothing about a better rule. Any A/B test must be out-of-sample and net of fees and slippage, and Replay must first model the signal-path exits, or the results are biased (N3).
+
+## UNKNOWNS (closable read-only)
+
+The wrapper rejects `SET`, so these queries use epoch bounds to stay UTC-safe.
+
+1. **1m highs for 20:45–20:54Z** (decides Q1's market-level answer):
+   ```sql
+   SELECT UNIX_TIMESTAMP(open_time), open_price, high_price, low_price, close_price, closed
+   FROM candle
+   WHERE symbol='SHIBUSDT' AND interval_code='1m'
+     AND open_time >= FROM_UNIXTIME(1791578700) AND open_time < FROM_UNIXTIME(1791579540)
+   ORDER BY open_time;
+   ```
+2. **Price events.** First `SHOW COLUMNS FROM market_price_event;`, then pull rows for:
+   - the minute starting 20:58:00Z (epoch 1791579480 to 1791579540) — the arming and trigger events;
+   - any rejected (`NON_CANONICAL`) observation at or above 0.00000543 between 1791578706 and 1791579524.
+3. **Path-confirming and advisory records:**
+   - `execution_key` on trades 106 and 107 (expected `POSITION:64:PROFIT_LOCK_EXIT` for the SELL);
+   - `production_exit_audit` for paper position 35;
+   - `position_management_event` and `position_analysis` rows for position 64.
+4. **Which code was actually running before the 21:15Z restart.** It was running from compiled classes, and the working tree has uncommitted edits. The exit message matches the current source exactly, which is consistent with the same code but not proof.
+5. **Logs for the exit window.** These are only in the 2026-10-09 `.gz` rotations. Search for position 64's lock-evaluation and trigger lines, `Live PROFIT_LOCK exit`, and SHIBUSDT price-outcome lines.
+
+## VERDICT
+
+The rule trace is reproducible, and on the available evidence nothing contradicts a rule-following `PROFIT_LOCK_EXIT` [PE+AI]. The gap analysis is still incomplete:
+- the 20:45–20:54Z highs (Unknown 1) and the trigger price-event IDs (Unknown 2) are missing;
+- the running code revision is unproven;
+- Codex hasn't reviewed findings N1–N3.
+
+I would move to APPROVED once Unknowns 1–2 are answered and Codex accepts or rebuts N1–N3 with evidence. APPROVED would not mean production safety and would not authorize code changes.
+
+Nothing was written: no plan-file, memory or `claude-docs/INVESTIGATION_LOG.md` update. This round is read-only, and the write and exit-plan tools aren't available in this session.
+
+VERDICT: INSUFFICIENT_EVIDENCE

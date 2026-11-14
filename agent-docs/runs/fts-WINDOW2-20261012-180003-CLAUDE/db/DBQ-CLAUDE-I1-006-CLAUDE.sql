@@ -1,0 +1,1 @@
+SELECT * FROM position_management_event WHERE symbol IN ('ACEUSDT','SHIBUSDT','DOGEUSDT','XRPUSDT','EGLDUSDT') AND occurred_at BETWEEN '2026-10-11 20:50:00' AND '2026-10-12 10:10:00' ORDER BY symbol, occurred_at LIMIT 200

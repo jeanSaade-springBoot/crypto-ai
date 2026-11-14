@@ -1,0 +1,264 @@
+TABLE_NAME	ORDINAL_POSITION	COLUMN_NAME	COLUMN_TYPE	IS_NULLABLE	COLUMN_KEY
+market_price_event	1	id	bigint	NO	PRI
+market_price_event	2	symbol	varchar(32)	NO	MUL
+market_price_event	3	observed_at	timestamp(6)	NO	
+market_price_event	4	price	decimal(30,12)	NO	
+market_price_event	5	source	varchar(64)	NO	MUL
+market_price_event	6	created_at	timestamp(6)	NO	
+market_price_event	7	source_event_id	bigint	YES	UNI
+market_price_event	8	source_sequence	bigint	YES	
+market_price_event	9	source_received_at	timestamp(6)	YES	
+market_price_event	10	delivery_status	varchar(40)	NO	
+market_price_event	11	ordering_slot	tinyint	YES	
+market_price_event	12	outcome_reason	varchar(64)	YES	
+paper_position	1	id	bigint	NO	PRI
+paper_position	2	symbol	varchar(30)	NO	MUL
+paper_position	3	side	varchar(10)	NO	
+paper_position	4	status	varchar(20)	NO	
+paper_position	5	quantity	decimal(30,12)	NO	
+paper_position	6	entry_price	decimal(30,12)	NO	
+paper_position	7	stop_loss	decimal(30,12)	NO	
+paper_position	8	take_profit	decimal(30,12)	NO	
+paper_position	9	exit_price	decimal(30,12)	YES	
+paper_position	10	realized_pnl	decimal(30,12)	YES	
+paper_position	11	close_reason	varchar(40)	YES	
+paper_position	12	entry_reason	mediumtext	YES	
+paper_position	13	exit_reason	mediumtext	YES	
+paper_position	14	signal_id	bigint	NO	MUL
+paper_position	15	exit_signal_id	bigint	YES	MUL
+paper_position	16	opened_at	timestamp(6)	NO	MUL
+paper_position	17	closed_at	timestamp(6)	YES	
+production_exit_audit	1	id	bigint	NO	PRI
+production_exit_audit	2	paper_position_id	bigint	YES	UNI
+production_exit_audit	3	wallet_position_id	bigint	YES	MUL
+production_exit_audit	4	symbol	varchar(30)	NO	MUL
+production_exit_audit	5	close_trigger	varchar(40)	NO	
+production_exit_audit	6	source_signal_id	bigint	YES	MUL
+production_exit_audit	7	source_signal_decision	varchar(30)	YES	
+production_exit_audit	8	source_signal_original_decision	varchar(30)	YES	
+production_exit_audit	9	position_analysis_id	bigint	YES	
+production_exit_audit	10	position_recommendation	varchar(20)	YES	
+production_exit_audit	11	entry_price_usdt	decimal(30,12)	YES	
+production_exit_audit	12	exit_price_usdt	decimal(30,12)	NO	
+production_exit_audit	13	stop_loss_usdt	decimal(30,12)	YES	
+production_exit_audit	14	take_profit_usdt	decimal(30,12)	YES	
+production_exit_audit	15	close_explanation	varchar(2000)	YES	
+production_exit_audit	16	audited_at	timestamp(6)	NO	
+trade_signal	1	id	bigint	NO	PRI
+trade_signal	2	symbol	varchar(30)	NO	MUL
+trade_signal	3	interval_code	varchar(10)	NO	
+trade_signal	4	candle_open_time	timestamp(6)	YES	
+trade_signal	5	decision	varchar(30)	NO	MUL
+trade_signal	6	original_decision	varchar(30)	NO	
+trade_signal	7	confluence_status	varchar(30)	NO	
+trade_signal	8	confluence_entry_allowed	tinyint(1)	NO	
+trade_signal	9	confluence_higher_interval	varchar(10)	YES	
+trade_signal	10	confluence_higher_decision	varchar(30)	YES	
+trade_signal	11	confluence_higher_trend_score	int	YES	
+trade_signal	12	confluence_explanation	varchar(1500)	YES	
+trade_signal	13	confluence_evaluated_at	timestamp(6)	YES	
+trade_signal	14	confluence_higher_signal_generated_at	timestamp(6)	YES	
+trade_signal	15	total_score	int	NO	
+trade_signal	16	confidence_score	int	NO	
+trade_signal	17	raw_confidence_score	int	YES	
+trade_signal	18	effective_confidence_score	int	YES	
+trade_signal	19	primary_blocking_stage	varchar(80)	YES	
+trade_signal	20	final_entry_allowed	tinyint(1)	NO	
+trade_signal	21	decision_path	json	YES	
+trade_signal	22	final_decision_explanation	varchar(2000)	YES	
+trade_signal	23	trend_score	int	NO	
+trade_signal	24	volume_score	int	NO	
+trade_signal	25	momentum_score	int	NO	
+trade_signal	26	sentiment_score	int	NO	
+trade_signal	27	fundamental_score	int	NO	
+trade_signal	28	latest_price	decimal(30,12)	NO	
+trade_signal	29	stop_loss	decimal(30,12)	YES	
+trade_signal	30	take_profit	decimal(30,12)	YES	
+trade_signal	31	explanation	text	YES	
+trade_signal	32	generated_at	timestamp(6)	NO	MUL
+trade_signal	33	created_at	timestamp(6)	NO	MUL
+trade_signal	34	ema_cross_score	int	NO	
+trade_signal	35	price_ema200_score	int	NO	
+trade_signal	36	ema_alignment_score	int	NO	
+trade_signal	37	sma20_score	int	NO	
+trade_signal	38	trend_direction_score	int	NO	
+trade_signal	39	trend_structure_score	int	NO	
+trade_signal	40	trend_strength_score	int	NO	
+trade_signal	41	trend_price_location_score	int	NO	
+trade_signal	42	rsi_score	int	NO	
+trade_signal	43	macd_score	int	NO	
+trade_signal	44	bollinger_score	int	NO	
+trade_signal	45	relative_volume_score	int	NO	
+trade_signal	46	volume_sma20_score	int	NO	
+trade_signal	47	raw_score	int	NO	
+trade_signal	48	maximum_available_score	int	NO	
+trade_signal	49	sentiment_breakdown	json	YES	
+trade_signal	50	analysis_breakdown	json	YES	
+trade_signal	51	atr_at_signal	decimal(30,12)	YES	
+trade_signal	52	atr_percent	decimal(20,8)	YES	
+trade_signal	53	risk_reward_ratio	decimal(20,8)	YES	
+trade_signal	54	candle_range_atr_multiple	decimal(20,8)	YES	
+trade_signal	55	volatility_level	varchar(20)	YES	
+trade_signal	56	atr_overextended	tinyint(1)	NO	
+trade_signal	57	atr_entry_type	varchar(40)	YES	
+trade_signal	58	atr_recommended_position_percent	int	NO	
+trade_signal	59	atr_immediate_entry_allowed	tinyint(1)	NO	
+trade_signal	60	atr_retracement_entry_price	decimal(30,12)	YES	
+trade_signal	61	atr_explanation	varchar(1000)	YES	
+trade_signal	62	btc_relationship_type	varchar(30)	NO	
+trade_signal	63	btc_context_status	varchar(30)	NO	
+trade_signal	64	btc_context_entry_allowed	tinyint(1)	NO	
+trade_signal	65	btc_context_interval	varchar(10)	YES	
+trade_signal	66	btc_context_decision	varchar(30)	YES	
+trade_signal	67	btc_context_trend_score	int	YES	
+trade_signal	68	btc_correlation	decimal(12,8)	YES	
+trade_signal	69	btc_beta	decimal(12,8)	YES	
+trade_signal	70	btc_relationship_sample_size	int	NO	
+trade_signal	71	btc_influence_factor	decimal(8,6)	YES	
+trade_signal	72	btc_relationship_stable	tinyint(1)	NO	
+trade_signal	73	btc_context_explanation	varchar(1500)	YES	
+trade_signal	74	btc_context_evaluated_at	datetime(6)	YES	
+trade_signal	75	btc_signal_generated_at	datetime(6)	YES	
+trade_signal	76	btc_context_candle_close_time	timestamp(6)	YES	
+trade_signal	77	btc_context_age_seconds	bigint	YES	
+trade_signal	78	btc_context_freshness_threshold_seconds	bigint	YES	
+trade_signal	79	liquidity_status	varchar(30)	NO	
+trade_signal	80	liquidity_entry_allowed	tinyint(1)	NO	
+trade_signal	81	order_book_imbalance	decimal(12,8)	YES	
+trade_signal	82	order_book_bid_depth	decimal(30,8)	YES	
+trade_signal	83	order_book_ask_depth	decimal(30,8)	YES	
+trade_signal	84	order_book_spread_percent	decimal(20,10)	YES	
+trade_signal	85	nearest_bid_wall_price	decimal(30,12)	YES	
+trade_signal	86	nearest_bid_wall_size	decimal(30,8)	YES	
+trade_signal	87	nearest_ask_wall_price	decimal(30,12)	YES	
+trade_signal	88	nearest_ask_wall_size	decimal(30,8)	YES	
+trade_signal	89	order_book_target_blocked	tinyint(1)	NO	
+trade_signal	90	order_book_stop_exposed	tinyint(1)	NO	
+trade_signal	91	order_book_observations	int	NO	
+trade_signal	92	order_book_window_seconds	bigint	NO	
+trade_signal	93	order_book_wall_persistence_seconds	bigint	NO	
+trade_signal	94	order_book_influence_factor	decimal(8,6)	YES	
+trade_signal	95	order_book_veto_allowed	tinyint(1)	NO	
+trade_signal	96	liquidity_explanation	varchar(2000)	YES	
+trade_signal	97	liquidity_evaluated_at	timestamp(6)	YES	
+trade_signal	98	market_regime	varchar(40)	NO	
+trade_signal	99	detected_regime	varchar(40)	YES	
+trade_signal	100	candidate_regime	varchar(40)	YES	
+trade_signal	101	confirmed_regime	varchar(40)	YES	
+trade_signal	102	regime_candidate_count	int	NO	
+trade_signal	103	entry_authority	varchar(40)	YES	
+trade_signal	104	entry_authority_max_position_percent	int	YES	
+trade_signal	105	entry_authority_explanation	varchar(1500)	YES	
+trade_signal	106	market_regime_confidence	int	NO	
+trade_signal	107	selected_strategy	varchar(40)	NO	
+trade_signal	108	strategy_version	varchar(30)	NO	
+trade_signal	109	strategy_entry_allowed	tinyint(1)	NO	
+trade_signal	110	strategy_explanation	varchar(1500)	YES	
+trade_signal	111	strategy_breakdown	json	YES	
+trade_signal	112	market_context_snapshot	json	YES	
+trade_signal	113	strategy_trend_maximum	int	NO	
+trade_signal	114	strategy_volume_maximum	int	NO	
+trade_signal	115	strategy_momentum_maximum	int	NO	
+trade_signal	116	strategy_sentiment_maximum	int	NO	
+trade_signal	117	strategy_fundamental_maximum	int	NO	
+trade_signal	118	derivatives_status	varchar(40)	NO	
+trade_signal	119	derivatives_entry_allowed	tinyint(1)	NO	
+trade_signal	120	funding_rate	decimal(20,12)	YES	
+trade_signal	121	funding_percentile	decimal(8,2)	YES	
+trade_signal	122	open_interest	decimal(30,8)	YES	
+trade_signal	123	open_interest_value	decimal(30,8)	YES	
+trade_signal	124	open_interest_change_percent	decimal(20,8)	YES	
+trade_signal	125	derivatives_price_change_percent	decimal(20,8)	YES	
+trade_signal	126	funding_sample_size	int	NO	
+trade_signal	127	derivatives_period	varchar(10)	YES	
+trade_signal	128	derivatives_confidence_adjustment	int	NO	
+trade_signal	129	derivatives_explanation	varchar(2000)	YES	
+trade_signal	130	derivatives_evaluated_at	timestamp(6)	YES	
+trade_signal	131	sentiment_available	tinyint(1)	NO	
+trade_signal	132	fundamental_available	tinyint(1)	NO	
+trade_signal	133	excluded_categories	json	YES	
+trade_signal	134	signal_mode	varchar(24)	YES	
+trade_signal	135	data_quality_valid	tinyint(1)	YES	
+wallet_managed_position	1	id	bigint	NO	PRI
+wallet_managed_position	2	entry_signal_id	bigint	YES	MUL
+wallet_managed_position	3	symbol	varchar(30)	NO	MUL
+wallet_managed_position	4	quantity	decimal(30,12)	NO	
+wallet_managed_position	5	average_entry_price_usdt	decimal(30,12)	NO	
+wallet_managed_position	6	total_cost_usdt	decimal(30,12)	NO	
+wallet_managed_position	7	entry_confidence	int	YES	
+wallet_managed_position	8	entry_total_score	int	YES	
+wallet_managed_position	9	entry_trend_score	int	YES	
+wallet_managed_position	10	entry_structure_score	int	YES	
+wallet_managed_position	11	entry_momentum_score	int	YES	
+wallet_managed_position	12	entry_volume_score	int	YES	
+wallet_managed_position	13	entry_sentiment_score	int	YES	
+wallet_managed_position	14	entry_fundamental_score	int	YES	
+wallet_managed_position	15	entry_decision	varchar(30)	YES	
+wallet_managed_position	16	entry_decision_path_json	json	YES	
+wallet_managed_position	17	entry_analysis_snapshot_json	json	YES	
+wallet_managed_position	18	stop_loss_usdt	decimal(30,12)	YES	
+wallet_managed_position	19	take_profit_usdt	decimal(30,12)	YES	
+wallet_managed_position	20	status	varchar(20)	NO	
+wallet_managed_position	21	opened_at	timestamp(6)	NO	
+wallet_managed_position	22	updated_at	timestamp(6)	NO	
+wallet_managed_position	23	highest_price_usdt	decimal(30,12)	YES	
+wallet_managed_position	24	profit_lock_active	tinyint(1)	NO	
+wallet_managed_position	25	profit_lock_price_usdt	decimal(30,12)	YES	
+wallet_managed_position	26	profit_lock_progress_percent	decimal(12,6)	YES	
+wallet_managed_position	27	profit_lock_activated_at	timestamp(6)	YES	
+wallet_managed_position	28	profit_lock_state	varchar(40)	NO	
+wallet_managed_position	29	profit_lock_rebase_started_at	timestamp(6)	YES	
+wallet_managed_position	30	entry_stage	varchar(30)	NO	
+wallet_managed_position	31	allocated_position_percent	int	NO	
+wallet_managed_position	32	entry_quality_score	int	NO	
+wallet_managed_position	33	last_scale_in_at	timestamp(6)	YES	
+wallet_managed_position	34	near_tp_state	varchar(40)	NO	
+wallet_managed_position	35	near_tp_best_price	decimal(30,12)	YES	
+wallet_managed_position	36	near_tp_bearish_streak	int	NO	
+wallet_managed_position	37	near_tp_last_1m_signal_id	bigint	YES	
+wallet_managed_position	38	near_tp_harvest_used	tinyint(1)	NO	
+wallet_managed_position	39	near_tp_harvested_quantity	decimal(30,12)	YES	
+wallet_trade	1	id	bigint	NO	PRI
+wallet_trade	2	signal_id	bigint	YES	MUL
+wallet_trade	3	position_analysis_id	bigint	YES	MUL
+wallet_trade	4	execution_key	varchar(100)	YES	UNI
+wallet_trade	5	symbol	varchar(30)	NO	MUL
+wallet_trade	6	side	varchar(10)	NO	
+wallet_trade	7	quantity	decimal(30,12)	NO	
+wallet_trade	8	price_usdt	decimal(30,12)	NO	
+wallet_trade	9	decision_price_usdt	decimal(30,12)	YES	
+wallet_trade	10	execution_price_observed_at	timestamp(6)	YES	
+wallet_trade	11	gross_amount_usdt	decimal(30,12)	NO	
+wallet_trade	12	fee_usdt	decimal(30,12)	NO	
+wallet_trade	13	net_amount_usdt	decimal(30,12)	NO	
+wallet_trade	14	cost_basis_usdt	decimal(30,12)	YES	
+wallet_trade	15	realized_pnl_usdt	decimal(30,12)	YES	
+wallet_trade	16	realized_pnl_percent	decimal(20,8)	YES	
+wallet_trade	17	execution_type	varchar(20)	NO	
+wallet_trade	18	execution_reason	varchar(40)	YES	MUL
+wallet_trade	19	status	varchar(20)	NO	
+wallet_trade	20	executed_at	timestamp(6)	NO	
+wallet_trade	21	notes	varchar(500)	YES	
+wallet_trade	22	execution_message	mediumtext	YES	
+wallet_trade	23	created_at	timestamp(6)	NO	
+TABLE_NAME	CONSTRAINT_NAME	COLUMN_NAME	REFERENCED_TABLE_NAME	REFERENCED_COLUMN_NAME
+market_price_event	PRIMARY	id	NULL	NULL
+market_price_event	uk_fix153_price_receipt	symbol	NULL	NULL
+market_price_event	uk_fix153_price_receipt	observed_at	NULL	NULL
+market_price_event	uk_fix153_price_receipt	ordering_slot	NULL	NULL
+market_price_event	uk_market_price_source_event	source_event_id	NULL	NULL
+paper_position	fk_paper_position_exit_signal	exit_signal_id	trade_signal	id
+paper_position	fk_paper_position_trade_signal	signal_id	trade_signal	id
+paper_position	PRIMARY	id	NULL	NULL
+production_exit_audit	PRIMARY	id	NULL	NULL
+production_exit_audit	uk_production_exit_audit_paper_position	paper_position_id	NULL	NULL
+trade_signal	PRIMARY	id	NULL	NULL
+trade_signal	uk_trade_signal_symbol_interval_candle	symbol	NULL	NULL
+trade_signal	uk_trade_signal_symbol_interval_candle	interval_code	NULL	NULL
+trade_signal	uk_trade_signal_symbol_interval_candle	candle_open_time	NULL	NULL
+wallet_managed_position	fk_wallet_managed_position_entry_signal	entry_signal_id	trade_signal	id
+wallet_managed_position	PRIMARY	id	NULL	NULL
+wallet_trade	fk_wallet_trade_position_analysis	position_analysis_id	position_analysis	id
+wallet_trade	fk_wallet_trade_signal	signal_id	trade_signal	id
+wallet_trade	PRIMARY	id	NULL	NULL
+wallet_trade	uk_wallet_trade_execution_key	execution_key	NULL	NULL

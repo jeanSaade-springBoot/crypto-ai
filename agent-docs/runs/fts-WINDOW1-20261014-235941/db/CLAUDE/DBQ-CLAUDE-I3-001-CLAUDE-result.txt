@@ -1,0 +1,4 @@
+global_tz	session_tz	system_tz	now_session	now_utc	offset_min
+SYSTEM	SYSTEM	Arab Standard Time	2026-10-15 00:27:47.088010	2026-10-14 21:27:47.088010	180
+id	execution_price_observed_at	epoch_s
+358	2026-10-11 22:40:01.028000	1791747601.028000

@@ -1,0 +1,108 @@
+## FINDINGS
+
+**PROJECT EVIDENCE:** No trade-specific timing conclusion is supportable yet. The permitted `db/CODEX` directory remains empty, so the six frozen `paper_position` rows—and even their symbols and close times—are unavailable.
+
+**PROJECT EVIDENCE:** Available live log files do not cover the WINDOW2 snapshot:
+
+- `crypto-ai-trader.log` spans 2026-10-19 14:32:18.902–14:32:36.235 UTC (17:32:18.902–17:32:36.235 KSA).
+- `database-timing.log` spans 2026-10-19 14:32:26.010–14:32:34.124 UTC (17:32:26.010–17:32:34.124 KSA).
+- The snapshot is 2026-10-26 18:07:57 UTC / 20:56:22 KSA. No accessible application-log archive is dated after 2026-10-19.
+
+These files therefore cannot establish latency, errors, or protection behavior for any frozen trade unless DB rows later prove a trade fell within their historical coverage.
+
+**PROJECT EVIDENCE:** The present application log contains no correlation line for paper-position IDs `182, 172, 162, 158, 143, 137`. Its short run also reports zero committed inputs and Binance DNS/bootstrap failures, so it is not evidence about the frozen trades.
+
+**PROJECT EVIDENCE:** Current source has useful timing evidence, but it is not directly keyed to `paper_position.id`:
+
+- Protection outcomes are durably identified by `market_price_event.id`, symbol, observation UTC/KSA, and outcome after transaction commit ([MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:82)).
+- Protection logs label `positionId` using the managed-wallet position identifier, not the authoritative paper-position ID ([LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:193)).
+- Paper closure stores `closed_at=Instant.now()` only after the mechanical-exit call succeeds, and does not emit the paper-position ID ([LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:391)).
+- JDBC timing logs redact bind values, so they cannot independently tie a statement to a frozen position ID ([JdbcTimingDataSource.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/diagnostics/JdbcTimingDataSource.java:103)).
+
+**AGENT INFERENCE:** Any log claim needs a durable bridge from frozen `paper_position.id` to symbol, time window, linked signal, managed/wallet position, and relevant price-event IDs. Matching by a bare logged `positionId` would be unsafe.
+
+**PROJECT EVIDENCE:** The source’s stage timer only logs successful Kline stages when they take at least one second; failures are logged. Thus, lack of a `[FIX-129][STAGE_TIMING]` entry cannot prove that a sub-second stage occurred or that no timing issue existed ([KlineTiming.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTiming.java:28)).
+
+**PROJECT EVIDENCE:** Application file logging is asynchronous and configured never to block; saturation can drop file events. Missing log lines are therefore not proof that a trade action did not occur ([logback-spring.xml](/C:/workspace/crypto-ai-trader-mysql/src/main/resources/logback-spring.xml:32)).
+
+**EXTERNAL RESEARCH:** None.
+
+## EVIDENCE
+
+- Frozen cohort maintained exactly: `182, 172, 162, 158, 143, 137`.
+- `logs/crypto-ai-trader.log`, `logs/database-timing.log`, and log archive filenames: retained runtime evidence ends 2026-10-19.
+- `PaperPosition` source maps the relevant lifecycle fields: symbol, entry/exit prices, signal IDs, close reason, opened/closed timestamps ([PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:12)).
+- Source and log configuration explicitly render application-file timestamps in UTC; any reported KSA conversion above is UTC +3.
+
+## UNKNOWNS
+
+- The actual six rows’ symbols, UTC/KSA entry and exit times, reasons, and linked signal IDs.
+- Whether the frozen trades occurred during any retained archived-log interval.
+- The durable relationship, if any, from each paper position to wallet-managed position and mechanical execution.
+- Exit-trigger price event, its accepted/rejected state, observation-to-commit latency, and any lock/deadlock/timeout evidence.
+- Results of `DBQ-FTS-001` through `DBQ-FTS-005`.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Read the actual schema before choosing timing/linkage columns for the frozen trades.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'wallet_managed_position',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'position_management_event',
+      'production_exit_audit'
+  )
+ORDER BY table_name, ordinal_position;
+
+SELECT
+    kcu.table_name,
+    kcu.constraint_name,
+    kcu.column_name,
+    kcu.referenced_table_name,
+    kcu.referenced_column_name
+FROM information_schema.key_column_usage kcu
+WHERE kcu.table_schema = 'crypto_ai'
+  AND (
+      kcu.table_name IN (
+          'paper_position',
+          'wallet_trade',
+          'wallet_managed_position',
+          'trade_signal',
+          'signal_processing_work',
+          'market_price_event',
+          'position_management_event',
+          'production_exit_audit'
+      )
+      OR kcu.referenced_table_name = 'paper_position'
+  )
+ORDER BY kcu.table_name, kcu.constraint_name, kcu.ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-002  
+Purpose: Retrieve only the authoritative lifecycle rows for timing-window construction; run alongside the schema result above.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST

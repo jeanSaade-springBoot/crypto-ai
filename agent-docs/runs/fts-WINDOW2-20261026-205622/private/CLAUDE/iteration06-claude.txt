@@ -1,0 +1,227 @@
+# Iteration 6: root causes and research
+
+This is the whole Iteration 6 output. I wrote nothing to code, config, the database or git. I did not write the plan file either, because no write tool is available in this session.
+
+**Inputs:**
+- The frozen `paper_position` trades 182, 172, 162, 158, 143 and 137 (none substituted).
+- My own query results I1-001 to I5-004.
+- The code, read only.
+- One primary external source for fees.
+
+**Times:** database values are UTC. KSA = UTC+3 is shown only where labelled.
+
+## In short
+
+1. **The whole system has no gross edge.** Across all 193 closed positions, gross P&L was −4.17 USDT on 6,195 USDT traded, with 47% wins. Estimated fees of 9.3–12.4 USDT are 2–3 times that loss. The six frozen trades are typical members of that population, not outliers (F-36).
+2. **My Iteration 5 idea that low Entry Quality causes the losses is wrong on this data.** Positions with Entry Quality (EQ) of 70 or more lost the most per dollar traded; EQ 50–54 was slightly positive. Planned reward:risk does not separate winners from losers either (F-37).
+3. **Trades 172 and 182 share one candidate logic defect.** A 5m veto is lost when the 5m signal is passed to the 1m entry gates (F-38). I5-003 now confirms the 172 half: its 5m "confirmation" #171559 was blocked by `RANGE_ENTRY_LOCATION`.
+4. **Trade 137's counterfactual is now near-certain.** When sentiment data is available it is market-wide and was 10/15 in every row. Counting it gives 137 a score of 86 (BUY), not 91 (STRONG_BUY), so the range-location guard would have blocked the entry (F-39).
+
+## FINDINGS
+
+### F-36 — No gross edge, and costs set the sign (PROJECT EVIDENCE + EXTERNAL RESEARCH; arithmetic is AGENT INFERENCE)
+
+*From I5-001/I5-002 (both total n = 193, so the joins did not duplicate rows):*
+- **Gross result:** P&L −4.1707 USDT on notional 6,195 USDT, which is −0.067% per dollar traded. There were 90 wins.
+- **Fees:**
+  - **EXTERNAL RESEARCH:** Binance's official schedule for a Regular user is 0.100% maker and taker, or 0.075% each with the BNB discount ([Binance fee schedule](https://www.binance.com/en/fee/schedule)). Secondary sources broadly agree ([Binance.US](https://support.binance.us/hc/en-us/articles/360047428113-Binance-US-Launches-Trading-Fee-Discount-and-VIP-Program-With-BNB), [Finhay](https://www.finhay.com.vn/en/phi-giao-dich-binance)).
+  - **AGENT INFERENCE:** a round trip therefore costs about 0.15–0.20%, or about 9.3–12.4 USDT across these positions. That puts the net result at about −13.5 to −16.6 USDT.
+- **Frozen trades:** each lost 0.13–0.35% before fees (I2). That is ordinary scatter around a negative-after-cost average.
+- **Fees are not recorded:** `fee_usdt = 0` (F-3/F-4), so the dashboards understate the loss by about 2–3 times.
+
+*Assessment:* the main economic root cause is a system-level absence of edge. It is not a single-trade defect.
+
+### F-37 — Correction: neither Entry Quality nor planned reward:risk predicts the outcome (PROJECT EVIDENCE: I5-002; ratios are AGENT INFERENCE)
+
+| EQ band | n | P&L (USDT) | Notional | P&L per notional |
+|---|---|---|---|---|
+| 50–54 | 61 | +0.687 | 1,290 | **+0.053%** |
+| 55–69 | 57 | −1.284 | 1,525 | −0.084% |
+| 70 and above (including a "85+" bucket that may hold NULLs) | 75 | −3.574 | 3,380 | **−0.106%** |
+
+- **By planned reward:risk:**
+  - below 0.75: 52% wins, −0.071%
+  - 0.75–1: 50% wins, −0.044%
+  - 1–1.5: 47% wins, −0.141%
+  - 1.5 and above: 43% wins, −0.043%
+  - No band is profitable even before fees.
+- **What it means for earlier findings:** F-27/F-28 stay true as descriptions of the code, but they are not supported as root causes. Raising the EQ cutoff to 70 is not shown to help on this data.
+- **A likely mechanism (AGENT INFERENCE):** 1.5+ reward:risk with 43% wins should break even *if* exits hit the target or stop. It doesn't, so realized winners are probably being cut short by signal and profit-lock exits. DBQ-CLAUDE-I6-001 tests this.
+- **Caveat:** the I5-002 `CASE` puts a NULL EQ into "eq85+". DBQ-CLAUDE-I6-003 splits that out.
+
+### F-38 — A 5m veto is lost on the way to the 1m entry gates (PROJECT EVIDENCE; frequency not yet measured)
+
+Both trades show the same pattern: the gate reads a cleaned-up 5m field and loses the 5m's own veto.
+
+*Trade 182:*
+- 5m `original_decision` was STRONG_SELL, but the stored `decision` was neutralised by a weak 1h WATCH (trend 16/25).
+- `hasHardBearishOpposition` and FIX-11G read only `decision` (F-22).
+- Elsewhere the code does read the raw value through `strongerDecision(decision, original_decision)` (`ExecutionIntelligenceService.java:2092, 2100, 2449`).
+
+*Trade 172:*
+- The 5m #171559 was BUY 80 but had `final_entry_allowed=0` with `primary_blocking_stage=RANGE_ENTRY_LOCATION` (I5-003).
+- `validateBuy` granted `BALANCED_STRONG` from the 5m decision alone. The wake-up route does refuse such a 5m (`:402`).
+- All six RANGE-regime 5m BUY/STRONG_BUY signals in I5-003 were blocked at `RANGE_ENTRY_LOCATION`. That closes U-25.
+
+*Assessment:* a candidate logic defect, inconsistent with sibling guards. It stays "candidate" until the frequency check (I6-004) and a Replay test are done.
+
+### F-39 — Leaving missing data out of the score acts as optimistic imputation, and it decided trade 137 (PROJECT EVIDENCE: code + I5-004; counterfactual is AGENT INFERENCE, now high-confidence)
+
+*What the data shows (I5-004, 10-11 20:00 to 10-12 10:10 UTC):*
+- Sentiment was available in 287 of about 850 1m rows **for every symbol alike**. When available it was always exactly 10 (min = max = 10). So it is one market-wide feed that is only intermittently available.
+- EGLD never had fundamentals.
+
+*How the score is built:*
+- `sentimentScore` maps the raw value to `round((raw + 1) × 7.5)` (`AnalysisService.java:955-958`): 0.38 gives 10.
+- `MarketStrategyService.score` divides by the maximum of the *available* components only (`MarketStrategyService.java:99-105`).
+- Leaving a component out is the same as assuming it scored at the same rate as the components that are present. Here that rate was 91%, while the feed's real level was 67%.
+
+*The counterfactual for 137:* (50 + 10) / 70 = 85.7, rounded to 86. That is a BUY, not a STRONG_BUY, so the ≥90 range-expansion exception fails and the 68.28% range position blocks the entry (F-30).
+
+*Further implication:* identical setups get different decisions depending on whether the sentiment feed happened to be up. DBQ-CLAUDE-I6-003 measures the effect across all positions.
+
+*Assessment:* a scoring-design weakness that turned missing data into permission to enter. It is not a defect against the current rules.
+
+### F-40 — The route-threshold inconsistencies are real but not shown to cost money (PROJECT EVIDENCE: I5-001)
+
+- **FIX-11G:** n = 35, 18 wins, −0.288 USDT (−0.032%). That is no worse than average. FIX-112B has n = 2, too few to compare.
+- **Worst groups per dollar:**
+  - `IMMEDIATE_VALIDATION/BALANCED_STRONG`: −0.171%, 6 wins in 16
+  - `SETUP_TIMEFRAME_ATR`: −0.145%
+  - `SETUP_CONFIRMATION_WAKEUP/BALANCED_STRONG`: −0.059%, 15 wins in 40
+- **The only clearly positive group** is `ACCUMULATED_EVIDENCE/BALANCED_EARLY`, +0.88 on 22 trades. That is trade 162's own route.
+- **Sample size (AGENT INFERENCE):** with groups of 40 or fewer and per-trade spread around ±0.2 USDT, differences of about 1 USDT are roughly one standard error. Route-level conclusions are not statistically supported.
+- **Conclusion:** F-29 and F-33 stay design inconsistencies, not proven loss drivers.
+
+### F-41 — Selection limitation, restated (PROJECT EVIDENCE: FTS-002)
+
+- The frozen set draws only from CLOSED losses (26 of 118). All 75 STOPPED positions are losses and are larger, −0.08 to −0.59 USDT.
+- Root causes found here describe signal and higher-timeframe exit losers, not stop-loss losers.
+- Iteration 3 showed one stop overshoot (trade 110: −0.78% realized against a 0.29% stop). DBQ-CLAUDE-I6-002 measures this across all STOPPED positions.
+
+## Root cause per frozen trade
+
+The decision at entry uses only what was known at entry. Outcome evidence is listed separately.
+
+| Trade | Main root cause | Other factors | Class |
+|---|---|---|---|
+| 137 (entry 10-11 20:55:01 UTC / 23:55:01 KSA) | F-39: missing sentiment pushed the score up to STRONG_BUY and through the range exception | F-36 no edge; reward:risk 0.64 | Scoring-design weakness |
+| 143 (22:40:01 UTC / 10-12 01:40:01 KSA) | F-24: timing race used an outdated 5m BUY; Replay probably would not open it | extended 1m; EQ 60/70 audit mismatch (F-34) | Production/Replay parity weakness |
+| 158 (10-12 02:35:01 UTC / 05:35:01 KSA) | F-36: target +0.17%, below fees, in a quiet market | wake-up route has no target-versus-fee floor | Valid loser under a design limitation |
+| 162 (04:02:02 UTC / 07:02:02 KSA) | F-36, plus FIX-119 lifted by a single BUY (F-33) | above the upper Bollinger band; route inconsistency | Design inconsistency; its route group is net positive |
+| 172 (06:36:01 UTC / 09:36:01 KSA) | **F-38:** a blocked 5m BUY used as confirmation | 1h NEUTRAL, trend 8 | **Candidate logic defect** |
+| 182 (09:57:01 UTC / 12:57:01 KSA) | **F-38:** a hidden 5m STRONG_SELL | F-31 long in WEAK_DOWNTREND; F-29 | **Candidate logic defect** + design gap |
+
+**Ruled out for all six:**
+- stale data (I3 F-20)
+- execution delay or exit price cost (F-21: 0 cost)
+- protection failure
+- dropped price messages (U-22 closed: quiet markets)
+
+## Recommended corrections and regression checks (none implemented)
+
+1. **F-38:**
+   - Make 1m BUY gates and FIX-11G/BALANCED_STRONG read `strongerDecision(decision, original_decision)` and the 5m `final_entry_allowed`.
+   - Test: a 5m with STRONG_SELL raw and NEUTRAL stored must veto the 1m BUY.
+   - Test: a 5m BUY with `final_entry_allowed=0` must not grant BALANCED_STRONG.
+   - Run Replay over ACE 10-12 09:50–10:06 UTC and SHIB 06:30–06:40 UTC.
+2. **F-39:**
+   - Count a missing component at a neutral or conservative value, or forbid STRONG_BUY / range exceptions when any component is missing.
+   - Test: the 137 inputs with sentiment absent and present must reach the same decision.
+3. **F-36:**
+   - Record estimated fees in `fee_usdt`.
+   - Add a minimum of target distance ≥ round-trip cost × k.
+   - Report net-of-fee results in the study and dashboards.
+4. **F-24:** make Production 1m-versus-5m ordering at shared boundaries the same as Replay, then Replay trades 143 and 158.
+5. **Not recommended on current evidence:** raising the EQ cutoff or tightening FIX-11G to the FIX-112B bar (F-37, F-40).
+
+## EVIDENCE
+
+| ID | Type | Reference |
+|---|---|---|
+| E-41 | DB | I5-001: route/higher-timeframe outcomes, n = 193, P&L −4.1707, notional 6,195 |
+| E-42 | DB | I5-002: reward:risk × EQ bands |
+| E-43 | DB | I5-003: `RANGE_ENTRY_LOCATION` on #163125, 165311, 165437, 165942, 170026, 171559 |
+| E-44 | DB | I5-004: sentiment market-wide, 287/850 rows available, always 10; EGLD fundamentals 0 |
+| E-45 | Code | `MarketStrategyService.java:18-22, 69-113`; `AnalysisService.java:228-263, 955-967, 1021-1035` |
+| E-46 | External | Binance official fee schedule (0.100% / 0.075% with BNB) |
+| E-47 | DB | FTS-002: 118 CLOSED / 75 STOPPED |
+
+## UNKNOWNS
+
+- **U-29:** realized versus planned payoff by exit reason, to test whether winners are cut short (needs I6-001).
+- **U-30:** how far STOPPED losses overshoot their stop (needs I6-002).
+- **U-31:** P&L of positions whose entry signal lacked sentiment, and the hourly pattern of sentiment availability (needs I6-003).
+- **U-32:** how often F-38 occurs across all positions, and what it costs (needs I6-004).
+- **U-33:** results by regime at entry, including WEAK_DOWNTREND BUYs (F-31; needs I6-005).
+- **Still open:**
+  - U-27: trade 143's EQ, 60 or 70
+  - U-28: which code revision was deployed on 10-11/12, given that FIX-154 code is present (F-35)
+  - U-15 and U-17: logs needed
+  - U-21: a Replay run, which is outside analysis-only mode
+  - The second statement in I5-004 returned no output.
+  - The account's real fee tier.
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: Realized versus planned payoff by status and exit reason, to test whether winners are cut short (F-37, U-29). Note: stop and target may have been moved after entry.
+SQL:
+SELECT p.status, LEFT(p.close_reason, 40) AS reason, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS wins, ROUND(AVG(CASE WHEN p.realized_pnl > 0 THEN (p.exit_price - p.entry_price) / p.entry_price * 100 END), 4) AS avg_win_pct, ROUND(AVG(CASE WHEN p.realized_pnl < 0 THEN (p.exit_price - p.entry_price) / p.entry_price * 100 END), 4) AS avg_loss_pct, ROUND(AVG((p.take_profit - p.entry_price) / p.entry_price * 100), 4) AS avg_tp_pct, ROUND(AVG((p.entry_price - p.stop_loss) / p.entry_price * 100), 4) AS avg_sl_pct, ROUND(SUM(p.realized_pnl), 4) AS pnl, ROUND(SUM(p.entry_price * p.quantity), 2) AS notional FROM crypto_ai.paper_position p WHERE p.status IN ('CLOSED','STOPPED') GROUP BY p.status, reason ORDER BY p.status, n DESC LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: How far STOPPED losses overshoot their stop (F-41, U-30).
+SQL:
+SELECT COUNT(*) AS n, ROUND(AVG((p.entry_price - p.exit_price) / (p.entry_price - p.stop_loss)), 3) AS avg_loss_to_stop, SUM((p.entry_price - p.exit_price) > 1.5 * (p.entry_price - p.stop_loss)) AS n_over_1_5x, ROUND(MAX((p.entry_price - p.exit_price) / (p.entry_price - p.stop_loss)), 3) AS max_ratio FROM crypto_ai.paper_position p WHERE p.status = 'STOPPED' AND p.entry_price > p.stop_loss;
+SELECT p.id, p.symbol, p.closed_at, ROUND((p.entry_price - p.stop_loss) / p.entry_price * 100, 4) AS sl_pct, ROUND((p.entry_price - p.exit_price) / p.entry_price * 100, 4) AS loss_pct, p.realized_pnl FROM crypto_ai.paper_position p WHERE p.status = 'STOPPED' AND p.entry_price > p.stop_loss ORDER BY (p.entry_price - p.exit_price) / (p.entry_price - p.stop_loss) DESC LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: Outcome by whether the entry signal had sentiment/fundamentals, the hourly sentiment-availability timeline, and a split of NULL EQ out of "eq85+" (F-37, F-39, U-31).
+SQL:
+SELECT s.interval_code, s.sentiment_available, s.fundamental_available, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS wins, ROUND(SUM(p.realized_pnl), 4) AS pnl, ROUND(SUM(p.entry_price * p.quantity), 2) AS notional, ROUND(AVG(s.total_score), 1) AS avg_score FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id WHERE p.status IN ('CLOSED','STOPPED') GROUP BY s.interval_code, s.sentiment_available, s.fundamental_available ORDER BY s.interval_code LIMIT 20;
+SELECT DATE_FORMAT(generated_at, '%Y-%m-%d %H:00') AS hr_utc, COUNT(*) AS n, SUM(sentiment_available) AS n_avail FROM crypto_ai.trade_signal WHERE symbol = 'BTCUSDT' AND interval_code = '1m' AND generated_at BETWEEN '2026-10-11 00:00:00' AND '2026-10-15 06:00:00' GROUP BY hr_utc ORDER BY hr_utc LIMIT 110;
+SELECT (m.id IS NULL) AS no_managed, (m.entry_quality_score IS NULL) AS eq_null, COUNT(*) AS n, ROUND(SUM(p.realized_pnl), 4) AS pnl FROM crypto_ai.paper_position p LEFT JOIN crypto_ai.wallet_managed_position m ON m.entry_signal_id = p.signal_id WHERE p.status IN ('CLOSED','STOPPED') GROUP BY no_managed, eq_null LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-004
+Purpose: How often F-38 occurs, and its outcome. For each 1m-signal position, take the latest 5m signal at or before the entry signal (10-minute bound) and flag a hidden bearish 5m or a blocked bullish 5m (U-32).
+SQL:
+SELECT x.hidden_bear_5m, x.blocked_bull_5m, COUNT(*) AS n, SUM(x.realized_pnl > 0) AS wins, ROUND(SUM(x.realized_pnl), 4) AS pnl, ROUND(SUM(x.notional), 2) AS notional FROM (SELECT p.id, p.realized_pnl, p.entry_price * p.quantity AS notional, COALESCE(f.decision IN ('NEUTRAL','WATCH') AND f.original_decision IN ('SELL','STRONG_SELL'), 0) AS hidden_bear_5m, COALESCE(f.decision IN ('BUY','STRONG_BUY') AND f.final_entry_allowed = 0, 0) AS blocked_bull_5m FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id LEFT JOIN crypto_ai.trade_signal f ON f.id = (SELECT f2.id FROM crypto_ai.trade_signal f2 WHERE f2.symbol = s.symbol AND f2.interval_code = '5m' AND f2.generated_at <= s.generated_at AND f2.generated_at >= DATE_SUB(s.generated_at, INTERVAL 10 MINUTE) ORDER BY f2.generated_at DESC LIMIT 1) WHERE p.status IN ('CLOSED','STOPPED') AND s.interval_code = '1m') x GROUP BY x.hidden_bear_5m, x.blocked_bull_5m LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-005
+Purpose: Outcome by the entry signal's market regime and strategy decision, to test whether long entries in downtrend regimes lose more (F-31, U-33).
+SQL:
+SELECT s.interval_code, s.market_regime, s.decision, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS wins, ROUND(SUM(p.realized_pnl), 4) AS pnl, ROUND(SUM(p.entry_price * p.quantity), 2) AS notional FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id WHERE p.status IN ('CLOSED','STOPPED') GROUP BY s.interval_code, s.market_regime, s.decision ORDER BY s.interval_code, s.market_regime, s.decision LIMIT 40;
+### END_DB_REQUEST
+
+## Self-review
+
+- **Revised:**
+  - F-27/F-28 are demoted from root cause to description (F-37).
+  - F-29/F-33 are shown to have no measurable cost (F-40).
+  - F-30 is upgraded to high confidence (F-39).
+  - F-32 is confirmed at the blocking-stage level (U-25 closed).
+- **Facts:** the aggregates, blocking stages, sentiment pattern, the scoring code and the fee schedule.
+- **Inferences:**
+  - the fee totals
+  - the winners-cut-short mechanism
+  - standard-error estimates
+  - the 137 counterfactual (it depends on rule thresholds cited in Iteration 5)
+- **No look-ahead:** every entry judgement uses only data available at entry. The P&L aggregates are outcome evidence only.
+- **Plan for Iteration 7:**
+  - fold in the I6 results
+  - finalise the root-cause ranking with measured cost per class
+  - freeze the regression-check list
+
+Sources:
+- [Binance fee schedule (official)](https://www.binance.com/en/fee/schedule)
+- [Binance.US fee/BNB discount](https://support.binance.us/hc/en-us/articles/360047428113-Binance-US-Launches-Trading-Fee-Discount-and-VIP-Program-With-BNB)
+- [Finhay – Binance fees 2026](https://www.finhay.com.vn/en/phi-giao-dich-binance)

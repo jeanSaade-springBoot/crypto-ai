@@ -1,0 +1,63 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Frozen cohort unchanged: `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutions.
+
+- **PROJECT EVIDENCE:** The permitted `db/CODEX` directory remains empty. No results exist for `DBQ-FTS-001..005`; no trade-specific timing, entry, exit, or protection conclusion is evidence-backed.
+
+- **PROJECT EVIDENCE:** Local application-log coverage does not reach the WINDOW2 snapshot. The newest available live log write is `2026-10-19 14:32:36 UTC` (`17:32:36 KSA`), while snapshot is `2026-10-20 15:00:04 UTC` (`18:00:04 KSA` by conversion). Thus logs are unavailable for at least the final **24h 27m 28s** before snapshot; they cannot establish events for the selected trades.
+
+- **PROJECT EVIDENCE:** Source provides three relevant timing/evidence channels:
+  - [`KlineTiming.java`](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTiming.java) measures input, protection, observer, and close-dispatch transaction elapsed time under one correlation ID.
+  - [`CandleClosedAnalysisWorker.java`](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java) logs worker stages and live-close-to-signal-generation/insertion delay by signal ID.
+  - [`SignalProcessingCoordinator.java`](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java) logs attempt and post-commit processing completion, explicitly noting that completion does **not** necessarily mean a trade was opened.
+
+- **PROJECT EVIDENCE:** `fix129_stage_timing` is diagnostic, not a complete market-event ledger. Timings are emitted only for failures or stages lasting at least 1 second; its asynchronous writer may drop or fail to persist diagnostics. Absence of a row cannot prove a stage did not execute or was fast.
+
+- **PROJECT EVIDENCE:** Protection evidence must use `market_price_event` with accepted `delivery_status` `LEGACY` or `APPLIED`. [`MarketPriceEventService.java`](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java) logs committed outcome with event ID and observation time. Candle OHLC cannot substitute for missing accepted price events.
+
+- **PROJECT EVIDENCE:** There is no direct price-event foreign key on `paper_position` or `production_exit_audit`; exact trigger-to-exit reconstruction requires symbol and bounded-time correlation. `paper_position.closed_at` is written from application `Instant.now()`, so it is not the Binance observation timestamp.
+
+- **PROJECT EVIDENCE:** Study metadata retains a two-second inconsistency: `2026-10-20 15:00:04 UTC` converts to `18:00:04 KSA`, not the supplied `18:00:02 KSA`. Frozen selection is unaffected.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Required shared context, Codex documentation, charter, private iterations 1–2 including stderr records, and permitted Codex DB directory were read.
+- **PROJECT EVIDENCE:** Local logs enumerated: latest available trade log is dated 2026-10-19; no 2026-10-20 application log exists in the workspace.
+- **EXTERNAL RESEARCH:** None.
+- **AGENT INFERENCE:** No trade may be classified as a valid loss, execution delay, strategy defect, or protection failure without durable records.
+
+## UNKNOWNS
+
+For each frozen position: symbol, entry/exit signals, open/close UTC and KSA times, processing attempt/completion, entry commit, accepted price-event identity, protection threshold, exit trigger, wallet execution, fees, P&L reconciliation, and Replay suitability.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Obtain actual schema evidence for the six-position timing/protection reconstruction before selecting any trade-specific columns or joins.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    data_type,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'signal_processing_work',
+      'market_price_event',
+      'production_exit_audit',
+      'position_management_event',
+      'fix129_stage_timing'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+No code, configuration, database, Git, or deployment changes were made.

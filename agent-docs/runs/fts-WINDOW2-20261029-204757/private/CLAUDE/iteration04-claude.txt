@@ -1,0 +1,273 @@
+# Claude: Daily Failed-Trade Study, WINDOW2, Iteration 4: Code and Trade Route (self-review)
+
+**Run:** `fts-WINDOW2-20261029-204757`. This iteration was analysis only. I changed no code, config or database, and did nothing with git or deployment. Plan mode was on, but this session has no Write, ExitPlanMode or shell tool, so all output is here and no plan file was written.
+
+**Inputs:** my iteration 1–3 outputs, the `db/CLAUDE/` results (including the new I3-001 to I3-005), and the current source tree. I did not read the Codex folders, LIVE_TEAM_STATUS or LIVE_EVENTS. I made no external requests this iteration.
+
+---
+
+## Summary
+
+- **I4-F01: Time basis is now confirmed.** The values shown in our result files are KSA. Stored values are UTC; subtract 3 h to get UTC. My iteration-3 time corrections stand.
+- **I4-F02: Trade 143 re-entered on the same 5m setup and the same evidence that had just funded a position closed 22 seconds earlier.** The code's post-exit evidence boundary only applies after a STOP_LOSS exit. This contradicts the documented FIX-020 rule, so I classify it as a candidate defect.
+- **I4-F03: Tick-driven exits in Production do not close the open opportunity record; Replay's equivalent exits do.** This is a parity gap. Its effect on trade 143 is not yet proven.
+- **I4-F04: Code-level proof that Replay can reproduce trade 158's entry but most likely not trade 143's.** The race costs little money when the route's outcome is certain; two larger losses remain uncertain.
+- **I4-F05: Trade 182 entered at Entry Quality exactly 50 on the weakest direct-BUY authority.** A stronger profile (BALANCED_EARLY) is blocked at that same quality. This is a design inversion.
+- **I4-F06: Trade 162 escaped the late-entry guard (FIX-119) because of a single BUY among ten signals.** It followed the code; it is a design weakness.
+- **I4-F07: None of the four routes used by the six trades has a minimum reward/risk check.** All six entered with reward/risk below 1.
+- **I4-F08: Contradiction with project docs. FIX-154 is installed and in the decision path.** AGENTS.md and claude-docs both say it is not implemented.
+
+---
+
+## FINDINGS
+
+### I4-F01: Time basis confirmed (PROJECT EVIDENCE: DBQ-CLAUDE-I3-001)
+
+| Field | Value |
+|---|---|
+| Session time zone | `SYSTEM` = `Arab Standard Time` |
+| `NOW(6)` | 2026-10-30 15:53:09.398 |
+| `UTC_TIMESTAMP(6)` | 12:53:09.398 |
+| Signal 159408, displayed `generated_at` | 22:40:01.633945 |
+| Signal 159408, epoch | 1791747601.633945 (= UTC 2026-10-11 19:40:01.634) |
+
+- Every `timestamp` column in the CLAUDE and FTS result files is displayed in **KSA**. Stored values are UTC, so UTC = displayed − 3 h.
+- The `datetime` columns (`btc_context_evaluated_at`, `btc_signal_generated_at`) show raw UTC (19:40:01.633945). Rows that mix the two column types mix time zones. Readers should not compare them directly.
+- `DATABASE_INVESTIGATION_RULES.md:35` ("raw MySQL timestamps are UTC") is true for storage but not for these result files. I am recording this as a contradiction for dual-agent review; I have not changed any shared document.
+- All times below are **KSA** unless they are marked UTC.
+
+### I4-F02: Trade 143 re-entered on pre-exit setup and evidence (CANDIDATE DEFECT: intent mismatch; PROJECT EVIDENCE + AGENT INFERENCE)
+
+**Timeline** (KSA; UTC = −3 h):
+
+| Time | Event |
+|---|---|
+| 22:35:01.553 | 5m #159285 **BUY**, `atr_immediate_entry_allowed`=1 (I3-002, I3-004) |
+| 22:36 | Opportunity #36481 opens position 171 through SETUP_TIMEFRAME_ATR, using that 5m (I2-003) |
+| 22:39:41.052 | Position 171 exits by PROFIT_LOCK_EXIT at 3.996 (wallet #357) |
+| 22:40:01.634 | 1m #159408 (WATCH, ATR-extended). New opportunity #36524 appears **already scored**: evidence 8, health 95 |
+| 22:40:03.115 | Wallet BUY #358 at 4.033, through SETUP_TIMEFRAME_ATR on the **same** 5m #159285 |
+
+**Code path:**
+1. `evaluateBuyInternal` reaches `setupTimeframeAtrAuthoritySignal` (`ExecutionIntelligenceService.java:628`, `:1472-1492`).
+2. The 1m signal is WATCH and not bearish. The 5m lookup returns #159285: it is BUY, its final entry was allowed, and its ATR plan allowed immediate entry.
+3. The route never checks whether that 5m has already been used for a position that is now closed.
+
+**Evidence score:**
+- `evidence()` recounts the raw 1m signals from the last 30 minutes (`:2241-2311`, `EVIDENCE_WINDOW=30m` at `:47`).
+- The only filter that removes pre-exit signals is FIX-122's `StopLossEvidenceService.eligible`.
+- Its boundary comes from `StopLossEvidenceStore.latest`, which selects only `execution_reason='STOP_LOSS'` (`StopLossEvidenceStore.java:39-42`). Replay matches this: `ExecutionReplayScope.recordStop` ignores any other exit reason (`:50`).
+- After a profit-lock exit there is no boundary, so the 1m signals from position 171's own lifecycle counted again toward the new entry.
+
+**Contradiction with the documented rule:**
+- FIX-020's Javadoc says that after *any* terminal exit, "including … profit lock … its pre-exit evidence may never finance a brand-new position" (`:812-819`).
+- The code enforces this only by setting the opportunity record to `COMPLETED` (`:821-840`). It does not filter `evidence()` and does not block re-use of the 5m setup in SETUP_TIMEFRAME_ATR.
+
+**Re-check at fill time:** `revalidateAtExecutionPrice` re-checks only the FIX-122 boundary, stop and target, and Entry Quality (`:1150-1169`). It never re-reads the 5m, so the WATCH 5m #159407 saved 175 ms before the fill was never seen. This adds to I3-F02.
+
+**Classification:**
+- Entry defect A (I3-F02, confirmed): an outdated 5m was selected.
+- Entry defect B (this finding, candidate): an exit evidence boundary is missing for exits other than stop-loss.
+- Before calling B confirmed, DBQ-CLAUDE-I4-002/003 must show that the evidence score of 8 came from 1m signals generated before 22:39:41.
+
+**Side note (AGENT INFERENCE, low impact):**
+- At signal time, SETUP_TIMEFRAME_ATR scores Entry Quality using the **5m** ATR (`:634`). The comment there warns that using the 1m ATR mislabels valid setups.
+- At the fill-time re-check it uses the **1m** ATR (`assessEntryQualityAtPrice`, `:857-858`).
+- The two scores are therefore not on the same basis. This did not block trade 143.
+
+### I4-F03: Production tick exits skip `completePositionOpportunity`; Replay does not (PARITY GAP; PROJECT EVIDENCE)
+
+- **Production:** `LivePositionProtectionService.closePaper` handles TAKE_PROFIT, STOP_LOSS, PROFIT_LOCK_HARD_EXIT, PROFIT_LOCK_EXIT and normal tick-driven exits (`:167,178,196,214,223,238`). It saves the paper position and an audit record (`:391-412`), but **never calls** `completePositionOpportunity`. The only callers are `PaperTradingService.java:475,512`, which handle signal-driven exits.
+- **Replay:** after a tick-driven exit, Replay does call it (`ShadowProductionReplayService.java:155`).
+- **Effect:**
+  - `completePositionOpportunity` only touches opportunities that are BUILDING, WEAKENING, BLOCKED or CONFIRMED.
+  - An executed opportunity such as #36481 is probably already `EXECUTED`, so the gap may change nothing in trade 143's case.
+  - It would matter for scout or add opportunities that are still building while the position is open.
+- This is unproven for trade 143 until DBQ-CLAUDE-I4-003 shows the status history.
+
+### I4-F04: Boundary race, Replay reachability and population effect (PROJECT EVIDENCE + AGENT INFERENCE)
+
+**How Replay's lookup works:**
+- Replay execution loads the whole signal timeline up front, stamps every signal with its candle close time, and sorts them with 1h first, then 5m, then 1m (`ShadowProductionReplayService.java:68-72`, `ExecutionReplayScope.open :40-44`).
+- Lookups use `!generatedAt.isAfter(ref)`, so a signal with the same timestamp is included (`ExecutionReplayScope.java:106-120`).
+
+**Trade 143 in Replay:**
+- The 1m `evaluateBuy` would see the new WATCH 5m, which closed at the same time.
+- SETUP_TIMEFRAME_ATR would then reject at `:1486`.
+- The entry most likely **cannot** be reproduced. This upgrades I3-F03 to a code-level proof.
+
+**Trade 158 in Replay:**
+- The 5m wake-up (`evaluateConfirmedSetupWakeup`, `:397-457`; Replay call at `ShadowProductionReplayService.java:258-268`) looks up the 1m at the same timestamp, age 0 s (limit 45 s, `:71`).
+- **Reproducible.**
+- In Production, the 1m #165412 was generated 21 ms *before* the 5m #165415 (I3-002), so both paths reach the same 1m.
+- I retract the iteration-3 wording "triggered by a fresh 5m … matched". The correct basis is this code path.
+
+**How the race affected entries (I3-004, 40 entries in total):**
+
+Some routes need a bullish 5m to proceed. Where the old 5m was bullish, the newly closed 5m was not, and the new one was saved **before** the fill:
+
+| Wallet trade | Symbol | Route | Change in 5m | Result (USDT) | Would the new 5m have blocked it? |
+|---|---|---|---|---|---|
+| #255 | ONG | SETUP_TIMEFRAME_ATR | STRONG_BUY → WATCH | +0.032 | Yes (`:1486`) |
+| #358 (trade 143) | EGLD | SETUP_TIMEFRAME_ATR | BUY → WATCH | −0.037 | Yes (`:1486`) |
+| #305 | PEPE | IMMEDIATE_VALIDATION | BUY → WATCH | −0.698 | Uncertain: the profile would change |
+| #42 | EDU | ACCUMULATED_EVIDENCE | BUY → WATCH | −0.518 | Uncertain: depends on FIX-119 inputs |
+
+- For the two certain cases the net is about −0.005 USDT. The two uncertain cases total −1.216 USDT, but proving them needs a Replay run.
+- **Correction to iteration 3:** the race also works in the other direction. #371 XLM and #435 TAO show SETUP_TIMEFRAME_ATR with an old 5m of WATCH or NEUTRAL. These can only have come from the 5m-triggered `evaluateSetupTimeframeWakeup` (`:291-359`), which uses the new bullish 5m directly.
+- Trade 143 could not have come through that wake-up path, because its new 5m (#159407) was WATCH and the wake-up needs a bullish trigger (`:295`). So trade 143 entered through 1m `evaluateBuy`, which is confirmed.
+
+### I4-F05: Trades 137 and 182 used the weakest direct-BUY authority; trade 182 entered at the quality floor (DESIGN INVERSION; PROJECT EVIDENCE)
+
+- **Route:** `validateBuy` → FIX-11G `BALANCED_NEUTRAL_5M_WATCH_1H` (`TradeExecutionValidationService.java:263-284`). Conditions:
+  - the 1m final entry is allowed
+  - Entry Quality ≥ 50 (`:49`)
+  - BTC is not in conflict
+  - no confidence threshold
+- **Trade 182** entered at Entry Quality **50**, which is "LATE_ENTRY" (`ExecutionIntelligenceService.java:1018-1022`; I2-003). **Trade 137** entered at 58, "ACCEPTABLE".
+
+**How this compares with the stronger profiles:**
+
+| Profile | Higher-timeframe inputs | Entry requirement | Source |
+|---|---|---|---|
+| FIX-112B (`BALANCED_NEUTRAL_5M`) | 5m NEUTRAL, 1h bullish | Entry Quality ≥ 70 **and** confidence ≥ 72 | `:234-238` |
+| FIX-041 (`BALANCED_EARLY`) | 5m WATCH, 1h WATCH | Blocked when LATE_ENTRY | `ExecutionIntelligenceService.java:672-684` |
+| FIX-11G (`BALANCED_NEUTRAL_5M_WATCH_1H`) | 5m NEUTRAL, 1h WATCH (weaker than both above) | Allowed when LATE_ENTRY (≥ 50), no confidence check | `:263-284` |
+
+- The weakest authority is the easiest to pass.
+- This is the coded intent ("Do NOT add a second confidence threshold", `:256-257`), so it is **not** a code defect. It is a strategy inconsistency and is one of the routes behind two of the six losses.
+
+### I4-F06: Trade 162 escaped FIX-119 on a single BUY (DESIGN WEAKNESS; PROJECT EVIDENCE)
+
+- **Entry inputs:** ACCUMULATED_EVIDENCE, "1 BUY, 9 WATCH", Entry Quality 50 (LATE_ENTRY), 5m WATCH, 1h WATCH, higher-timeframe authority BALANCED_EARLY (I2-003).
+- **Why the guard did not apply:** FIX-119 defers a late entry only when `buyCount == 0` **and** the 5m is not bullish (`ExecutionIntelligenceService.java:1275-1280`). One BUY anywhere in the 30-minute window turns the guard off.
+- **FIX-041 does not apply either:** that block only covers the direct route (`:672`), and the comment at `:668-670` says the exemption is deliberate.
+- **Missing evidence:** when that BUY occurred and whether it was itself stale (DBQ-CLAUDE-I4-005).
+
+### I4-F07: No reward/risk floor on the routes these trades used (DESIGN WEAKNESS; PROJECT EVIDENCE)
+
+- `applyInitialEntryQualityGuard` blocks only when the score is below 50 and otherwise only caps position size (`:1171-1223`). It never reads `rewardRisk()`.
+- R/R minimums exist only on the probe, transition, retracement, breakout and deferred routes (`:1055,1098,1128,1397,1455,1539,1631`).
+- All six trades entered through IMMEDIATE_VALIDATION, SETUP_TIMEFRAME_ATR, SETUP_CONFIRMATION_WAKEUP or ACCUMULATED_EVIDENCE. Their R/R ranged from 0.33 to 0.74 (my iteration 1–2 figures). Trade 143's R/R has not been computed yet.
+
+**Correction to iteration 3 ("TP below fees"):**
+- The paper wallet charges **zero fees** (`fee_usdt = 0` on every row in I1-004), so fees caused none of these losses.
+- My point was that the target would not cover real exchange fees. That is AGENT INFERENCE based on the commonly cited Binance 0.1% fee per side, which I did not re-verify this iteration.
+
+### I4-F08: FIX-154 is deployed in the decision path, contradicting project docs (PROJECT EVIDENCE: DBQ-CLAUDE-I3-005)
+
+- Flyway shows V107 `fix 154 trusted higher timeframe buy` and V108 installed 2026-10-10 00:15:21 KSA, and V109 installed 01:52:45 KSA. All three predate every frozen trade.
+- In the current tree, `validateBuy` and `validateBuyContext` call `HigherTimeframeBuyAssessmentService.assess` (`TradeExecutionValidationService.java:93-98,145-150`) and write `buy_htf_assessment_audit` (`BuyHtfAssessmentAuditStore.java:55-72`).
+- AGENTS.md calls FIX-154 "not-yet-implemented". `claude-docs/ARCHITECTURE.md:19` and `claude-docs/TRADING_RULES.md:124` say "pending, not implemented".
+- I am reporting this contradiction as required. The migrations prove the schema was applied, but not which code build ran on 10-11/12. The audit table is the decisive evidence (DBQ-CLAUDE-I4-001).
+- FIX-154 does not change the I3-F05 conclusion: `assess` vetoes only on the **final** 5m decision (`HigherTimeframeBuyAssessmentService.java:22`), so trade 182's STRONG_SELL demoted to NEUTRAL still passes.
+
+---
+
+## Route summary per trade
+
+| ID | Entry route (code) | Higher-timeframe authority | 5m actually used | Followed code? | Classification |
+|---|---|---|---|---|---|
+| 137 | IMMEDIATE_VALIDATION → FIX-11G (`TEVS:263`) | 5m NEUTRAL / 1h WATCH | #156721 (generated 17 ms before the 1m) | Yes | Design inversion (I4-F05); reward/risk 0.64 |
+| 143 | `evaluateBuy` → SETUP_TIMEFRAME_ATR (`EIS:628,1472`) | 5m BUY #159285, re-used | Outdated (I3-F02) | No (A), plus candidate defect B | **Logic defect at entry**; valid tick-driven exit |
+| 158 | 5m wake-up FRESH_5M_CONFIRMATION (`EIS:397`) | BALANCED_STRONG, capped at 25% | #165415, the trigger | Yes | Reward/risk 0.33 weakness (I4-F07) |
+| 162 | ACCUMULATED_EVIDENCE (`EIS:777`) | BALANCED_EARLY | #167616 WATCH | Yes | FIX-119 escaped on 1 BUY (I4-F06); reward/risk 0.44 |
+| 172 | IMMEDIATE_VALIDATION → BALANCED_STRONG (`TEVS:306`) | 5m BUY (`fea`=0) / 1h NEUTRAL | #171559 | Yes | Design inconsistency (I3-F05); reward/risk 0.74 |
+| 182 | IMMEDIATE_VALIDATION → FIX-11G | 5m NEUTRAL (originally STRONG_SELL) / 1h WATCH | #176655 | Yes | Inversion at Entry Quality 50 (I4-F05); reward/risk 0.48 |
+
+`EIS` = `ExecutionIntelligenceService.java`, `TEVS` = `TradeExecutionValidationService.java`.
+
+---
+
+## EVIDENCE INDEX
+
+- **DB:** I1-004; I2-003; I3-001, 002, 003, 004, 005.
+- **Code:**
+  - `ExecutionIntelligenceService.java:47,66-104,229,284-359,397-457,466-786,812-840,1018-1022,1150-1223,1257-1313,1472-1514,2241-2317,2455-2462,2601-2618`
+  - `StopLossEvidenceService.java:43-114`
+  - `StopLossEvidencePolicy.java:12-23`
+  - `StopLossEvidenceStore.java:37-46`
+  - `ExecutionReplayScope.java:37-59,99-120`
+  - `ShadowProductionReplayService.java:68-72,118-160,186-189,244-268`
+  - `RegressionTestWorker.java:550-620,787-793`
+  - `LivePositionProtectionService.java:165-249,391-412`
+  - `PaperTradingService.java:292-355,475,512`
+  - `TradeExecutionValidationService.java:49,62-163,218-319`
+  - `HigherTimeframeBuyAssessmentService.java:15-51`
+  - `BuyHtfAssessmentAuditStore.java:40-78`
+- **Docs:** AGENTS.md (FIX-154 section); `claude-docs/ARCHITECTURE.md:19`; `claude-docs/TRADING_RULES.md:124`.
+
+## UNKNOWNS
+
+- **U4-01:** Where trade 143's evidence score of 8 came from, and whether those signals predate the 22:39:41 exit (I4-002).
+- **U4-02:** Status history of opportunity #36481 after the tick-driven exit (I4-003).
+- **U4-03:** Whether FIX-154 code actually ran for these entries (I4-001).
+- **U4-04:** The single BUY behind trade 162 (I4-005).
+- **U4-05:** The counterfactual P&L for #305 and #42. This needs a Replay run, which is outside analysis-only scope.
+- **U4-06:** No log access this iteration (same as I3-F07). Still unsearched: the FIX-11G grant lines, `[FIX-122]` lines for EGLD, and `Live PROFIT_LOCK exit` for position 171.
+- **U4-07:** Trade 143's reward/risk, from the stored `stop_loss` and `take_profit` of #159408 (I4-006).
+
+---
+
+## DB_REQUEST blocks
+
+Literal time filters below are in the session's display zone (KSA). Rows are bounded.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: Prove which 5m/1h signals FIX-154 actually used per entry, and that FIX-154 ran on 10-11/12 (I4-F08, U4-03).
+SQL:
+SELECT a.id, a.reference_signal_id, a.evaluation_path, a.evaluated_at, UNIX_TIMESTAMP(a.evaluated_at) AS eval_epoch, a.five_minute_signal_id, a.five_minute_raw_decision, a.five_minute_effective_decision, a.five_minute_age_seconds, a.five_minute_data_quality_valid, a.one_hour_signal_id, a.one_hour_raw_decision, a.one_hour_effective_decision, a.one_hour_data_quality_valid, a.assessment_band, a.max_initial_percent, a.legacy_veto_result, a.final_result, LEFT(a.final_reason, 300) AS final_reason FROM buy_htf_assessment_audit a WHERE a.reference_signal_id IN (156723,159408,165412,165415,167668,171589,176710) ORDER BY a.reference_signal_id, a.evaluated_at LIMIT 50
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: EGLD 1m evidence window for trade 143 (I4-F02). Which signals generated before the 22:39:41.052 exit fed evidence score 8?
+SQL:
+SELECT s.id, s.candle_open_time, s.generated_at, s.decision, s.original_decision, s.total_score, s.confidence_score, s.final_entry_allowed, s.atr_immediate_entry_allowed, s.latest_price, s.stop_loss, s.take_profit FROM trade_signal s WHERE s.symbol = 'EGLDUSDT' AND s.interval_code = '1m' AND s.generated_at BETWEEN '2026-10-11 22:09:00' AND '2026-10-11 22:40:02' ORDER BY s.generated_at LIMIT 40
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: Opportunity lifecycle around position 171 exit and position 143 entry (I4-F02/F03). Was #36481 ever COMPLETED?
+SQL:
+SELECT o.id, o.status, o.started_at, o.last_evidence_at, o.latest_signal_id, o.evidence_score, o.opportunity_health, o.execution_source, o.decision_code, o.executed_at, o.updated_at FROM execution_opportunity o WHERE o.symbol = 'EGLDUSDT' AND (o.started_at BETWEEN '2026-10-11 22:00:00' AND '2026-10-11 22:45:00' OR o.updated_at BETWEEN '2026-10-11 22:30:00' AND '2026-10-11 22:45:00') ORDER BY o.started_at LIMIT 20
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: FIX-122 audit for 143 and 162 entries (expect NOT_APPLICABLE status, i.e. no stop boundary) and position 171 entry/exit legs.
+SQL:
+SELECT f.id, f.symbol, f.signal_id, f.evaluated_at, f.stage, LEFT(f.payload, 900) AS payload FROM fix122_evaluation f WHERE f.test_run_id IS NULL AND ((f.symbol = 'EGLDUSDT' AND f.evaluated_at BETWEEN '2026-10-11 22:35:00' AND '2026-10-11 22:40:05') OR (f.symbol = 'DOGEUSDT' AND f.evaluated_at BETWEEN '2026-10-12 04:01:30' AND '2026-10-12 04:02:06')) ORDER BY f.evaluated_at LIMIT 40
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-005
+Purpose: DOGE 1m evidence window for trade 162 (I4-F06). Locate the single BUY and any DOGE exit in the 30-minute window.
+SQL:
+SELECT 'SIG' AS kind, s.id, s.generated_at AS t, s.decision AS d, s.original_decision AS od, s.total_score, s.confidence_score, NULL AS reason FROM trade_signal s WHERE s.symbol = 'DOGEUSDT' AND s.interval_code = '1m' AND s.generated_at BETWEEN '2026-10-12 03:32:00' AND '2026-10-12 04:02:03' UNION ALL SELECT 'WT', w.id, w.executed_at, w.side, NULL, NULL, NULL, w.execution_reason FROM wallet_trade w WHERE w.symbol = 'DOGEUSDT' AND w.executed_at BETWEEN '2026-10-12 03:00:00' AND '2026-10-12 04:02:05' ORDER BY t LIMIT 60
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-006
+Purpose: Risk geometry for trade 143 (U4-07) and the 5m/1m ATR basis behind the Entry Quality mismatch (I4-F02 side note).
+SQL:
+SELECT s.id, s.interval_code, s.latest_price, s.stop_loss, s.take_profit, s.atr_at_signal, s.atr_recommended_position_percent, s.atr_immediate_entry_allowed, s.final_entry_allowed FROM trade_signal s WHERE s.id IN (159285, 159407, 159408, 159321) ORDER BY s.id
+### END_DB_REQUEST
+
+---
+
+## Self-review (iteration 4)
+
+- **Frozen set:** unchanged (182, 172, 162, 158, 143, 137). No substitution.
+- **Time:** the basis is confirmed by I3-001. All KSA values are labelled; UTC = displayed − 3 h. The `datetime` columns are raw UTC and flagged as such.
+- **Corrections to earlier iterations:**
+  - Trade 158 is reproducible in Replay; the basis is now a code path, not an assumption.
+  - Fees were zero in paper trading, so "TP below fees" is restated as a hypothetical about real exchange fees.
+  - #371 and #435 were 5m-triggered wake-ups, not 1m route entries.
+- **Claim levels:**
+  - Defect A (trade 143) is **confirmed**.
+  - Defect B (trade 143) and the parity gap (I4-F03) are **candidates** pending I4-002 and I4-003.
+  - Trades 137, 158, 162, 172 and 182 have **no defect claimed**; they are design-level findings.
+- **Contradictions reported, not silently changed:** the display time zone rule (I4-F01) and the FIX-154 status (I4-F08).
+- **Plan for iteration 5:** close U4-01 to U4-04 using the I4 results. Then finalise trade 143 into one defect or two, and rank the design weaknesses (I4-F05/F06/F07) by how many of the six losses each one explains.

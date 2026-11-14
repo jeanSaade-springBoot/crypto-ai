@@ -1,0 +1,214 @@
+# Iteration 6: root causes and research for the six frozen trades (Claude)
+
+I found three new things this iteration. One changes my earlier conclusions.
+
+1. **The 1h-SELL exit did not cause most of the HTF losses.** Trades 91 and 96 never rose above their entry price, and 78 rose by one tick. The exit was only how these losses ended; the root cause is entries with no real edge. Whether the early exit hurt or helped depends on what happened afterwards, which DBQ-CLAUDE-I6-004 checks.
+2. **A new confirmed defect: the startup candle import closes open live candles without recording any analysis outcome.** This explains why the XLM 5m 17:55 and 1h 17:00 candles have no signal, outcome or audit row. It is also strong evidence that the 18:00 KSA outage on 2026-10-10 was an application restart, not a WebSocket disconnect.
+3. **Paper P&L ignores exchange fees.** At Binance's normal 0.1% per side, every frozen trade had a net risk/reward of 0.88 or less. Trade 101's profit-lock floor is below the fee cost, so exiting at the floor still loses money after fees.
+
+This was analysis only: no code, config, DB, git or deploy changes. Plan mode was on, but I had no Write or ExitPlanMode tool, so this text is the whole deliverable. I did not read the CODEX folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log or the other agent's memory.
+
+**Time labels:** the DB displays timestamps in KSA (proved by DBQ-CLAUDE-I3-001). Below, "KSA" means the time as the DB shows it, and **UTC = KSA − 3 h**.
+
+## FINDINGS
+
+**G0. Results of the iteration-5 queries (PROJECT EVIDENCE)**
+
+*Entry stage (I5-001, 121 trades since 2026-10-03, total −2.73):*
+
+| Entry stage / 1m decision | Trades | Losers | P&L |
+|---|---|---|---|
+| SETUP_CONFIRMATION_WAKEUP (all) | 32 | 21 (66%) | −0.50 |
+| …of which on a 1m WATCH | 28 | 17 | −0.24 |
+| IMMEDIATE_VALIDATION on a 1m BUY | 25 | 13 | −1.11 |
+| CONFIRMATION_ADD on a 1m WATCH | 10 | 8 | −1.10 |
+| CONFIRMATION_ADD on a 1m BUY | 8 | 3 | **+1.55** |
+| ACCUMULATED_EVIDENCE on a 1m WATCH | 22 | 9 | −0.53 |
+
+- Wake-up entries lose most often, but they are small (capped at 25%), so their total loss is small.
+- Adding to a position on a 1m WATCH is clearly worse than adding on a 1m BUY.
+
+*Raw 1h decision at entry (I5-002):*
+
+| 1h decision | Trades | Losers | P&L |
+|---|---|---|---|
+| SELL | 7 | 5 | −0.16 |
+| BUY | 7 | 6 | **−1.04** |
+| NEUTRAL | 50 | 25 | −1.58 |
+| WATCH | 53 | 27 | −0.96 |
+
+- Entering against a 1h SELL is **not** shown to be the worst bucket; a 1h BUY did worse.
+- So the 1h SELL soft conflict alone does not explain the losses (this weakens E3/R2). Both queries use an approximate symbol + 5 s join.
+
+*Trade 82 (I5-004):*
+- Both pieces of evidence behind the entry came from before the outage.
+- The 2 accumulated BUYs were signals 115479 and 115502 (1m candles 17:51 and 17:52 KSA, created 17:52:01 and 17:53:01).
+- The 0.1986 rejection zone came from 115502 and 115523 (17:52–17:53).
+- The entry at 18:03:02 therefore used evidence 10–11 minutes old that spanned a 3-minute feed gap. No rule checks whether accumulated evidence spans an outage. This is a gap, not a breach.
+
+*Trades 96 and 104 (I5-003; outcome data, used to judge the entry):*
+- **96 (PEPE, opened 22:28:04 KSA):**
+  - From 22:18 to 22:30, PEPE traded only at 4.05e-6 and 4.06e-6. One tick is 0.246% of the price.
+  - The "breakout" to 4.06 had already printed at 22:24, 22:25 and 22:27. The fill at 4.06 was the top of a two-tick range.
+  - The highest price after entry stayed at 4.06 (I3-006).
+  - **The BREAKOUT label, with an entry-quality score of 100, came from a single tick increment.**
+- **104 (ENA, opened 05:35:07 KSA):**
+  - The 05:33 and 05:34 candles rose from 0.2231 to 0.2248 (+0.76%) on 25–40× normal volume. That is about 4 times the 1m ATR of 0.18%.
+  - The peak of 0.2254 came in the next candle, and the trade exited within 5 minutes.
+  - It bought right after a volume spike, a classic chase. The 1m signal's own `atrImmediateEntryAllowed` flag was 1, so that check did not catch a 2-candle impulse.
+
+**G1. Correction to E2: the wake-up path does check 1m ATR (PROJECT EVIDENCE: `ExecutionIntelligenceService.java:427,439,631-633`)**
+- `current1m.isAtrImmediateEntryAllowed()` is required at `:427`.
+- Only the entry-quality *extension score* uses the 5m ATR (`:439`), and the comment at `:631-633` shows that is deliberate.
+- So in E2, "ATR extension is measured only on 5m" was wrong. The rest of E2 stands: the wake-up path has no minimum risk/reward, no FIX-064 price-action check and no late-entry deferral.
+- Trade 104's direct BUY was rejected for context reasons, not as a chase (audit 1558: `BALANCED_CONFIRMATION_INSUFFICIENT`, 5m WATCH). Wake-up admitted it about 1 s later when 5m signal 133251 turned BUY. That is the intended route, not a bypass.
+
+**G2. New confirmed defect: the startup import closes live candles with no analysis outcome (PROJECT EVIDENCE: I5-005, `CandleRepository.java:99-106,173-188`, `MarketDataService.java:31-56`, `MarketDataBootstrapService.java:49-69,105-110`)**
+
+*What the data shows (I5-005):*
+- XLM 5m 17:55 and XLM 1h 17:00 (KSA, 2026-10-10) are `closed=1` with `ingestion_source=RUNTIME`. They were last updated at 18:02:10.2 and 18:02:12.1 KSA (15:02 UTC).
+- Neither has a `candle_analysis_outcome` row or a `local_reconciliation_audit` row.
+
+*Which code produces exactly this:*
+- `MarketDataService.importCandles` calls `CandleRepository.upsert(..., closed=true)` with provenance `BACKFILL`.
+- Its `ON DUPLICATE KEY UPDATE` closes an existing `closed=0` row (`closed=GREATEST(...)`). It keeps `ingestion_source` and the token unchanged, so the row stays `RUNTIME` with no token.
+- That gives no token, no dispatch, no outcome and no audit.
+- Authoritative reconciliation cannot fix the row afterwards, because `finalizeExistingOpenFromAuthoritative` requires `closed=0` (`:141`).
+
+*Who calls it:*
+- `MarketDataBootstrapService.run` (an ApplicationRunner, so it runs at startup), dynamic coin activation, and the manual `/import` endpoint.
+- In OFF mode it logs `[FIX-153][BACKFILL_IMPORT_RETURNED] analysis=false` and stops there.
+
+*Rules it conflicts with:*
+- AGENTS.md: "Each candle/work path must write one durable terminal analysis outcome."
+- AGENTS.md: backfill "must never use a duplicate-key update that could finalise or alter a live row."
+- Its own Javadoc ("Existing candles are preserved and only missing Binance rows are inserted"). The comment at `CandleRepository.java:175-176` shows the finalising was deliberate. That design conflicts with the newer AGENTS.md direction.
+
+*Impact:*
+- The candle data is valid: REST is authoritative, and in-progress candles are skipped (`:45`).
+- The defect is the missing outcome and audit. It is invisible to health checks.
+- **It did not cause trade 82's loss.** Even a correct recovery is non-live by design (`SKIPPED_NOT_LIVE`), so no signal would have existed either way.
+
+**G3. The 18:00 KSA outage was most likely an application restart, not a Binance disconnect (AGENT INFERENCE, strongly supported; this replaces R7 for this event)**
+- Only startup bootstrap, coin activation or a manual import can produce the G2 fingerprint. Of these, startup runs for every symbol and interval in turn.
+- The timing fits a restart:
+  - runtime writes stopped at 17:59:01;
+  - the import closed XLM rows at 18:02:10–12;
+  - runtime 5m 18:00 rows were created at 18:02:21–26 (R5);
+  - the bootstrap runner finishes before the WebSocket path writes.
+- The recovery bursts at irregular times (I4-001) also fit restarts or deploys better than a fixed 24-hour disconnect.
+- **Not proved:** I have no log evidence. The archives are gzipped. DBQ-CLAUDE-I6-001/002/003 test this.
+
+**G4. Root-cause correction for the HTF_SELL exits 78, 91, 96 and 104 (PROJECT EVIDENCE plus AGENT INFERENCE)**
+- Highest gain after entry (I3-006): 91 = 0 ticks, 96 = 0, 78 = +1, 104 = +6 of the 13 needed for the target.
+- These positions had no favourable move. The exit read an old 1h SELL (R2). That decided *when and how* each position closed, and in three cases that was probably at a smaller loss than the stop.
+- **Revised root causes:**
+  - **78 and 91:** a weak entry. A 1m WATCH at the minimum score of 60, on a coin where one tick is 0.18–0.25%, so the stop and target are 2–4 ticks. No edge after fees (G5).
+  - **96:** a false breakout. A one-tick move inside a two-tick range was scored as BREAKOUT with entry quality 100 (G0).
+  - **104:** chasing a volume spike after a +0.76% two-candle move (G0).
+- R2 (the exit ignores signal age and the entry's soft-conflict decision) is still a **confirmed design inconsistency**. Whether it lost or saved money is open until I6-004 returns.
+- I am downgrading R2 from "cause of the losses" to "exit mechanism, design inconsistency".
+
+**G5. Paper P&L is fee-blind, and net risk/reward is far below gross (PROJECT EVIDENCE: `WalletAutoExecutionService.java:173,260,349,443,540,653` all `.feeUsdt(ZERO)`; arithmetic plus EXTERNAL RESEARCH on fees and tick sizes)**
+
+*External facts:*
+- Binance exchangeInfo gives a tick of 0.00000001 for PEPEUSDT and SHIBUSDT, and 0.0001 for XLMUSDT, ENAUSDT and AEROUSDT.
+- The regular Binance spot fee is 0.10% maker and taker, or 0.075% when paid in BNB. A round trip costs about 0.20%.
+
+*Net figures with the stop and target rounded to ticks:*
+
+| Trade | Target, gross → net | Stop, gross → net | Net risk/reward |
+|---|---|---|---|
+| 78 | 0.74% → 0.54% | 0.99% → 1.19% | **0.45** |
+| 91 | 0.36% → 0.16% | 0.55% → 0.75% | **0.22** |
+| 96 | 0.74% → 0.54% | 0.74% → 0.94% | 0.57 |
+| 104 | 0.58% → 0.38% | 0.53% → 0.73% | 0.52 |
+| 82 | 0.25% → 0.05% | 0.50% → 0.70% | **0.07** |
+| 101 | 0.87% → 0.67% | 0.57% → 0.77% | 0.88 |
+
+- **Trade 101:** the hard floor at entry × 1.0005 (+0.05%, R9) is below the 0.20% fee cost. An exit exactly at the floor is still a net loss of about 0.15%. This strengthens T2/R9.
+- This confirms the R9 inference: `realized_pnl` excludes fees, so stored paper results overstate real performance.
+- **Classification:** a design gap in how risk is modelled. It inflates every risk/reward and P&L figure. It is not a code bug against the current rules.
+
+**Classification after iteration 6**
+
+| Trade | Root cause | Exit mechanism | Other factors |
+|---|---|---|---|
+| 78 | Weak entry: 1m WATCH at 60; net R/R 0.45; 1-tick worse fill | HTF_SELL exit reading an old 1h SELL (R2 inconsistency) | Tick-size geometry, fees |
+| 91 | Weak entry: 1m WATCH at 60; net R/R 0.22; never in profit | R2 | Tick-size geometry, fees |
+| 96 | False breakout: 1-tick move in a 2-tick range scored 100 | R2 | Tick-size geometry |
+| 104 | Chased a spike: +0.76% / about 4×ATR in 2 candles on 25–40× volume | R2 | — |
+| 101 | TP-extension rebase defect (T2) | PROFIT_LOCK_HARD_EXIT at a floor below fees | — |
+| 82 | Valid loss under the rules; poor entry flagged at the time (E5); net R/R 0.07; evidence from before the outage | SELL_CONFIRMED | Restart (G3); G2 defect present but not causal |
+
+## EVIDENCE
+- **DB:** DBQ-CLAUDE-I5-001 to I5-005 (new); I1-003, I1-006, I2-004, I2-008, I3-006, I4-003 and I4-004; DBQ-FTS-005.
+- **Code:**
+  - `CandleRepository.java:99-106,132-145,169-213`
+  - `MarketDataService.java:31-56`
+  - `MarketDataBootstrapService.java:21-25,49-69,94-110`
+  - `ExecutionIntelligenceService.java:397-457,631-633`
+  - `WalletAutoExecutionService.java:173,260`
+  - `WalletService.java:554-581`
+- **Logs:** none. The archives `logs/crypto-ai-trader.2026-10-10.*.log.gz` cannot be searched with my tools.
+- **External research:** Binance exchangeInfo for the five symbols (live GET), and spot fee schedule guides (third-party).
+
+## UNKNOWNS
+- **U1:** Proof of the restart (G3). Needs I6-001/002/003 plus a log search by the coordinator, roughly 14:58–15:04 UTC on 2026-10-10, for `Started`, `Historical bootstrap completed: symbol=XLMUSDT`, `[FIX-153][BACKFILL_IMPORT_RETURNED]` and shutdown lines.
+- **U2:** Whether the HTF_SELL exits saved or lost money compared with the stop and target (I6-004).
+- **U3:** The total effect of fees across all trades (I6-005).
+- **U4:** Why the 1m `atrImmediateEntryAllowed` flag allowed trade 104's 4×ATR impulse. I have not traced the ATR permission formula.
+- **U5:** Replay reproduction. Not run, because running Replay creates state.
+- **U6:** Whether the deployed binary matches the working tree, which has uncommitted changes.
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: G2/G3. Find every candle the startup import closed around the outage: closed RUNTIME rows with no token and no analysis outcome, updated 18:01–18:04 KSA on 2026-10-10. Shows how far the defect reached and the order symbols were processed in (bootstrap fingerprint).
+SQL:
+SELECT c.symbol, c.interval_code, c.open_time, c.ingestion_source, c.close_transition_token IS NULL AS no_token, c.created_at, c.updated_at FROM candle c WHERE c.closed=1 AND c.updated_at BETWEEN '2026-10-10 18:01:00' AND '2026-10-10 18:04:00' AND NOT EXISTS (SELECT 1 FROM candle_analysis_outcome o WHERE o.symbol=c.symbol AND o.interval_code=c.interval_code AND o.candle_open_time=c.open_time) ORDER BY c.updated_at LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: G2/G3 across all trades. Count, by minute, the closed RUNTIME candles with no close token since 2026-10-04 (the fingerprint of the import closing a live row). Bursts mark restarts. Aggregate only; times shown in KSA.
+SQL:
+SELECT DATE(c.updated_at) AS d_ksa, HOUR(c.updated_at) AS h_ksa, MINUTE(c.updated_at) AS m_ksa, COUNT(*) AS n, COUNT(DISTINCT c.symbol) AS symbols FROM candle c WHERE c.closed=1 AND c.ingestion_source='RUNTIME' AND c.close_transition_token IS NULL AND c.created_at >= '2026-10-04 00:00:00' GROUP BY d_ksa, h_ksa, m_ksa ORDER BY d_ksa, h_ksa, m_ksa LIMIT 300;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: G3. Look for deploy markers: Flyway migrations applied since 2026-10-09, to compare with the restart and recovery times. Times shown in KSA.
+SQL:
+SELECT installed_rank, version, description, installed_on, execution_time, success FROM flyway_schema_history WHERE installed_on >= '2026-10-09 00:00:00' ORDER BY installed_rank LIMIT 50;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-004
+Purpose: G4/U2. What would have happened without each exit: within 240 min after closing, did price touch the take-profit or the stop first, and what were the high and low in the first 60 min? Limited to the six frozen positions. Caveat: the stored stop_loss may be the final protected stop.
+SQL:
+SELECT p.id, p.symbol, p.closed_at, p.exit_price, p.stop_loss, p.take_profit, (SELECT MIN(c.open_time) FROM candle c WHERE c.symbol=p.symbol AND c.interval_code='1m' AND c.open_time >= p.closed_at - INTERVAL 1 MINUTE AND c.open_time < p.closed_at + INTERVAL 240 MINUTE AND c.high_price >= p.take_profit) AS first_tp_touch, (SELECT MIN(c.open_time) FROM candle c WHERE c.symbol=p.symbol AND c.interval_code='1m' AND c.open_time >= p.closed_at - INTERVAL 1 MINUTE AND c.open_time < p.closed_at + INTERVAL 240 MINUTE AND c.low_price <= p.stop_loss) AS first_sl_touch, (SELECT MAX(c.high_price) FROM candle c WHERE c.symbol=p.symbol AND c.interval_code='1m' AND c.open_time >= p.closed_at AND c.open_time < p.closed_at + INTERVAL 60 MINUTE) AS max_high_60m, (SELECT MIN(c.low_price) FROM candle c WHERE c.symbol=p.symbol AND c.interval_code='1m' AND c.open_time >= p.closed_at AND c.open_time < p.closed_at + INTERVAL 60 MINUTE) AS min_low_60m FROM paper_position p WHERE p.id IN (104,101,96,91,82,78) ORDER BY p.id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-005
+Purpose: G5/U3. Effect of fees across all trades: P&L before fees against estimated P&L after a 0.1% fee on each side, by close reason, since 2026-10-03. Aggregate only.
+SQL:
+SELECT close_reason, COUNT(*) AS n, SUM(realized_pnl<0) AS losers_gross, ROUND(SUM(realized_pnl),6) AS pnl_gross, ROUND(SUM(0.001*quantity*(entry_price+exit_price)),6) AS est_fees, SUM(realized_pnl - 0.001*quantity*(entry_price+exit_price) < 0) AS losers_net FROM paper_position WHERE status='CLOSED' AND closed_at >= '2026-10-03 00:00:00' AND exit_price IS NOT NULL GROUP BY close_reason ORDER BY close_reason LIMIT 50;
+### END_DB_REQUEST
+
+**Labels:**
+- **PROJECT EVIDENCE:** G0, G1, the code and data in G2, the zero-fee code in G5, and the data in G4.
+- **AGENT INFERENCE:**
+  - the restart explanation (G3);
+  - the reframed root causes in G4, pending I6-004;
+  - "false breakout" and "chased a spike" as descriptions of 96 and 104;
+  - applying the 0.1% fee to a paper system (G5).
+- **EXTERNAL RESEARCH:** tick sizes from Binance exchangeInfo; the 0.1% / 0.075% spot fee schedule.
+
+Sources:
+- [Binance exchangeInfo API (PEPE, SHIB, ENA, XLM, AERO)](https://api.binance.com/api/v3/exchangeInfo?symbols=["PEPEUSDT","SHIBUSDT","ENAUSDT","XLMUSDT","AEROUSDT"])
+- [CryptoPotato – Binance Trading Fees Explained](https://cryptopotato.com/binance-fees/)
+- [Unger Academy – Binance Fees Explained](https://ungeracademy.com/?p=6767)
+- [Analytics Insight – Binance Exchange fees](https://www.analyticsinsight.net/cryptocurrency-analytics-insight/binance-exchange-how-it-works-fees-trading-risks)

@@ -1,0 +1,214 @@
+# Iteration 4 of 8: code and trade route (Claude, self-review only)
+
+The main result of this iteration is a time-basis problem. The database query results appear to show KSA time, not UTC. If that is confirmed, every "UTC → KSA" label I wrote in iterations 1–3 is 3 hours too late.
+
+The route tracing also found two entry routes that skip the checks the direct BUY route applies. Trade 143 came through one of them, and trade 162 through the other.
+
+No code, config, database writes, git or deploy. I didn't read the Codex folders, LIVE_TEAM_STATUS or LIVE_EVENTS. Note: plan mode was on, and no plan-file write or ExitPlanMode tool was available, so this response is the whole deliverable.
+
+## FINDINGS
+
+**F31. The study's database timestamps appear to be shown in KSA, not UTC. Every earlier "UTC → KSA" label is likely 3 h too late.** (PROJECT EVIDENCE; root cause is AGENT INFERENCE until DBQ-CLAUDE-I4-001/002)
+
+- **Where the true UTC comes from:** each wallet BUY message contains `priceObservedAt=<Instant>Z`. The app writes this from `rs.getTimestamp("observed_at").toInstant()` (`PaperTradingService.java:383`, `MarketPriceEventService.java:133-145`).
+  - The app's connection is pinned to UTC: `connectionTimeZone=UTC`, `forceConnectionTimeZoneToSession`, `preserveInstants`, and `SET time_zone='+00:00'` (`application.yml:13-35`).
+- **What the query results show:** the same column, `wallet_trade.execution_price_observed_at` (DBQ-CLAUDE-I1-003), is exactly 3 h later in all six trades:
+
+| Trade | Message (true UTC) | Query result |
+|---|---|---|
+| 137 | `17:55:00.032Z` | 20:55:00.032 |
+| 143 | `19:40:01.028Z` | 22:40:01.028 |
+| 158 | `23:35:00.328Z` | 02:35:00.328 |
+| 162 | `01:02:02.580Z` | 04:02:02.580 |
+| 172 | `03:36:01.457Z` | 06:36:01.457 |
+| 182 | `06:57:02.437Z` | 09:57:02.437 |
+
+- **Likely mechanism:** the time columns are `TIMESTAMP(6)` (`B105…baseline.sql:21,151,187-188,656,1445`). MySQL shows TIMESTAMP values in the *session* time zone.
+  - The read-only query wrapper rejects `SET` (`DATABASE_INVESTIGATION_RULES.md:27`), so the query session runs on the server default.
+  - That default is most likely SYSTEM on a UTC+3 host; the local startup logs show `+03:00` offsets (`logs/fix145-startup.log:22`).
+- **What is affected:**
+  - Durations, the order of events, and millisecond races are unaffected.
+  - Every absolute label in F1, F16 and the F21/F28 tables is wrong.
+  - The iteration-3 log-request windows are 3 h too late.
+  - The rule "raw DB timestamps are UTC" in `DATABASE_INVESTIGATION_RULES.md:35` and the study prompt does not hold for this access path.
+- **Handling:** I'm reporting the contradiction rather than silently accepting either side.
+- **How times appear below:** all times are **DB-display** values. The true UTC is DB-display − 3 h (this is the instant the app itself recorded), and the true KSA is the DB-display value. Trade 137, for example, entered at 17:55:03 UTC → 20:55:03 KSA.
+
+**F32. The six trades took five different entry routes, and each matches its wallet record.** (PROJECT EVIDENCE: code and DBQ-CLAUDE-I1-003 / I3-002 / I3-003)
+
+| Trade | Route (`execution_reason`) | Code path | FIX-154 audit | Higher-timeframe authority |
+|---|---|---|---|---|
+| 137 | IMMEDIATE_VALIDATION / `BALANCED_NEUTRAL_5M_WATCH_1H` | `ExecutionIntelligenceService.java:652-710` → `TradeExecutionValidationService.java:263-284` (FIX-11G, 25%, EQ 58 ≥ 50) | yes (DIRECT_BUY, audit 1938) | 5m 156721 NEUTRAL, 1h WATCH |
+| 182 | IMMEDIATE_VALIDATION / `BALANCED_NEUTRAL_5M_WATCH_1H` | same | yes (audit 2425) | 5m 176655 NEUTRAL (masked from STRONG_SELL, F11/F24), 1h WATCH |
+| 172 | IMMEDIATE_VALIDATION / `BALANCED_STRONG` | `:652` → `TradeExecutionValidationService.java:306-308` | direct path (row not re-queried) | 5m bullish, 1h NEUTRAL |
+| 158 | SETUP_CONFIRMATION_WAKEUP | Started by the 5m signal's own processing: `signal_processing_work` 165415 → position 158, while 165412 → none. Path is `ExecutionIntelligenceService.java:397-457` | yes: SETUP_WAKEUP, audit 2086, 5m 165415 BUY, 1h 164516 NEUTRAL, BALANCED_STRONG | `current1m` = 165412 WATCH, generated 21 ms *before* the 5m |
+| 162 | ACCUMULATED_EVIDENCE | `ExecutionIntelligenceService.java:1990-2067` → `validateBuyContext` | path audited (not re-queried) | BALANCED_EARLY (5m WATCH, 1h WATCH), 1 BUY + 9 WATCH, EQ 50 **LATE_ENTRY** |
+| 143 | SETUP_TIMEFRAME_ATR | `ExecutionIntelligenceService.java:628-641`, `:1472-1514` | **none** (see F33) | 5m 159285 BUY (22:30 candle) |
+
+- These routes fully explain U14, together with F33.
+
+**F33. The SETUP_TIMEFRAME_ATR route (trade 143) skips every check `validateBuy` applies.** (PROJECT EVIDENCE: code; impact on 143 is PROJECT EVIDENCE + AGENT INFERENCE)
+
+- **What the code does:** `:628-641` returns before `validationService.validateBuy` at `:653` is reached. `setupTimeframeAtrAuthoritySignal` (`:1472-1492`) checks only three things:
+  - the 1m is not bearish;
+  - the latest 5m with `generated_at` at or before the 1m is BUY, final-allowed and ATR-immediate;
+  - the 1h is not bearish. A missing 1h is allowed.
+- **What it therefore skips:**
+  - the FIX-154 higher-timeframe assessment. DBQ-CLAUDE-I3-003 has no audit row for 159408 or 159285; the only rows in that window belong to a different reference, 159410.
+  - the FIX-112A consumed-BUY check (`TradeExecutionValidationService.java:67-79`);
+  - the required fresh 1h context.
+- **The 5m BUY was reused for a second entry:**
+  - The previous EGLD position (171) entered through the same route at 22:36:03 DB-display (19:36:03 UTC), from signal 159321.
+  - The only 5m signal generated between 22:35:01 and 22:40:01 is 159285, so both entries must have relied on it. That is AGENT INFERENCE until DBQ-CLAUDE-I4-004.
+  - Position 171 profit-locked out at 22:39:41. Trade 143 then re-entered 21 s later, 0.043 higher (3.990 → 4.033), on the same 5m authority.
+- **No re-entry cooldown exists:** a search of production `src/main/java` for `cooldown|reentry|re_entry|lastExit|recentlyClosed` finds only REST-gate, monitor and replay-service matches.
+- **The 5m signal was already visible:** 159407 (WATCH) was committed at 22:40:02.94, before 143's fill at 22:40:03.115. The route still excluded it, because it filters on `generated_at ≤ 1m.generated_at`, and 159407 was generated 2 ms later (F22).
+- **F22's mechanism is now confirmed:** the issue is the selection rule, not commit visibility.
+- **Classification:** confirmed **route-design gap**. Re-entry chasing on a consumed or stale 5m authority is a logic defect candidate for 143. Whether it is intended is a design question; the code comments say only "neutral 1m is timing-neutral".
+
+**F34. The ACCUMULATED_EVIDENCE route (162) allows a BALANCED_EARLY + LATE_ENTRY combination that the direct route blocks.** (PROJECT EVIDENCE)
+
+- The FIX-041 guard (`ExecutionIntelligenceService.java:672-684`) blocks direct BUYs that have BALANCED_EARLY authority and a LATE_ENTRY classification.
+- The comment at `:668-670` explicitly exempts accumulated evidence.
+- Trade 162 entered on exactly that combination: a 1m WATCH, authority `BALANCED_EARLY`, `Entry Quality 50/100 (LATE_ENTRY)` (wallet_trade 403).
+- **Classification:** the code does what it was written to do. A weaker signal (WATCH) gets a looser price-quality gate than a fresh BUY would. This is a candidate design inconsistency, not a defect against the coded rules.
+
+**F35. The 5m-versus-1m race decides the route in both directions.** (PROJECT EVIDENCE)
+
+- At 5m boundaries, the 1m and 5m signals run as separate analysis jobs, so which one gets the earlier `generated_at` is down to milliseconds:
+  - **137:** the 5m was 18 ms earlier, so the 5m NEUTRAL counted.
+  - **143:** the 5m was 2 ms later, so the stale 5m BUY counted.
+  - **158:** the 1m was 21 ms earlier, so the wake-up found a current 1m (`:420-428`). Had the 1m been later, the wake-up would have returned `none()` and the 1m's own direct path would have rejected a WATCH.
+- **Existing fix pattern:** FIX-141 already fixed the same class of problem for BTC context by selecting on candle time (`ExecutionReplayScope.java:122-137`).
+- **Replay:**
+  - `ExecutionReplayScope.latestAtOrBefore` uses the same `generated_at` filter as production (`:106-120`). Replay over *stored* production signals should therefore reproduce these choices.
+  - Replay that *regenerates* signals assigns its own `generated_at` (`appendSignal`, `:99-104`), so it may not reproduce the race. That part is AGENT INFERENCE.
+- This refines U7.
+
+**F36. U13, U15 and U16 are resolved: the exit delays came from the market, not from intake.** (PROJECT EVIDENCE)
+
+- **158 (U13):** the signals committed at 03:30:02.688 / 02.811. The tick at 03:30:02.32 came before both commits, so it couldn't trigger the exit. F21 is confirmed (DBQ-CLAUDE-I3-001).
+- **172 (U15):** the SHIBUSDT 07:15 1m candle had `number_of_trades=1`, and the only tick was at 07:15:43.462 (I3-005, I3-007). The 39 s delay was a market with no trades, and the price didn't change.
+- **137 and 182 (U16):** other symbols kept ticking every ~2 s through both gaps (I3-004). The gaps were EGLD-only and ACE-only, in minutes with 6 and 10 trades. These were quiet markets, not an intake stall.
+- **Exception, 143:** in the gap from 22:43:27 to 22:43:35 there were 0 EGLD rows of any status, while 12 other symbols ticked. Yet the candle had 433 trades.
+  - Every 1m kline update is persisted (`BinanceKlineService.java:95-106`). The only way an update is dropped with no row is `PRICE_NOT_CANONICAL` (stale or future, `MarketPriceEventService.java:53-57`), which is logged and not stored.
+  - No `PROTECTION_TRANSACTION` stage took ≥ 1 s in that gap (I3-006).
+  - **This is still UNKNOWN (U19).** It may be how Binance pushed updates, or updates rejected without a stored row. It needs the logs.
+
+**F37. Smaller notes.**
+- **No reconciliation audit rows:** DBQ-CLAUDE-I3-008 returned empty for the window. (PROJECT EVIDENCE)
+- **Snapshot query in F25:**
+  - The snapshot price query uses the unique key `uk_candle_symbol_interval_open_time`, then a filesort over about 11,348 rows (I3-009).
+  - There are 20 wallet assets, of which 1 is non-zero. So about 20 such queries run per wallet transaction.
+  - This confirms the cost mechanism in F25, which remains a non-loss finding. (PROJECT EVIDENCE)
+- **Slow protection transactions:** every exit's `PROTECTION_TRANSACTION` took 1.2–3.2 s on the WebSocket thread. For example, 137 took 3233 ms and 158 took 2455 ms (I3-006). (PROJECT EVIDENCE)
+
+## EVIDENCE
+
+- **Database results:**
+  - DBQ-CLAUDE-I1-003
+  - DBQ-CLAUDE-I3-001 to -009 (I3-008 is empty)
+- **Code:**
+  - `ExecutionIntelligenceService.java:330-457, 470-741, 1472-1514, 1990-2067`
+  - `TradeExecutionValidationService.java:41-49, 62-163, 263-321, 367-386`
+  - `PositionExitPolicy.java:20-93`
+  - `ExecutionReplayScope.java:99-137`
+  - `MarketPriceEventService.java:39-74, 133-145`
+  - `BinanceKlineService.java:91-111`
+  - `PaperTradingService.java:380-383`
+  - `application.yml:13-35`
+  - `B105__fix_153_trader_only_baseline.sql` (column types)
+- **Docs:** `DATABASE_INVESTIGATION_RULES.md:27,35`
+- **Log:** `logs/crypto-ai-trader.log:1-3`, which has rotated and now starts at 15:21 UTC. It prints UTC and is consistent with Binance epoch milliseconds.
+
+## UNKNOWNS
+
+- **U20:** the server's and the wrapper session's time zone (I4-001/002). This blocks every absolute timestamp in the study.
+- **U19:** the missing EGLD price updates in 143's gap.
+- **U21:** whether positions 171 and 143 both used 5m 159285, and what the opportunity record holds (I4-003/004).
+- **U22:** how common each route is and how each performs across all closed trades; how often the race and re-entry occur (I4-005 to I4-007).
+- **U7 (carried over):** Replay reproduction. Not run.
+- **U17 (carried over):** stages under 1 s are not persisted, so smaller stalls are invisible.
+
+## DB REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: Decide the time zone the study's query results are displayed in (F31, U20)
+SQL:
+SELECT @@global.time_zone AS global_tz, @@session.time_zone AS session_tz, @@system_time_zone AS system_tz, NOW(6) AS now_session, UTC_TIMESTAMP(6) AS now_utc
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: Epoch values that don't depend on time zone, to compare against the app's `priceObservedAt=…Z` strings (F31)
+SQL:
+SELECT id, execution_price_observed_at, UNIX_TIMESTAMP(execution_price_observed_at) AS observed_epoch, executed_at, UNIX_TIMESTAMP(executed_at) AS executed_epoch FROM wallet_trade WHERE id IN (344,358,392,403,426,451) ORDER BY id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: Opportunity records behind position 171's and trade 143's SETUP_TIMEFRAME_ATR entries (F33, U21); schema first
+SQL:
+DESCRIBE execution_opportunity;
+SELECT * FROM execution_opportunity WHERE symbol='EGLDUSDT' AND updated_at BETWEEN '2026-10-11 22:30:00' AND '2026-10-11 22:44:00' ORDER BY updated_at LIMIT 20
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: Route gate fields for the EGLD re-entry signals (F33)
+SQL:
+SELECT id, interval_code, candle_open_time, decision, original_decision, final_entry_allowed, atr_immediate_entry_allowed, atr_recommended_position_percent, atr_at_signal, atr_entry_type, latest_price, generated_at, created_at FROM trade_signal WHERE id IN (159285,159321,159407,159408) ORDER BY generated_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-005
+Purpose: Outcome by entry route across all closed paper positions (U22)
+SQL:
+SELECT b.execution_reason, p.status, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS winners, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum, ROUND(AVG(p.realized_pnl), 6) AS pnl_avg FROM wallet_trade b JOIN paper_position p ON p.signal_id = b.signal_id WHERE b.side = 'BUY' AND b.status = 'EXECUTED' AND p.closed_at IS NOT NULL GROUP BY b.execution_reason, p.status ORDER BY b.execution_reason, p.status
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-006
+Purpose: Re-entries within 120 s of a same-symbol close, and how they turned out (F33, U22)
+SQL:
+SELECT p.id, p.symbol, p.opened_at, p.realized_pnl, p.status, (SELECT MAX(q.closed_at) FROM paper_position q WHERE q.symbol = p.symbol AND q.id <> p.id AND q.closed_at <= p.opened_at) AS prev_close FROM paper_position p WHERE p.closed_at IS NOT NULL HAVING prev_close IS NOT NULL AND TIMESTAMPDIFF(SECOND, prev_close, p.opened_at) <= 120 ORDER BY p.opened_at LIMIT 100
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-007
+Purpose: How often the same-boundary 5m signal is generated after the 1m (F35)
+SQL:
+SELECT COUNT(*) AS boundary_pairs, SUM(m.generated_at < f.generated_at) AS one_min_first, ROUND(AVG(TIMESTAMPDIFF(MICROSECOND, m.generated_at, f.generated_at))/1000, 1) AS avg_5m_minus_1m_ms FROM trade_signal m JOIN trade_signal f ON f.symbol = m.symbol AND f.interval_code = '5m' AND f.candle_open_time = m.candle_open_time - INTERVAL 4 MINUTE WHERE m.interval_code = '1m' AND m.generated_at BETWEEN '2026-10-11 00:00:00' AND '2026-10-12 15:00:00'
+### END_DB_REQUEST
+
+## LOG REQUESTS (for the coordinator)
+
+If F31 is confirmed, the iteration-3 log windows move 3 h earlier in UTC (log files are UTC):
+
+| Trade | Symbol | Window (UTC) | Log file date |
+|---|---|---|---|
+| 137 | EGLD | 17:54–18:01 | 10-11 |
+| 143 | EGLD | 19:39–19:44 | 10-11 |
+| 158 | XRP | 23:34 to 00:31 next day | 10-11 → 10-12 |
+| 162 | DOGE | 01:01–01:27 | 10-12 |
+| 172 | SHIB | 03:35–04:16 | 10-12 |
+| 182 | ACE | 06:56–07:06 | 10-12 |
+
+- **For U19:** add `PRICE_NOT_CANONICAL` for EGLD between 19:43:27 and 19:43:36 UTC.
+- **For 137 and 182:** add `FIX-11G` in each entry window.
+
+## Self-review
+
+- **Corrections:**
+  - F31 invalidates the absolute "UTC → KSA" labels of iterations 1–3. Durations and orderings stand.
+  - F33 upgrades F22 from a visibility race to a selection-rule gap.
+  - F36 closes U13, U15 and U16. The exit delays caused no loss.
+- **Contradictions to escalate:**
+  - F31 (the time-basis rule doesn't hold for the query path);
+  - F12 (FIX-154 is live in production).
+- **Claims still unsupported:**
+  - that 171 and 143 shared 5m 159285 (needs I4-004);
+  - that the session time zone is the mechanism behind F31 (needs I4-001);
+  - Replay behaviour under regenerated signals.
+- **Plan for iteration 5:** use I4-001/002 to fix the time basis and re-issue the corrected timelines. Then use I4-003 to I4-007 to decide whether F33 and F35 are a systematic pattern or confined to trade 143.

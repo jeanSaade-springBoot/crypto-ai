@@ -1,0 +1,220 @@
+# CLAUDE — FTS WINDOW1 — Iteration 4: How each trade was entered and exited in code
+
+**Main result:** none of the six losses came from stale data or slow execution. Each one followed the code as written. Two code-level findings carry the analysis:
+- **F-20 (new, confirmed in code):** the same hourly SELL signal is handled one way at entry and the opposite way at exit, inside the same code base. That accounts for 4 of the 6 losses.
+- **F-21 (new, confirmed in code, strongly supported in the DB):** after a restart, the startup candle import closed open candles without ever analysing them. That is why no signals exist at the 15:00 UTC hour boundary on 10-10, and why trade 82 entered on hour-old context.
+
+This round is analysis only: no code, config, DB, git or doc writes. I didn't open Codex's private or db folders, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or Codex memory. Frozen trades analysed, none substituted: **104, 101, 96, 91, 82, 78**. The plan-file Write and ExitPlanMode tools aren't available here, so the findings are in this message only.
+
+## 0. Time basis is now settled (this contradicts the prompt and `DATABASE_INVESTIGATION_RULES.md:35`)
+
+**PROJECT EVIDENCE:**
+- **I3-001:** the wrapper session uses time zone `SYSTEM` = "Arab Standard Time". `NOW() − UTC_TIMESTAMP()` = **+180 min**.
+- **I3-002:** `CONVERT_TZ(..., '+00:00')` returns exactly the displayed value minus 3 h, for all 13 wallet fills.
+
+**What this means:**
+- The DB stores instants in UTC (`TIMESTAMP(6)`).
+- The wrapper **displays** them in KSA, and also **reads SQL literals as KSA**.
+- So "raw DB timestamps are UTC" holds for storage but not for what the wrapper prints. The rule text should be corrected through the dual-agent process. I'm reporting the mismatch, not editing anything.
+- From here on, "UTC" means displayed − 3 h. The confirmed times for the six trades are the corrected table in iteration 3 §0. All my DB_REQUEST literals below are written in KSA on purpose.
+
+## 1. Code route for each trade
+
+| Trade | Entry route (code) | How the 1h signal was read at entry | Exit route (code) |
+|---|---|---|---|
+| 78 PEPE | Setup wake-up on a fresh 5m BUY (`ExecutionIntelligenceService.java:397-457`) → `validateBuyContext(5m,"SETUP_WAKEUP")` → `balancedBuy` | 1h 114160 SELL, confidence 70. Treated as a soft conflict (`HigherTimeframeBuyAssessmentService.java:33-34`): counted as NEUTRAL, entry capped at 25% | `onPrice` → `evaluateNormalExit` → HTF_SELL_CONFIRMED (`PositionExitPolicy.java:25-32`) |
+| 91 SHIB | Same as 78 | 1h 120186 SELL, confidence 70, soft conflict | Same as 78 |
+| 96 PEPE | Direct 1m BUY: `validateBuy` → `balancedBuyWithNeutralFiveException` → 75%, cut to 25% by the soft-conflict cap (`TradeExecutionValidationService.java:93-111,413-418`) | 1h 121720 SELL, confidence 71, soft conflict | Same as 78; the 1m signal at exit was STRONG_SELL, but the HTF branch is checked first |
+| 104 ENA | Direct 1m BUY **rejected** (audit 1558, `balancedBuy` with 5m WATCH and 1h NEUTRAL). 0.9 s later the setup wake-up on 5m 133251 BUY approved it: 75% × size factor → 15% | 1h 132367 SELL, confidence 70, soft conflict | Same as 78 |
+| 82 XLM | Accumulated-evidence path → `validateBuyContext` → BALANCED_STRONG 75%, cut to 25% by the entry-quality cap | 1h 114163 WATCH from the **16:00 KSA** candle (13:00 UTC), age 3782 s. The 17:00 KSA candle was never analysed (F-21) | `evaluateNormalExit`, lower-timeframe branch → SELL_CONFIRMED (1m STRONG_SELL, 5m SELL, 1h WATCH; `PositionExitPolicy.java:35-44`) |
+| 101 AERO | Direct BUY, no HTF conflict. 1h 127870 BUY with confidence 49 and `final_entry_allowed=0` still counted as bullish, because the assessment reads only decision and confidence (`HigherTimeframeBuyAssessmentService.java:46-50`). Then a scale-in | — | TP reached → continuation check passed → TP extended → profit-lock rebase → hard-floor exit (`LivePositionProtectionService.java:100-133,191-198`) |
+
+## 2. FINDINGS
+
+### F-20 (CONFIRMED in code): the same hourly SELL is soft at entry but blocks adds and forces exits
+*PROJECT EVIDENCE: code plus I3-012.*
+
+**What the code does:**
+- **Initial entry:** any quality-valid 1h `SELL` counts as a soft conflict, whatever its confidence. Its effective decision becomes NEUTRAL and the entry is capped at 25% (`HigherTimeframeBuyAssessmentService.java:47,33-34`). Only a `STRONG_SELL` with confidence ≥70 becomes a hard veto (`:46`).
+- **Scale-in:** the raw 1h is still applied. The comment at `TradeExecutionValidationService.java:420-431` says "Existing raw 1h progressive-add guard blocked this add".
+- **Exit:** the raw 1h is applied too. `evaluateNormalExit` exits on `bearish(1h) && !supportive(5m)` (`PositionExitPolicy.java:25-27`).
+  - Exits are checked against the newest signal per timeframe, with no age check and no comparison to when the position opened (`LivePositionProtectionService.java:95-97`).
+  - The Javadoc says "a **fresh** 1h SELL" (`:14`). The exit text says "1h **turned** SELL" (`:30`). The code checks neither.
+
+**What happened:**
+- I3-012: in 78, 91, 96 and 104, the 1h at entry was SELL and **no new 1h signal arrived** while the position was open (`new_1h_during_hold=0`).
+- The two other HTF_SELL_CONFIRMED losses since V107 (72 and 71) had a new 1h signal during the hold. The asymmetry is specific to soft-conflict entries.
+
+**Why it loses by construction:**
+- Entry needs a 5m BUY (the wake-up path requires a non-bullish 5m followed by a BUY; `:408-412`).
+- The exit fires on the first 5m candle that isn't BUY or WATCH.
+- So the position survives only while a single 5m state lasts. That took 1–4 bars here.
+
+**Classification:** a design inconsistency between the FIX-154 entry relaxation and the exit and add policy. Each piece is implemented as written; together the policy contradicts itself. This is a logic-defect candidate, not stale data.
+
+**AGENT INFERENCE:** because the policy is deterministic, Replay should reproduce it exactly. I haven't run Replay.
+
+### F-21 (CONFIRMED in code; DB footprint strongly supports it): the startup import closed open live candles with no analysis record
+*PROJECT EVIDENCE: code plus I3-007/008/009/010.*
+
+**Code:**
+1. `BinanceWebSocketManager.start()` runs on `ApplicationReadyEvent` (`BinanceWebSocketManager.java:95-96`). In Spring that event fires only after every `ApplicationRunner` has finished. The startup import, `MarketDataBootstrapService` (`@Order(10)`), is one of those runners. **The live WebSocket therefore stays down for the whole import.**
+2. The import calls `CandleRepository.upsert` → `write(..., "BACKFILL", null)` (`CandleRepository.java:99-106`). On a duplicate key it runs `closed=GREATEST(closed,VALUES(closed))` (`:173-188`).
+   - That **closes an existing RUNTIME `closed=0` row**.
+   - It leaves `ingestion_source='RUNTIME'`, writes no close-transition token, and records no analysis outcome.
+   - The comment at `:205` ("backfill inserts missing identities only") contradicts the code at `:173-188`.
+3. In OFF mode the import doesn't analyse (`MarketDataBootstrapService.java:107-110`).
+4. The missed-close detector only picks up rows that have a token (`LocalClosedCandleDetector.java:50`).
+5. Authoritative reconciliation only picks up `closed=0` rows (`LocalCandleReconciliationService.java:131`).
+6. **Result:** a candle closed by the import is invisible to both. It gets no signal, no SKIPPED/EXPIRED outcome, and no retry.
+
+**DB footprint at the hour boundary.** All times are 2026-10-10.
+
+| UTC | KSA | Event |
+|---|---|---|
+| 14:59:06 | 17:59:06 | Last price event before the outage |
+| 15:00:28–15:02:12 | 18:00:28–18:02:12 | Open 1m/5m/1h rows closed with `ingestion_source=RUNTIME` and no token, in symbol order (BTC 18:00:28–32, PEPE 18:01:26–31, XLM 18:01:26–18:02:12) |
+| 15:01:15 | 18:01:15 | First reconciliation activity (its startup delay is 15 s) |
+| 15:02:21 | 18:02:21 | Price events and new candles resume (193 events in that minute) |
+
+- Reconciliation recovered only the rows that were **still open** when it reached them:
+  - 1h 17:00 KSA: **2 of 21** symbols
+  - 5m 17:55 KSA: 2 of 21
+  - 1m 17:59 KSA: 10 of 21
+- It needed successor proof first (`:198-207`); the 1h 18:00 KSA successor appeared only at 18:02:21 KSA.
+- The other **19 / 19 / 11** candles have no outcome row (I3-008) and no signal (I2-007).
+- AGENTS.md says each closed candle must end with one durable terminal analysis outcome, and that gap repair must never use a duplicate-key update that finalises a live row. This path breaks both.
+
+**Effect on the frozen trades:**
+- Trade 82 (entry 15:03:06 UTC / 18:03:06 KSA) used a 1h signal 63 minutes old and a 5m signal 8 minutes old. Both were within limits, so the entry followed the rules.
+- What the missing 17:00 KSA 1h analysis would have said is **unknown**.
+
+**Classification:** a confirmed data-path defect. Its link to 82's loss is not proven.
+
+**A restart is AGENT INFERENCE, but the code leaves little alternative.** A tokenless RUNTIME close with no recovery row can only come from `importCandles`, which is called only by the startup import or the admin controller. I4-001 and I4-005 are meant to confirm the restart and its protection impact.
+
+### F-17: now CONFIRMED inside the study window
+*PROJECT EVIDENCE: I3-005.*
+
+After each exit, other symbols' price events queued up and were then handled in a burst:
+
+| Exit | Wallet SELL (KSA) | Delay to other symbols' events |
+|---|---|---|
+| XLM | 19:25:14.36 | 1.38–1.56 s (DOGE, TAO, SOL observed at 14.58–14.80 KSA, created at 16.14–16.18) |
+| SHIB | 21:45:29.54 | Up to 0.85 s |
+| PEPE | 17:50:12.10 | About 0.3 s |
+
+- This confirms a latent cross-symbol protection delay of up to about 1.5 s.
+- It changed nothing for the frozen trades, because each exit price was fixed before the stall.
+
+### F-16: the clock step is located, but unexplained
+*PROJECT EVIDENCE: I3-003; the timing estimate is AGENT INFERENCE.*
+
+- `created_at − observed_at` was about 0 for hours, then a single step to about −2.8 s.
+- The step falls inside **2026-10-11 02:00–03:00 KSA (2026-10-10 23:00–24:00 UTC)**:
+  - Trade 101 at 02:12–02:21 KSA was still around 0.
+  - The hourly average of −799 ms suggests the step came at about **02:43 KSA (23:43 UTC)**.
+- After that the skew grows by about 36 ms/h, reaching −3.0 s by 09:00 KSA. That's consistent with the later `CLOCK_SKEW` log lines.
+- **I3-004:** no `FUTURE_TIMESTAMP` or `STALE` rejections happened anywhere in 16:33 10-10 → 09:42 10-11 KSA. The only non-applied events were 23 ambiguous equal timestamps and 16 duplicate timestamps (`NON_CANONICAL`).
+- So the latent risk is still only latent. U-13 is closed: no rejections occurred.
+
+### F-22 (new, PROJECT EVIDENCE): trade 101's hourly support was a blocked BUY
+- `HigherTimeframeBuyAssessmentService` and `balancedBuy` read only the 1h decision and confidence. They ignore `final_entry_allowed` on the 1h signal.
+- For 101, the 1h BUY had confidence 49 and was entry-blocked, yet it still counted as "bullish". That gave NO_CONFLICT at entry and a PASS on the continuation check at TP.
+- The 5m signal of the same trade was downgraded to WATCH when blocked; the 1h kept BUY. Whether that difference between timeframes is intended is **unknown** (U-14).
+- This isn't the cause of the loss, which was the FIX-118 rebase floor (F-13). It is a policy question.
+
+### F-19 / U-11 (EXTERNAL RESEARCH)
+- Binance documents kline stream updates at "2000ms for the other intervals" ([Binance WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)).
+- The observed per-symbol cadence matches that: BTC at 12.02 / 14.04 / 16.04.
+- The documentation doesn't say whether pushes are skipped when nothing traded. I found no deduplication in `MarketPriceEventService`. SHIB's 25-second silence therefore remains **unexplained**: it may be skipped pushes on low activity, which is AGENT INFERENCE.
+
+## 3. Draft verdicts (AGENT INFERENCE, to be refined in iterations 5–8)
+
+| Trade | Classification |
+|---|---|
+| 78, 91, 96, 104 | Followed the rules. Each loss is a by-construction whipsaw from F-20, made worse by 1-tick geometry (F-10), stop/target ratios below 1 (F-11) and waiting for a price event (F-19). Data was fresh and nothing was delayed. **Logic-defect candidate (policy inconsistency).** |
+| 82 | A valid losing trade. Its 1h context was older than it should have been because of a confirmed data-path defect (F-21); the effect on the decision is unknown. |
+| 101 | Followed the rules. The FIX-118 rebase leaves a 0.57% give-back band (policy weakness). F-22 is a secondary question. |
+
+## 4. UNKNOWNS
+- **U-10 (still open):** the rotated logs are `.gz` and my tools can't open them. Lines needed:
+  - startup/shutdown around 14:58–15:03 UTC on 10-10 (17:58–18:03 KSA);
+  - `CLOCK_SKEW` around 23:30–24:00 UTC (02:30–03:00 KSA);
+  - `[FIX-118]` lines for 101.
+- **U-12:** a restart is inferred (F-21); I4-001 and I4-005 test it.
+- **U-14:** whether a blocked 1h BUY should count as bullish authority.
+- **U-15:** the cause of the clock step: host clock correction, restart, or Binance time. I4-006 tests whether ingestion was interrupted.
+- **U-16:** whether any position was open during the 3-minute 15:00 UTC outage (the AGENTS.md protection-coverage release gate).
+- **Replay:** F-20 and F-22 are deterministic and shared with Replay. F-21 and F-17 are Production-only effects of the runtime. Not run.
+
+## 5. DB_REQUEST blocks
+All literals are KSA, because that is the wrapper session zone (I3-001).
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: Deploy/restart evidence near 2026-10-10 18:00 KSA (15:00 UTC) and 02:43 KSA (23:43 UTC): latest Flyway installs
+SQL:
+SELECT installed_rank, version, description, installed_on, execution_time, success FROM flyway_schema_history ORDER BY installed_rank DESC LIMIT 15
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: Schema discovery for candle_analysis_outcome before the orphan-candle prevalence query
+SQL:
+DESCRIBE candle_analysis_outcome
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: F-21 prevalence: candles closed with no token and with no terminal outcome and no signal (bootstrap-silenced) across the study period
+SQL:
+SELECT c.interval_code, c.ingestion_source, DATE_FORMAT(c.open_time,'%Y-%m-%d %H:00') AS ksa_hour, COUNT(*) AS n, COUNT(DISTINCT c.symbol) AS symbols, MIN(c.updated_at) AS first_update_ksa, MAX(c.updated_at) AS last_update_ksa FROM candle c WHERE c.open_time BETWEEN '2026-10-10 16:00:00' AND '2026-10-11 10:00:00' AND c.closed = 1 AND c.close_transition_token IS NULL AND NOT EXISTS (SELECT 1 FROM candle_analysis_outcome o WHERE o.symbol = c.symbol AND o.interval_code = c.interval_code AND o.candle_open_time = c.open_time) AND NOT EXISTS (SELECT 1 FROM trade_signal s WHERE s.symbol = c.symbol AND s.interval_code = c.interval_code AND s.candle_open_time = c.open_time) GROUP BY c.interval_code, c.ingestion_source, ksa_hour ORDER BY ksa_hour, c.interval_code LIMIT 300
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: Per-symbol proof for the 1h candle 17:00 KSA (14:00 UTC): which 2 symbols were recovered vs which 19 (incl. XLM) were closed silently by bootstrap
+SQL:
+SELECT c.symbol, c.closed, c.ingestion_source, (c.close_transition_token IS NOT NULL) AS has_token, c.updated_at, (SELECT GROUP_CONCAT(CONCAT(o.outcome,'/',o.origin)) FROM candle_analysis_outcome o WHERE o.symbol = c.symbol AND o.interval_code = c.interval_code AND o.candle_open_time = c.open_time) AS outcomes, (SELECT COUNT(*) FROM trade_signal s WHERE s.symbol = c.symbol AND s.interval_code = '1h' AND s.candle_open_time = c.open_time) AS signals FROM candle c WHERE c.interval_code = '1h' AND c.open_time = '2026-10-10 17:00:00' ORDER BY c.updated_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-005
+Purpose: U-16: positions open during the 17:59:06–18:02:21 KSA ingestion outage (protection coverage during restart)
+SQL:
+SELECT id, symbol, status, opened_at, closed_at, close_reason, entry_price, stop_loss, take_profit, exit_price, realized_pnl FROM paper_position WHERE opened_at <= '2026-10-10 18:02:21' AND (closed_at IS NULL OR closed_at >= '2026-10-10 17:59:00') ORDER BY opened_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-006
+Purpose: F-16/U-15: minute-level clock-skew step and ingestion continuity around 02:15–03:05 KSA on 2026-10-11 (restart vs host clock correction)
+SQL:
+SELECT DATE_FORMAT(created_at,'%H:%i') AS ksa_minute, COUNT(*) AS events, COUNT(DISTINCT symbol) AS symbols, ROUND(AVG(TIMESTAMPDIFF(MICROSECOND, observed_at, created_at))/1000,1) AS avg_ms, ROUND(MIN(TIMESTAMPDIFF(MICROSECOND, observed_at, created_at))/1000,1) AS min_ms, MIN(created_at) AS first_ksa, MAX(created_at) AS last_ksa FROM market_price_event WHERE id BETWEEN 1455000 AND 1500000 AND created_at BETWEEN '2026-10-11 02:15:00' AND '2026-10-11 03:05:00' GROUP BY ksa_minute ORDER BY ksa_minute
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-007
+Purpose: Outcome-only (not entry assessment): after each exit, did price first touch the stored TP or SL within 120 min, plus 60-min extremes
+SQL:
+SELECT p.id, p.symbol, p.closed_at, p.exit_price, p.stop_loss, p.take_profit, (SELECT MIN(c.open_time) FROM candle c WHERE c.symbol = p.symbol AND c.interval_code = '1m' AND c.open_time BETWEEN p.closed_at - INTERVAL 1 MINUTE AND p.closed_at + INTERVAL 120 MINUTE AND c.high_price >= p.take_profit) AS first_tp_touch_ksa, (SELECT MIN(c.open_time) FROM candle c WHERE c.symbol = p.symbol AND c.interval_code = '1m' AND c.open_time BETWEEN p.closed_at - INTERVAL 1 MINUTE AND p.closed_at + INTERVAL 120 MINUTE AND c.low_price <= p.stop_loss) AS first_sl_touch_ksa, (SELECT MAX(c.high_price) FROM candle c WHERE c.symbol = p.symbol AND c.interval_code = '1m' AND c.open_time BETWEEN p.closed_at AND p.closed_at + INTERVAL 60 MINUTE) AS max_high_60m, (SELECT MIN(c.low_price) FROM candle c WHERE c.symbol = p.symbol AND c.interval_code = '1m' AND c.open_time BETWEEN p.closed_at AND p.closed_at + INTERVAL 60 MINUTE) AS min_low_60m FROM paper_position p WHERE p.id IN (104,101,96,91,82,78) ORDER BY p.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-008
+Purpose: F-20 prevalence: outcome of all closed positions entered while the latest 1h was SELL/STRONG_SELL since V107 (2026-10-10 00:15:21 KSA)
+SQL:
+SELECT p.status, p.close_reason, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losses, SUM(p.realized_pnl) AS pnl_sum, AVG(TIMESTAMPDIFF(SECOND, p.opened_at, p.closed_at)) AS avg_hold_s FROM paper_position p WHERE p.opened_at BETWEEN '2026-10-10 00:15:21' AND '2026-10-11 10:00:03' AND p.closed_at IS NOT NULL AND (SELECT s2.decision FROM trade_signal s2 WHERE s2.symbol = p.symbol AND s2.interval_code = '1h' AND s2.generated_at <= p.opened_at ORDER BY s2.generated_at DESC LIMIT 1) IN ('SELL','STRONG_SELL') GROUP BY p.status, p.close_reason ORDER BY n DESC
+### END_DB_REQUEST
+
+## 6. Self-review: what would falsify these
+- **F-21:** if I4-004 shows XLM's 1h 17:00 KSA candle has an outcome or a signal, or I4-003 finds no tokenless orphans, the bootstrap attribution fails. If I4-001 or the logs show no restart, the `importCandles` caller must have been the admin controller, and that would need explaining.
+- **F-20:** if I4-008 shows soft-conflict entries profitable overall, the defect stays but its business impact is smaller.
+- **Same code in Production?** The FIX-154 audit text matches the working tree, but I haven't verified the deployed JAR.
+
+## 7. Labels
+- **PROJECT EVIDENCE:**
+  - Code: `PositionExitPolicy.java:14-50,99-111`; `LivePositionProtectionService.java:65-71,95-249`; `HigherTimeframeBuyAssessmentService.java:15-50`; `TradeExecutionValidationService.java:81-163,218-321,413-433`; `ExecutionIntelligenceService.java:397-457`; `CandleRepository.java:99-213`; `MarketDataService.java:31-56`; `MarketDataBootstrapService.java:30-110`; `BinanceWebSocketManager.java:95-96`; `LocalClosedCandleDetector.java:35-139`; `LocalCandleReconciliationService.java:58-207`.
+  - DB: I3-001…012, I2-007.
+- **EXTERNAL RESEARCH:** the Binance kline update speed (source linked above).
+- **AGENT INFERENCE:** the restart; the ~02:43 KSA step time; the reason for SHIB's silence; the Replay reproducibility claims; the draft verdicts.

@@ -1,0 +1,14 @@
+SIMULATION_STATUS: STARTED
+
+AUTH: Claude CLI authentication seems to work, because this session is running and could make a tool call (a web search). I did not separately check stored credentials or tokens.
+
+WEB: EXTERNAL RESEARCH — "How to Review Your Trades: A Post-Market Review Checklist", https://daytradingtoolkit.com/beginners-guide/post-market-review-checklist. It recommends reviewing losing trades soon after they close and looking for patterns in losses, such as setup type and time of day. This is public advice and not evidence about this project.
+
+FROZEN_IDS: 96, 91, 82, 78, 71, 72
+
+DB: I did not receive a database password. I ran no database queries, including the proof queries DBQ-FTS-001 to DBQ-FTS-005, and I changed no code, configuration, database data, git state or deployment.
+
+VERDICT: SIMULATION_OK
+
+Sources:
+- [How to Review Your Trades: A Post-Market Review Checklist](https://daytradingtoolkit.com/beginners-guide/post-market-review-checklist)

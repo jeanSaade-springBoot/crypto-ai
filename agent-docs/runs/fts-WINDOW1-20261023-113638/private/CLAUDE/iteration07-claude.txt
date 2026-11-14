@@ -1,0 +1,191 @@
+# Claude: FTS WINDOW1, Iteration 7 (self-challenge)
+
+**Status**
+- **Inputs.** I added the I6 results (DBQ-CLAUDE-I6-001 to 004) and re-read the code that picks the fill price: `ExecutionPriceAuthorityService.java:25-49`, `MarketPriceEventService.java:31-46, 133-146` and `PaperTradingService.java:340-412, 442-507`.
+- **Isolation.** I did not open the other agent's folders, LIVE_TEAM_STATUS.md or LIVE_EVENTS.log.
+- **Output not saved.** Write is disabled in this session, so this text is not in `private/CLAUDE/iteration07-claude.txt`. ExitPlanMode is not available either.
+- **Times.** Database times are UTC; KSA = UTC+3.
+- **Snapshot clock.** The charter's snapshot pair (UTC 2026-10-25 10:08:57 / KSA 2026-10-23 11:36:38) is not a valid UTC+3 pair. I recorded it and did not use it.
+- **Trades.** All six frozen trades (182, 172, 162, 158, 143, 137) are kept. None were substituted.
+
+---
+
+## FINDINGS
+
+**F-I7-01: F-I6-01 is confirmed in substance but needs rewording. The tick price was a real traded price, just from the previous minute.** [PROJECT EVIDENCE: I6-001; the wording change is AGENT INFERENCE]
+- **The pattern is exact.** I compared each price tick with the final 1-minute candle it falls in, for 2026-10-12 00:00–12:00 UTC.
+  - In the first 3 seconds of a minute, 3,729 of 25,001 ticks (14.9%) were priced outside the candle's final low–high range.
+  - Later in the minute, 1,113 of 154,922 were outside it.
+  - In every one of those cases (3,729/3,729 and 1,113/1,113) the price equals the previous minute's close.
+- **Correction to my wording.** In I6 I wrote that this was a price "nobody traded at". That was wrong. It is the previous minute's last trade, shown with a fresh Binance event time.
+  - So the defect is about what the timestamp means: the tick's time is fresh, but its price may be older.
+  - For an illiquid symbol, the price can be many seconds old while the tick still passes the 15 s age check.
+- **Trade 182.** The fill at 0.1884 is the 09:56 close, filled at 09:57:02.437 UTC (12:57:02.437 KSA). The finding stands for 182: about 2 price steps worse than the 09:57 trades.
+- **Downgrade for the wider system.** Since 2026-10-06, 19 BUY fills were priced outside their candle's range (I6-001, third result set).
+  - 11 were worse for us: wallet trades 78, 182, 226, 235, 237, 238, 240, 310, 325, 354 and 451.
+  - 8 were better: wallet trades 122, 176, 222, 242, 243, 262, 268 and 463.
+  - So there is **no proven net bias** in entry prices. Whether protection (stop-loss and profit-lock) reacted to these placeholder ticks is still unmeasured.
+- **Snapshot schema.** `crypto_ai.candle.number_of_trades` exists. Whether `market_price_event` stores the trade count of each update is not yet known.
+
+**F-I7-02: Correction to F-I6-02. Most I6-004 rows are processing delay, not host-clock lag.** [PROJECT EVIDENCE: code, I6-004]
+- **Where the reference time is set.** The fill-price reference time is `Instant.now()` at `PaperTradingService.java:343`. That happens *before* re-validation and before `executeBuy` (`:349-379`). `executed_at` is written later. So "a newer tick was written before `executed_at`" does not, by itself, prove that the clock excluded it.
+- **Processing delay (new finding).** Wallet trade 463 (ACE, 2026-10-15) executed at 00:36:09.678 UTC (03:36:09.678 KSA).
+  - It used a tick observed at 00:36:00.036 UTC (03:36:00.036 KSA).
+  - Another tick was observed at 00:36:02.471 and written at 00:36:02.551 UTC. It was not used.
+  - So the fill price was 9.6 s older than the execution time. That is within the 15 s limit, but it is processing delay. Both ticks were 0.1848, so it cost nothing.
+- **Clock lag is still proven by some rows.** These are rows where the tick's Binance time is *after* the execution time but the row was written *before* it.
+  - Wallet trade 262: written 2026-10-11 04:26:00.824 UTC (07:26:00.824 KSA), Binance time 04:26:03.686 UTC. That is about 2.9 s.
+  - Wallet trade 268: written 08:27:58.703 UTC, Binance time 08:28:01.692 UTC. About 3.0 s.
+  - Wallet trade 276: written 11:34:59.159 UTC (14:34:59.159 KSA), Binance time 11:35:02.230 UTC. About 3.1 s.
+  - Trade 137's wallet trade 344 also fits this pattern.
+  - So on 2026-10-11 the host clock ran about 3 s behind Binance. That is more than the 2 s `futureSkew` allowed at ingestion, and ingestion only accepted these ticks because it uses the corrected clock.
+  - At the fill, the raw clock hid every tick newer than about 3 s.
+- **Cost.** The price differences go both ways: 268 got a better fill by 10 steps, and 272 a worse one by 9 steps. **There is no proven systematic cost.**
+- **Replay.** Replay uses the replay scope's clock. It cannot reproduce host clock lag or processing delay, so this is a Replay/Production difference in fill selection.
+- **Still open: U-26.** How Replay supplies the reference time at `:343`. If Replay goes through this method, raw `Instant.now()` would make every replay price older than 15 s. I have not traced Replay's entry path.
+
+**F-I7-03: Most of the loss is in trades entered on a 5-minute boundary. The race is a candidate cause, not proven.** [PROJECT EVIDENCE: I6-002; statistics are AGENT INFERENCE]
+
+| Kind | Trades | Wins | P&L | P&L per trade |
+|---|---|---|---|---|
+| BOUNDARY, 5-minute signal came later | 70 | 30 (43%) | −3.202 | −0.046 |
+| BOUNDARY, 5-minute signal visible or missing | 5 | 1 | −0.374 | −0.075 |
+| NON_BOUNDARY | 118 | 59 (50%) | −0.594 | −0.005 |
+| **Total** | 193 | 90 | −4.171 | matches the I5 system total |
+
+- **The share of the loss.** Boundary entries are 39% of trades but **86% of the loss**.
+- **Confounding factor.** The SETUP_CONFIRMATION_WAKEUP route is almost all boundary trades (41 of 42) by design.
+  - Leaving that route out, boundary trades are 34 trades with 16 wins and −2.671 (−0.079 per trade).
+  - Non-boundary trades are −0.005 per trade.
+  - ACCUMULATED_EVIDENCE: +1.505 over 39 non-boundary trades, but −1.307 over 5 boundary trades.
+- **Self-challenge.**
+  - The "visible" group has only 5 trades, so I cannot compare "late" with "visible" inside the boundary group. That means the race is not shown to be the cause.
+  - Other explanations are possible: volatility at 5-minute marks, or the 5-minute signal changing at that moment.
+  - A rough check, assuming each trade's P&L varies by about 0.2 (an assumption), puts the difference at about 1.5–2 standard errors. That is suggestive, not significant. DBQ-CLAUDE-I7-001 asks for the real spread.
+  - Also, in this classification "visible" includes boundary trades with no 5-minute signal at all, which is a small mislabel.
+
+**F-I7-04: The I6-003 result was incomplete; the wide-target loss comes from stop-outs.** [PROJECT EVIDENCE: I6-003, code]
+- **Why it was incomplete.**
+  - The result hit `LIMIT 40`.
+  - `exit_reason` is free text that includes prices, so grouping by it split exits that share the same reason into separate one-trade rows.
+  - The rows with targets above 0.30% show only 85 of 155 trades.
+- **What it still proves.** Of the wide-target trades, **72 hit the stop-loss, for −15.59 in total (−0.217 each)**. The other wide-target trades therefore net about +11.26.
+  - That fits a mechanism: winners usually exit through profit-lock at 70–95% of the target distance, often at the 1-minute close price (`PaperTradingService.java:457`). Losers take the full stop. So the realised reward-to-risk is below the planned 1.5. [AGENT INFERENCE; DBQ-CLAUDE-I7-002 checks it]
+- **Audit gap.** Two losing exits with targets ≤ 0.30% have an `exit_reason` that is a full signal explanation ending in "Entry allowed". One of them is BTCUSDT.
+  - `completeClose` stores the caller's `explanation` as is (`:505`). The real exit rule can only be recovered from `close_reason`.
+  - **Still open: U-27.** Whether any frozen trade is affected.
+- **Effect on F-I6-04.** The revised root cause stands, sharpened: on wide-target trades the loss comes from stop-outs combined with profit-lock cutting winners short, not just "targets not reached".
+
+**F-I7-05: Updated per-trade verdicts.** [AGENT INFERENCE]
+
+| Trade | Change since I6 |
+|---|---|
+| 182 ACE | Classification unchanged: a valid losing trade. The price issue is now confirmed for this fill (previous-minute close), about 2 steps. It has no systematic effect across the system. |
+| 172 SHIB | Unchanged: a valid losing trade. Design gap: one price step was larger than the ATR. |
+| 162 DOGE | Unchanged: a valid losing trade (U-27 may affect the exit-reason audit). |
+| 158 XRP | Unchanged: valid under the rules; the target was below round-trip fees (design gap). |
+| 143 EGLD | Unchanged: the race defect decided its route. It is a boundary entry, in the group carrying 86% of the loss. U-08 is still open. |
+| 137 EGLD | Confirmed: host clock lag excluded the newer tick (F-I7-02) at zero cost. The exit followed policy. A valid losing trade. |
+
+**F-I7-06: Re-ranked correction candidates.** Analysis only. Each needs a FINAL_CHANGE_SPECIFICATION and approvals.
+1. **R2: fee-aware accounting plus an economic entry gate.** Unchanged.
+2. **R6: an expectancy study** of weak-uptrend trend-following, **extended** to check realised reward-to-risk under profit-lock against full stop losses (F-I7-04).
+3. **R1: choose the 5-minute signal by candle identity.** Raised in priority by F-I7-03; the causal link is still unproven.
+4. **R3: count only evidence generated after the previous exit.** Unchanged.
+5. **R4: use the exchange-corrected clock at fill, and measure the delay from price lookup to execution.** Its cost is zero systematically; it matters mainly for Replay parity.
+6. **R5: treat zero-trade updates as non-tradable.** Downgraded for entries: no net bias. Its effect on protection still needs to be checked.
+
+---
+
+## UNKNOWNS
+
+| ID | Status |
+|---|---|
+| U-08 | Open: the cause of 143's tick gap (needs production logs, no SSH access) |
+| U-12 | Open: the live fee tier |
+| U-20/24 | Narrowed (F-I7-03); significance pending (I7-001) |
+| U-23 | **Resolved**: ticks are the previous close shown with a fresh event time (F-I7-01) |
+| U-25 | Open: statistical significance |
+| U-26 (new) | Replay's reference time at `PaperTradingService:343` |
+| U-27 (new) | Which positions store a signal explanation as their exit reason |
+| U-28 (new) | Did protection trigger on placeholder ticks? (I7-004) |
+
+---
+
+## DB REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-001
+Purpose: F-I7-03 / U-25. Distribution of per-trade P&L for boundary vs non-boundary entries, excluding SETUP_CONFIRMATION_WAKEUP, so significance can be estimated.
+SQL:
+SELECT CASE WHEN MINUTE(s.candle_open_time)%5<>4 THEN 'NON_BOUNDARY' ELSE 'BOUNDARY' END kind,
+       COALESCE(eo.execution_source,'NULL') src_group,
+       COUNT(*) n, SUM(pp.realized_pnl>0) wins, ROUND(AVG(pp.realized_pnl),6) mean_pnl,
+       ROUND(STDDEV_SAMP(pp.realized_pnl),6) sd_pnl,
+       ROUND(AVG(CASE WHEN pp.realized_pnl>0 THEN pp.realized_pnl END),6) avg_win,
+       ROUND(AVG(CASE WHEN pp.realized_pnl<=0 THEN pp.realized_pnl END),6) avg_loss
+FROM paper_position pp JOIN trade_signal s ON s.id=pp.signal_id AND s.interval_code='1m'
+LEFT JOIN execution_opportunity eo ON eo.latest_signal_id=pp.signal_id AND eo.status='EXECUTED'
+WHERE pp.closed_at IS NOT NULL
+GROUP BY kind, (COALESCE(eo.execution_source,'NULL')='SETUP_CONFIRMATION_WAKEUP')
+ORDER BY kind LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-002
+Purpose: F-I7-04. Wide- vs small-target outcomes grouped by structured close_reason (not free-text exit_reason), with realised R-multiple.
+SQL:
+SELECT CASE WHEN (ts.take_profit-ts.latest_price)/ts.latest_price*100 <= 0.30 THEN 'TP<=0.30' ELSE 'TP>0.30' END tp_bucket,
+       pp.close_reason, COUNT(*) n, SUM(pp.realized_pnl>0) wins, ROUND(SUM(pp.realized_pnl),6) pnl,
+       ROUND(AVG((pp.exit_price-pp.entry_price)/NULLIF(pp.entry_price-pp.stop_loss,0)),3) avg_r,
+       ROUND(AVG((pp.take_profit-pp.entry_price)/NULLIF(pp.entry_price-pp.stop_loss,0)),3) planned_r
+FROM paper_position pp JOIN trade_signal ts ON ts.id=pp.signal_id
+WHERE pp.closed_at IS NOT NULL GROUP BY tp_bucket, pp.close_reason ORDER BY tp_bucket, n DESC LIMIT 40;
+SELECT pp.id, pp.symbol, pp.close_reason, LEFT(pp.exit_reason,60) exit_head, pp.realized_pnl, pp.closed_at
+FROM paper_position pp WHERE pp.closed_at IS NOT NULL AND pp.exit_reason LIKE '%Entry allowed%' ORDER BY pp.id LIMIT 50;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-003
+Purpose: F-I7-02. Daily host-vs-Binance lag (written time minus Binance time; negative means the host is behind) and the delay from price lookup to execution for BUY fills. Also the denominator for F-I7-01.
+SQL:
+SELECT DATE(e.created_at) d, COUNT(*) n,
+       ROUND(MIN(TIMESTAMPDIFF(MICROSECOND,e.observed_at,e.created_at))/1000,0) min_lag_ms,
+       ROUND(AVG(TIMESTAMPDIFF(MICROSECOND,e.observed_at,e.created_at))/1000,0) avg_lag_ms
+FROM market_price_event e WHERE e.delivery_status='APPLIED' AND e.created_at >= '2026-10-06 00:00:00'
+GROUP BY DATE(e.created_at) ORDER BY d LIMIT 30;
+SELECT COUNT(*) buy_fills,
+       ROUND(AVG(TIMESTAMPDIFF(MICROSECOND,wt.execution_price_observed_at,wt.executed_at))/1000,0) avg_fill_age_ms,
+       ROUND(MAX(TIMESTAMPDIFF(MICROSECOND,wt.execution_price_observed_at,wt.executed_at))/1000,0) max_fill_age_ms,
+       SUM(TIMESTAMPDIFF(MICROSECOND,wt.execution_price_observed_at,wt.executed_at) > 5000000) over_5s
+FROM wallet_trade wt WHERE wt.side='BUY' AND wt.executed_at >= '2026-10-06 00:00:00';
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-004
+Purpose: U-28 / F-I7-01. Did stop-loss or profit-lock exits happen at prices outside the final 1-minute candle range (a possible protection trigger on a placeholder tick)? Also read the market_price_event schema for a trade-count column.
+SQL:
+SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME='market_price_event' ORDER BY ORDINAL_POSITION;
+SELECT pp.id, pp.symbol, pp.close_reason, pp.exit_price, c.low_price, c.high_price, p.close_price prev_close, pp.realized_pnl, pp.closed_at
+FROM paper_position pp
+JOIN candle c ON c.symbol=pp.symbol AND c.interval_code='1m' AND c.closed=1 AND pp.closed_at >= c.open_time AND pp.closed_at <= c.close_time
+LEFT JOIN candle p ON p.symbol=c.symbol AND p.interval_code='1m' AND p.open_time = c.open_time - INTERVAL 1 MINUTE
+WHERE pp.closed_at IS NOT NULL AND pp.close_reason IN ('STOP_LOSS','PROFIT_LOCK','TAKE_PROFIT')
+  AND (pp.exit_price > c.high_price OR pp.exit_price < c.low_price)
+ORDER BY pp.id LIMIT 100;
+### END_DB_REQUEST
+
+---
+
+**Self-review**
+- **Corrected:**
+  - F-I6-01's wording: the tick price was the previous minute's last trade, not an untraded price.
+  - F-I6-02's evidence: most of those rows show processing delay, not clock lag.
+  - My earlier reading of I6-003, which was truncated and split by free-text reasons.
+- **Downgraded:**
+  - R5, for entries.
+  - The size of the fill-price issue across the system.
+- **Raised:** R1. It is now backed by the boundary concentration of losses, while the causal link stays labelled unproven.
+- **Checks.** No trades were substituted. Every KSA time is UTC+3. Nothing was changed.
+
+**Iteration 8 plan:** add the I7 results, settle U-25/U-26/U-28 where the evidence allows, and freeze the final verdicts and ranked corrections.

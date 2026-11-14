@@ -1,0 +1,50 @@
+## Iteration 2/8 — Database Forensics
+
+### Findings
+
+- **PROJECT EVIDENCE:** Scope remains limited to frozen `crypto_ai.paper_position` IDs **172, 162, 158, 143, 137, 131**. No substitution is permitted.
+- **PROJECT EVIDENCE:** The permitted `db/CODEX` evidence directory is empty. No returned results exist for Iteration 1 requests or proof queries `DBQ-FTS-001`–`DBQ-FTS-005`.
+- **PROJECT EVIDENCE:** `PaperPosition` supports entry/exit signal links and stores `close_reason`, `entry_reason`, `exit_reason`, entry/exit prices, P&L, and lifecycle timestamps. `WalletTrade` can provide execution price, fee, realized P&L, execution reason, and execution-observation time.
+- **AGENT INFERENCE:** Without schema-confirmed query results, no trade can yet be classified as a valid loss, protection defect, execution defect, stale-data event, or accounting discrepancy.
+- **PROJECT EVIDENCE:** Snapshot metadata is internally inconsistent by one second: `2026-10-12 07:00:03 UTC` converts to `2026-10-12 10:00:03 KSA`, while the supplied snapshot KSA is `10:00:02`. This does not change the frozen IDs; it prevents relying on the supplied KSA snapshot second for latency arithmetic.
+
+### Evidence
+
+- **PROJECT EVIDENCE:** `agent-docs/runs/fts-WINDOW1-20261012-100002/CHARTER.md`
+- **PROJECT EVIDENCE:** `src/main/java/com/crypto/domain/PaperPosition.java`
+- **PROJECT EVIDENCE:** `src/main/java/com/crypto/wallet/domain/WalletTrade.java`
+- **PROJECT EVIDENCE:** `codex-docs/TRADE_INVESTIGATION_AGENT.md`
+- **EXTERNAL RESEARCH:** None.
+
+### Unknowns
+
+- All six positions’ symbols, prices, quantities, P&L, entry/close UTC timestamps, and close reasons.
+- The linked entry/exit signals and whether their data-quality, freshness, strategy, and final-entry gates passed.
+- Whether wallet execution records reconcile with each position’s recorded P&L.
+- Whether accepted protection price-event evidence proves the exit trigger.
+- Historical runtime mode/version/configuration and Replay comparability.
+- Schema-confirmed relationships and indexes for signal work, position analysis, and price-event evidence.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Establish actual `crypto_ai` schema before selecting forensic columns, then retrieve only the six frozen authoritative position rows. Returned timestamps must be labeled UTC; KSA conversion is report-only (`UTC + 03:00`).  
+SQL:
+```sql
+SHOW CREATE TABLE paper_position;
+SHOW CREATE TABLE trade_signal;
+SHOW CREATE TABLE signal_processing_work;
+SHOW CREATE TABLE wallet_trade;
+SHOW CREATE TABLE wallet_managed_position;
+SHOW CREATE TABLE position_analysis;
+SHOW CREATE TABLE market_price_event;
+SHOW CREATE TABLE candle;
+SHOW CREATE TABLE technical_indicator;
+
+SELECT p.*
+FROM paper_position AS p
+WHERE p.id IN (172, 162, 158, 143, 137, 131)
+ORDER BY FIELD(p.id, 172, 162, 158, 143, 137, 131)
+LIMIT 6;
+```
+### END_DB_REQUEST

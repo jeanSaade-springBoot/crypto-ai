@@ -71,7 +71,7 @@ class BtcMarketContextServiceTest {
                 .candleOpenTime(candleOpenTime)
                 .generatedAt(generatedAt)
                 .decision(decision)
-                .trendScore(trendScore) // FIX-141: apply the fixture's intended BTC trend score.
+                .trendScore(trendScore)
                 .build();
     }
 

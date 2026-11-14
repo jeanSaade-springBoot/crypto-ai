@@ -1,0 +1,1 @@
+SELECT id, symbol, interval_code, candle_open_time, generated_at, decision, original_decision, total_score, confidence_score, latest_price, data_quality_valid FROM trade_signal WHERE id IN (156850,159487,166819,168277,172587,176927) ORDER BY id

@@ -1,0 +1,59 @@
+## FINDINGS — Iteration 2 Database Forensics
+
+- **[PROJECT EVIDENCE]** The frozen scope remains exactly `crypto_ai.paper_position` IDs **182, 172, 162, 158, 143, 137**. No replacement selection was made.
+- **[PROJECT EVIDENCE]** The permitted Codex DB-evidence folder contains no result files. The Iteration-1 schema request has no captured result, so no trade-specific database facts can yet be established.
+- **[PROJECT EVIDENCE]** Current source maps `paper_position` to lifecycle, entry/exit price, SL/TP, realized P&L, entry/exit signals, reasons, and timestamps. `production_exit_audit` is designed to preserve the close trigger separately; `wallet_trade` holds execution prices, quantities, fees, cost basis, and realized P&L.
+- **[PROJECT EVIDENCE]** Current protection code records a live closure to `paper_position` and creates `production_exit_audit`; it also preserves prior partial-harvest P&L when calculating terminal paper-position P&L. This describes current code, not proven historical behavior for these six rows.
+- **[AGENT INFERENCE]** `paper_position.realized_pnl` alone is insufficient for net-P&L reconciliation: source-side paper P&L calculation does not subtract wallet fees, and prior partial exits may be included.
+- **[PROJECT EVIDENCE]** The supplied snapshot timestamps conflict: `2026-10-25 10:08:57 UTC` converts to `2026-10-25 13:08:57 KSA`, not the supplied `2026-10-23 11:36:38 KSA`. The frozen IDs remain authoritative; the snapshot time must not be used as an exact cutoff.
+
+## EVIDENCE
+
+- `PaperPosition.java`: source-side authoritative position mapping.
+- `WalletTrade.java`: execution/fee/cost-basis evidence model.
+- `ProductionExitAudit.java`: immutable terminal-trigger evidence model.
+- `LivePositionProtectionService.java`: current mechanical closure, audit, and partial-harvest accounting paths.
+- `TRADE_INVESTIGATION_AGENT.md`: requires accepted price-event evidence for intrabar protection; candle OHLC cannot replace it.
+
+## UNKNOWNS
+
+- Actual `crypto_ai` schema and migration state.
+- All six trades’ symbol, entry/exit UTC timestamps and corresponding KSA values, signal links, close reasons, SL/TP, and realized P&L.
+- Whether each loss involved partial harvests, fees, signal exit, stop loss, take profit, profit lock, or another path.
+- Trade-specific accepted/non-canonical price-event sequence and protection timing.
+- Whether current source behavior/version was active when each historical trade closed.
+- Whether each loss is valid strategy outcome, execution/protection defect, accounting discrepancy, or unsupported by evidence.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Establish the actual `crypto_ai` schema before requesting forensic joins for the six frozen `paper_position` rows.  
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'wallet_managed_position',
+      'production_exit_audit',
+      'market_price_event',
+      'position_analysis',
+      'position_management_event',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+**[EXTERNAL RESEARCH]** None.

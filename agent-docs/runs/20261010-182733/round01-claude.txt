@@ -1,0 +1,199 @@
+# Independent Review: FINAL_CHANGE_SPECIFICATION_RPR-0.6.md (Round 1)
+
+I reviewed only the files listed here. AGENTS.md, AGREED_KNOWLEDGE.md and DECISIONS.md (both of which contain no entries yet), the relevant claude-docs, and my own CLAUDE_LATEST.md (a placeholder). I also read RPR-0.5, only to see what changed. I checked every claim against the current working-tree code.
+
+I did not read Codex's memory, the peer index, this run's findings, or codex-docs. I had no database, log, SSH or production access. No files were modified.
+
+## FINDINGS
+
+**What RPR-0.6 gets right (verified):**
+- **[PROJECT EVIDENCE]** All four root-cause claims are true in the current code:
+  - the Replay timeline includes candles that are still open (`closed=0`);
+  - Replay signals have no IDs;
+  - Replay reads Production's `wallet_settings`;
+  - Replay's price-path and signal-path management order differs from Production's.
+- **[PROJECT EVIDENCE]** Excluding `NON_CANONICAL` and `PROTECTION_NOT_APPLIED` price events matches Production, which only uses `LEGACY`/`APPLIED` prices.
+- **[PROJECT EVIDENCE]** In normal parity runs, `RegimeStateService` passes the regime through unchanged, so it matches Production. It only keeps state in experimental scope, and no main-code caller opens that scope.
+- **[AGENT INFERENCE]** Leaving out `ENTRY_DECISION_PARITY` and wallet-lifecycle parity is forced by the ban on reading account state. Production's entry gates count positions and P&L across all symbols.
+- The core principles are sound: refuse before writing anything, use truthful labels, never fall back to wallet reads on rollback, and only add migrations forward.
+
+**Why it is not approvable.** There are 14 objections below; 10 are material:
+1. The read/write boundary table is factually wrong.
+2. The class/file registry misses about 12 classes that the stated requirements must touch.
+3. The class-by-class and method-by-method content that AGENTS.md requires is missing. RPR-0.6 is less specified than RPR-0.5, which it claims to supersede.
+4. There is no rule for when a run earns `ANALYSIS_PARITY`, and the class named as the comparison "oracle" is never called.
+5. The default simulation mode skips Production's rules for deciding which candles get analysed at all.
+6. M04 and M07, as written, contradict how Production behaves. M07 can bias results.
+7. The model for event ordering and clocks is undefined, and the current assumptions are systematically optimistic.
+8. FIX-154 is live in the BUY path but the spec never mentions it.
+9. The handoff says Production code stays unchanged, but the registry changes Production classes.
+
+**Contradictions with governance and docs.** These need to go through the dual-agent process; I made no edits.
+- **[PROJECT EVIDENCE]** AGENTS.md (FIX-154 section), `claude-docs/ARCHITECTURE.md:19` and `claude-docs/TRADING_RULES.md:124-128` say FIX-154 is not implemented.
+  - The code has it: `V107` and `V109` migrations, `HigherTimeframeBuyAssessmentService`, `BuyHtfAssessmentAuditStore`.
+  - The comment at the top of `V109` says V107 "was already applied on the trader database".
+- **[PROJECT EVIDENCE]** `claude-docs/ARCHITECTURE.md:24` lists Flyway migrations V1–V106, but V107–V109 exist. Its Replay row (`:161`) overstates parity.
+
+## EVIDENCE
+
+All rows below are **[PROJECT EVIDENCE]** unless marked otherwise.
+
+| # | Claim | Location |
+|---|---|---|
+| E1 | The Replay timeline is loaded without a closed filter | `RegressionTestWorker.java:509-512, 550-556` |
+| E2 | Snapshots don't check candle identity. An open or missing candle is silently analysed as an older candle, giving a duplicate, stale signal (consequence: **[AGENT INFERENCE]**) | `TechnicalIndicatorService.java:186-200`; `RegressionTestWorker.java:590-594` |
+| E3 | Null signal IDs silently disable entry-consumption checks and the Near-TP bearish-streak count | `ShadowProductionReplayService.java:340,362`; `ExecutionReplayScope.java:85-92`; `EntryConsumptionPolicy.java:21`; `NearTpFailureProtectionPolicy.java:120-125` |
+| E4 | Replay reads `wallet_settings` | `ShadowProductionReplayService.java:79,726,757,777,999-1007`; `TradeExecutionValidationService.java:66,152,400-411`; `OneCandleContinuationGraceReplayObserver.java:195-197` |
+| E5 | Production's signal path: advisory stop → TP from the managed position → TP close with no extension → profit lock → stop loss → floor → SELL (suppressed while lock active) → add (suppressed while lock active). Replay's exact-price path has no lock suppression; its fallback path extends TP and applies the higher-timeframe exit on the signal path | `PaperTradingService.java:115-121,157-217` vs `ShadowProductionReplayService.java:183-255,570-583,654-664` |
+| E6 | `regression_test_run` does not exist; the only hit is a comment. The real table is `analysis_test_run` | `B105__fix_153_trader_only_baseline.sql:1261`; `RegressionTestWorker.java:119-120`; `RegressionTestService.java:213-216` |
+| E7 | Replay writes several tables the spec omits: `analysis_test_result`, `trade_signal_test`, `execution_opportunity_test`, `position_management_test`, `defensive_risk_reduction_observation_test`, `one_candle_continuation_grace_test`, `fix122_replay_revision`, the archive tables, and `proven_analyzed_trade` | `RegressionTestWorker.java:262-283,345-393,768`; `ShadowProductionReplayService.java:822-838,877-890`; `DefensiveRiskReductionReplayObserver.java:81-96`; `OneCandleContinuationGraceReplayObserver.java:86-98`; `RegressionTestService.java:230,258-275,613-618` |
+| E8 | Replay writes `fix122_evaluation` in a separate transaction that "survives a caller rollback". The purge query confirms Replay rows exist there | `StopLossEvidenceStore.java:48-55`; `StopLossEvidenceService.java:41-63,142,157`; `RegressionTestService.java:360` |
+| E9 | The Replay results chart reads Production `wallet_trade` | `RegressionTestService.java:549-558` |
+| E10 | Replay analysis reads Production's stored `technical_indicator` row for the previous candle, plus sentiment and fundamentals as-of. None of these are on the spec's permitted list | `AnalysisService.java:703-709, 227-236` |
+| E11 | The FIX-11K observer runs in every baseline run | `ShadowProductionReplayService.java:100,177-181,382` |
+| E12 | The run request has no profile or mode field, and the pre-FIX-122 OLD revision can be selected by the user | `RegressionTestRunRequest.java:5-11`; `RegressionTestService.java:230`; `ShadowProductionReplayService.java:113-116` |
+| E13 | The price-event record carries neither an ID nor an ordering slot | `MarketPriceEventService.java:118-129,173-175` |
+| E14 | `ReplayParityValidator` has no caller anywhere in `src` (main or test) and compares only 13 fields | grep across `src`; `ReplayParityValidator.java:17-38` |
+| E15 | Derivatives positioning is enabled with a veto in Production config, but Replay's historical path always returns `UNAVAILABLE` | `application.yml:395-405`; `DerivativesPositioningService.java:38-50`; `AnalysisService.java:331-345` |
+| E16 | Production only analyses a candle after these steps: data-quality check (latest 210 candles, no gaps — not an as-of check) → indicators → existing-signal check → freshness, which yields `HISTORICAL_ONLY` or `LIVE` | `CandleClosedAnalysisWorker.java:117-176`; `CandleDataQualityService.java:25-29`; `application.yml:338-341` |
+| E17 | When the daily loss limit is hit, Production throws, rolls back, and marks only that one signal `REVIEW_REQUIRED`. Trading continues afterwards | `PaperTradingService.java:326,543-554`; `SignalProcessingCoordinator.java:113-131` |
+| E18 | A price event's `observedAt` is Binance's event time `E`. Production applies protection for the closing tick before dispatching the close. Replay only consumes prices with `observedAt ≤` nominal close time | `BinanceKlineService.java:94,101-111`; `ShadowProductionReplayService.java:126-128`; `RegressionTestWorker.java:584` |
+| E19 | Production's `generatedAt` and execution price both use `Instant.now()`, and it looks up higher-timeframe signals by `generatedAt ≤` evaluation time. Replay uses the candle-close time and sorts 1h→5m→1m at equal close times | `AnalysisService.java:150`; `MultiTimeframeConfluenceService.java:106-110`; `PaperTradingService.java:238,343`; `RegressionTestWorker.java:557-560`; `ShadowProductionReplayService.java:310-311` |
+| E20 | FIX-154 is in the BUY path; Replay suppresses its audit | `TradeExecutionValidationService.java:93-111`; `AnalysisService.java:424`; `BuyHtfAssessmentAuditStore.java:41-44`; `V107…sql`; `V109…sql:1-3` |
+| E21 | Inside the protection transaction, Production takes locks in a fixed order: symbol lock → position lock → freshness check | `LivePositionProtectionService.java:54-72` |
+| E22 | `DynamicProfitLockService` creates a `wallet_settings` row if one is missing | `DynamicProfitLockService.java:328` |
+| E23 | `PositionExitPolicy` and `ProfitLockPolicy` are already pure: no repository, clock or settings access | grep (no matches) |
+| E24 | A one-active-run guard already exists; Replay runs on plain `@Async` and shares Production's database connection pool (max 15) | `RegressionTestService.java:185-201`; `RegressionTestWorker.java:99`; `application.yml:17` |
+| E25 | The existing `PRODUCTION_PARITY` label is still written to every run | `RegressionTestWorker.java:205-206`; `ShadowProductionReplayService.java:99,387-389` |
+| E26 | RPR-0.5 had a class-by-class spec, an observability registry (V01–V05), a trading-behaviour registry (T01–T04) and per-document IDs. RPR-0.6 drops all of them | `FINAL_CHANGE_SPECIFICATION_RPR-0.5.md:141-224, 273-307` |
+
+**[EXTERNAL RESEARCH]**
+- **Binance Spot API, "WebSocket Streams"** ([link](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)).
+  - *Date:* not stated (living document; accessed 2026-10-10).
+  - *Findings:* kline updates every 2000 ms for 1m and longer intervals. `E` is the event time. `T` is the kline close time; the example shows `T = open + 59.999 s`. `x` marks a closed kline.
+  - *Limitations:* the page says nothing about how `E` relates to `T` for the final message, and gives no guarantee the final kline is delivered after a reconnect.
+  - *Relevance:* supports O8. The closing tick's `E` is at or after the nominal close, and the price path is only sampled every ~2 s.
+- **Binance Spot API CHANGELOG** ([link](https://developers.binance.com/en/docs/products/spot/CHANGELOG)), entry dated 2026-05-06, rollout 2026-05-08.
+  - *Findings:* the reference-price logic for the `MIN_NOTIONAL`, `NOTIONAL` and `PERCENT_PRICE` filters changed.
+  - *Limitations:* I only saw a search summary, not the full page.
+  - *Relevance:* exchange minimum-order constraints change over time, so the virtual constraints in RPR6-10 must be versioned by date.
+- **Bailey, Borwein, López de Prado, Zhu, "The Probability of Backtest Overfitting"**, *Journal of Computational Finance* 20(4), 2017 ([SSRN](https://papers.ssrn.com/abstract=2326253)).
+  - *Findings:* choosing among backtests inflates apparent performance; the paper offers a method (CSCV) to estimate the probability of overfitting.
+  - *Limitations:* a generic framework; it says nothing about this project.
+  - *Relevance:* supports O14 on selection bias. It is not evidence about this system's performance.
+
+## OBJECTIONS
+
+**O1. The read/write boundary is wrong (material).**
+- **[PROJECT EVIDENCE]** The run table it names, `regression_test_run`, doesn't exist (E6).
+- Nine tables that Replay writes are missing (E7).
+- `fix122_evaluation` is listed as read-only Production evidence, but Replay writes it in a transaction that survives rollback, which also defeats M04's staging (E8).
+- The Replay chart reads `wallet_trade` and the spec neither forbids nor exempts it (E9).
+- The permitted list omits `technical_indicator`, sentiment and fundamentals, which Replay analysis already reads (E10).
+- *Required:* an exact, code-verified allowlist and write list, with each exception given a reason.
+
+**O2. The class/file registry is incomplete (material).**
+- **[PROJECT EVIDENCE]** Classes the requirements must touch but that aren't registered:
+  - `DefensiveRiskReductionReplayObserver` (E11); RPR6-11 and X08 cover only the FIX-11Q observer;
+  - `RegressionTestRunRequest`, `RegressionTestController` and `RegressionTestService`, plus the UI; flow step 1 and the FIX-122 OLD gating need them (E12);
+  - `MarketPriceEventService`, for the ID and ordering slot §3 requires (E13);
+  - `EntryConsumptionPolicy` and `NearTpFailureProtectionPolicy` (E3);
+  - `StopLossEvidenceService` and `StopLossEvidenceStore` (E8);
+  - `TechnicalIndicatorService` (E2);
+  - `AnalysisService` and `DerivativesPositioningService` (E15);
+  - `CandleDataQualityService` and `CandleClosedAnalysisWorker` (E16);
+  - `ExecutionIntelligenceService`, `WalletExecutionSizingPolicy`, and the FIX-154 classes (E20).
+- **[PROJECT EVIDENCE]** In the other direction, RPR6-10 lists `PositionExitPolicy` and `ProfitLockPolicy` as modified, but both are already pure (E23). That is either an unneeded change or a hidden refactor.
+
+**O3. Mandatory contract content is missing (material).**
+- **[PROJECT EVIDENCE]** AGENTS.md requires class-by-class and method-by-method current→new behaviour, with inputs and outputs, side effects, errors, concurrency and transactions. §5 has only eight one-line rows.
+- The database registry has no tables, columns or rollback.
+- C04 has no property name or value, and C02 duplicates the existing guard (E24).
+- There is no observability registry and no per-document registry.
+- **[AGENT INFERENCE]** Replay trading behaviour does change and must be listed with the expected direction of each change:
+  - entry consumption starts working, so fewer re-entries;
+  - Near-TP streaks start being counted;
+  - the signal path stops extending TP;
+  - SELLs and adds are suppressed while the profit lock is active.
+- "Supersedes RPR-0.5 for review only" leaves it unclear whether RPR-0.5's detail is still binding. The contract must stand on its own (E26).
+
+**O4. The parity claim is undefined (material).**
+- **[PROJECT EVIDENCE]** The named oracle has no caller and covers only 13 fields (E14).
+- The spec never defines:
+  - the match key: candle identity, or generation time;
+  - which fields are compared and the pass threshold;
+  - how to handle Production candles that were blocked by data quality, marked historical-only, or are absent;
+  - what happens to the existing `PRODUCTION_PARITY` label and to old runs carrying it (E25).
+- **[AGENT INFERENCE]** If stored Production context (BTC status, liquidity, derivatives) is fed into Replay and then compared field by field, the parity result is partly guaranteed in advance, which produces false positives.
+- **[PROJECT EVIDENCE]** With derivatives enabled and Replay returning `UNAVAILABLE` (E15), `ANALYSIS_PARITY` is unreachable for those windows unless the raw inputs were stored.
+
+**O5. The default simulation skips Production's analysis rules (material).**
+- **[PROJECT EVIDENCE]** Production decides whether a candle is analysed at all via the data-quality and freshness steps in E16. Replay calls none of them, and the data-quality check reads the latest candles rather than as-of, so it can't be reused unchanged.
+- §7 handles this only for analysis parity. **[AGENT INFERENCE]** Under C01's default mode, Replay would still trade candles Production blocks: one missing 1m candle blocks roughly 210 subsequent 1m analyses.
+
+**O6. M04 "no skip semantics" conflicts with Production, and staging is unspecified (material).**
+- **[PROJECT EVIDENCE]** Production has normal terminal skips such as `DATA_QUALITY_BLOCKED`, `HISTORY_UNAVAILABLE` and `HISTORICAL_ONLY` (`CandleClosedAnalysisWorker.java:125,136,165`). Replay currently counts these as errors and continues (`RegressionTestWorker.java:598-605,690-697`).
+- M04 has to separate reproduced business outcomes from infrastructure failures.
+- The staging mechanism is unspecified. A run-long transaction would hold locks and undo log on the shared Production database. Cleanup of staged rows after a JVM crash isn't tested.
+- The FIX-11Q observer's per-run maps leak whenever a run throws (`ShadowProductionReplayService.java:383` is skipped on error).
+
+**O7. M07's daily-loss rule mis-models Production (material).**
+- **[PROJECT EVIDENCE]** In Production, hitting the limit affects only that signal, and trading continues the next UTC day (E17). The check also uses the wall-clock day and P&L across all symbols.
+- **[AGENT INFERENCE]** If "ends `FAILED_PROFILE_EVALUATION`" means hitting the limit ends the run, Replay stops exactly on bad days. Only windows without such a day would produce results, which is survivorship bias.
+- The same gap exists for the open-position limit, which counts across all symbols (`PaperTradingService.java:322`).
+
+**O8. The ordering and clock model is unspecified and optimistic (material).**
+- **[PROJECT EVIDENCE + EXTERNAL RESEARCH]** The closing tick carries `E` at or after the nominal close. Production applies its protection before analysing the candle. Replay applies it after the new signal is already visible (E18).
+- **[PROJECT EVIDENCE]** At every shared 5m/1h close time, Replay always lets the 1m analysis see the new 5m/1h signal. Production often couldn't, because it looks up by `generatedAt ≤` evaluation time (E19). This is optimistic look-ahead relative to Production.
+- **[PROJECT EVIDENCE]** Replay fills at the candle-close time, while Production fills at `Instant.now()`. That is a zero-latency fill assumption.
+- §7's "inferred ordering" is undefined, and commit-time visibility isn't recorded anywhere.
+- RPR-0.5 required separate decision and fill clocks; RPR-0.6 dropped this.
+
+**O9. FIX-154 is unaddressed and contradicts governance (material).**
+- **[PROJECT EVIDENCE]** FIX-154 is in the BUY path, Replay suppresses its audit, and V109's comment says V107 was applied (E20). Yet AGENTS.md says FIX-154 is not implemented.
+- The spec doesn't say:
+  - how FIX-154's assessment and audit evidence are reproduced in Replay;
+  - what happens if the unapproved FIX-153 or FIX-154 code in the dirty worktree changes;
+  - how this is sequenced with the FIX-155 Replay study, which depends on Replay correctness.
+
+**O10. "Production code unchanged" conflicts with the registry (material).**
+- **[PROJECT EVIDENCE]** RPR6-07, -08, -09, -10 and -12 modify Production classes. That includes `LivePositionProtectionService` inside the protection transaction, where AGENTS.md requires the input→protection→observer→close order to be preserved (E21).
+- There is no named test for transaction order or lock order, and no numeric latency budget.
+- The settings port must make it impossible for Replay to reach the code that creates a `wallet_settings` row (E22).
+- The user has to decide explicitly whether Production code may change at all.
+
+**O11. The stable Replay ID is underspecified (moderate).**
+- **[AGENT INFERENCE]** "Never equal to Production ID" has no mechanism, yet the IDs flow into the same `Long` columns as Production IDs. The spec should define a separate namespace, and prove that no save/merge path can receive an unsaved signal carrying a non-null ID.
+
+**O12. The logging registry is too thin (moderate).**
+- **[PROJECT EVIDENCE]** L03 is DEBUG, so at the default INFO level decisions can't be reconstructed from logs. There is no UTC/KSA rule.
+- Existing high-volume INFO logs in Replay paths aren't dealt with (`ShadowProductionReplayService.java:469-475`; `TechnicalIndicatorService.java:215-231`).
+- RPR-0.5's `REPLAY_CANDLE_IDENTITY_MISMATCH` log was dropped.
+
+**O13. Resource isolation is too vague (moderate).**
+- **[PROJECT EVIDENCE]** Replay shares Production's database pool and runs on plain `@Async` (E24). The separate-transaction audit writes double its connection use.
+- X10 has no numeric acceptance criteria, such as latency percentiles or freshness-expiry counts.
+
+**O14. Statistical safeguards are missing (moderate).**
+- **[AGENT INFERENCE + EXTERNAL RESEARCH]** Refusing unqualified windows tends to remove stressful periods such as outages and reconnects, so aggregate results become biased.
+- The spec should require reporting refusal rates and never pooling results across eras or labels.
+- Production records zero fees for automatic trades, so a profile with non-zero fees isn't directly comparable to Production; the label must say so.
+- Exchange constraints need to be dated.
+
+## UNKNOWNS
+- Whether V107–V109 are applied in each environment, and whether FIX-154 was ever approved. I had no database access.
+- How Spring resolves the executor for `runAsync` when several executor beans exist; this needs runtime confirmation.
+- How far after the nominal close the final kline's `E` lands, and how Production's analysis latency is distributed. Neither has been measured; both are needed to set the ordering rules.
+- Whether outcome and processing evidence exist for the windows users intend to replay.
+- Whether the stored `technical_indicator` rows were computed by the same code version across eras.
+- Whether RPR-0.5's detail is still binding.
+- Java 21 build and test status (not re-verified).
+- What UI changes are needed.
+
+Sources:
+- [Binance Spot API — WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)
+- [Binance Spot API — CHANGELOG](https://developers.binance.com/en/docs/products/spot/CHANGELOG)
+- [Bailey et al., "The Probability of Backtest Overfitting" (SSRN)](https://papers.ssrn.com/abstract=2326253)
+
+## VERDICT
+VERDICT: REJECTED

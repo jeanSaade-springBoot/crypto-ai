@@ -1,0 +1,14 @@
+exit_code=0
+duration_ms=233
+row_count=6
+--- stdout ---
+TABLE_NAME	COLUMN_NAME
+coin_configuration	id
+coin_configuration	symbol
+coin_configuration	enabled
+coin_configuration	system_default
+coin_configuration	created_at
+coin_configuration	updated_at
+
+--- stderr ---
+

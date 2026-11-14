@@ -1,0 +1,235 @@
+# CLAUDE — Daily Failed-Trade Study, WINDOW2, Iteration 2: Database Forensics (self-review)
+
+**Run:** `fts-WINDOW2-20261029-204757`. **Mode:** analysis only. I changed no code, config or DB and ran nothing against git or deployment. Plan mode was on, but this session has no Write tool, so all output is here.
+
+**Inputs:** my iteration-1 output, the `db/CLAUDE/` results DBQ-CLAUDE-I1-001 to 010, and the code paths cited below. I did not read the Codex folders, LIVE_TEAM_STATUS or LIVE_EVENTS.
+
+**Time:** DB values are UTC; KSA = UTC+3.
+
+---
+
+## Summary
+
+- **I2-F01 — reward/risk below 1:1.** Five of the six entries were planned with a reward/risk below 1:1. The cause is the 0.5% minimum stop, which outweighs a 3×ATR target when ATR is very low. The code has no reward/risk floor on these entry paths.
+- **I2-F02 — stale 5m signal.** Trade 143's entry was most likely authorised by a 5m signal that a newer one had already replaced. The newer 5m signal was stored 2 ms *after* the 1m signal, so a `generatedAt <=` lookup could not see it. This is not yet proven; I2-001 and I2-002 would prove it.
+- **I2-F03 — 143's loss on a profit-lock exit was a price gap.** Price fell from 4.100 to 4.027 between two observations 8 s apart. The protection logic fired on the first tick it saw.
+- **I2-F05 — fees not recorded.** Stored fees are 0. Assuming a 0.1% fee per side (not verified this iteration), the six losses grow from −0.2732 to about −0.533 USDT. Trade 158's target was below the round-trip fee, so it would have lost money even at take-profit.
+- **No confirmed defect yet.** All six exits followed their coded rules.
+
+---
+
+## FINDINGS
+
+### I2-F01 — Five of six entries had a planned reward/risk below 1:1 (PROJECT EVIDENCE: I1-001, I1-003; code)
+
+**How the levels are set (code):**
+- `AtrRiskService.java:34-45`: `stopDistance = max(2×ATR, 0.50%×price)` capped at 8%; `rewardDistance = 3×ATR`; `RR = reward / stop`.
+- `application.yml:137-143`: `minimum-stop-percent: 0.50`, stop 2.0×ATR, target 3.0×ATR.
+- Below an ATR of about 0.1667% of price, reward/risk falls under 1.0.
+
+| ID | ATR % | Stop distance | TP distance | Stored RR | Highest price reached (% of TP distance) |
+|---|---|---|---|---|---|
+| 137 | 0.107% | 0.500% (floor) | 0.322% | 0.644 | +0.15% (46.6%) |
+| 143 | 0.270% | 0.541% (2×ATR) | 0.811%, later extended to 1.768% | 1.500 | +1.69% (95.3%) |
+| 158 | 0.055% | 0.500% (floor) | **0.164%** | **0.327** | +0.06% (33.2%) |
+| 162 | 0.073% | 0.500% (floor) | 0.219% | 0.438 | +0.07% (31.5%) |
+| 172 | 0.124% | 0.500% (floor) | 0.372% | 0.744 | +0.18% (49.0%) |
+| 182 | 0.080% | 0.500% (floor) | 0.241% | 0.482 | 0.00% (never above entry) |
+
+Each stop and TP value reproduces exactly from the formula, so the data is internally consistent.
+
+**No reward/risk floor on these paths (code):** grep found `ExecutionIntelligenceService.java:1397`/`:1455` requiring only `rewardRisk > 0`. A 1.15 floor exists only for breakout-retracement entries (`:212`, `:1539`). None of these six entries used that path.
+
+**AGENT INFERENCE:** In low-volatility conditions the system takes trades whose win rate would need to exceed about 60–75% just to break even, before fees. This is a **strategy/configuration design weakness**, not a code defect: the code does what it is configured to do. It is also not a stale-data problem.
+
+### I2-F02 — Trade 143's entry authority most likely came from a superseded 5m signal (PROJECT EVIDENCE + AGENT INFERENCE; not yet proven)
+
+**Evidence:**
+- **The entry path.** Wallet trade 358 was `SETUP_TIMEFRAME_ATR`. That path comes from `setupTimeframeAtrAuthoritySignal` (`ExecutionIntelligenceService.java:1472-1492`) and requires `five = latestAtOrBefore(1m)` to be a BUY or STRONG_BUY.
+- **The lookup.** It uses `findTop…GeneratedAtLessThanEqual(1m.generatedAt)` (`:2455-2461`, `:2606-2608`).
+- **The two 5m candidates:**
+  - 1m #159408 was generated at 22:40:01.633945 UTC.
+  - 5m #159407 (candle 22:35, closed 22:40:00, **WATCH**) was generated at 22:40:01.635944. That is **2.0 ms later**, so the lookup excludes it.
+  - 5m #159285 (candle 22:30, **BUY 83**) was generated at 22:35:01.552, about 5 minutes earlier. This is the signal `latestAtOrBefore` returns.
+- **The confluence record agrees.** The 1m entry reason records `5m=BUY (trend 18/25)`, which matches the old candle, not the current WATCH.
+- **The current 5m would have blocked the entry.** `isBullish(WATCH)` is false (`:2634`), so with #159407 the route returns null.
+- **The 5m wake-up path is excluded.** It needs the triggering 5m to be bullish (`:401`, `:295`), and #159407 was WATCH.
+
+**The 1m signal's own ATR plan said not to enter now:** `WAIT_FOR_RETRACEMENT`, "Recommended position is 0%", retrace target ≈4.0118, RSI 84.3, price 4.35 ATR above SMA20. The route is designed to override that 1m ATR deferral when the 5m allows entry. Here the override rested on a 5m candle that had already been replaced.
+
+**The race is non-deterministic:** at 5-minute boundaries the 5m signal is sometimes generated before the 1m and sometimes after. 137 at 20:55 and 162 at 04:05 had 5m first; 143 at 22:40 and 158 at 02:35 had 5m after.
+
+**Conclusion:** This is a **candidate logic defect**: a boundary race in higher-timeframe selection. It is not yet confirmed, because the `confluence_higher_signal_generated_at` evidence and #159285's executability flags are still missing (see I2-001 and I2-002).
+
+**Context:**
+- The previous EGLD position (wallet position 171) closed on `PROFIT_LOCK_EXIT` at 3.996 at 22:39:41 UTC, on a one-tick dip: 4.040 → 3.996 → 4.021.
+- 143 then re-entered 22 s later at 4.033, which is 0.93% higher.
+
+### I2-F03 — Trade 143's loss on a profit-lock exit came from a price gap; protection behaved as coded (PROJECT EVIDENCE: I1-005, I1-008, I1-009, I1-006)
+
+**Sequence (UTC → KSA):**
+1. 22:40:23 → 01:40:23 — profit lock activated.
+2. 22:40:41 and 22:41:13 — TP extended twice (events #51, #52): 4.0647 → 4.0805 → 4.1043.
+3. 22:41:55 → 01:41:55 — highest price 4.101 (95.35% of the extended TP distance). Lock set at 4.07579; hard floor at entry×1.0005 = 4.035017.
+4. Ticks: 22:43:27.038 at **4.100**, then 22:43:35.021 at **4.027**. Nothing was recorded in between.
+   - That is −1.78% in 8 s. It jumped through the lock (4.0758), the floor (4.0350) and entry (4.033) in one step.
+   - The next ticks kept falling: 4.018, 4.016, 4.007, then 3.994 at 22:43:45.
+5. The wallet sold at 22:43:35.045, 24 ms after the 4.027 tick (`POSITION:172:PROFIT_LOCK_HARD_EXIT`). This was the first observed tick, and the exit price equals the tick price.
+
+**Classification:** a gap loss, consistent with the coded rule (`LivePositionProtectionService.java:210-213`). It is not a delay: the reaction to the tick was immediate.
+
+**Open question:** EGLD ticks normally arrive about every 2 s, but none exist at :29, :31 or :33. That could be ordinary Binance coalescing when nothing changed, or an ingestion pause (I2-004, I2-005).
+
+**Rule note:** the profit lock gives no price guarantee. A tick-based paper fill gives back the whole lock on a gap. That is realistic for a market exit, but the "protected-profit" wording overstates the guarantee.
+
+### I2-F04 — Entry paths and their context (PROJECT EVIDENCE: I1-003, I1-004, I1-005, I1-007)
+
+| ID | 1m entry signal | Entry path | 5m used | Allocation | Notes |
+|---|---|---|---|---|---|
+| 137 | #156723 STRONG_BUY 91 | IMMEDIATE_VALIDATION | NEUTRAL (5m signal was current, generated 17 ms earlier) | 25 USDT | Previous 20 one-minute candles were mostly STRONG_SELL. #156695 STRONG_BUY a minute earlier was blocked by `RANGE_ENTRY_LOCATION`. Single-candle reversal. |
+| 143 | #159408 WATCH 73 | SETUP_TIMEFRAME_ATR | BUY #159285 (superseded, I2-F02) | 25 | ATR said wait/0%. |
+| 158 | #165412 WATCH 64 | SETUP_CONFIRMATION_WAKEUP | fresh 5m #165415 BUY was the trigger (`:390-456`) | 25 | Consistent: the 5m trigger was fresh and the previous 5m #165289 was WATCH. |
+| 162 | #167668 WATCH 76 | ACCUMULATED_EVIDENCE | WATCH #167616 | 15 | 1h WATCH. |
+| 172 | #171589 BUY 77 | IMMEDIATE_VALIDATION | "5m=BUY": #171559, which itself had `final_entry_allowed=0`, blocked by `RANGE_ENTRY_LOCATION` | 25 | `confluence_status=CONFLICT`. |
+| 182 | #176710 BUY 75 | IMMEDIATE_VALIDATION | "5m=NEUTRAL": #176655, original STRONG_SELL demoted to NEUTRAL (score 25) | 15 | Regime WEAK_DOWNTREND with a TREND_FOLLOWING strategy; CONFLICT. Previous 20 one-minute candles were STRONG_SELL. Never above entry. |
+
+**AGENT INFERENCE (to trace in iteration 3):**
+- In 172, the confluence step credited a 5m BUY that its own analysis had marked non-executable.
+- In 182, a 5m whose *original* decision was STRONG_SELL counted as neutral support.
+
+Whether these follow the intended rules depends on `TradeExecutionValidationService` / the confluence policy. I have not finished that trace.
+
+### I2-F05 — Fees would make every loss materially larger (PROJECT EVIDENCE fee_usdt=0; EXTERNAL RESEARCH assumption)
+
+- Every wallet fill has `fee_usdt = 0` (I1-004).
+- The 0.1% per side figure is Binance's standard spot rate for the lowest (VIP0) tier. **I did not verify it in this iteration**; treat it as an assumption.
+- At 0.1% per side, the extra cost is 137: 0.0499, 143: 0.0500, 158: 0.0500, 162: 0.0299, 172: 0.0500 and 182: 0.0300 USDT.
+- Stored total −0.2732 USDT → fee-adjusted about **−0.5329 USDT**.
+- **Trade 158's TP distance (0.164%) is below the 0.2% round-trip fee.** Trades 162 (0.219%) and 182 (0.241%) would have netted under 0.05% even at TP. The fact that paper P&L leaves fees out hides this negative expectancy.
+
+### I2-F06 — Exits followed their coded rules (PROJECT EVIDENCE: I1-006, I1-007)
+
+| ID | Exit evidence | Exit fill |
+|---|---|---|
+| 137 | 1m #156850 STRONG_SELL (stored 21:00:03.10) plus fresh 5m #156852 SELL (stored 21:00:04.26); 1h NEUTRAL | tick 3.987, 21:00:08.9 |
+| 158 | 1m #166819 STRONG_SELL plus 5m #166821 SELL; 55 minutes of flat movement before | — |
+| 162 | Signal path; #168277 STRONG_SELL with 5m #168251 SELL | `position_recommendation=REDUCE`, but the position was fully closed (rule to check) |
+| 172 | 1h #172201 SELL from 07:00:06. The exit waited until 07:15, when 5m #172588 became NEUTRAL; this matches the `HTF_SELL_CONFIRMED` condition | — |
+| 182 | 1m #176927 SELL plus 5m #176934 STRONG_SELL | — |
+
+The gap between exit evidence and fill is about 1–6 s in every case. There is no sign of execution delay.
+
+### I2-F07 — Resolving my iteration-1 unknowns U-06 and U-07 (PROJECT EVIDENCE: I1-008, I1-010)
+
+- **U-06 (ingestion mode):** answered. Every tick has `source=BINANCE_KLINE_DIRECT_FIX153`, `delivery_status=APPLIED`, `outcome_reason=PROTECTION_CALLBACK_COMPLETED`. Direct ingestion was active on 10-11/12.
+- **U-07 (why no later losses):** answered.
+  - The last paper position opened 2026-10-15 03:08 UTC (KSA 06:08).
+  - The last 1m signal was 2026-10-17 03:26 UTC (KSA 06:26). There have been **no signals for about 13 days** before the snapshot.
+  - CLOSED-status positions from 10-12 to 10-15 were all non-negative.
+  - Whether the application or analysis was stopped is unknown. This is an operational observation, not a trade defect, but it means the "daily" study is looking at old trades.
+- **Minor observation:** during trade 137 the ticks have `created_at` about 150 ms *before* `observed_at`. That points to a local-clock or exchange-time offset. It does not affect these trades, but price-age validation should allow for negative ages.
+
+### Preliminary classification (not final)
+
+| ID | Classification |
+|---|---|
+| 137 | Followed the rules; losing trade with negative structural expectancy (reward/risk 0.64, single-candle reversal against a downtrend). |
+| 143 | **Candidate logic defect** in the entry (I2-F02, stale 5m at the 5-minute boundary). The exit was a valid gap loss. |
+| 158 | Followed the rules; design weakness (reward/risk 0.33, TP below fees). |
+| 162 | Followed the rules; design weakness (reward/risk 0.44). |
+| 172 | Followed the rules pending the I2-F04 confluence trace; reward/risk 0.74. |
+| 182 | Followed the rules pending the I2-F04 confluence trace (demoted STRONG_SELL counted as neutral); reward/risk 0.48; zero favourable excursion. |
+
+---
+
+## EVIDENCE INDEX
+
+- **DB:** DBQ-CLAUDE-I1-001, 003, 004, 005, 006, 007, 008, 009, 010; DBQ-FTS-005.
+- **Code:**
+  - `AtrRiskService.java:27-75, 82-174`
+  - `application.yml:135-151`
+  - `ExecutionIntelligenceService.java:66, 104, 212, 283-346, 389-456, 1397, 1455, 1472-1514, 2455-2462, 2606-2614, 2634-2640`
+  - `LivePositionProtectionService.java:210-213` (from iteration 1)
+- **Logs:** not searched. No SSH access in this iteration.
+
+## UNKNOWNS
+
+- **U2-01:** Which 5m signal each 1m entry actually used (`confluence_higher_signal_generated_at`). Decisive for I2-F02.
+- **U2-02:** #159285's `final_entry_allowed`, `atr_immediate_entry_allowed` and `atr_recommended_position_percent`.
+- **U2-03:** The `execution_opportunity` decision code and explanation at each entry.
+- **U2-04:** Whether ticks were missing from 22:43:27 to 22:43:35 on 10-11 for EGLD only or for all symbols.
+- **U2-05:** How often the 5-minute-boundary race happens across all executed entries.
+- **U2-06:** Win rate and P&L of all positions by planned reward/risk band. Tests I2-F01 on more than six trades.
+- **U2-07:** The confluence rules behind 172 and 182 (code trace, iteration 3).
+- **U2-08:** Replay reproducibility. Replay's `replayScope.latestAtOrBefore` uses the same `<=` semantics (`:2607`). Whether Replay recreates the same millisecond ordering is unknown, so the race may not reproduce in Replay.
+
+---
+
+## DB_REQUEST blocks
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-001
+Purpose: Show exactly which higher-timeframe signal each entry's confluence used, plus the ATR and executability fields (decisive for I2-F02).
+SQL:
+SELECT s.id, s.symbol, s.generated_at, s.decision, s.confluence_status, s.confluence_entry_allowed, s.confluence_higher_interval, s.confluence_higher_decision, s.confluence_higher_trend_score, s.confluence_higher_signal_generated_at, s.confluence_evaluated_at, s.atr_entry_type, s.atr_recommended_position_percent, s.atr_immediate_entry_allowed, s.atr_retracement_entry_price, s.atr_overextended, s.candle_range_atr_multiple, s.entry_authority, s.entry_authority_max_position_percent, LEFT(s.entry_authority_explanation, 600) AS entry_authority_explanation, LEFT(s.final_decision_explanation, 800) AS final_decision_explanation FROM trade_signal s WHERE s.id IN (156723,159408,165412,167668,171589,176710) ORDER BY s.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-002
+Purpose: Get the executability flags of the 5m candidates at each 5-minute-boundary entry (old vs. new 5m signal).
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, generated_at, created_at, decision, original_decision, total_score, confidence_score, final_entry_allowed, primary_blocking_stage, atr_immediate_entry_allowed, atr_recommended_position_percent, atr_entry_type, liquidity_entry_allowed, atr_at_signal, signal_mode, data_quality_valid FROM trade_signal WHERE id IN (159285,159407,165289,165415,156594,156721,171559,176655,176792) ORDER BY id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-003
+Purpose: Get the execution-opportunity decisions recorded at each entry (entry path, the 5m/1h decisions used, explanation).
+SQL:
+SELECT o.id, o.symbol, o.status, o.started_at, o.last_evidence_at, o.latest_signal_id, o.evidence_score, o.opportunity_health, o.five_minute_decision, o.one_hour_decision, o.execution_source, o.recommended_position_percent, o.decision_code, LEFT(o.decision_explanation, 1200) AS decision_explanation, o.executed_at FROM execution_opportunity o WHERE o.latest_signal_id IN (156723,159408,165412,167668,171589,176710) OR (o.symbol IN ('EGLDUSDT','XRPUSDT','DOGEUSDT','SHIBUSDT','ACEUSDT') AND o.executed_at BETWEEN '2026-10-11 20:50:00' AND '2026-10-12 10:00:00') ORDER BY o.executed_at LIMIT 40
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-004
+Purpose: 1m EGLDUSDT candles around trade 143's gap exit (was the drop inside one candle, and were the candles finalised normally?).
+SQL:
+SELECT id, symbol, interval_code, open_time, close_time, open_price, high_price, low_price, close_price, volume, number_of_trades, closed, ingestion_source, created_at, updated_at FROM candle WHERE symbol = 'EGLDUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-11 22:38:00' AND '2026-10-11 22:45:00' ORDER BY open_time
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-005
+Purpose: Check whether price-event ingestion paused for all symbols between 22:43:27 and 22:43:35 UTC (U2-04).
+SQL:
+SELECT symbol, COUNT(*) AS n, MIN(observed_at) AS first_obs, MAX(observed_at) AS last_obs FROM market_price_event WHERE observed_at BETWEEN '2026-10-11 22:43:20' AND '2026-10-11 22:43:40' GROUP BY symbol ORDER BY symbol LIMIT 100
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-006
+Purpose: How often the 5-minute-boundary race (5m generated after the 1m that was executed) happens across all executed BUY entries (U2-05).
+SQL:
+SELECT w.id AS wallet_trade_id, w.symbol, w.execution_reason, w.executed_at, s1.id AS s1m_id, s1.generated_at AS s1m_gen, s5.id AS s5m_id, s5.generated_at AS s5m_gen, s5.decision AS s5m_decision, TIMESTAMPDIFF(MICROSECOND, s1.generated_at, s5.generated_at) AS s5m_after_1m_us FROM wallet_trade w JOIN trade_signal s1 ON s1.id = w.signal_id AND s1.interval_code = '1m' JOIN trade_signal s5 ON s5.symbol = s1.symbol AND s5.interval_code = '5m' AND s5.candle_open_time = s1.candle_open_time - INTERVAL 4 MINUTE WHERE w.side = 'BUY' AND w.executed_at >= '2026-10-01 00:00:00' AND MINUTE(s1.candle_open_time) % 5 = 4 ORDER BY w.executed_at LIMIT 200
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-007
+Purpose: Outcome by planned reward/risk band across all closed and stopped paper positions (tests I2-F01 beyond the six trades).
+SQL:
+SELECT CASE WHEN s.risk_reward_ratio < 0.5 THEN 'a<0.5' WHEN s.risk_reward_ratio < 1.0 THEN 'b0.5-1.0' WHEN s.risk_reward_ratio < 1.5 THEN 'c1.0-1.5' ELSE 'd>=1.5' END AS rr_band, p.status, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losses, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum, ROUND(AVG(s.atr_percent), 5) AS avg_atr_pct FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL GROUP BY rr_band, p.status ORDER BY rr_band, p.status
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-008
+Purpose: The EGLDUSDT position just before trade 143 (wallet position 171, profit-lock exit 22 s before re-entry) and its entry signal.
+SQL:
+SELECT m.id, m.entry_signal_id, m.symbol, m.stop_loss_usdt, m.take_profit_usdt, m.highest_price_usdt, m.profit_lock_state, m.profit_lock_price_usdt, m.profit_lock_progress_percent, m.entry_stage, m.opened_at, m.updated_at, m.status FROM wallet_managed_position m WHERE m.id = 171
+### END_DB_REQUEST
+
+---
+
+## Self-review (iteration 2)
+
+- **Frozen set:** unchanged (182, 172, 162, 158, 143, 137).
+- **Labels:** every claim is labelled. I2-F02 is held as a *candidate* defect until I2-001 and I2-002 are back. I2-F01 is a configuration/design weakness, not a code defect. I2-F05's fee rate is an unverified external assumption.
+- **Corrections to iteration 1:**
+  - F-07 (trade 143) is now explained: it was a price gap, not a stale or wrong progress calculation.
+  - H-01 is ruled out for trades 137 and 158 and supported for 143.
+- **Plan for iteration 3:** use I2-001 to 003 to confirm or reject I2-F02. Trace the confluence handling of a blocked or demoted 5m signal (trades 172 and 182) in `TradeExecutionValidationService`. Quantify I2-F01 across the population using I2-007. Assess whether the race can be reproduced in Replay.

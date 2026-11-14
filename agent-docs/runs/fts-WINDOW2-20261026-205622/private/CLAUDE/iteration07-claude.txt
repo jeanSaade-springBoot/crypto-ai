@@ -1,0 +1,178 @@
+# Iteration 7: self-challenge (Claude, WINDOW2)
+
+This is analysis only. I wrote nothing to code, config, the database or git. No write or ExitPlanMode tool was available in this session, so this text is the whole output. The frozen trades are 182, 172, 162, 158, 143 and 137; none were substituted. Database times are UTC, and KSA (UTC+3) is shown only where labelled.
+
+## Bottom line
+
+My Iteration 6 conclusions mostly survive the I6 results, but four need correcting:
+
+- **Trade 137 is the only claim that got stronger** (F-39 holds).
+- **F-38 (the hidden 5m veto) has no measurable cost.** The "blocked bullish 5m" half is actually net positive; the "hidden bearish 5m" half is 8 trades, which is too few to tell.
+- **F-39 does not hold as a population-wide claim.** Positions entered with sentiment data did worse per dollar than those without it.
+- **The system's loss is almost entirely the stop-loss class.** No frozen trade belongs to it, because the selection only picks `CLOSED` losses.
+
+## FINDINGS
+
+### F-42 — Where the system loses money: the stop-loss class, plus slippage past the stop (PROJECT EVIDENCE: I6-001 and I6-002; the arithmetic is AGENT INFERENCE)
+
+- **The I6-001 groups reconcile exactly:** they sum to −4.1707 USDT across 193 positions.
+- **Totals:**
+  - `CLOSED` positions: **+11.70 USDT**.
+  - `STOPPED` positions: **−15.88 USDT** across 75, all losses.
+  - Stop-loss exits are about 92% of all gross losses. Signal-exit losers are only about −1.4 USDT.
+- **Payoff shape (AGENT INFERENCE):**
+  - Average win is about +0.44%; average loss is about −0.50%.
+  - With a 47% win rate, break-even would need about 53% wins.
+  - 69 of the 90 wins are profit-lock exits. They realise only 0.27% and 0.47%, against average targets of 0.65% and 1.20%.
+- **Stops fill worse than the stop price:**
+  - Average loss is 1.151 times the stop distance; 3 of 75 exceed 1.5 times, and the worst is 2.27 times (trade 151, PEPE).
+  - Average loss is 0.600% against an average stop distance of 0.525%. That is about 0.075% × 2,710 notional ≈ **2.0 USDT**, roughly half of the system's gross loss.
+- **PEPE dominates the overshoot list** (6 of the top 10). My hypothesis is the coarse price step on a very low-priced coin combined with fast drops, like trade 143's sweep (F-11). This is unproven; I7-003 tests it.
+- **Caveat:** `paper_position.stop_loss` may be the stop after any later adjustment, not the stop set at entry.
+- **What this means for the study:** the frozen six are the *cheapest* kind of loser. Their signal exits lost 0.18–0.26% on average versus 0.60% for stops, and together they lost −0.273 USDT (about 6.5% of the gross loss). The biggest improvement opportunity is outside this frozen selection.
+
+### F-36 — Revised: "no gross edge" is a payoff-shape problem, not just fees (AGENT INFERENCE on PROJECT EVIDENCE)
+
+- The fee arithmetic is unchanged: 9.3–12.4 USDT on 6,195 USDT traded.
+- The cause of the negative gross result is now measured (F-42): wins are small relative to losses, not just fees.
+- I cannot claim that profit locks cut winners short. Locks activate at 70% of the way to the target (the admin profile on trade 143). Without them, some of those trades might have fallen back to the stop. I7-002 tests this.
+
+### F-37 — Unchanged, and its caveat is closed (PROJECT EVIDENCE: I6-003, third statement)
+
+All 193 positions have a managed-position record and a non-NULL Entry Quality. The "85+" bucket was not contaminated by NULLs, so "Entry Quality does not predict outcome" stands.
+
+### F-38 — Downgraded: a rule inconsistency with no measured cost (PROJECT EVIDENCE: I6-004)
+
+| Flag | Positions | Wins | P&L (USDT) | P&L per dollar traded |
+|---|---|---|---|---|
+| Neither | 181 | 83 | −3.705 | −0.064% |
+| Blocked bullish 5m (trade 172's pattern) | 4 | 2 | **+0.093** | +0.066% |
+| Hidden bearish 5m (trade 182's pattern) | 8 | 5 | −0.559 | −0.207% |
+
+- **Excess loss of the hidden-bearish group (AGENT INFERENCE):** about −0.39 USDT more than the baseline rate. With 8 trades this is not statistically meaningful, and the group's win rate (62%) is above average.
+- **Query limitation:** it picks the latest 5m signal by `generated_at`. Production picks by commit visibility (F-13), so a few rows may be misclassified. I have not yet confirmed that 172 and 182 themselves are flagged; I7-004 checks.
+- **Verdict:** F-38 is still a real inconsistency between sibling guards. Trade 182's 5m STRONG_SELL was hidden behind a neutralised field, and trade 172's 5m "confirmation" had itself been blocked. It is **not shown to cost money**. I now call it a "candidate rule inconsistency", not a "candidate logic defect" driving losses.
+
+### F-39 — Holds for trade 137; rejected as a population-wide or trade-182 cause (PROJECT EVIDENCE: I6-003 and code; counterfactuals are AGENT INFERENCE)
+
+- **Sentiment is a time-of-day feed, not random gaps.** It is available only from about 03:00 to 08:00 UTC (06:00–11:00 KSA) each day, and on no other hours in 10-11 to 10-15.
+  - Trade 137 entered at 20:55 UTC, when sentiment is structurally absent.
+  - So "with sentiment" versus "without" is confounded with time of day.
+- **Population result (1m entries; every position entered on a 1m signal):**
+
+  | Sentiment at entry | Positions | Wins | P&L (USDT) | P&L per dollar traded | Average score |
+  |---|---|---|---|---|---|
+  | Absent | 142 | 66 | −2.517 | −0.054% | 72.4 |
+  | Present | 43 | 20 | −1.628 | **−0.124%** | 70.9 |
+
+  - Positions with sentiment did *worse*. The claim "missing data inflates scores and leads to worse trades" is not supported across the population.
+- **Trade 137 is robust.** It used the RANGE profile, where sentiment is worth up to 15 points.
+  - With the observed feed value: (50 + 10) / 70 = 86, a BUY rather than STRONG_BUY.
+  - With a neutral value instead: (50 + 7.5) / 70 = 82.
+  - Both are below 88 (STRONG_BUY) and below the 90 needed for the range exception, so the range-location guard would have blocked the entry.
+- **New self-challenge on trade 182 — tested and rejected.** The trend-following profile allows sentiment up to 10 points (`application.yml:353`). Scaling is rounded (`MarketStrategyService.java:211-215`).
+  - With the observed feed value: (49 + 7) / 75 = 74.67, which rounds to 75, still a BUY at the 75 threshold. Leaving sentiment out did **not** decide trade 182.
+  - Only a neutral value of 5 points would have flipped it, to 72 (WATCH).
+
+### F-31 — Downgraded: no measured cost (PROJECT EVIDENCE: I6-005)
+
+- `WEAK_DOWNTREND` BUY positions: 2 trades, 1 win, +0.040 USDT. Trade 182 is one of them.
+- It stays a design gap (no gate reads the downtrend regime) with no evidence that it costs money.
+- **Side observation (hypothesis only):** `BREAKOUT`/BUY won 6 of 20 for −0.22% per dollar, the worst group. It is not significant (roughly p ≈ 0.1 against a 47% base rate).
+
+### Corrections to earlier wording
+
+- **F-41:** `CLOSED` positions that were not wins number 28, of which 26 are losses (FTS-002). The other 2 had a realised P&L of exactly zero.
+- **Trade 158:** its target was +0.171%. That is *about equal to* the 0.15–0.20% round-trip fee, not clearly below it.
+- **Trade 143:** Iteration 3 F-13 said Production and Replay would agree on this trade. Iteration 4 F-24 superseded that: Replay stamps signals at the candle close and processes 5m before 1m, so it would see the WATCH signal #159407 and not open the trade. F-11 stands: the loss came after the trade reached 95.35% of its target, from a gap sweep, not from a protection defect.
+
+## Root cause per frozen trade (revised)
+
+The entry assessment uses only what was known at entry; outcomes are listed separately.
+
+| Trade | Entry (UTC / KSA) | Exit, P&L | Root cause | Class | Confidence |
+|---|---|---|---|---|---|
+| 137 | 10-11 20:55:01 / 23:55:01 | `SELL_CONFIRMED`, −0.075 | F-39: missing sentiment lifted it to STRONG_BUY and through the range exception | Scoring-design weakness | High (inference; Replay test pending) |
+| 143 | 10-11 22:40:01 / 10-12 01:40:01 | `PROFIT_LOCK_HARD_EXIT`, −0.037 | Entry admitted by a timing race at the 5-minute boundary (F-12/F-24); loss from gap risk (F-11) | Production/Replay parity weakness + valid gap loss | Medium |
+| 158 | 10-12 02:35:01 / 05:35:01 | `SELL_CONFIRMED`, −0.032 | Target about equal to fees; no edge | Valid loser under a design limitation | High |
+| 162 | 10-12 04:02:02 / 07:02:02 | `STRONG_SELL`, −0.052 | Late entry; FIX-119 lifted by a single BUY (F-33); its route group is net positive | Valid loser with a design inconsistency | Medium |
+| 172 | 10-12 06:36:01 / 09:36:01 | `HTF_SELL_CONFIRMED`, −0.046 | F-38: the 5m BUY used as confirmation had itself been blocked | Rule inconsistency, cost not shown | Medium |
+| 182 | 10-12 09:57:01 / 12:57:01 | `SELL_CONFIRMED`, −0.032 | F-38: hidden 5m STRONG_SELL; F-31 and F-39 tested and not decisive | Rule inconsistency + design gap; cost not shown | Medium |
+
+**Ruled out for all six (unchanged):** stale data, execution delay, protection failure, dropped price messages. All six exits limited the loss compared with the stop.
+
+## Recommendations (ranked by measured cost; none implemented)
+
+1. **Stop overshoot (F-42, about 2 USDT, largest).**
+   - Measure overshoot per symbol and price step (I7-003).
+   - Check whether the paper fill rule (fill at the first observed price past the stop) matches what a real stop would get.
+   - Regression check: a synthetic price step through the stop should fill at the observed price, and the overshoot should be logged.
+2. **Payoff shape (F-36/F-42).**
+   - Evaluate the profit-lock activation and lock levels against what price did after the exit (I7-002) before changing them.
+   - Report results net of fees.
+3. **F-39.** Score missing components neutrally, or forbid STRONG_BUY and the range exception when sentiment is absent. Regression check: trade 137's inputs with sentiment present and absent must give the same decision.
+4. **F-38 and F-24.** These are consistency fixes with Replay tests (ACE 09:50–10:06 UTC on 10-12; SHIB 06:30–06:40 UTC on 10-12; EGLD 22:35–22:45 UTC on 10-11). Do not expect them to change P&L much.
+5. **Not supported:** raising the Entry Quality cutoff, a downtrend-regime gate, or tightening FIX-11G.
+
+## EVIDENCE
+
+| ID | Type | Reference |
+|---|---|---|
+| E-48 | DB | I6-001: exit-reason groups; `STOP_LOSS` n = 75, −15.8756; profit-lock wins 0.27% / 0.47% |
+| E-49 | DB | I6-002: loss-to-stop ratio averages 1.151, max 2.274 (#151 PEPE); 3 of 75 exceed 1.5× |
+| E-50 | DB | I6-003: sentiment only 03:00–08:00 UTC; with/without outcome; no NULL Entry Quality across 193 |
+| E-51 | DB | I6-004: F-38 flag groups (n = 181 / 4 / 8) |
+| E-52 | DB | I6-005: regime × decision; `WEAK_DOWNTREND` BUY n = 2, +0.040 |
+| E-53 | Code | `MarketStrategyService.java:96-105, 211-215`; `StrategyProfile.java:21-25`; `application.yml:349-370` |
+| E-54 | Code | `TradeExecutionValidationService.java:263-284` (FIX-11G requires the 1m signal to be already approved) |
+| E-55 | DB | I1-002 / I1-003 / I1-006: frozen exit reasons and P&L |
+
+## UNKNOWNS
+
+- **U-34:** Were the frozen signal exits good outcomes? That is, did price reach the stop before the target after each exit? Needs I7-001.
+- **U-35:** Do profit-lock exits avoid later stop hits, or cut off moves that would have reached the target? Needs I7-002. Caveat: the stored stop may already have been moved.
+- **U-36:** Is stop overshoot tied to symbol or price step? Needs I7-003.
+- **U-37:** Are 172 and 182 themselves in the I6-004 flag groups? Needs I7-004.
+- **Still open:**
+  - U-27: trade 143's Entry Quality, 60 or 70.
+  - U-28: which code revision was deployed on 10-11/12 (F-35, FIX-154 code is present in the working tree).
+  - U-15 and U-17: application logs.
+  - U-21: Replay runs, which are outside analysis-only mode.
+  - The account's real fee tier.
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-001
+Purpose: Outcome only (not used to judge the entries). Price path for 120 minutes after each frozen exit, and whether the target or the stop was touched first (U-34).
+SQL:
+SELECT p.id, p.symbol, p.close_reason, p.closed_at, p.entry_price, p.exit_price, p.take_profit, p.stop_loss, COUNT(c.id) AS n_candles, MAX(c.high_price) AS max_high_120m, MIN(c.low_price) AS min_low_120m, MIN(CASE WHEN c.high_price >= p.take_profit THEN c.open_time END) AS first_tp_touch, MIN(CASE WHEN c.low_price <= p.stop_loss THEN c.open_time END) AS first_sl_touch FROM crypto_ai.paper_position p LEFT JOIN crypto_ai.candle c ON c.symbol = p.symbol AND c.interval_code = '1m' AND c.closed = 1 AND c.open_time >= p.closed_at AND c.open_time < DATE_ADD(p.closed_at, INTERVAL 120 MINUTE) WHERE p.id IN (182,172,162,158,143,137) GROUP BY p.id, p.symbol, p.close_reason, p.closed_at, p.entry_price, p.exit_price, p.take_profit, p.stop_loss ORDER BY p.id LIMIT 6;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-002
+Purpose: Outcome only. For every `CLOSED` exit other than `TAKE_PROFIT`: after the exit, which was touched first within 120 minutes, the target or the stop? (U-35; tests whether profit locks help or hurt.)
+SQL:
+SELECT x.close_reason, COUNT(*) AS n, SUM(x.first_sl IS NOT NULL AND (x.first_tp IS NULL OR x.first_sl < x.first_tp)) AS sl_first, SUM(x.first_tp IS NOT NULL AND (x.first_sl IS NULL OR x.first_tp < x.first_sl)) AS tp_first, SUM(x.first_tp IS NOT NULL AND x.first_tp = x.first_sl) AS same_candle, SUM(x.first_tp IS NULL AND x.first_sl IS NULL) AS neither, ROUND(SUM(x.realized_pnl), 4) AS pnl FROM (SELECT p.id, p.close_reason, p.realized_pnl, MIN(CASE WHEN c.high_price >= p.take_profit THEN c.open_time END) AS first_tp, MIN(CASE WHEN c.low_price <= p.stop_loss THEN c.open_time END) AS first_sl FROM crypto_ai.paper_position p LEFT JOIN crypto_ai.candle c ON c.symbol = p.symbol AND c.interval_code = '1m' AND c.closed = 1 AND c.open_time >= p.closed_at AND c.open_time < DATE_ADD(p.closed_at, INTERVAL 120 MINUTE) WHERE p.status = 'CLOSED' AND p.close_reason <> 'TAKE_PROFIT' GROUP BY p.id, p.close_reason, p.realized_pnl) x GROUP BY x.close_reason ORDER BY n DESC LIMIT 20;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-003
+Purpose: Stop overshoot cost per symbol, to test the price-step hypothesis (F-42, U-36).
+SQL:
+SELECT p.symbol, COUNT(*) AS n, ROUND(AVG((p.entry_price - p.exit_price) / (p.entry_price - p.stop_loss)), 3) AS avg_loss_to_stop, ROUND(SUM((p.exit_price - p.stop_loss) * p.quantity), 4) AS overshoot_usdt, ROUND(SUM(p.realized_pnl), 4) AS pnl, ROUND(SUM(p.entry_price * p.quantity), 2) AS notional, MIN(p.stop_loss) AS min_stop FROM crypto_ai.paper_position p WHERE p.status = 'STOPPED' AND p.entry_price > p.stop_loss GROUP BY p.symbol ORDER BY overshoot_usdt LIMIT 30;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-004
+Purpose: List the positions flagged in I6-004 and confirm whether 172 and 182 are among them (U-37).
+SQL:
+SELECT x.* FROM (SELECT p.id, p.symbol, p.opened_at, p.realized_pnl, s.id AS entry_sig, f.id AS f5m_id, f.generated_at AS f5m_gen, f.decision AS f5m_decision, f.original_decision AS f5m_original, f.final_entry_allowed AS f5m_fea, COALESCE(f.decision IN ('NEUTRAL','WATCH') AND f.original_decision IN ('SELL','STRONG_SELL'), 0) AS hidden_bear_5m, COALESCE(f.decision IN ('BUY','STRONG_BUY') AND f.final_entry_allowed = 0, 0) AS blocked_bull_5m FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id LEFT JOIN crypto_ai.trade_signal f ON f.id = (SELECT f2.id FROM crypto_ai.trade_signal f2 WHERE f2.symbol = s.symbol AND f2.interval_code = '5m' AND f2.generated_at <= s.generated_at AND f2.generated_at >= DATE_SUB(s.generated_at, INTERVAL 10 MINUTE) ORDER BY f2.generated_at DESC LIMIT 1) WHERE p.status IN ('CLOSED','STOPPED') AND s.interval_code = '1m') x WHERE x.hidden_bear_5m = 1 OR x.blocked_bull_5m = 1 OR x.id IN (172,182) ORDER BY x.id LIMIT 20;
+### END_DB_REQUEST
+
+## Self-review
+
+- **Downgraded:** F-38 and F-31 (no measured cost). F-39 is limited to trade 137 at population level. My new idea that F-39 also decided trade 182 was tested against the code and rejected.
+- **Upgraded:** F-42, stop-class losses and slippage past the stop, is the largest measured driver. It lies outside the frozen selection.
+- **Separation kept:** every entry verdict uses only data available at entry. The I6 aggregates and the I7-001/002 queries are outcome evidence only.
+- **Plan for Iteration 8:** fold in the I7 results, freeze the root-cause table and ranked recommendations, and list the remaining unknowns explicitly.

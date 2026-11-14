@@ -1,0 +1,86 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No permitted Codex DB-result files exist yet. Therefore entry quality for frozen trades `182, 172, 162, 158, 143, 137` is currently **unverifiable**; none may be labelled supported, weak, or defective.
+
+- **PROJECT EVIDENCE:** An initial BUY is assessed twice: against signal-time evidence and again against a fresh canonical execution price. Execution is cancelled if that fresh price is at/below stop, at/above target, or falls below the entry-quality cutoff. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:340) [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1150)
+
+- **PROJECT EVIDENCE:** Entry quality scores expansion from a recent/opportunity reference, ATR extension, opportunity age, risk/reward, rejection proximity, high-volatility regime, and stop exposure. Scores below 50 are `CHASE_ENTRY` and block the initial BUY; otherwise the score caps initial allocation at 25%, 40%, or 50%. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:865) [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1171)
+
+- **PROJECT EVIDENCE:** The durable `wallet_managed_position.entry_quality_score` is not necessarily the initial-entry score: every BUY, including a progressive add, overwrites it. Likewise, a progressive add can re-average `paper_position.entry_price`. Initial-entry assessment must therefore be reconstructed from the initial executed `wallet_trade` and its linked entry signal—not solely from the final position row. [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:129) [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:263)
+
+- **PROJECT EVIDENCE:** The signal stores contemporaneous decision, data-quality, BTC, liquidity, ATR, risk/reward, score, and final-entry permission evidence. This supports an as-of-entry review once the actual linked records are available. [TradeSignal.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/TradeSignal.java:284) [AnalysisService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:406)
+
+- **EXTERNAL RESEARCH:** None.
+
+- **AGENT INFERENCE:** A negative realized P&L does not establish poor entry quality. Each loss could still have passed its contemporaneous gates and execution-price revalidation.
+
+## EVIDENCE
+
+- Frozen cohort preserved exactly: `182, 172, 162, 158, 143, 137`.
+- `db/CODEX/` is empty; proof-query outputs `DBQ-FTS-001` through `DBQ-FTS-005` are unavailable to this track.
+- No raw trade timestamp has been obtained; consequently, no UTC/KSA trade-time conversion is asserted.
+
+## UNKNOWNS
+
+- Initial signal, initial wallet BUY, canonical execution price/observation time, and initial entry-quality score for every frozen trade.
+- Whether any position was progressively scaled in, which would make final position price/quality unsuitable as initial-entry evidence.
+- Whether final-entry, freshness, data quality, BTC, liquidity, ATR, and higher-timeframe gates were satisfied at each actual entry.
+- Whether the supplied snapshot’s UTC/KSA values represent distinct clocks: `2026-10-28 15:00:05 UTC` arithmetically converts to `18:00:05 KSA`, not `18:00:02 KSA`. This does not alter the frozen SQL selection, which has no snapshot-time predicate.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Verify the actual schema before selecting entry-quality columns or constructing joins for the frozen positions.  
+SQL:
+
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key
+FROM information_schema.columns AS c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'signal_processing_work',
+      'execution_opportunity'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-002  
+Purpose: Verify actual key relationships, especially whether entry-quality evidence can be linked unambiguously from `paper_position` to its initial wallet BUY and managed position.  
+SQL:
+
+```sql
+SELECT
+    k.table_name,
+    k.constraint_name,
+    k.column_name,
+    k.ordinal_position,
+    k.referenced_table_name,
+    k.referenced_column_name
+FROM information_schema.key_column_usage AS k
+WHERE k.table_schema = 'crypto_ai'
+  AND k.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'signal_processing_work',
+      'execution_opportunity'
+  )
+ORDER BY k.table_name, k.constraint_name, k.ordinal_position;
+```
+
+### END_DB_REQUEST

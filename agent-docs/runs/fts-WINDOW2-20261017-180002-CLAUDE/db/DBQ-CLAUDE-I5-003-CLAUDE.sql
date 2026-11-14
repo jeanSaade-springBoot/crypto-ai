@@ -1,0 +1,2 @@
+SELECT id, LENGTH(execution_message) AS len, SUBSTRING(execution_message, 600, 900) AS message_tail FROM crypto_ai.wallet_trade WHERE id IN (358, 403);
+SELECT id, LENGTH(decision_explanation) AS len, SUBSTRING(decision_explanation, 380, 900) AS explanation_tail FROM crypto_ai.execution_opportunity WHERE id = 36524;

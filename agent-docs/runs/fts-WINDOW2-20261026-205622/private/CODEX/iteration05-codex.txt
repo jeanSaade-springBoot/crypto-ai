@@ -1,0 +1,139 @@
+## FINDINGS
+
+**PROJECT EVIDENCE:** The frozen cohort remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitution was made.
+
+**PROJECT EVIDENCE:** The permitted `db/CODEX` directory is empty. Consequently, no individual entry can be scored, classified, or linked to its signal/execution evidence.
+
+**PROJECT EVIDENCE — current source:** A new paper position is saved only after fresh-price revalidation and a successful wallet BUY. The recorded entry price is the canonical execution-time price, while stop/target originate from the execution signal. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:330)
+
+**PROJECT EVIDENCE — current source:** Final revalidation rejects execution at/below the signal stop, at/above target, or with Entry Quality below 50 (`CHASE_ENTRY_BLOCKED`). Entry Quality is recomputed using execution price versus a timestamp-bounded opportunity/rolling reference, ATR extension, reward/risk, opportunity age, recent rejection, volatility, and stop-exposure factors. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:848) [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1150)
+
+**PROJECT EVIDENCE — current source:** Normal BUY authority requires a 1m bullish execution signal plus fresh 5m (≤20 minutes) and 1h (≤3 hours) context, evaluated at-or-before the 1m signal time. The permitted size depends on the execution profile and higher-timeframe outcome. [TradeExecutionValidationService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:62) [TradeExecutionValidationService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:367)
+
+**PROJECT EVIDENCE — current source:** Signal work is claimed, locked, and freshness-checked after lock acquisition before business execution. [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:36)
+
+**AGENT INFERENCE:** The current code establishes the checks that should be tested, but it does not prove the six historical entries passed them. Current source/configuration also cannot establish the historical runtime profile or settings.
+
+**AGENT INFERENCE:** Entry quality for every frozen trade is presently **unverifiable**, not weak or supported, because the authoritative positions, entry signals, execution prices, and as-of context rows are absent.
+
+**EXTERNAL RESEARCH:** None used.
+
+## EVIDENCE
+
+- `CHARTER.md`: frozen IDs, authoritative entity, selection criteria, and snapshot drift.
+- `private/CODEX/iteration01`–`iteration04`: no query results were supplied; prior findings remain evidence-limited.
+- Snapshot reference only: **2026-10-26 18:07:57 UTC / 20:56:22 KSA**. The intended 18:00:00 KSA state was not preserved.
+
+## UNKNOWNS
+
+- Each trade’s symbol, entry signal, entry time, execution price, stop, target, and realized loss.
+- Whether the entry signal was 1m bullish, final-entry-allowed, data-quality-valid, and fresh at execution.
+- The exact 5m/1h decisions available at each signal time, plus the applicable execution profile.
+- Execution-price versus decision-price gap, Entry Quality score/classification, ATR extension, risk/reward, and chase status.
+- Work-claim/freshness outcome and wallet BUY evidence for each position.
+- Historical configuration/version evidence needed to apply current rules to these trades.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Read the actual forensic schema and retrieve only the six authoritative lifecycle rows before interpreting entry fields. All returned timestamps are UTC.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'wallet_managed_position'
+  )
+ORDER BY table_name, ordinal_position;
+
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-002  
+Purpose: After DBQ-CODEX-I5-001 confirms the mappings, retrieve each frozen position’s actual entry signal and wallet BUY execution evidence, including decision-price versus observed execution-price timing.  
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.opened_at AS paper_opened_at_utc,
+    p.entry_price AS paper_entry_price,
+    p.signal_id AS entry_signal_id,
+    s.*,
+    wt.id AS wallet_buy_trade_id,
+    wt.execution_key,
+    wt.price_usdt AS wallet_execution_price,
+    wt.decision_price_usdt,
+    wt.execution_price_observed_at,
+    wt.quantity AS wallet_buy_quantity,
+    wt.gross_amount_usdt,
+    wt.fee_usdt,
+    wt.execution_reason,
+    wt.execution_message,
+    wt.executed_at AS wallet_executed_at_utc
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.trade_signal s
+  ON s.id = p.signal_id
+LEFT JOIN crypto_ai.wallet_trade wt
+  ON wt.signal_id = p.signal_id
+ AND wt.side = 'BUY'
+ AND wt.status = 'EXECUTED'
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, wt.executed_at, wt.id;
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-003  
+Purpose: After schema confirmation, obtain strictly as-of entry context needed to assess freshness, 5m/1h authority, and the 30-minute Entry Quality reference; no future signal may be used.  
+SQL:
+```sql
+WITH entry_signal AS (
+    SELECT
+        p.id AS paper_position_id,
+        p.signal_id AS entry_signal_id,
+        s.symbol,
+        s.generated_at AS entry_signal_generated_at_utc
+    FROM crypto_ai.paper_position p
+    JOIN crypto_ai.trade_signal s
+      ON s.id = p.signal_id
+    WHERE p.id IN (182, 172, 162, 158, 143, 137)
+),
+context_signals AS (
+    SELECT
+        e.paper_position_id,
+        e.entry_signal_id,
+        e.entry_signal_generated_at_utc,
+        c.*
+    FROM entry_signal e
+    JOIN crypto_ai.trade_signal c
+      ON c.symbol = e.symbol
+     AND c.interval IN ('1m', '5m', '1h')
+     AND c.generated_at <= e.entry_signal_generated_at_utc
+     AND c.generated_at >= e.entry_signal_generated_at_utc - INTERVAL 3 HOUR
+)
+SELECT *
+FROM context_signals
+ORDER BY paper_position_id, interval, generated_at;
+```
+
+### END_DB_REQUEST

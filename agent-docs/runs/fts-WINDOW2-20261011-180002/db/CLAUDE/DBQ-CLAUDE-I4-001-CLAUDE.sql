@@ -1,0 +1,1 @@
+SELECT DATE(created_at) AS d_ksa, HOUR(created_at) AS h_ksa, MINUTE(created_at) AS m_ksa, interval_code, COUNT(*) AS n FROM candle_analysis_outcome WHERE origin='AUTHORITATIVE_RECOVERY' AND created_at >= '2026-10-04 00:00:00' GROUP BY d_ksa, h_ksa, m_ksa, interval_code ORDER BY d_ksa, h_ksa, m_ksa, interval_code LIMIT 300;

@@ -1,0 +1,9 @@
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME IN ('wallet_snapshot','wallet_asset') ORDER BY TABLE_NAME, ORDINAL_POSITION;
+SELECT COUNT(*) asset_rows, SUM(quantity>0) nonzero_rows FROM wallet_asset;
+SELECT id, captured_at FROM wallet_snapshot
+WHERE captured_at BETWEEN '2026-10-12 09:57:04' AND '2026-10-12 09:57:07'
+   OR captured_at BETWEEN '2026-10-12 10:05:18' AND '2026-10-12 10:05:21'
+   OR captured_at BETWEEN '2026-10-11 21:00:08' AND '2026-10-11 21:00:13'
+   OR captured_at BETWEEN '2026-10-11 22:43:35' AND '2026-10-11 22:43:37'
+ORDER BY captured_at LIMIT 40;

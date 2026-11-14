@@ -1,0 +1,204 @@
+I made no changes. Plan mode is on, and this session has no Write or ExitPlanMode tool, so this message is the Iteration 7 output and nothing was written to the plan file.
+
+# FTS WINDOW2: Claude, Iteration 7 of 8 (self-challenge)
+
+**Iteration headline:**
+- **The gross loss comes from stop-outs, not fees.** The frozen six don't sample those stop-outs. Paper P&L charges no fee, so fees can't explain any recorded loss. My I6 "fees are the biggest cost" claim holds only for live trading.
+- **Low-ATR trades are break-even gross.** The bucket holding 158, 162 and 182 made +0.16 USDT gross across 38 positions. So these three lost through a near-zero edge plus noise, not a strategy that loses gross. My "negative expected value by construction" (F5-2/F6-6) is true only after fees.
+- **The "1m BUY after a sell run" pattern (F6-5) is not supported system-wide.** Only 5 positions fall in the strongest sell-run group, and the 149 entries with no prior sells hold most of the loss (−3.30).
+- **U6-3 is resolved, and it is intended design, not a defect.** Both wake-up routes deliberately use the latest 1m signal's plan. I withdraw "158 lost the better geometry" as a finding.
+- **My causal claim for 172 was too strong; 182's needs one check.** The defect itself still stands. Its effect on 172 is unproven without Replay. 182 is only conditionally causal: it depends on why the 5m STRONG_SELL was relabelled NEUTRAL (I7-001).
+- **One fact error fixed:** paper 162 closed at 04:26:04.116 KSA (01:26:04.116 UTC), not 04:26:06.
+
+**Labels:** **[PE]** project evidence · **[ER]** external research · **[AI]** agent inference.
+
+**Time convention:** times are written KSA (UTC). The relevant columns are `timestamp(6)` (I2-001), and the session time zone is +03:00 (F2-0), so displayed values are KSA. F2-0 was cross-checked against an embedded `…Z` timestamp. The BTC-age figures in F2-2 come from the app-computed `btc_context_age_seconds`, not the `datetime` columns `btc_signal_generated_at` and `btc_context_evaluated_at`, so they don't have the 3-hour ambiguity.
+
+**Isolation disclosure:** one of my Grep searches ran over the whole run folder. It returned file paths and Java column-annotation lines from the stderr files of the other agent's `private/CODEX/` folder. I did not open those files or use anything from them. All later searches were limited to `private/CLAUDE/` and `db/CLAUDE/`.
+
+---
+
+## FINDINGS
+
+### F7-1 [PE DB I6-001, arithmetic AI]: the gross loss is entirely in STOPPED positions, and mostly in one bucket
+
+| Bucket (stop type / ATR %) | CLOSED: n, gross | STOPPED: n, gross | Net gross | Frozen trades |
+|---|---|---|---|---|
+| floored / < 0.10 | 35, +0.446 | 3, −0.284 | **+0.161** | 158, 162, 182 |
+| floored / 0.10–0.25 | 57, +5.203 | 35, −5.405 | −0.202 | 137, 172 |
+| floored / 0.25–0.50 | 3, +0.600 | 4, −0.804 | −0.204 | — |
+| ATR stop / 0.25–0.50 | 21, +4.855 | 30, −7.963 | **−3.109** | 143 |
+| ATR stop / ≥ 0.50 | 2, +0.602 | 3, −1.419 | −0.817 | — |
+| **Total** | **118, +11.705** | **75, −15.876** | **−4.171** ✔ | |
+
+- **[AI]** About 75% of the system's gross loss (−3.11 of −4.17) is in the ATR-stop, ATR 0.25–0.50% bucket, where 59% of positions were stopped out.
+  - 143 is the only frozen trade in that bucket, and it closed via the floor, not the stop.
+  - **The frozen sample is structurally unrepresentative of where money is lost.** This strengthens F6-7.
+- **Correction to F6-1:** "fees are the largest cost" is true only for a *live* fee model, which is an assumed rate [ER]. Recorded paper P&L contains no fee, so the frozen losses are not fee losses.
+- **Correction to F5-2/F6-6 for 158, 162, 182:** their bucket is break-even gross. These trades lost because the edge is close to zero, which makes them valid losing trades. They do not have a negative gross expectancy. "Negative EV by construction" applies only once fees are included.
+- **Caveat [AI]:**
+  - The stop type is classified from `s.latest_price`, not the fill price.
+  - Progressive adds (`PaperTradingService.java:263-275`) change entry price and quantity, and can raise the stop.
+  - So the bucket edges are approximate. I7-004 checks this.
+
+### F7-2 [PE DB I6-002]: the sell-run flip pattern is not a system-level cause (F6-5 downgraded)
+
+| 1m SELL signals in the 15 min before entry | n | Losers | STOPPED | Gross |
+|---|---|---|---|---|
+| ≥ 10 | 5 | 4 | 2 | −0.734 |
+| 5–9 | 18 | 6 | 2 | +0.210 |
+| 1–4 | 21 | 9 | 4 | −0.348 |
+| 0 | 149 | 82 | 67 | −3.299 |
+
+- **[AI]** The ≥ 10 group very likely includes 137 and 182 (by their signal counts in F6-5), so only about 3 positions in it are independent. That is too few to conclude anything.
+- The 5–9 group is positive, and the 0 group has most of the loss.
+- F6-5 is reclassified from "strategy property contributing to the losses" to **"anecdotal for 137 and 182; not established."**
+
+### F7-3 [PE code]: the wake-up plan source is intended design (resolves U6-3; withdraws part of F6-4)
+
+- `PaperTradingService.java:296-311`:
+  - It first tries `evaluateSetupTimeframeWakeup`, then `evaluateConfirmedSetupWakeup`.
+  - When either is allowed, `executionSignal = wakeup.executionSignal()`.
+  - Stop and TP are then taken from `executionSignal` (`:408-409`), and sizing too (`:328-330`, `:367`).
+- Both wake-up methods return `current1m`, the latest 1m signal at or before the 5m trigger time (`ExecutionIntelligenceService.java:315-316`, `:377`; `:420-421`, `:456`).
+- The FIX-023 comment (`:381-387`) says explicitly that "the actual execution price/risk plan remains the latest fresh 1m signal".
+- **Withdrawn:** the F6-4 statement that "158 lost the better geometry" as an implied defect. This is designed behaviour. Whether a 5m-authorised entry *should* inherit the 5m plan is a design question, not a confirmed defect.
+- **New asymmetry [PE code]:** `evaluateConfirmedSetupWakeup` (the route 158 used) does **not** check `getOriginalDecision()` on the 5m trigger or the 1m signal. `evaluateSetupTimeframeWakeup` checks both (`:326-327`, `:355`).
+  - **[AI]** This is the same family as F4-4 (label-only authority).
+  - Whether it affected 158 depends on the original decisions of 165415 and 165412 (I7-001). No effect is claimed until then.
+- **158 is also bound by the boundary race [PE + AI].** The wake-up's `latestSignalAtOrBefore(1m, 5m.generatedAt)` picked 165412 only because its `generatedAt` was 21 ms before the 5m's. This confirms the F4-2/F4-3 dependency for 158 from the wake-up side.
+
+### F7-4 [PE code + AI]: re-testing whether the F4-4 defect caused the losses
+
+`original_decision` is the strategy's base decision (`AnalysisService.java:303`, `:411`). The final label is changed by ordered stages in `FinalDecisionService.decide` (`:122-148`):
+- MULTI_TIMEFRAME
+- BTC_CONTEXT
+- DERIVATIVES_POSITIONING
+- ORDER_BOOK
+
+`safeNeutral` is used only for invalid data (`:54-57`, `:296-297`). The trades were data-valid (F2-2), so 182's STRONG_SELL → NEUTRAL came from one of those context stages.
+
+**182:**
+- If a context stage neutralised the SELL *on purpose* (for example, a bullish higher-timeframe conflict), then ignoring `original_decision` may be intended. In that case the problem is "label-only authority by design" (inconsistent with SETUP_TIMEFRAME_ATR's check at `:1478`, `:1518`), not a bypass bug.
+- **Status:** the defect stays a confirmed route inconsistency. That it caused 182 is **conditional** on the `decision_path` (I7-001).
+- Even if it is causal, AGENTS.md's FIX-154 notes keep the legacy `5M_BEARISH_VETO` behaviour, so any change is a design decision.
+
+**172:**
+- The 5m's own block was `RANGE_ENTRY_LOCATION`. That is a check on *where the 5m itself would enter*, not a bearish signal.
+- Whether a 5m location veto should also deny authority to a 1m entry is a policy question, not an evident bug.
+- Without the defect, the 5m would still read as BUY. I can't show the entry would have been refused without Replay or a code-path counterfactual of `balancedBuy` with a blocked 5m.
+- **Downgrade:** 172's main root cause changes from "logic defect" to **"route inconsistency (confirmed) + no-edge, sub-tick geometry (F5-6). Causal attribution unproven."**
+
+### F7-5 [PE DB I1-002, I1-004]: fact corrections
+
+- **162:** paper `closed_at` is **04:26:04.116 KSA (01:26:04.116 UTC)**, and the wallet SELL 407 is at 04:26:04.134. F6-6 wrote "04:26:06"; that was the transaction commit time, not the exit time.
+- **F6-6 exit labels re-checked against the wallet SELL rows [PE]:**
+
+| ID | Wallet SELL | Exit reason |
+|---|---|---|
+| 137 | 346 | SELL_CONFIRMED |
+| 158 | 401 | SELL_CONFIRMED |
+| 162 | 407 | SIGNAL_SELL (signal 168277) |
+| 172 | 429 | HTF_SELL_CONFIRMED |
+| 182 | 454 | SELL_CONFIRMED |
+
+  - All consistent with F6-6.
+  - The 143 floor exit (`PROFIT_LOCK`/floor path) is unchanged from F4-6.
+- **STOPPED status semantics [PE code]:** `STOPPED` is assigned when the exit price is at or below the position's *current* `stop_loss` (`PaperTradingService.java:182-184`, `:433`), and progressive adds can raise that stop.
+  - So "STOPPED" does not always mean "hit the original stop".
+  - The I6-001 average moves (−0.47% to −0.66%) suggest it mostly does. I7-004 verifies.
+
+### F7-6 [AI]: re-checking the remaining I6 claims
+
+| Claim | Self-challenge result |
+|---|---|
+| F6-3: all six EQ scores reproduce exactly | **Kept** for 137, 143, 162, 172, 182. 158 remains *probable*, because the opportunity rows were cut off by LIMIT. |
+| F6-3: 182 was admitted by under one tick | **Kept, as a counterfactual [AI].** It depends on the exact reference low and on EQ < 50 being a veto (`CHASE_ENTRY_CUTOFF=50`, F5-2). It shows how fragile the score is, not a cause. |
+| F6-2: EQ is inversely related to outcome | **Kept as confounded.** I6-001 shows the confounder: low EQ correlates with low ATR and a floored stop, which is the break-even bucket. EQ also correlates with ATR-stop trades in 0.25–0.50, the loss bucket. EQ is not shown to be the causal variable. |
+| F6-8: tick gaps of 8–38 s | **Unresolved (U6-1).** It still matters for 143 (floor gap) and 172 (37.6 s exit wait). |
+| F4-2/F4-3: boundary race and parity divergence | **Kept**, and now also confirmed on the wake-up lookup (F7-3). Its system-wide size (I4-003) has still never come back. |
+
+### F7-7 [AI]: revised root-cause table (supersedes F6-6)
+
+Exit times are paper `closed_at`.
+
+| ID | Exit, KSA (UTC) | Main root cause | Class |
+|---|---|---|---|
+| 137 | 10-11 21:00:08.935 (18:00:08.935) | Near-zero-edge entry under a rejection zone; a correct 5m SELL exit | **Valid losing trade** |
+| 143 | 10-11 22:43:35.046 (19:43:35.046) | The TP was extended after price passed it, then the floor gapped through over an 8 s tick gap | **Design property**; the entry exists only because of the boundary race (**confirmed defect, F4-2/F4-3**) |
+| 158 | 10-12 03:30:04.217 (00:30:04.217) | Gross break-even bucket; a +0.17% target | **Valid losing trade**; the route depended on the boundary race; using the 1m plan is intended (F7-3) |
+| 162 | 10-12 04:26:04.116 (01:26:04.116) | LATE_ENTRY admitted as BALANCED_EARLY | **Policy-scope gap** (F5-5) |
+| 172 | 10-12 07:15:43.492 (04:15:43.492) | Sub-tick ATR with no edge, under a label-only 5m authority | **Route inconsistency confirmed; causation unproven** (F7-4) |
+| 182 | 10-12 10:05:18.504 (07:05:18.504) | Bought the top against a raw STRONG_SELL that was neutralised to NEUTRAL | **Logic defect, conditional** on the neutralisation stage (I7-001) |
+
+---
+
+## UNKNOWNS
+
+| ID | Unknown | Resolution |
+|---|---|---|
+| U7-1 | Which `FinalDecisionService` stage relabelled 176655 from STRONG_SELL to NEUTRAL; the original decisions of 165415, 165412 and 171559 | I7-001 |
+| U7-2 | How often a TP extension turns a passed TP into a loss (U6-5). I6-003 failed: `paper_position` has no `highest_price` column [PE `PaperPosition.java`]. The column is on `wallet_managed_position.highest_price_usdt`. | I7-002 (corrected) |
+| U7-3 | Gross P&L by execution route (direct BUY, SETUP_TIMEFRAME_ATR, wake-ups, ACCUMULATED_EVIDENCE) | I7-003 |
+| U7-4 | Whether STOPPED positions used raised stops or progressive adds | I7-004 |
+| U6-1 | Cause of the 8–38 s tick gaps | Coordinator log extraction |
+| U4-3, U3-1/4/5, U2-9 | System-wide boundary-race size and the I3-005/006/007 results have still not been returned; Replay has not been run | Reissue; Replay remains the main missing evidence for the 143, 158 and 172 counterfactuals |
+
+---
+
+## DB REQUESTS
+
+Time literals are not used. All requests are read-only and bounded.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-001
+Purpose: Find which FinalDecisionService stage changed each authority signal's label, and get the original decisions. This settles whether 182 was caused by the F4-4 defect and whether the confirmed wake-up gap applied to 158 (F7-3, F7-4, U7-1).
+SQL:
+SELECT id, symbol, interval_code, generated_at, original_decision, decision, final_entry_allowed, primary_blocking_stage, confluence_status, LEFT(decision_path, 2500) AS decision_path FROM crypto_ai.trade_signal WHERE id IN (176655, 176710, 171559, 171589, 165415, 165412, 159407, 159285) ORDER BY symbol, generated_at LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-002
+Purpose: Corrected I6-003. Count closed positions whose highest price reached the original signal TP, split by outcome, to size the TP-extension loss mechanism seen in 143 (U6-5, U7-2).
+SQL:
+SELECT p.status, COUNT(DISTINCT p.id) AS n, SUM(p.realized_pnl < 0) AS losers, ROUND(SUM(p.realized_pnl),4) AS pnl_gross, SUM(w.take_profit_usdt > s.take_profit) AS tp_extended_n FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id JOIN crypto_ai.wallet_managed_position w ON w.entry_signal_id = p.signal_id WHERE p.closed_at IS NOT NULL AND w.highest_price_usdt >= s.take_profit GROUP BY p.status LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-003
+Purpose: Gross outcome by entry route, to see whether the boundary-race-dependent routes (wake-ups, SETUP_TIMEFRAME_ATR) or the label-only direct route carry the system-wide loss (F7-1, U7-3).
+SQL:
+SELECT t.execution_reason, COUNT(DISTINCT p.id) AS n, SUM(p.realized_pnl < 0) AS losers, SUM(p.status='STOPPED') AS stopped, ROUND(SUM(p.realized_pnl),4) AS pnl_gross FROM crypto_ai.paper_position p JOIN crypto_ai.wallet_trade t ON t.signal_id = p.signal_id AND t.side = 'BUY' AND t.status = 'EXECUTED' WHERE p.closed_at IS NOT NULL GROUP BY t.execution_reason ORDER BY pnl_gross LIMIT 30;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-004
+Purpose: Check what STOPPED means: how many STOPPED and CLOSED positions have a stop or entry price different from the original signal's (raised stops or progressive adds) (F7-5, U7-4).
+SQL:
+SELECT p.status, COUNT(*) AS n, SUM(p.stop_loss <> s.stop_loss) AS stop_changed, SUM(ABS(p.entry_price - s.latest_price)/s.latest_price > 0.003) AS entry_moved_gt_0_3pct, ROUND(AVG((p.exit_price - p.stop_loss)/p.entry_price*100),3) AS avg_exit_vs_stop_pct FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id WHERE p.closed_at IS NOT NULL GROUP BY p.status LIMIT 5;
+### END_DB_REQUEST
+
+**Reissue (unchanged SQL):** DBQ-CLAUDE-I3-005, I3-006, I3-007 and I4-003.
+
+---
+
+## STATUS AFTER ITERATION 7
+
+**Confirmed defects:**
+- **Boundary race and Production–Replay parity divergence (F4-2/F4-3).** It now also shows on the wake-up lookup. It decided whether 143 and 158 were entered at all.
+- **Label-only 5m authority as a route inconsistency (F4-4).** The confirmed-wake-up route has the same gap (F7-3). Causation is conditional for 182 and unproven for 172.
+
+**Corrected framing:**
+- System gross loss = stop-outs in the 0.25–0.50% ATR bucket with ATR-based stops.
+- The frozen six are mostly near-zero-edge "scratch" exits.
+- Fees matter for live viability, not for the recorded paper losses.
+
+**Withdrawn or downgraded:**
+- F6-5 sell-run flips: downgraded to anecdotal.
+- F6-4 "158 lost the better geometry": withdrawn as a defect; it is intended design.
+- F6-1 "fees are the largest cost": scoped to live trading only.
+
+**Next, Iteration 8 (freeze):**
+- Correction candidates and regression checks per root cause, using the I7 results.
+- The Replay requirements for the 143, 158 and 172 counterfactuals.
+- A study-design note for the Coordinator: the charter's `status=CLOSED` selection leaves out STOPPED positions, which hold the system's loss.

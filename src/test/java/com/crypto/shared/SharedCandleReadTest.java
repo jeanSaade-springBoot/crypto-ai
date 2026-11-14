@@ -69,6 +69,8 @@ class SharedCandleReadTest {
         local.execute("CREATE TABLE market_price_event(symbol VARCHAR(30),observed_at TIMESTAMP,source_event_id BIGINT,delivery_status VARCHAR(40))");
         local.execute("CREATE TABLE shared_market_cutover_history(symbol VARCHAR(30),cutover_at TIMESTAMP)");
         var prices=new MarketPriceEventService(local);
+        // FIX-153: collector-era fallback guard is tested explicitly in LIVE; OFF never reads cutover state.
+        org.springframework.test.util.ReflectionTestUtils.setField(prices,"mode","LIVE");
         prices.assertReplayEvidence("BTCUSDT",t,t.plusSeconds(60)); // genuine legacy empty window
         local.update("INSERT INTO shared_market_cutover_history VALUES('BTCUSDT',?)",Timestamp.from(t));
         local.update("INSERT INTO market_price_event VALUES('BTCUSDT',?,1,'HISTORICAL_ONLY')",Timestamp.from(t));

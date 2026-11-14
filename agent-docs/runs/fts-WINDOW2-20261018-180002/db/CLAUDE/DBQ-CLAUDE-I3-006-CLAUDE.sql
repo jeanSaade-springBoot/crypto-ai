@@ -1,0 +1,1 @@
+SELECT id, symbol, status, opened_at, closed_at, close_reason FROM crypto_ai.paper_position WHERE opened_at <= '2026-10-11 22:43:40' AND (closed_at IS NULL OR closed_at >= '2026-10-11 22:43:00') ORDER BY opened_at;

@@ -1,0 +1,1 @@
+SELECT interval_code,COUNT(*) AS candles,MIN(open_time) AS first_open_utc,MAX(open_time) AS last_open_utc,MAX(high_price) AS peak_high,MIN(low_price) AS trough_low FROM candle WHERE symbol='SHIBUSDT' AND interval_code IN ('1m','5m') AND closed=1 AND open_time >= '2026-10-09 23:45:00' AND open_time < '2026-10-10 09:16:00' GROUP BY interval_code

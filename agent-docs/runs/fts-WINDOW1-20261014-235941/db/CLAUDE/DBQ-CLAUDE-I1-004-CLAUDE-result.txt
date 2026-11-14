@@ -1,0 +1,2 @@
+position_id	id	interval_code	candle_open_time	generated_at	decision	original_decision	confluence_higher_decision	latest_price	total_score	confidence_score	final_expl
+162	168277	1m	2026-10-12 04:25:00.000000	2026-10-12 04:26:02.793873	STRONG_SELL	STRONG_SELL	WATCH	0.086750000000	26	80	FinalDecisionService applied 8 ordered checks. Raw confidence 80/100, effective confidence 80/100. Entry allowed.

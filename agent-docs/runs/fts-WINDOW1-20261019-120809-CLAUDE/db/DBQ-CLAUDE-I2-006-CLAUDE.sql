@@ -1,0 +1,1 @@
+SELECT DATE(closed_at) AS close_day_utc, status, COUNT(*) AS n, SUM(realized_pnl > 0) AS wins, SUM(realized_pnl < 0) AS losses, ROUND(SUM(realized_pnl), 6) AS pnl, MAX(closed_at) AS last_close, MAX(opened_at) AS last_open FROM crypto_ai.paper_position WHERE opened_at >= '2026-10-10 00:00:00' GROUP BY DATE(closed_at), status ORDER BY close_day_utc LIMIT 40

@@ -1,0 +1,120 @@
+I'm rejecting this document revision. Its answers to the three questions are correct, but the document doesn't meet the bar set for approval. Its key Q1 fact is labelled as proven when it is only inferred, Codex has already rejected this same revision, and none of the required change/test/rollback statements are present.
+
+I reviewed `agent-docs/runs/20261010-010943/FINAL_TECHNICAL_REVIEW.md`, which is identical to the document you supplied. I checked it read-only against the source code, the DBQ result files, and the log output captured in `round04-codex.stderr.txt`. My tools can't open the `.gz` log directly. I ran no database queries, shell commands or Replay. I did no new external research and did not re-check the document's external-research items; nothing below depends on them.
+
+Labels: **PE** = PROJECT EVIDENCE, **AI** = AGENT INFERENCE.
+
+## FINDINGS
+
+### Verified correct
+- **PE – Q1 (profit lock instead of TP):**
+  - Event 1085348 at 0.00000543 (20:58:09.444Z / 23:58:09.444 KSA) set the lock at 0.000005421865, with progress 84.2815%.
+  - Event 1085485 at 0.00000542 (20:58:43.449Z / 23:58:43.449 KSA) triggered it.
+  - With 1h = NEUTRAL, neither hold rule matches, so the policy returns its default `PROFIT_LOCK_EXIT`.
+  - The lock arithmetic checks out: one completed 10% step moves the lock from 40% to 50% of the TP distance.
+- **PE – signal labels at the trigger:** 1m signal 89795 was 41.8 s old, 5m 89724 was 3 m 38.8 s, 1h 88327 was 58 m 37.1 s. These match DBQ-010 and the labels stored in SELL 107's message.
+- **PE – Q2 (no extension):**
+  - The target-extension check (`PositionContinuationPolicy.evaluate`) has one production caller, the live TP branch; every other caller is a Replay class.
+  - The position closed 39 m 16 s before the 00:38 KSA candle, so there was nothing open to extend.
+- **AI from PE – "12:38" means 00:38 KSA.** The run started at 01:09:43 KSA on 10 Oct. That local clock matches MySQL `NOW()` in DBQ-004. So noon on 10 Oct was still in the future when the question was asked, and Codex's "if noon" hedge is moot.
+- **PE – Q3 (no re-check of upside):** the lock-breach rule reads only three labels. The 1h label was NEUTRAL from 20:00:06Z to 21:00:12Z, so any breach during this hold had to sell.
+- **PE – the signal path also exits without reading labels** once the lock is triggered.
+- **PE – the wake-up entry route has no minimum risk/reward;** other entry routes require 1.0–1.25.
+
+### Defects in the document
+1. **Q1's key fact is labelled PE but is an inference, and the two authors dispute it.**
+   - A price at or above TP runs the continuation check, which logs nothing. If that check fails and the sell call returns `false`, the branch returns silently. The price event is still marked APPLIED and no counter moves.
+   - Of the five points in Claude's S1:
+     - (a), (b), (c) and (e) rule out a target extension, a successful TP sell, and exceptions.
+     - Only (d) addresses this silent path, and (d) is an inference.
+   - The direct evidence was never collected: the `market_price_event` prices for the hold, or the 1m candle highs for 20:45–20:54Z.
+   - Codex rejected this same revision on exactly this point.
+   - My view [AI]: (d) is sound and the residual risk is very low. Both `false` returns depend only on position or wallet quantity. Trades 106 and 107 have consecutive IDs and the full quantity was sold, so that state did not change. But the claim must be labelled AI, or proven.
+2. **The document contradicts itself.** It says "the market first traded at TP in the 00:04 KSA candle", but its own Unknown 1 says the 1m highs for 20:45–20:54Z aren't in evidence. DBQ-011 only starts at 20:55Z, so "first" isn't established.
+3. **A counter change during the hold isn't reconciled.** `PROTECTION_REJECTED` went from 68 to 69 between 20:49:18Z and 20:57:18Z. The document cites the same counter lines but reports only "failure and pending-resolved counters all 0". All three places that raise this counter log the symbol, and the whole-archive SHIB searches found nothing. So it was most likely another symbol [AI]. This doesn't change the conclusion, but the document should say so.
+4. **The entry assessment is misclassified and incomplete.**
+   - E1 is a real audit-text defect, yet the verdict says "No defect was found". The stored text "after the prior blocker cleared" (`ExecutionIntelligenceService.java:446`) is fixed wording. The code never checks it, and it was written 1.1 s after the opposite decision (`ACCUMULATED_EVIDENCE_DETERIORATED`).
+   - Neither agent flagged that signal 89469's stored text says "Stop uses 2.0 ATR". The persisted stop is the 0.5% minimum floor, about 3.4 ATR (`AtrRiskService.java:34-40`).
+   - That floor is why risk/reward was 0.877. TP stays at 3 ATR, so the ratio falls below 1 whenever ATR is under 0.333% of price. The document reports the ratio but not its cause.
+   - Codex's section has no entry assessment at all, which AGENTS.md requires.
+5. **The document doesn't meet its own approval gate.**
+   - It is two unmerged agent texts that disagree on how strong the Q1 evidence is and on the 12:38 reading.
+   - There is no revision ID.
+   - There are no explicit entries, even "NONE", for code changes, regression checks, rollback, or DB/Replay/Production impact.
+   - Its own "Required before approval" items are unmet, and one author has rejected this revision.
+
+## EVIDENCE
+
+| Label | Claim | Location |
+|---|---|---|
+| PE | TP branch runs first; on a `false` sell it returns with no log | `src/main/java/com/crypto/position/service/LivePositionProtectionService.java:100-171` (`:165-170`) |
+| PE | Price event marked APPLIED whatever the business result | `LivePositionProtectionService.java:69-71` |
+| PE | Both `false` returns depend only on state; position quantity is checked earlier in the same transaction | `src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:490-493`, `:504-505`; `LivePositionProtectionService.java:93` |
+| PE | Continuation check writes no log | `src/main/java/com/crypto/position/service/PositionContinuationPolicy.java:34-118` |
+| PE | Callers of the continuation check | `LivePositionProtectionService.java:103`; `ShadowProductionReplayService.java:406`, `:573`; `OneCandleContinuationGraceReplayObserver.java:152` |
+| PE | Hold rules and default exit; labels read without a freshness check | `PositionExitPolicy.java:58-92`; `LivePositionProtectionService.java:95-97` |
+| PE | Lock arithmetic | `ProfitLockPolicy.java:39-51` |
+| PE | Protection uses only the 1m kline close `c` | `src/main/java/com/crypto/service/BinanceKlineService.java:91`, `:95`, `:106-108` |
+| PE | Price-outcome log omits the price; the counter is raised only at three symbol-logging sites | `src/main/java/com/crypto/market/service/MarketPriceEventService.java:54-56`, `:70-72`, `:92-94` |
+| PE | Lock set, three holds, trigger, exit | `agent-docs/runs/20261010-010943/round04-codex.stderr.txt:2888-2902` |
+| PE | Counter 68 → 69 | `round04-codex.stderr.txt:2623` vs `:2863` |
+| PE | Zero SHIB TP/extension lines and zero SHIB rejections; log span 20:05–20:59:59Z | `round04-codex.stderr.txt:5933-5946`, `:2908-2912` |
+| PE | 89469 declined, then the wake-up route bought 1.1 s later | `round04-codex.stderr.txt:2510`; `DBQ-002-CODEX-result.txt:10` |
+| PE | 89815 refused (5m WATCH, 1h NEUTRAL) | `round04-codex.stderr.txt:5931`; `TradeExecutionValidationService.java:306-320` |
+| PE | Wake-up route: fixed text, no risk/reward floor; other routes' floors | `ExecutionIntelligenceService.java:397-457`; `:1055`, `:1098`, `:1128`, `:1539`, `:1631`, `:1757` |
+| PE | 0.5% stop floor vs the "2.0 ATR" text | `AtrRiskService.java:34-45`; `DBQ-007-CODEX-result.txt:6` |
+| PE | Signal-path lock exit reads no labels | `PaperTradingService.java:176-179`, `:452-485` |
+| PE | Advisory analysis only ever executes a stop-loss | `PositionManagementService.java:129` |
+| PE | Managed position state | `DBQ-014-CODEX-result.txt:6` |
+| PE | Candle query starts at 20:55Z only | `DBQ-011-CODEX.sql:1` |
+| PE | MySQL session is UTC+3 (KSA); stored instants are UTC | `DBQ-004-CODEX-result.txt:6`; `DBQ-005-CODEX-result.txt:6` |
+| PE | Codex rejected this revision | `document-review-codex.txt:27-49` |
+
+## OBJECTIONS
+- **O1 (material).** Relabel "no accepted price reached TP" as AI, or prove it. Either of these read-only queries settles it:
+  - `market_price_event` for SHIBUSDT from 20:45:05.997Z to 20:58:43.449Z: id, price, status, reason;
+  - the 1m candle highs for 20:45–20:54Z. A minute's close can never exceed its high, so highs of 0.00000543 or less exclude any TP-capable price.
+  - The session is in KSA, so use KSA literals or `CONVERT_TZ`.
+- **O2.** Remove "first traded at TP", or prove it with the highs from O1.
+- **O3 (non-material).** Explain the 69th `PROTECTION_REJECTED`, either by searching the log for 20:49–20:57Z without a symbol filter or by stating the inference above.
+- **O4 (material).** Record E1 as a confirmed audit-text defect (low severity, no execution effect) or justify otherwise. Add the stop-floor/text mismatch and the cause of the below-1 risk/reward. Include an entry assessment in the merged text.
+- **O5 (material).** Merge into one revision with explicit entries:
+  - code changes: NONE;
+  - regression checks: the O1 queries, plus Replay only with user consent;
+  - rollback: not applicable;
+  - DB/Replay/Production impact: NONE.
+
+  Both agents must then approve that same revision.
+- **Non-material.**
+  - "The same profile refused": BALANCED_STRONG is a result code of the balanced check, not a separate profile.
+  - DBQ-008 converted a "12:15 KSA" horizon to UTC for its upper bound, then ran it in a KSA session. This was harmless because the data ends at query time, but it shows the timezone confusion reached query construction.
+- **Statistics, look-ahead, costs and Replay.** The document handles these acceptably:
+  - later prices are kept as outcome only;
+  - it states that one trade proves nothing about a better rule;
+  - fees are recomputed (paper trades record 0);
+  - Replay differences are stated and no parity is claimed.
+
+  No objection there.
+
+## UNKNOWNS
+1. The prices of the APPLIED SHIB price events during the hold (the outcome log omits them).
+2. The 1m highs for 20:45–20:54Z.
+3. Which symbol caused the 69th rejection.
+4. Whether the running binary matched this source. The working tree has uncommitted changes to `LivePositionProtectionService`, `MarketPriceEventService`, `BinanceKlineService` and `WalletAutoExecutionService`; only the stored message text corroborates it.
+5. Replay was not run. It needs user consent because it creates Replay state (`claude-docs/TRADE_INVESTIGATION_AGENT.md:67-69`).
+6. Nobody searched the log for `CALLBACK_FAILED` or `MESSAGE_REJECTED`.
+7. The fee tier and slippage for any live account.
+
+## VERDICT
+The core answers to Q1–Q3 are correct, and I found no evidence that this exit broke an implemented rule. I'm rejecting the revision for these reasons:
+- the gap analysis is incomplete;
+- Q1's key fact is mislabelled and disputed by one author;
+- the text contradicts itself;
+- an audit-text defect is classed as "no defect";
+- the required registries and same-revision dual approval are missing.
+
+The O1 queries and a merged rewrite would fix all of this.
+
+VERDICT: REJECTED
+
+Nothing was written: plan mode is active and this session has no write tool. So no plan file was created, and the `claude-docs/INVESTIGATION_LOG.md` entry for this trade is still outstanding.

@@ -1,0 +1,1 @@
+SELECT id, symbol, realized_pnl, closed_at FROM crypto_ai.paper_position WHERE status = 'CLOSED' AND closed_at IS NOT NULL AND realized_pnl < 0 AND closed_at <= '2026-10-19 09:08:24' ORDER BY closed_at DESC LIMIT 10

@@ -1,0 +1,1 @@
+SELECT COUNT(*) AS n, SUM(fee_usdt<>0) AS nonzero_fee, ROUND(SUM(fee_usdt),6) AS fee_sum, MIN(executed_at) AS first_exec, MAX(executed_at) AS last_exec FROM crypto_ai.wallet_trade;

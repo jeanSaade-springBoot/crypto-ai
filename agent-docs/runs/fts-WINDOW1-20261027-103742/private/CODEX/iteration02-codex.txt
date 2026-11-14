@@ -1,0 +1,84 @@
+## FINDINGS
+
+**PROJECT EVIDENCE — frozen cohort confirmed.** DBQ-FTS-005 identifies exactly these six `crypto_ai.paper_position` rows, all `CLOSED`, negative P&L, and closed timestamps present. I did not substitute `STOPPED` rows or Replay data.
+
+| Position | Symbol | Open UTC → KSA | Close UTC → KSA | Hold | P&L | Recorded close reason |
+|---:|---|---|---|---:|---:|---|
+| 182 | ACEUSDT | 2026-10-12 09:57:06.476246 → 12:57:06.476246 | 10:05:20.486035 → 13:05:20.486035 | 8m 14.010s | -0.031847133758 | `SELL_CONFIRMED` |
+| 172 | SHIBUSDT | 06:36:05.087117 → 09:36:05.087117 | 07:15:45.484258 → 10:15:45.484258 | 39m 40.397s | -0.045537340619 | `HTF_SELL_CONFIRMED` |
+| 162 | DOGEUSDT | 04:02:06.414818 → 07:02:06.414818 | 04:26:04.116278 → 07:26:04.116278 | 23m 57.701s | -0.051694428489 | `STRONG_SELL` |
+| 158 | XRPUSDT | 02:35:04.811478 → 05:35:04.811478 | 03:30:06.638124 → 06:30:06.638124 | 55m 01.827s | -0.031896796144 | `SELL_CONFIRMED` |
+| 143 | EGLDUSDT | 2026-10-11 22:40:04.857700 → 2026-10-12 01:40:04.857700 | 22:43:36.229162 → 01:43:36.229162 | 3m 31.371s | -0.037193156459 | `PROFIT_LOCK_HARD_EXIT` |
+| 137 | EGLDUSDT | 20:55:04.510238 → 23:55:04.510238 | 21:00:12.121700 → 2026-10-12 00:00:12.121700 | 5m 07.611s | -0.075018754689 | `SELL_CONFIRMED` |
+
+Total realized loss: **-0.273187610158**.
+
+**PROJECT EVIDENCE — cohort scope caveat.** There are 75 `STOPPED` rows and all have negative P&L (DBQ-FTS-002), but the mandatory frozen selection expressly filters `status='CLOSED'`. Thus this is not a claim about the six most recent losing positions across every terminal status; it is exactly the mandated CLOSED-loss cohort.
+
+**PROJECT EVIDENCE — exit-label distribution.** Five of six positions carry an adverse signal/protection-oriented close label: three `SELL_CONFIRMED`, one `HTF_SELL_CONFIRMED`, and one `STRONG_SELL`. One carries `PROFIT_LOCK_HARD_EXIT`. This supports prioritising exit-decision and protection evidence in subsequent iterations; it does not yet establish that any exit was correct, timely, or defective.
+
+**PROJECT EVIDENCE — source behaviour.** `PaperTradingService` orders mechanical exits ahead of normal bearish-signal processing: target, profit lock, stop loss, hard profit floor, then validated `SELL`/`STRONG_SELL`. `paper_position` persists both entry and exit rationale plus entry/exit signal links. The present evidence lacks those fields, so no label can yet be translated into a proven triggering rule.
+
+**AGENT INFERENCE.** The short-loss positions 143 and 137 (both EGLDUSDT) deserve comparison for repeated-entry/exit conditions, but repeat symbol alone is not evidence of a defect or duplicate entry.
+
+## EVIDENCE
+
+- DBQ-FTS-001: actual `paper_position` schema.
+- DBQ-FTS-002 through DBQ-FTS-005: frozen cohort selection and row facts.
+- `PaperPosition.java`: durable fields for entry/exit prices, reasons, and signal links.
+- `PaperTradingService.java`: current code order for position-close evaluation.
+- No external research used.
+
+## UNKNOWNS
+
+- Full position economics: quantity, entry/exit price, stop, target, and narrative fields.
+- Entry and exit signal IDs/decisions, timestamps, interval, data quality, and contemporaneous context.
+- Wallet execution records, fees, partial executions, and P&L reconciliation.
+- Accepted price-event/protection evidence, including whether a label reflects a first threshold breach.
+- Signal-processing timing, candle lineage/data quality, logs, configuration/version active at the time, and Replay comparability.
+- The requested Codex iteration-1 private artifacts and `db/CODEX/` contained no files in the permitted paths, so they add no evidence for this iteration.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Retrieve the complete authoritative `paper_position` evidence for the fixed six-position cohort, including entry/exit linkage and rationale, without widening the cohort.  
+SQL:
+```sql
+SELECT
+    id,
+    symbol,
+    side,
+    status,
+    quantity,
+    entry_price,
+    stop_loss,
+    take_profit,
+    exit_price,
+    realized_pnl,
+    close_reason,
+    entry_reason,
+    exit_reason,
+    signal_id,
+    exit_signal_id,
+    opened_at,
+    closed_at
+FROM paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-002  
+Purpose: Read the actual schemas required to link the frozen positions to signals, durable processing, paper-wallet execution, managed-position protection, and canonical price evidence before requesting any additional columns.  
+SQL:
+```sql
+DESCRIBE trade_signal;
+DESCRIBE signal_processing_work;
+DESCRIBE wallet_trade;
+DESCRIBE wallet_managed_position;
+DESCRIBE market_price_event;
+DESCRIBE candle;
+```
+### END_DB_REQUEST
+
+No implementation, configuration, database, Git, or deployment change was made. Documentation updates are not required for this analysis-only iteration.

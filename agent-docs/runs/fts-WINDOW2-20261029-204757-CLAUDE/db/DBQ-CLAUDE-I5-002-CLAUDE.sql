@@ -1,0 +1,1 @@
+SELECT s.id, s.symbol, s.generated_at, s.decision, s.original_decision, s.total_score, s.selected_strategy, s.market_regime, s.latest_price, s.final_entry_allowed, s.primary_blocking_stage, LEFT(CAST(s.decision_path AS CHAR), 3500) AS decision_path FROM trade_signal s WHERE s.id IN (156695,156723,171462,171484,171589) ORDER BY s.id

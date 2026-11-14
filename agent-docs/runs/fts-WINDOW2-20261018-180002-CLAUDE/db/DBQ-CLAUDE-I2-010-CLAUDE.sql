@@ -1,0 +1,1 @@
+SELECT id, symbol, entry_signal_id, status, stop_loss_usdt, take_profit_usdt, highest_price_usdt, profit_lock_active, profit_lock_price_usdt, profit_lock_progress_percent, profit_lock_activated_at, profit_lock_state, entry_stage, near_tp_state, opened_at, updated_at FROM crypto_ai.wallet_managed_position WHERE id IN (170, 171);

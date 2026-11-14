@@ -1,0 +1,3 @@
+SELECT @@global.time_zone, @@session.time_zone, @@system_time_zone, NOW(6), UTC_TIMESTAMP(6);
+SELECT id, execution_price_observed_at, UNIX_TIMESTAMP(execution_price_observed_at) AS epoch_s FROM wallet_trade WHERE id IN (344,358,392,403,426,451);
+SELECT id, symbol, interval_code, open_time, UNIX_TIMESTAMP(open_time) AS epoch_s, close_price FROM candle WHERE symbol='EGLDUSDT' AND interval_code='1m' AND open_time BETWEEN '2026-10-11 22:39:00' AND '2026-10-11 22:43:00' ORDER BY open_time

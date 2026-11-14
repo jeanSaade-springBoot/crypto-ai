@@ -1,0 +1,23 @@
+COLUMN_NAME	DATA_TYPE
+id	bigint
+symbol	varchar
+side	varchar
+status	varchar
+quantity	decimal
+entry_price	decimal
+stop_loss	decimal
+take_profit	decimal
+exit_price	decimal
+realized_pnl	decimal
+close_reason	varchar
+entry_reason	mediumtext
+exit_reason	mediumtext
+signal_id	bigint
+exit_signal_id	bigint
+opened_at	timestamp
+closed_at	timestamp
+rr_band	n	pnl_sum	notional_sum	pnl_after_0p2pct_roundtrip
+a<0.75	54	0.233767	1215.0000	-2.196233
+b0.75-1	15	-0.354120	345.0000	-1.044120
+c1-1.5	61	0.079202	1904.0000	-3.728798
+d>=1.5	63	-4.129590	2731.0000	-9.591590

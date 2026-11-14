@@ -1,0 +1,1 @@
+DESCRIBE candle; DESCRIBE candle_analysis_outcome; DESCRIBE execution_opportunity;

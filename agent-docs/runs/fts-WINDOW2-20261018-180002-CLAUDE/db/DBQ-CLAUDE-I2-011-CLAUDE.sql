@@ -1,0 +1,1 @@
+SELECT table_name, table_rows FROM information_schema.tables WHERE table_schema = 'crypto_ai' AND (table_name LIKE '%replay%' OR table_name LIKE '%\_test%' OR table_name LIKE '%audit%' OR table_name LIKE '%evaluation%') ORDER BY table_name;

@@ -1,0 +1,74 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Frozen scope preserved: positions `104, 101, 96, 91, 82, 78`; no substitutions.
+- **PROJECT EVIDENCE:** No CODEX-side database artifacts exist yet, including no result for Iteration 1’s schema request. Database forensics cannot establish any lifecycle, linkage, timing, exit, or P&L fact.
+- **AGENT INFERENCE:** No loss can yet be classified as a valid strategy outcome, execution/protection defect, stale-data incident, or accounting issue.
+- **PROJECT EVIDENCE:** Snapshot metadata has a two-second conflict: `2026-10-11 07:00:03 UTC` converts to `2026-10-11 10:00:03 KSA`, not the supplied `10:00:01 KSA`. The frozen IDs remain unaffected.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** The declared authoritative entity is `crypto_ai.paper_position`; declared selection is closed positions with non-null `closed_at`, negative `realized_pnl`, ordered by newest close, limit six.
+- **PROJECT EVIDENCE:** Project investigation rules require actual schema evidence before assuming columns or relationships for `wallet_trade`, signals, managed positions, price events, or candles.
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- Independent DB confirmation that the six frozen IDs satisfy the declared selection at the snapshot.
+- All trade symbols, UTC/KSA entry/exit times, exit reasons, quantities, prices, fees, and realized-loss amounts.
+- Position-to-wallet-trade, signal, managed-position, and accepted-price-event links.
+- Contemporaneous candle quality, signal freshness, protection trigger evidence, and Replay relevance.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Obtain the actual schema before constructing linked-trade forensic queries.  
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    ordinal_position,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'trade_signal',
+      'signal_processing_work',
+      'managed_position',
+      'market_price_event',
+      'candle'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-002  
+Purpose: Independently prove the frozen six-position selection and retain raw UTC close timestamps for later KSA conversion.  
+SQL:
+```sql
+SELECT
+    id,
+    status,
+    closed_at,
+    realized_pnl
+FROM crypto_ai.paper_position
+WHERE status = 'CLOSED'
+  AND closed_at IS NOT NULL
+  AND realized_pnl < 0
+ORDER BY closed_at DESC
+LIMIT 6;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-003  
+Purpose: Capture authoritative `paper_position` keys and constraints needed to identify safe linkage paths after schema review.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+```
+### END_DB_REQUEST

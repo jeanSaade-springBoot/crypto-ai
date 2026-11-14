@@ -1,0 +1,98 @@
+## Iteration 7 — Self-Challenge
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+- The binding study scope remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. This is a mandated scope, not independently re-proven evidence: `db/CODEX/` contains no query artifacts, including no `DBQ-FTS-001`–`005` results.
+- Therefore, no trade-specific conclusion is supportable for any of the six IDs—not even symbol, lifecycle timestamps, loss amount, exit reason, or whether the supplied list matched the snapshot selection.
+- Prior source-based route descriptions are only descriptions of the current working-tree implementation. They cannot establish the historical deployed code, configuration, or runtime mode for these positions.
+- A canonical `market_price_event` outcome, if later found, would still require correlation to a wallet execution and the position close; `APPLIED` alone can be a no-op. [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:112)
+- Candle OHLC, a later signal, or subsequent price action cannot substitute for missing intrabar protection evidence. The position and wallet models provide potential evidence fields, but source mappings do not prove deployed schema or row values. [PaperPosition.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:10) [WalletTrade.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletTrade.java:11)
+- Project documentation has time/status ambiguity around FIX-154: the architecture’s release-status section calls it pending, while later sections describe a local implementation update. This reinforces—not weakens—the need for historical version/configuration evidence before applying any current rule to a frozen trade. [ARCHITECTURE.md](C:/workspace/crypto-ai-trader-mysql/codex-docs/ARCHITECTURE.md:23)
+
+**AGENT INFERENCE**
+
+- The defensible current verdict for each ID is **unverifiable**, not “valid loss,” “strategy defect,” “late entry,” “failed stop,” or “accounting defect.”
+- The absence of Codex-side DB artifacts and matching local-log evidence is an evidence-collection gap; it is not evidence that the database records, executions, or protection events do not exist.
+- The previous reconnect/candle-close risk is a known project risk only. There is no basis to associate it with any selected trade.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+### EVIDENCE
+
+- Codex’s permitted `agent-docs/runs/fts-WINDOW2-20261018-180002/db/CODEX/` directory exists but has no files.
+- Iterations 1–6 consistently recorded the same missing-evidence condition; none supplied a trade-specific database result.
+- Current transaction ordering is input → protection → observer → close dispatch, but this is static source evidence rather than historical runtime proof. [KlineTransactionCoordinator.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:36)
+
+### UNKNOWNS
+
+- Independent proof that the six frozen IDs are the exact six rows produced by the stated snapshot query.
+- For every trade: symbol, entry/close UTC timestamps and KSA conversions, entry/exit signal IDs, realized P&L, close reason, quantity, wallet executions, fees, and partial-close history.
+- Entry validity: contemporaneous data quality, freshness, decision gates, stop/target, risk/reward, execution-price age, and historical rule/configuration version.
+- Exit validity: accepted price-event identity, threshold ordering, protection completion, and wallet/position mutation linkage.
+- Replay comparability and relevant runtime/log coverage.
+
+### Time Metadata Challenge
+
+The supplied snapshot values conflict arithmetically:
+
+- Supplied UTC: `2026-10-18 15:00:04`
+- UTC + 3 hours: `2026-10-18 18:00:04 KSA`
+- Supplied KSA: `2026-10-18 18:00:02`
+
+I retain the supplied values as study metadata and do not normalize either. No trade timestamp is available to report in KSA.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Independently prove the frozen selection and retrieve the authoritative lifecycle rows only after exposing the deployed evidence schema needed for a bounded next-stage reconstruction.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'position_management_event',
+      'signal_processing_work'
+  )
+ORDER BY table_name, ordinal_position
+LIMIT 1000;
+
+SELECT p.*
+FROM crypto_ai.paper_position p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137)
+LIMIT 6;
+
+SELECT
+    id,
+    status,
+    closed_at,
+    realized_pnl
+FROM crypto_ai.paper_position
+WHERE status = 'CLOSED'
+  AND closed_at IS NOT NULL
+  AND realized_pnl < 0
+ORDER BY closed_at DESC
+LIMIT 6;
+```
+
+### END_DB_REQUEST
+
+No implementation or documentation update was made; this iteration was analysis-only.

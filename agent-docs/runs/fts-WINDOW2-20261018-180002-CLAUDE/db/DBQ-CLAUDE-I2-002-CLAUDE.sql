@@ -1,0 +1,1 @@
+SELECT DATE_FORMAT(observed_at, '%H:%i:%s') AS sec_utc, COUNT(*) AS n, COUNT(DISTINCT symbol) AS symbols, MIN(created_at) AS first_created, MAX(created_at) AS last_created FROM crypto_ai.market_price_event WHERE observed_at BETWEEN '2026-10-11 22:43:00' AND '2026-10-11 22:43:45' GROUP BY sec_utc ORDER BY sec_utc;

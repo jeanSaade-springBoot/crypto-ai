@@ -1,0 +1,5 @@
+SELECT *
+FROM production_exit_audit
+WHERE paper_position_id IN (182,172,162,158,143,137)
+ORDER BY paper_position_id
+LIMIT 20

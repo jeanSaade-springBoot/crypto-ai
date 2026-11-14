@@ -1,0 +1,1 @@
+SELECT status, COUNT(*) AS n, SUM(realized_pnl<0) AS neg, MIN(closed_at) AS first_close, MAX(closed_at) AS last_close, MAX(opened_at) AS last_open FROM paper_position WHERE opened_at >= '2026-10-11 00:00:00' GROUP BY status

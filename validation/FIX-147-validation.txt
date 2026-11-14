@@ -1,0 +1,3 @@
+PASS: account provisioning SQL fixtures on SQLite (create/idempotence/preservation/missing or ineligible admin).
+PASS: Java test syntax parse and registry JS syntax.
+NOT RUN: four H2 tests, Java 21 Maven build, real MySQL/Flyway migration.

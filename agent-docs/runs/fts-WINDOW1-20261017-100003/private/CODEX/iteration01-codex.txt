@@ -1,0 +1,32 @@
+## WINDOW1 · Iteration 1 — trade reconstruction
+
+### FINDINGS
+
+- **PROJECT EVIDENCE:** Scope is locked to paper-position IDs `182, 172, 162, 158, 143, 137`. No substitutions made.
+- **PROJECT EVIDENCE:** No database query results exist in the permitted Codex evidence directory, so no trade-specific entry, exit, P&L, signal, or price-event finding can yet be made.
+- **PROJECT EVIDENCE:** `PaperPosition` maps the authoritative `paper_position` entity and defines entry/exit signal links, prices, stop/target, reasons, P&L, and lifecycle timestamps. [PaperPosition.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\domain\PaperPosition.java:10)
+- **PROJECT EVIDENCE:** A live-price close records exit price, cumulative realized P&L, status, close reason, detailed exit reason, and close time; this is a possible mechanism only, not attribution for any frozen trade. [LivePositionProtectionService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\position\service\LivePositionProtectionService.java:391)
+- **AGENT INFERENCE:** The supplied snapshot clocks disagree by one second: `07:00:04 UTC + 03:00 = 10:00:04 KSA`, while the supplied KSA snapshot is `10:00:03`. I will retain both supplied values rather than silently correcting either.
+
+### EVIDENCE
+
+- **PROJECT EVIDENCE:** Required project context and all permitted `codex-docs/` files were loaded.
+- **PROJECT EVIDENCE:** No external research used.
+- **PROJECT EVIDENCE:** No database, code, configuration, Git, or deployment mutation occurred.
+
+### UNKNOWNS
+
+- Actual schema, foreign keys, and exact related-record tables.
+- Symbol, side, entry/exit UTC and KSA times, prices, quantity, loss amount, and recorded close reason for each frozen ID.
+- Entry/exit signal linkage, work/admission history, protection price-event evidence, wallet execution records, and whether any partial harvest occurred.
+- Whether each loss was a valid strategy loss, execution/protection defect, stale-data event, or accounting discrepancy.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual authoritative table schema before selecting columns or reconstructing the six frozen positions.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+```
+### END_DB_REQUEST

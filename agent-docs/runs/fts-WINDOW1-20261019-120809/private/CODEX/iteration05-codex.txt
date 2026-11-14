@@ -1,0 +1,74 @@
+## FINDINGS — Iteration 5: Entry Quality
+
+### PROJECT EVIDENCE
+
+- The frozen cohort remains exactly: **182, 172, 162, 158, 143, 137**. No substitution or numeric-log correlation was used.
+
+- Entry quality for every frozen trade is currently **UNVERIFIABLE**, not “weak” or “supported.” The permitted `db/CODEX/` directory has no schema or result evidence, so none of the six `paper_position` rows can be linked to its entry signal, wallet fill, managed position, or opportunity evidence.
+
+- Current source’s entry-quality model is independent of signal quality. It scores the actual execution-time price against a rolling 30-minute reference/opportunity anchor, ATR extension, current reward/risk, opportunity age, recent-rejection zone, volatility, and stop-exposure status. It blocks scores below 50 as `CHASE_ENTRY`; 50–54 are `LATE_ENTRY`; 55–69 are acceptable; 70–84 good; 85+ excellent. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:844) [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:976)
+
+- The current normal BUY path resolves a fresh canonical execution price after signal/HTF gates, rejects a fill at/below stop or at/above target, then re-scores entry quality at that execution price before wallet execution. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:340) [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1150)
+
+- Current source persists the entry signal reference on `paper_position`; it persists the decision-time price, execution-time price, and observation time on `wallet_trade`. [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:45) [WalletTrade.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletTrade.java:28)
+
+- Current source records `entry_quality_score` and stage on `wallet_managed_position`, but a later scale-in overwrites both fields. Therefore a closed managed-position row is not, by itself, durable proof of the original entry’s quality or route. [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:129) [WalletManagedPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletManagedPosition.java:56)
+
+- A `paper_position.signal` alone may not fully explain the entry route: a 5m setup-wakeup can provide contextual authority while the latest eligible 1m signal remains the execution/risk plan. This must be reconstructed from contemporaneous rows, not inferred from the loss outcome. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:292)
+
+### AGENT INFERENCE
+
+| Frozen paper_position ID | Entry-quality result |
+|---:|---|
+| 182 | Unverifiable — no durable row/linkage evidence available |
+| 172 | Unverifiable — no durable row/linkage evidence available |
+| 162 | Unverifiable — no durable row/linkage evidence available |
+| 158 | Unverifiable — no durable row/linkage evidence available |
+| 143 | Unverifiable — no durable row/linkage evidence available |
+| 137 | Unverifiable — no durable row/linkage evidence available |
+
+- The prior numeric `positionId` log candidates remain unusable: they may be `wallet_managed_position` IDs rather than the frozen `paper_position` IDs.
+- Current source and Codex documentation evidence FIX-154-era entry controls, but neither proves the exact deployed version, configuration, or historical decision route for these six entries.
+
+### EXTERNAL RESEARCH
+
+- None performed.
+
+## EVIDENCE
+
+- `agent-docs/runs/fts-WINDOW1-20261019-120809/db/CODEX/`: no result files.
+- Entry-quality scoring and execution-price revalidation: current source references above.
+- Frozen selection snapshot remains imprecise: supplied UTC `2026-10-19 09:08:24` converts to `12:08:24 KSA`, while supplied snapshot KSA is `12:08:09`; frozen IDs remain mandatory regardless.
+
+## UNKNOWNS
+
+For each frozen trade: symbol; entry signal ID; entry route/stage; signal decision and quality fields; 5m/1h context; data-quality status; signal and fill timestamps; decision-versus-fill price gap; calculated entry-quality score; opportunity anchor/reference; risk/reward at fill; wallet limits; and whether a later scale-in overwrote managed-position entry fields.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Obtain the deployed physical schema required to reconstruct entry quality for only the six frozen `paper_position` rows, without assuming current source mappings match the historical database.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    ordinal_position,
+    column_type,
+    is_nullable,
+    column_key,
+    column_default
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'execution_opportunity',
+      'signal_processing_work',
+      'production_exit_audit'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

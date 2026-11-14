@@ -1,0 +1,95 @@
+# FIX-156 preparation review, Round 2 (Claude cross-examination)
+
+**Bottom line:** the preparation is not ready to freeze or implement. All seven gates (P01–P07) are still Pending and evidence items E03–E10 don't exist. Several design inputs have no named source or no owner yet.
+
+This round was read-only. I changed no code, configuration, database, git state or preparation file. I used no internet research, so nothing below is EXTERNAL RESEARCH.
+
+## FINDINGS
+
+### A. Corrections to my own Round 1
+
+- **R1 price-ordering claim — partly wrong, now downgraded.** [PROJECT EVIDENCE]
+  - I said Replay sorts price events by `observedAt` only, with no ID tie-breaker.
+  - In fact `MarketPriceEventService.find` already orders by `observed_at ASC, id ASC`.
+  - Replay's later `.sorted(Comparator.comparing(PriceEvent::observedAt))` is a stable sort on an ordered stream, so it keeps that ID order. [AGENT INFERENCE, from standard Java behaviour]
+  - So equal-time ordering is correct today. What's missing is that `PriceEvent` drops `id` and `delivery_status`. Order can't be proven, logged as `priceEventId`, or checked against the ID-ordered SQL.
+  - R156-06 is still needed, but as an evidence/observability item, not a fix for wrong ordering. Codex was more accurate here.
+- **R1 F-1 ("§4.2a has no authority") — downgraded from BLOCKER to MATERIAL.** [PROJECT EVIDENCE]
+  - The file on disk (line 8, and O-8 at line 47) records D48 option (a) as an owner decision, to be folded into RPR-0.9.12 before review.
+  - So it was not slipped in without authority. The real problem is sequencing: the canonical design (RPR-0.9.11) and the preparation document disagree until RPR-0.9.12 exists and is frozen.
+- **R1 F-2 (purge scope) — partly corrected, the core still stands.** [PROJECT EVIDENCE]
+  - §4.2a now quotes the real purge SQL (`test_run_id IS NOT NULL`), which deletes every Replay run's rows, not just the active run's.
+  - It still does not register the run-ID reuse. The purge deletes all of `analysis_test_run` and resets its AUTO_INCREMENT to 1 (`RegressionTestService.java:362, 403-407`).
+  - Meanwhile `proven_analyzed_trade` and `proven_trade_leg_archive` are kept (`:395-398`) and are addressed by `/proven-trades/{runId}/{tradeId}`.
+  - Result: after a purge, a new run can reuse the `runId` of a kept proven record or of any earlier certificate or log line. A certificate or log correlation keyed only on `runId` becomes ambiguous.
+
+### B. Codex Round-1 claims I checked
+
+| Codex claim | Result |
+|---|---|
+| `/proven-trades` sits outside the `/runs/**` boundary and can reach `wallet_trade` | **Confirmed and wider than stated.** The same controller prefix exposes `/proven-trades`, `/proven-trades/chart`, `/trade-chart` and `/archives/**`. Five diagnostics controllers (Fix122, Fix124, Fix127, Fix129, Fix130) also each expose `/runs/{id}/fixNNN`, `/archives/{id}/fixNNN` and `/proven-trades/{id}/fixNNN`. R156-12 names only `/runs/**` plus the chart, so the endpoint boundary is incomplete. [PROJECT EVIDENCE] |
+| Unqualified `@Async` and no Replay executor | **Confirmed, with a concrete conflict.** `RegressionTestWorker.java:99` uses plain `@Async`, and there is no `AsyncConfigurer`. Production's `DynamicCoinActivationService.java:18, 35` also uses plain `@Async`, so Replay runs share a default pool with Production coin-activation work. This is the exact thing R156-02 forbids ("refuse capacity rather than use Production capacity"). [PROJECT EVIDENCE + AGENT INFERENCE about Spring Boot's default executor] |
+| "Replay only" conflicts with editing shared classes | **Confirmed and stronger than stated.** `ExecutionReplayScope` is referenced by 13 non-Replay classes, including `TradeExecutionValidationService`, `BtcMarketContextService`, `MultiTimeframeConfluenceService`, `OpportunityConsolidationService`, `EntryConsumptionPolicy`, `ExecutionPriceAuthorityService`, `StopLossEvidenceService` and `BuyHtfAssessmentAuditStore`. Several branch on `replayScope.active()`. R156-05 (scope propagation, fail-closed) and R156-06 (price-event projection) therefore require edits to classes Production runs. §1's claim that Production source does not change can't hold as written. The specification must allow those edits explicitly and require zero-behaviour-change proof (the Production path is byte-equivalent when scope is inactive). Otherwise it must use new Replay-only types. [PROJECT EVIDENCE + AGENT INFERENCE] |
+| The fixture scope for analysis parity is incomplete | **Confirmed.** `AnalysisService.buildSignal` reads more than D53 (sentiment) and D54 (prior indicator snapshot) cover: the current `sentimentService.isEnabled()` flag (`:227`), fundamentals with an availability rule (`fundamentalService.latestAsOf`/`isAvailable`, `:234-235`), ATR-risk configuration (`:266`) and the regime services (`:270-272`). The register has no row for fundamentals availability, the sentiment enable flag, or the scoring/ATR/regime configuration. [PROJECT EVIDENCE] |
+
+### C. New in Round 2
+
+- **N-R2-1 (MATERIAL): the register is silent on the FIX-154 code path.** [PROJECT EVIDENCE]
+  - FIX-154 is the pending higher-timeframe BUY check. Its code is present in the current tree: `BuyHtfAssessmentAuditStore` exists, and `MultiTimeframeConfluenceService.java:106` branches on Replay scope.
+  - Its audit write is skipped when Replay scope is active or the signal ID is null (`BuyHtfAssessmentAuditStore.java:43-44`). That is the same null-ID shortcut as D56, so it has the same masking risk if scope is lost.
+  - AGENTS.md describes FIX-154 as not implemented. That contradicts the current tree, but whether this is uncommitted work in progress is UNKNOWN.
+  - The FIX-156 D-register, as visible in the preparation, doesn't say whether FIX-154 BUY evaluation is mirrored, version-matched or excluded. The BUY mirror (R156-09, T156-05c) can't be specified until that's decided.
+
+### D. Round-1 findings that still stand
+
+- **F-3 and F-4: no historical source for the dated fixtures.** These stay BLOCKERs. `wallet_settings` is a single current row, and the Binance minimum notional is never stored. The plan names no source and no refusal rule.
+- **F-5: canonical specification identity.** The canonical specification is still RPR-0.4. There are two RPR-0.9.11 copies in Downloads, RPR-0.9.12 now needs to exist, and no hashes have been recorded.
+- **F-6: written-after-the-signal look-ahead.** No test covers D53/D54 evidence that exists but was written after the signal it supports.
+- **F-8: sample-size feasibility.** Zero mismatches with a 99% lower confidence bound of at least 0.99 needs about 459 comparable units per metric. The plan has no exclusion cap.
+- **F-9: no drift guard.** Nothing ties a Replay-local mirror to the Production source it copies.
+
+## EVIDENCE
+
+| Item | Location |
+|---|---|
+| Price SQL ordered by observed_at, then id; record drops id and status | `MarketPriceEventService.java:118-129, 173` |
+| Replay re-sort by observedAt only, signals by generatedAt | `ShadowProductionReplayService.java:65-69, 89-94` |
+| Wallet settings and budget at Replay start | `ShadowProductionReplayService.java:75-82` |
+| Purge deletes all runs, resets IDs, keeps proven records | `RegressionTestService.java:350-407` |
+| §4.2a owner decision and wording | `FIX-156_IMPLEMENTATION_PREPARATION.md:8, 47, 84-108, 242` |
+| Endpoint surface | `RegressionTestController.java:131-160`; `Fix122/124/127/129/130DiagnosticsController` |
+| Unqualified `@Async` | `RegressionTestWorker.java:99`; `DynamicCoinActivationService.java:18, 35`; `@EnableAsync` at `CryptoAiTraderApplication.java:21` |
+| Production classes that branch on Replay scope | `TradeExecutionValidationService.java:372, 377`; `BtcMarketContextService.java:78, 278`; `MultiTimeframeConfluenceService.java:106`; `OpportunityConsolidationService.java:72, 215` |
+| Analysis inputs | `AnalysisService.java:227-272` |
+| FIX-154 audit skip | `BuyHtfAssessmentAuditStore.java:41-47` |
+
+## OBJECTIONS
+
+1. **Production-source impact.** The frozen specification must list every Production-shared class it edits and require a no-behaviour-change regression test for each one with scope inactive. Otherwise §1 must be withdrawn.
+2. **Endpoint boundary.** R156-12 and T156-11 must list every route under `/api/administration/regression-tests`: in boundary, read-only legacy, or retired.
+3. **Run identity.** Register an identity that survives a purge, such as a UUID or content hash, for certificates, logs and proven records. Alternatively, stop the AUTO_INCREMENT reset for `analysis_test_run`.
+4. **Executor.** R156-02 must name a dedicated executor bean with queue size and rejection behaviour, and say how scope is carried to async children (T156-14).
+5. **Analysis fixtures.** Add register rows for fundamentals availability, the sentiment enable flag, and the ATR/regime/scoring configuration, each with an as-of fixture or a refusal rule.
+6. **FIX-154.** Decide whether FIX-154 BUY evaluation is mirrored or excluded.
+7. **Freeze sequencing.** RPR-0.9.12 must exist at the canonical path before P01. The F-3/F-4 sources, the F-8 feasibility check and the F-9 drift guard must be resolved before freeze.
+
+## UNKNOWNS
+
+- RPR-0.9.11/0.9.12 contents and hashes. I couldn't compute hashes, and I didn't re-read the Downloads copies this round.
+- Whether the D30–D46 and S01–S14 rows cover FIX-154 or fundamentals. I didn't verify them row by row.
+- Whether the FIX-154 code in the tree is committed or work in progress.
+- Whether historical `[FIX-118]` and minimum-notional logs survive long enough to rebuild settings history.
+
+## FINDINGS FOR JEAN
+
+1. **Not ready to freeze or implement.** Codex and I agree. All gates P01–P07 are Pending, E03–E10 are missing, and the canonical specification is still RPR-0.4.
+2. **I corrected two of my own Round-1 points.** Price ordering is already correct (the ID is simply dropped, not mis-sorted). And D48 option (a) is your recorded owner decision, not an unauthorised change. It still has to go into RPR-0.9.12 before freeze.
+3. **The "no Production source changes" claim won't hold.** The Replay scope is threaded through 13 Production classes, so the fixes in R156-05 and R156-06 touch Production code. Choose one:
+   - allow those edits explicitly, with tests proving nothing changes when Replay isn't running; or
+   - build new Replay-only types instead.
+4. **The boundary misses many routes.** The `/proven-trades` and `/archives` routes, plus five per-fix diagnostics controllers, sit outside the planned `/runs/**` boundary.
+5. **Replay shares a thread pool with Production.** Replay currently runs on the default async pool alongside Production coin activation. It needs its own named executor.
+6. **Deleting test data recycles run IDs.** After a delete, new run IDs can collide with kept proven trades and with old certificates. You need a run identity that survives a purge.
+7. **Decide the historical source for settings and exchange minimums, or refuse those runs.** Today there is no history for either. The same applies to the extra analysis inputs (fundamentals, sentiment on/off, ATR/regime configuration) and to the FIX-154 BUY path.
+
+VERDICT: REJECTED

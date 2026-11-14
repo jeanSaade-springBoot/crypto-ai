@@ -1,0 +1,1 @@
+SELECT p.id AS position_id, ev.* FROM paper_position p JOIN wallet_managed_position m ON m.entry_signal_id = p.signal_id JOIN position_management_event ev ON ev.wallet_position_id = m.id WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, ev.occurred_at LIMIT 200

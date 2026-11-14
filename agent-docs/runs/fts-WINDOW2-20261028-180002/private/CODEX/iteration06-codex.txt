@@ -1,0 +1,57 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE — root cause:** No trade-specific root cause is confirmed for frozen positions `182, 172, 162, 158, 143, 137`. The permitted `db/CODEX` directory remains empty; proof-query outputs and lifecycle records are absent.
+
+- **PROJECT EVIDENCE — execution-risk hypothesis:** Signal-path closes persist `paper_position` first, then attempt the wallet SELL while catching failures. Thus, for a signal-path close, a closed negative `paper_position` alone does not prove the wallet exit committed. This is a confirmed forensic limitation, not evidence that it occurred in any frozen trade. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487)
+
+- **PROJECT EVIDENCE — contrasting mechanical path:** Live protection closes the paper position only after `executeMechanicalExit(...)` succeeds. A stop-loss/profit-lock/TP row attributable to this path has a stronger paper-wallet linkage, but still requires the actual wallet trade and accepted price-event evidence. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:173)
+
+- **PROJECT EVIDENCE — entry quality:** A BUY is revalidated against a fresh canonical execution price before wallet persistence; a negative realized P&L is therefore not evidence by itself of a stale or poor entry. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:340)
+
+- **PROJECT EVIDENCE — known systemic issue, not attributed:** The project has previously confirmed reconnect-boundary candle gaps that blocked signal generation and could contribute to late entries. There is no timing/symbol evidence connecting that issue to any of these six positions. [INVESTIGATION_LOG.md](/C:/workspace/crypto-ai-trader-mysql/codex-docs/INVESTIGATION_LOG.md:17)
+
+- **EXTERNAL RESEARCH:** Binance documents UTC kline payloads with separate event/start/close times and a closed-candle flag. This supports using persisted observation/event evidence rather than inferring protection timing from OHLC alone; it does not establish facts about this cohort. [Binance Spot WebSocket kline documentation](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/ws-streams/~)
+
+- **AGENT INFERENCE:** The likely root-cause classes remain open: valid strategy loss, late/stale-entry effect, protection-policy exit, incomplete wallet accounting, or data/timing defect. No class can be assigned per trade yet.
+
+## EVIDENCE
+
+- Frozen cohort preserved exactly: `182, 172, 162, 158, 143, 137`.
+- No raw trade timestamp is available, so no trade-level UTC→KSA conversion is asserted.
+- The supplied snapshot fields differ by three seconds under UTC+03 arithmetic (`15:00:05 UTC` normally maps to `18:00:05 KSA`); this does not affect the frozen selection, which has no snapshot-time predicate.
+
+## UNKNOWNS
+
+- Per trade: symbol, entry/exit time, prices, quantity, P&L, close reason, linked signals, and wallet BUY/SELL records.
+- Whether a given close used signal or mechanical protection routing.
+- First accepted threshold-breaching `market_price_event`, its observation time, and resulting committed effect.
+- Whether any trade had progressive adds, which can change average entry and overwrite managed-position entry-quality state.
+- Replay eligibility; no Replay run was started.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Schema-first verification for root-cause reconstruction of the six frozen positions, including lifecycle, wallet execution, protection evidence, and audit linkage.  
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key
+FROM information_schema.columns AS c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'signal_processing_work',
+      'fix129_stage_timing'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+### END_DB_REQUEST

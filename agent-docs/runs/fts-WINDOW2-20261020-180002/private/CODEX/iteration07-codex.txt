@@ -1,0 +1,53 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen cohort remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. I made no substitutions.
+
+- **PROJECT EVIDENCE:** No DB result files are available in the permitted `db/CODEX` directory. Therefore none of the six trades can yet be classified as a valid loss, strategy defect, stale-data event, protection failure, execution delay, or accounting divergence.
+
+- **PROJECT EVIDENCE:** Prior source-based concerns are hypotheses only, not findings about this cohort:
+  - `PaperTradingService.completeClose()` saves a paper close before a signal-linked wallet exit; that wallet method may return without a SELL when no eligible managed position/quantity exists.
+  - This is a current-source reconciliation risk, but it cannot be attributed to any frozen ID without matching `wallet_trade` and managed-position evidence.
+  - Mechanical live-price exits have stronger ordering: wallet mechanical exit must return success before the paper close is written. Even then, the causal trigger requires a matching accepted `market_price_event` (`APPLIED` or legacy `LEGACY`).
+
+- **PROJECT EVIDENCE:** Current workspace source and historical documentation disagree about FIX-154’s state. That contradiction means neither source nor documentation can establish which rule set governed these trades; runtime version/configuration evidence is required.
+
+- **PROJECT EVIDENCE:** The supplied snapshot timestamps differ by two seconds if intended as the same instant: `2026-10-20 15:00:04 UTC` converts to `2026-10-20 18:00:04 KSA`, while the charter declares `18:00:02 KSA`. This is a metadata discrepancy only and does not alter the stipulated frozen cohort.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Required shared context, Codex documentation, charter, iterations 1–6, and the permitted Codex DB directory were reviewed.
+- **PROJECT EVIDENCE:** Accepted protection evidence is limited to `market_price_event.delivery_status IN ('LEGACY','APPLIED')`; candle OHLC, a `PENDING` event, or `paper_position.closed_at` cannot prove the exit trigger.
+- **EXTERNAL RESEARCH:** None used in this iteration.
+- **AGENT INFERENCE:** Repeating source-route analysis without durable trade rows would create false confidence. The next defensible step is schema evidence, then bounded reconstruction of only the six IDs.
+
+## UNKNOWNS
+
+For every frozen trade: symbol; entry/exit timestamps; prices; stop/target; close reason; linked signals; wallet BUY/SELL proof; fees; realized-P&L reconciliation; accepted protection event; data quality/freshness; analysis/processing timing; and runtime version/configuration.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Obtain actual `crypto_ai` schema evidence for the minimal bounded lifecycle/reconciliation entities before querying any frozen trade fields or joins.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    data_type,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'signal_processing_work'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

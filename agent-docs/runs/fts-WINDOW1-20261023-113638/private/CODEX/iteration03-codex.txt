@@ -1,0 +1,72 @@
+## FINDINGS — Iteration 3: Log and timing forensics
+
+- **[PROJECT EVIDENCE]** Application-log timestamps are explicitly UTC (`logback-spring.xml`); the records below have been converted to KSA correctly.
+
+- **[PROJECT EVIDENCE]** Exact archived-log ID matches exist only for a `WalletManagedPosition` with ID `182`, not yet proven to be frozen `paper_position` ID `182`. There were no exact log matches for IDs `172`, `162`, `158`, `143`, or `137`.
+
+- **[AGENT INFERENCE]** There is a strong but unconfirmed candidate linkage for managed position `182` / `ICPUSDT`:
+  - `2026-10-11 22:49:02.879 UTC` / `2026-10-12 01:49:02.879 KSA`: position analysis `HOLD`, exit score `4/25`, advisory only.
+  - `2026-10-11 22:49:33.460 UTC` / `2026-10-12 01:49:33.460 KSA`: accepted protection observation, event `1837489`.
+  - `2026-10-11 22:49:36.971 UTC` / `2026-10-12 01:49:36.971 KSA`: `Live STOP_LOSS executed` for `ICPUSDT`, price `3.465000000000`, configured stop `3.465026371152`.
+  - `2026-10-11 22:49:36.973 UTC` / `2026-10-12 01:49:36.973 KSA`: symbol transaction reports `COMMITTED`, wait `0 ms`, hold/elapsed `2437/2438 ms`.
+  - `2026-10-11 22:49:36.974 UTC` / `2026-10-12 01:49:36.974 KSA`: event `1837489` reports durable `APPLIED`.
+
+  The observed-to-committed interval is approximately **3.513 seconds**. The protection transaction itself took **2.438 seconds**, with no recorded symbol-coordination wait.
+
+- **[PROJECT EVIDENCE]** The source logs `PRICE_OUTCOME_COMMITTED` only in an `afterCompletion(STATUS_COMMITTED)` callback, so this line is stronger than a pre-commit activity log. The protection path marks stale, future, invalid, duplicate, and out-of-order observations non-canonical before evaluation. [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:82)
+
+- **[PROJECT EVIDENCE]** The candidate window contains no targeted `FIX-124` protection-failure, retry, stale-price, equal-timestamp, or pending-resolution marker. This supports normal completion of that one protection callback, but does not establish the frozen paper-position linkage or assess all six trades.
+
+- **[PROJECT EVIDENCE]** SQL timing logs retained locally do not cover 2026-10-11/12. Database/lock-wait causation therefore cannot be established from local log files.
+
+## EVIDENCE
+
+### PROJECT EVIDENCE
+
+- [logback-spring.xml](C:/workspace/crypto-ai-trader-mysql/src/main/resources/logback-spring.xml:24) renders application log timestamps in UTC.
+- [PositionManagementService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionManagementService.java:51) establishes that `Position analysis created: position=...` denotes `WalletManagedPosition`, not `paper_position`.
+- [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:173) makes stop loss an absolute price threshold.
+- [ProductionExitAuditService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:37) shows the required paper-position-to-managed-position linkage path through the entry signal.
+- Archived logs: `crypto-ai-trader.2026-10-12.0.log.gz` and `.1.log.gz`.
+
+### EXTERNAL RESEARCH
+
+None.
+
+## UNKNOWNS
+
+- Whether managed position `182` is frozen `paper_position` `182`.
+- The symbols, lifecycle times, and exit evidence for frozen paper positions `172`, `162`, `158`, `143`, and `137`.
+- The event `1837489` persisted price, the corresponding wallet execution, `paper_position.closed_at`, close reason, exit audit, fees, and net P&L.
+- Whether the approximate 3.513-second observation-to-commit interval was acceptable under the then-active configuration; historical configuration is absent.
+- Any SQL-level contention or database delay during the candidate transaction.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Read the actual schema required to prove or reject the candidate linkage between frozen `paper_position` IDs and wallet-managed positions, and to select only valid timing/exit columns for the next bounded request.  
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'wallet_managed_position',
+      'production_exit_audit',
+      'market_price_event',
+      'position_analysis',
+      'trade_signal',
+      'wallet_trade'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+Self-review: no frozen-ID substitution, code/config/DB change, or unsupported trade-level conclusion was made.

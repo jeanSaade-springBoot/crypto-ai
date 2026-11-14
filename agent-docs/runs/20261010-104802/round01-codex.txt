@@ -1,0 +1,21 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Required project context was loaded read-only. The request provides no review target, trade ID, file, design revision, or concrete technical question beyond “Perform.”
+- **AGENT INFERENCE:** An adversarial conclusion on code or trading behavior would be speculative without a defined subject.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** [AGENTS.md](C:\workspace\crypto-ai-trader-mysql\AGENTS.md:1) requires evidence-based investigation and distinguishes pending architecture from implemented state.
+- **PROJECT EVIDENCE:** [AGREED_KNOWLEDGE.md](C:\workspace\crypto-ai-trader-mysql\agent-docs\AGREED_KNOWLEDGE.md:1) contains no agreed technical entries.
+- **PROJECT EVIDENCE:** [DECISIONS.md](C:\workspace\crypto-ai-trader-mysql\agent-docs\DECISIONS.md:1) contains no approved decisions.
+- **PROJECT EVIDENCE:** No source path or artifact was identified for code verification.
+
+## OBJECTIONS
+
+- **AGENT INFERENCE:** There is no specified claim to approve or reject; reviewing an inferred target (for example, FIX-154) would violate the requested independence.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** Needed scope: the exact implementation/document/strategy/trade to investigate, and any relevant revision or identifiers.
+
+VERDICT: INSUFFICIENT_EVIDENCE

@@ -1,0 +1,1 @@
+SELECT s.id, s.symbol, s.interval_code, s.latest_price, s.atr_at_signal, s.atr_percent, s.liquidity_status, s.liquidity_entry_allowed, s.market_regime, s.detected_regime, s.confirmed_regime, s.atr_recommended_position_percent, s.entry_authority_max_position_percent FROM trade_signal s WHERE s.id IN (156723,159408,165412,165415,167668,171589,176710) ORDER BY s.id

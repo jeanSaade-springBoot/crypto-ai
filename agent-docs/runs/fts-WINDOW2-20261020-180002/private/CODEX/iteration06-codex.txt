@@ -1,0 +1,54 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No root cause can be attributed to any frozen trade (182, 172, 162, 158, 143, 137). The permitted `db/CODEX` folder is empty and local logs end before the study snapshot, so there is no durable lifecycle, wallet, signal, or accepted-price evidence for these IDs.
+
+- **PROJECT EVIDENCE:** A confirmed source-level reconciliation risk exists for signal-linked exits: `PaperTradingService.completeClose()` persists the `paper_position` closure before it invokes the wallet exit, catches wallet exceptions, and `executeSignalLinkedExit()` can return without a SELL when no open managed position or sellable quantity exists. This is not evidence that it affected any selected trade; it requires wallet-trade reconciliation.
+
+- **PROJECT EVIDENCE:** Mechanical live-price exits have a stronger sequence: `LivePositionProtectionService` closes the paper position only after `executeMechanicalExit(...)` reports success. Their causal trigger still requires a matching accepted `market_price_event` (`APPLIED` or legacy `LEGACY`), not candle OHLC or `paper_position.closed_at`.
+
+- **PROJECT EVIDENCE:** The current source cannot be assumed to be the runtime version for these trades. Project instructions describe FIX-154 as pending, while current source/Codex docs describe it as implemented. Runtime/version evidence is required before applying any current rule to the cohort.
+
+- **EXTERNAL RESEARCH:** Binance documents that klines are uniquely identified by open time and its REST kline endpoint is database-backed, supporting the project’s use of exact identity-based recovery—not inference from adjacent candles. Binance’s WebSocket kline protocol also describes periodic current-candle updates with an explicit closed flag; WebSocket continuity is therefore not evidence of delivery of a particular terminal update. This supports the existing reconnect-risk hypothesis but does not establish it for these six trades. [Binance Spot REST kline documentation](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/rest-api/market), [Binance WebSocket kline protocol](https://developers.binance.com/zh-CN/docs/products/spot/testnet/web-socket-streams)
+
+- **PROJECT EVIDENCE:** Snapshot metadata remains internally inconsistent: UTC `2026-10-20 15:00:04` converts to KSA `2026-10-20 18:00:04`, not the supplied KSA `18:00:02`. This does not change the frozen IDs.
+
+## EVIDENCE
+
+- Source paths: `PaperTradingService.completeClose`, `WalletAutoExecutionService.executeSignalLinkedExit`, `WalletAutoExecutionService.executeMechanicalExit`, `LivePositionProtectionService.onPrice`, and `MarketPriceEventService.find`.
+- The latest available local log timestamp is UTC `2026-10-19 14:32:36` (KSA `2026-10-19 17:32:36`), before the snapshot UTC `2026-10-20 15:00:04` (arithmetically KSA `18:00:04`).
+
+## UNKNOWNS
+
+For every frozen ID: symbol, entry/exit signals, entry/exit UTC/KSA times, exit route and reason, wallet BUY/SELL proof, P&L reconciliation, accepted protection event, data quality, execution delay, and runtime version.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Obtain actual schema evidence before issuing the bounded trade-to-wallet/protection reconciliation query needed to test the source-level exit-risk hypothesis for the six frozen positions.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    data_type,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'signal_processing_work',
+      'position_management_event',
+      'execution_opportunity',
+      'fix129_stage_timing'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

@@ -1,0 +1,184 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE — trade-level root cause:** `INSUFFICIENT_EVIDENCE` for every frozen trade: **182, 172, 162, 158, 143, 137**. The permitted Codex DB-evidence directory contains no results for DBQ-FTS-001..005 or prior Codex requests. Thus no symbol, entry/exit UTC time, trigger, price event, or linked signal is proven for any of the six.
+
+- **PROJECT EVIDENCE — confirmed cross-cutting defect:** live protection validates the price observation’s age and ordering, but then discards `observedAt` before choosing the 1m/5m/1h context. It fetches each interval’s latest signal without an `at-or-before observedAt` condition and without a maximum-age test. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:54) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:95)
+
+  `PositionExitPolicy` describes a “fresh 1h SELL” but receives only decisions, not timestamps, so it cannot enforce freshness itself. This can make a stale—or, under delayed processing, later-generated—signal affect `HTF_SELL_CONFIRMED`, `SELL_CONFIRMED`, or profit-lock exit/hold decisions. [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:20)
+
+- **PROJECT EVIDENCE — scope of the defect:** this is not evidence that it caused a loss in any frozen trade. Causality requires the trade’s `production_exit_audit.close_trigger`, accepted price event, and 1m/5m/1h signal ages at the actual observation time.
+
+- **PROJECT EVIDENCE — test gap:** the current exit-policy tests construct signals without `generatedAt`, exercising decision combinations only; they do not cover stale-context or observation-order rejection. [PositionExitPolicyTest.java](/C:/workspace/crypto-ai-trader-mysql/src/test/java/com/crypto/position/service/PositionExitPolicyTest.java:16)
+
+- **PROJECT EVIDENCE — entry route:** initial BUY execution does have a separate durable processing freshness check after locks, then resolves and revalidates at a canonical price before creating `paper_position`. [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:89) [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:342) That does not remediate stale signal selection in the live exit route.
+
+- **EXTERNAL RESEARCH:** Binance documents kline event/start/close timestamps as UTC and supplies `x` as the closed-candle flag; REST klines are identified by open time and include close time. This supports using persisted accepted price events for protection reconstruction and not substituting candle OHLC for intrabar path/order. It does not identify a cause for these six trades. [Binance WebSocket kline stream](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams), [Binance kline REST data](https://developers.binance.com/docs/derivatives/coin-margined-futures/market-data/rest-api/Kline-Candlestick-Data)
+
+- **AGENT INFERENCE:** If any selected trade closed with `PROFIT_LOCK_*`, `HTF_SELL_CONFIRMED`, or `SELL_CONFIRMED`, the stale-context defect is a material causal candidate. If it closed with `TAKE_PROFIT` or `STOP_LOSS`, it is not the direct trigger, though it could still affect prior management decisions.
+
+## UNKNOWNS
+
+- Actual close trigger and audit record for each frozen position.
+- Whether each loss was a valid strategy loss, a protection-policy effect, or an execution/accounting issue.
+- The accepted `market_price_event` that produced each exit.
+- Signal age and whether any selected context was generated after the accepted observation.
+- Fee-adjusted reconciliation and any partial-harvest contribution.
+- Runtime version/configuration and Replay comparability.
+
+The frozen snapshot’s supplied UTC/KSA labels also differ by one second: `2026-10-17 15:00:03 UTC` converts to `18:00:03 KSA`, while the frozen label states `18:00:02 KSA`. No trade timestamp has been inferred from that discrepancy.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Verify actual schema before root-cause reads for the frozen positions.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'production_exit_audit',
+      'trade_signal',
+      'market_price_event'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-002  
+Purpose: After DBQ-CODEX-I6-001 confirms the columns, identify each frozen trade’s entry, terminal trigger, source context, and latest 1m/5m/1h signals available by recorded close time. All returned timestamps are UTC.
+
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.status,
+    p.entry_price,
+    p.exit_price,
+    p.stop_loss,
+    p.take_profit,
+    p.realized_pnl,
+    p.close_reason,
+    p.opened_at,
+    p.closed_at,
+
+    a.id AS exit_audit_id,
+    a.close_trigger,
+    a.source_signal_id,
+    a.source_signal_decision,
+    a.exit_price_usdt AS audited_exit_price,
+    a.close_explanation,
+    a.audited_at,
+
+    entry_signal.id AS entry_signal_id,
+    entry_signal.interval AS entry_interval,
+    entry_signal.generated_at AS entry_signal_generated_at,
+    entry_signal.decision AS entry_signal_decision,
+    entry_signal.latest_price AS entry_signal_price,
+
+    audit_signal.id AS audit_source_signal_id,
+    audit_signal.interval AS audit_source_interval,
+    audit_signal.generated_at AS audit_source_generated_at,
+    audit_signal.decision AS audit_source_decision,
+    TIMESTAMPDIFF(SECOND, audit_signal.generated_at, p.closed_at)
+        AS audit_source_signal_age_seconds_at_recorded_close,
+
+    one_minute.id AS latest_1m_signal_id_at_close,
+    one_minute.generated_at AS latest_1m_generated_at,
+    one_minute.decision AS latest_1m_decision,
+    TIMESTAMPDIFF(SECOND, one_minute.generated_at, p.closed_at)
+        AS latest_1m_age_seconds_at_recorded_close,
+
+    five_minute.id AS latest_5m_signal_id_at_close,
+    five_minute.generated_at AS latest_5m_generated_at,
+    five_minute.decision AS latest_5m_decision,
+    TIMESTAMPDIFF(SECOND, five_minute.generated_at, p.closed_at)
+        AS latest_5m_age_seconds_at_recorded_close,
+
+    one_hour.id AS latest_1h_signal_id_at_close,
+    one_hour.generated_at AS latest_1h_generated_at,
+    one_hour.decision AS latest_1h_decision,
+    TIMESTAMPDIFF(SECOND, one_hour.generated_at, p.closed_at)
+        AS latest_1h_age_seconds_at_recorded_close
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.production_exit_audit a
+    ON a.paper_position_id = p.id
+LEFT JOIN crypto_ai.trade_signal entry_signal
+    ON entry_signal.id = p.signal_id
+LEFT JOIN crypto_ai.trade_signal audit_signal
+    ON audit_signal.id = a.source_signal_id
+LEFT JOIN crypto_ai.trade_signal one_minute
+    ON one_minute.id = (
+        SELECT s.id
+        FROM crypto_ai.trade_signal s
+        WHERE s.symbol = p.symbol
+          AND s.interval = '1m'
+          AND s.generated_at <= p.closed_at
+        ORDER BY s.generated_at DESC, s.id DESC
+        LIMIT 1
+    )
+LEFT JOIN crypto_ai.trade_signal five_minute
+    ON five_minute.id = (
+        SELECT s.id
+        FROM crypto_ai.trade_signal s
+        WHERE s.symbol = p.symbol
+          AND s.interval = '5m'
+          AND s.generated_at <= p.closed_at
+        ORDER BY s.generated_at DESC, s.id DESC
+        LIMIT 1
+    )
+LEFT JOIN crypto_ai.trade_signal one_hour
+    ON one_hour.id = (
+        SELECT s.id
+        FROM crypto_ai.trade_signal s
+        WHERE s.symbol = p.symbol
+          AND s.interval = '1h'
+          AND s.generated_at <= p.closed_at
+        ORDER BY s.generated_at DESC, s.id DESC
+        LIMIT 1
+    )
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-003  
+Purpose: After schema confirmation, retrieve bounded accepted price-event evidence around each recorded close. These rows require correlation with the audit trigger; they do not independently prove a position mutation. Returned timestamps are UTC.
+
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.closed_at,
+    m.id AS market_price_event_id,
+    m.observed_at,
+    m.price,
+    m.source,
+    m.delivery_status,
+    m.outcome_reason
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.market_price_event m
+    ON m.symbol = p.symbol
+   AND m.observed_at BETWEEN DATE_SUB(p.closed_at, INTERVAL 3 MINUTE)
+                         AND DATE_ADD(p.closed_at, INTERVAL 1 MINUTE)
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+  AND m.delivery_status IN ('LEGACY', 'APPLIED')
+ORDER BY p.id, m.observed_at, m.id;
+```
+
+### END_DB_REQUEST

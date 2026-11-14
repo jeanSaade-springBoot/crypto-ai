@@ -1,0 +1,1 @@
+SHOW COLUMNS FROM trade_signal_test WHERE Field IN ('btc_context_candle_close_time','signal_mode','data_quality_valid')

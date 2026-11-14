@@ -1,0 +1,64 @@
+## FINDINGS — Iteration 1: reconstruction setup
+
+- Frozen cohort retained exactly: `182, 172, 162, 158, 143, 137`. No substitutes considered.
+- No Codex DB-evidence files exist yet under the permitted `db/CODEX/` location; no database query has been executed.
+- Timestamp metadata has a two-second inconsistency: snapshot UTC `2026-11-14 15:00:04` converts to KSA `2026-11-14 18:00:04`, whereas the supplied snapshot KSA is `18:00:02`. This does not change the frozen cohort.
+
+## EVIDENCE
+
+### PROJECT EVIDENCE
+
+- [PaperPosition.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:12) establishes `paper_position` as the lifecycle record with entry/exit signal links, prices, realized P&L, reasons, and UTC open/close instants.
+- [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:402) creates a paper position only after wallet BUY execution returns success; it stores the entry signal and its initial stop/target.
+- [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:75) is the candidate live-protection path. Its code prioritizes take-profit, stop-loss, profit-lock, normal exit, then near-TP handling.
+- [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:391) updates the paper position and writes a production exit audit for a live-price exit.
+- [ProductionExitAuditService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:33) records the terminal trigger separately from the contextual signal, if the applicable runtime version executed this path.
+
+### AGENT INFERENCE
+
+The code identifies the likely evidence chain, but it does not prove which path, version, configuration, symbol, entry signal, or exit mechanism applied to any frozen trade. Database evidence is required before reconstructing individual timelines or classifying a loss.
+
+### EXTERNAL RESEARCH
+
+None.
+
+## UNKNOWNS
+
+- Symbol, entry/exit timestamps, P&L, quantity, prices, and reasons for every frozen ID.
+- Whether each exit has `production_exit_audit`, linked wallet executions, managed-position history, accepted price-event evidence, and signal-processing work.
+- Runtime mode/version and configuration active at each entry.
+- Whether the supplied snapshot KSA timestamp or supplied UTC timestamp is the intended authoritative instant.
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual `crypto_ai` schema before selecting reconstruction columns or joining tables for the six frozen `paper_position` records. This is metadata-only and bounded to tables identified by current project code and investigation guidance.  
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key
+FROM information_schema.columns AS c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'production_exit_audit',
+      'position_management_event',
+      'position_analysis',
+      'market_price_event',
+      'signal_processing_work',
+      'candle',
+      'technical_indicator',
+      'buy_htf_assessment_audit'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+### END_DB_REQUEST

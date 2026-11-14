@@ -1,0 +1,1 @@
+SELECT installed_rank, version, description, installed_on, success FROM flyway_schema_history WHERE installed_on <= '2026-10-13 00:00:00' ORDER BY installed_rank DESC LIMIT 15

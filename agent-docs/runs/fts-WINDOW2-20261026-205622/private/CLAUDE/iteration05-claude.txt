@@ -1,0 +1,271 @@
+# CLAUDE — WINDOW2 Failed-Trade Study — Iteration 5 (Entry Quality)
+
+Nothing was written to code, config, the database or git. This message is the whole Iteration 5 output, as in earlier iterations.
+
+**Scope and inputs**
+- Frozen `paper_position` IDs 182, 172, 162, 158, 143 and 137 (none substituted).
+- My own results I1-001 to I4-006 in `db/CLAUDE/`.
+- Code, read only. No logs and no web sources were used this iteration.
+
+**Times:** every database value is UTC; KSA = UTC+3 is shown only where labelled.
+
+**Rule for this iteration:** each entry is judged only on what was known at entry. Later price moves are used only for outcomes, and are labelled that way.
+
+**In short:**
+- **All six entries scored at the bottom of the range that is allowed to trade.** Entry Quality (EQ) was 50, 50, 50, 58, 60 and 70. Three were exactly 50, the lowest score that can still trade (F-27).
+- **Five of the six entered with a planned reward:risk below 1.** EQ subtracts 30 points for that, but it only shrinks the position; it never blocks the trade (F-28).
+- **Trades 137 and 182 both used the FIX-11G rule.** It has a lower bar than its sibling rule FIX-112B, which covers the case where the 1h context is *stronger* (F-29).
+- **Trade 137 probably entered only because sentiment and fundamentals data were missing.** Leaving them out raised the score to 91, which cleared the ≥90 exception. With typical sentiment data the 55% range-position guard would probably have blocked it (F-30).
+- **Trade 182 was a trend-following BUY in a `WEAK_DOWNTREND` regime.** No code anywhere stops a BUY because the regime is a downtrend (F-31).
+
+## Iteration 4 unknowns now answered by I4 results (PROJECT EVIDENCE)
+
+| Unknown | Result | Evidence |
+|---|---|---|
+| U-18 entry codes | 137 = `BALANCED_NEUTRAL_5M_WATCH_1H` (FIX-11G), EQ 58. 182 = FIX-11G, EQ 50. 172 = `BALANCED_STRONG` ("5m is bullish while 1h is NEUTRAL"), EQ 60. 143 = SETUP_TIMEFRAME_ATR, EQ 60 in the message. 158 = wake-up, profile BALANCED_STRONG. 162 = ACCUMULATED_EVIDENCE, "1 BUY, 9 WATCH", EQ 50 LATE_ENTRY. | I4-001 |
+| U-19 ACE 1h | The 1h signal that neutralised the 5m SELLs from 09:05 to 10:00 UTC was #175258: WATCH, trend 16/25, regime WEAK_UPTREND. It was replaced at 10:00:06 by #176791 (NEUTRAL, trend 13). The very next 5m (#176934) kept STRONG_SELL. No 15m signals exist (1m 52,374 / 5m 10,467 / 1h 888 rows on 10-11 and 10-12). | I4-002, I4-003 |
+| U-20 exit gap | The `wallet_snapshot.captured_at` values match `paper_position.closed_at` almost exactly, e.g. 182: snapshot 10:05:20.484, paper close 10:05:20.486. The revaluation candle query does a filesort over about 15.9k rows per asset across 20 assets. This supports F-23, but log timings would be needed to prove it. | I4-003, I4-004 |
+| U-22 price gaps | SHIB had 0 trades in the 07:14 candle and 1 trade in the 07:15 candle; ACE had 12 and 10 trades in the 10:04 and 10:05 candles. These were quiet markets, not dropped messages. That closes U-22 in substance; it is not a log-level proof. | I4-006 |
+| U-23 | ACE 1m #176733 (09:58 UTC) was SELL → NEUTRAL. #176857 (10:02) was SELL but its 5m was NEUTRAL, so it could not confirm an exit. Price sat at 0.1880–0.1883 the whole time, so an earlier exit would have saved at most about 1 tick. **Outcome only.** | I4-005 |
+
+**Size check:** 182 and 162 executed at 15% because the ATR plan's `REDUCED_POSITION` cut the 25% route allocation to 60% of it (25% × 60% = 15%). This matches `allocated_position_percent` = 15 (I1-007). It is not an anomaly.
+
+## FINDINGS
+
+**F-27 — Every frozen entry sat in the lowest EQ band that can still trade** (PROJECT EVIDENCE)
+
+*Stored EQ (`wallet_managed_position.entry_quality_score`, I1-007):*
+
+| Trade | Entry signal (UTC / KSA) | Route | EQ | EQ class |
+|---|---|---|---|---|
+| 137 | #156723, 10-11 20:55:01 / 23:55:01 | IMMEDIATE_VALIDATION, FIX-11G | 58 | ACCEPTABLE |
+| 143 | #159408, 10-11 22:40:01 / 10-12 01:40:01 | SETUP_TIMEFRAME_ATR | 70 stored; 60 in the message | — |
+| 158 | #165412, 10-12 02:35:01 / 05:35:01 | SETUP_CONFIRMATION_WAKEUP | **50** | LATE |
+| 162 | #167668, 04:02:02 / 07:02:02 | ACCUMULATED_EVIDENCE | **50** | LATE |
+| 172 | #171589, 06:36:01 / 09:36:01 | IMMEDIATE_VALIDATION, BALANCED_STRONG | 60 | ACCEPTABLE |
+| 182 | #176710, 09:57:01 / 12:57:01 | IMMEDIATE_VALIDATION, FIX-11G | **50** | LATE |
+
+*How the guard works:*
+- `applyInitialEntryQualityGuard` blocks only when the score is below 50 (`ExecutionIntelligenceService.java:229, 1173`).
+- So 50 is the lowest score that can trade. Anything below 70 is capped at 25% size (`:1183`).
+- The LATE_ENTRY class (50–54) still executes, except in two narrow cases:
+  - the BALANCED_EARLY direct route (FIX-041, `:672-684`)
+  - WATCH-only accumulated evidence (FIX-119, `:1257-1280`)
+
+*Assessment:*
+- The guard did what it is coded to do. It does not act as a quality filter; at this level it only sets position size.
+- Whether EQ 50–60 entries lose money overall is a separate question. DBQ-CLAUDE-I5-002 checks it.
+
+**F-28 — A reward:risk below 1 costs 30 EQ points but never blocks an entry** (PROJECT EVIDENCE: code; the EQ breakdown is AGENT INFERENCE)
+
+*The code:*
+- `assessEntryQuality` takes 30 points off when reward:risk is below 1 (`:991`), computed by `currentRewardRisk` from the signal's stop and target at the execution price (`:1811-1816`).
+- Starting from 100, that leaves 70, which is still above the cutoff.
+- Only the breakout-retracement route has a hard minimum reward:risk of 1.15 (I2 F-5).
+
+*The frozen trades:*
+- Five of six entered with reward:risk between 0.35 and 0.74: trades 137, 158, 162, 172 and 182.
+- 143 is the exception, at about 1.39 at entry against its 1m signal plan.
+
+*What made up the rest of each score (inference, by subtraction):*
+
+| Trade | EQ | Likely breakdown |
+|---|---|---|
+| 137 | 58 | 100 − 30 (reward:risk) − 12 (recent-rejection penalty, `:236`) |
+| 182 | 50 | 100 − 30 − 15 (`STOP_EXPOSED`; the decision path says "No persistent bid support … above the stop-loss") − 5 (opportunity age over 20 min) |
+| 172 | 60 | Unclear: −30 plus a −10 from expansion, ATR extension or age. I5-003 checks this. |
+
+*Cross-check against all positions from 10-11 to 10-15* (AGENT INFERENCE: my arithmetic on I2-008):
+- 23 positions had a planned reward:risk below 1: 14 wins, 8 losses, 1 at zero.
+- Net P&L was about −0.04 USDT *before* fees. At about 0.2% per round trip, roughly 23 × 0.04 USDT ≈ −0.9 USDT more in fees would make the group clearly loss-making.
+- So these entries need about a 60–75% win rate, they achieved about 61% gross, and fees make them a losing group.
+- DBQ-CLAUDE-I5-002 replaces this manual count with an exact grouping by reward:risk band, with notional totals for the fee estimate.
+
+*Assessment:* a design weakness in the configuration and quality model, not a code defect.
+
+**F-29 — FIX-11G (5m NEUTRAL + 1h WATCH) has a lower bar than FIX-112B (5m NEUTRAL + 1h BUY)** (PROJECT EVIDENCE)
+
+| Rule | Context | Requirements | Code |
+|---|---|---|---|
+| FIX-112B (`BALANCED_NEUTRAL_5M`) | 1h bullish (stronger) | confidence ≥ 72 **and** EQ ≥ 70 | `TradeExecutionValidationService.java:234-236` |
+| FIX-11G (`BALANCED_NEUTRAL_5M_WATCH_1H`) | 1h only WATCH (weaker) | EQ ≥ 50, upstream approval and a BTC check; **no confidence threshold** (stated on purpose at `:256-257`) | `:49, 263-272` |
+
+- **Trade 137** (confidence 81, EQ 58) would fail the FIX-112B bar on EQ.
+- **Trade 182** (confidence 68, EQ 50) would fail it on both confidence and EQ.
+- **The 1h "WATCH" behind 182 was weak:** #175258 had trend 16/25 and total score 60, the bottom of the WATCH band (`AnalysisService.java:972`).
+- **Assessment:**
+  - An inconsistent threshold design: the weaker higher-timeframe context gets the looser gate.
+  - Both are deliberate, documented rules, so this is a design inconsistency, not a code bug.
+  - It adds to F-22 for 182: FIX-11G's "neither timeframe is bearish" premise judged a 5m whose raw decision was STRONG_SELL.
+  - DBQ-CLAUDE-I5-001 measures FIX-11G's record across all trades.
+
+**F-30 — Trade 137's STRONG_BUY 91 depended on sentiment and fundamentals being left out of the score** (PROJECT EVIDENCE: code + I1-005/I1-007; the counterfactual is AGENT INFERENCE)
+
+*How the score was built:*
+- RANGE_MEAN_REVERSION weights are trend 15, volume 18, momentum 22, sentiment 15, fundamentals 15 (`application.yml:360-367`).
+- Signal #156723 scored raw 50 out of the 55 available points (sentiment and fundamentals "unavailable/stale; excluded from normalization"), so normalized = 91 (`MarketStrategyService.java:96-105`).
+
+*Why that mattered:*
+- Price was at 68.28% of the Bollinger range, above the 55% limit for a range BUY (`RangeEntryLocationService.java:35`).
+- It passed only through the expansion exception, which needs STRONG_BUY *and* a normalized score ≥ 90 (`:37, 96-103`; decision path step 4).
+- With sentiment counted: (50 + S) / 70 ≥ 90% needs S ≥ 13 out of 15. At S = 10, the score is 86: a BUY, not a STRONG_BUY (threshold 88). The exception fails, and the location guard blocks the entry.
+
+*Why S = 10 is a reasonable guess:*
+- DOGE and SHIB signals the next day carried "Sentiment 10/15; raw=0.380" (I1-005).
+- The identical raw value suggests a market-wide feed, but the EGLD value at 20:55 UTC is unknown. I5-004 checks it.
+
+*Two more points:*
+- Leaving a missing component out of the normalization raises the score whenever the available components are near their maximum. Here volume and momentum were both at maximum.
+- The 1m entry was in RANGE, but the 1h was WEAK_DOWNTREND with trend 11/25.
+
+*Assessment:* a candidate scoring weakness, an artefact of leaving missing data out. It is not a code defect against the current rules, but it turned a data gap into entry authority.
+
+**F-31 — Trade 182: a trend-following BUY was allowed in a `WEAK_DOWNTREND` regime** (PROJECT EVIDENCE)
+
+- `MarketStrategyService.java:70` maps STRONG_UPTREND, WEAK_UPTREND, STRONG_DOWNTREND and WEAK_DOWNTREND all to TREND_FOLLOWING.
+- The scoring only ever produces bullish decisions. So in a downtrend the profile can only produce a long that goes against the regime, carried by volume and momentum.
+- The word `DOWNTREND` appears in only 3 source files: the enum, the regime classifier and that switch. No entry gate reads it.
+- **#176710's score:**
+  - trend 12/25 base, which scales to about 14/30
+  - volume 20/20 and momentum 15/15
+  - raw 49/65 = 75.4, which is exactly the trend-following BUY threshold of 75 (`application.yml:356`)
+  - sentiment and fundamentals left out
+- **Context:** the confluence was "NEUTRAL/WATCH with weak structure", with confidence reduced to 68. Fifty-five minutes of raw 5m SELL/STRONG_SELL were hidden (F-22).
+- **Assessment:**
+  - A design gap: the regime direction is classified but never used as an entry constraint for long-only trend-following.
+  - Together with F-22 and F-29, trade 182 is the weakest entry in the set.
+  - It is not a valid "clean" losing trade; it is a design-permitted, low-quality entry.
+
+**F-32 — Trade 172: the 5m "bullish" confirmation was a 5m BUY that its own analysis had blocked from entry** (PROJECT EVIDENCE; the cause needs I5-003)
+
+- `BALANCED_STRONG` was granted on 5m #171559: BUY 80, RANGE regime, generated at 06:35:04 UTC, but with `final_entry_allowed = 0` (I2-005).
+- `validateBuy` uses only the 5m decision (`TradeExecutionValidationService.java:81-107`; the assessment `decision()` at `HigherTimeframeBuyAssessmentService.java:50`).
+- The wake-up route, by contrast, refuses a 5m trigger with `final_entry_allowed = 0` (`ExecutionIntelligenceService.java:402`). That is the same kind of inconsistency as F-22.
+- **A pattern to confirm:** every 5m BUY in a RANGE regime in I2-005 has `final_entry_allowed = 0` (163125, 165311, 165437, 165942, 170026, 171559). That fits the range-location guard rejecting them. I5-003 checks this.
+- **Other context:**
+  - 1h #170667 was NEUTRAL, trend 8/25, RANGE, and the 1m confluence was CONFLICT.
+  - About 90 minutes earlier, SHIB 5m printed seven SELL/STRONG_SELL candles in a row (04:40–05:10 UTC).
+  - The order book showed no bid support above the stop.
+- **Assessment:** a candidate inconsistency. A 5m BUY that its own analysis would not allow as an entry was used as confirmation for a 1m entry.
+
+**F-33 — Trades 158 and 162 were low-quality entries in very quiet markets, admitted by design** (PROJECT EVIDENCE)
+
+*Trade 158:*
+- The 1m signal was WATCH 64, with volume 6/20.
+- ATR was 0.05% of price, so the target was +0.17%, which is below the fees (I2 F-6).
+- EQ was 50, and the 1h was NEUTRAL, trend 11–12, RANGE.
+- The wake-up route checks EQ only against the cutoff (`:439-441`) and checks nothing about the target against fees.
+
+*Trade 162:*
+- ACCUMULATED_EVIDENCE: 1 BUY and 9 WATCH, EQ 50, LATE_ENTRY.
+- FIX-119 defers a late accumulated entry only when the evidence contains *zero* BUYs (`:1275-1280`). A single BUY observation lifts the deferral.
+- The higher-timeframe authority was 5m WATCH + 1h WATCH (BALANCED_EARLY). The same EQ on the direct BALANCED_EARLY route would have been blocked by FIX-041 (`:672-684`).
+- The 1m price was above the upper Bollinger band (I2 F-8).
+
+*Assessment:* both followed the code. 162 shows a second inconsistency like F-29: a BALANCED_EARLY late entry is blocked on one route and allowed on another.
+
+**F-34 — Trade 143's EQ is recorded inconsistently** (PROJECT EVIDENCE)
+- The `wallet_trade` message says "Entry Quality 60/100 (ACCEPTABLE_ENTRY)" (I4-001).
+- `wallet_managed_position.entry_quality_score` = 70 (I1-007).
+- The other five rows match their messages.
+- I can't tell which value is authoritative or where 70 came from (another ATR basis, or a later rewrite). It is an audit-consistency gap, not a trading defect.
+- Trade 143's entry quality judgement is otherwise unchanged from F-12 and F-24: an entry admitted by a timing race, on an extended 1m (RSI 84, 4.35 ATR above SMA20).
+
+**F-35 — The working tree contains FIX-154 code, while the docs say it is not implemented** (PROJECT EVIDENCE; reported, not resolved)
+
+- **What exists:** `HigherTimeframeBuyAssessmentService.java` exists and is called from `validateBuy` and `validateBuyContext` (`TradeExecutionValidationService.java:93, 145`).
+- **What the docs say:** `claude-docs/ARCHITECTURE.md:19`, `TRADING_RULES.md:124` and AGENTS.md all describe FIX-154 as not yet implemented.
+- **The effect on this study:**
+  - The code I'm citing may not be the code that ran on 10-11/10-12.
+  - The FIX-11G and BALANCED_STRONG message text in `wallet_trade` matches the current code exactly. So F-29 and F-32 are supported for those routes.
+  - Even if FIX-154 had been running, its `5M_BEARISH_VETO` reads `getDecision()`, the neutralised value (`:20-22, 50`). So it would not have changed trade 182 (F-22 still applies).
+- **Next step:** this contradiction needs the dual-agent process. I am not updating any shared knowledge.
+
+## Entry-quality verdicts (information available at entry only)
+
+| Trade | Entry verdict | Main reasons | Class |
+|---|---|---|---|
+| 137 | Weak; admitted by a scoring artefact | reward:risk 0.64; target +0.32%; score inflated by missing data (F-30); FIX-11G low bar (F-29) | Candidate scoring weakness + design limitation |
+| 143 | Weak; timing race | Extended 1m, used a 5m BUY one bar out of date (F-12, F-24); reward:risk acceptable | Timing/parity weakness |
+| 158 | Poor | Target below fees; volume 6/20; EQ 50 | Design limitation (no target-vs-fee floor) |
+| 162 | Poor | EQ 50 LATE; above the upper Bollinger band; 1 BUY lifts FIX-119 | Design inconsistency (F-33) |
+| 172 | Weak | 5m confirmation was blocked at source (F-32); 1h NEUTRAL, trend 8; reward:risk 0.74 | Candidate inconsistency |
+| 182 | Poorest | Long in a downtrend (F-31); hidden 5m STRONG_SELL (F-22); FIX-11G at EQ 50 with confidence 68 (F-29); reward:risk 0.48 | Candidate logic defect + design gaps |
+
+**Data freshness and execution:** previously confirmed fine for all six (I3 F-20, I2 F-3). Entry quality problems are in the decision rules, not in stale data or execution delay.
+
+## EVIDENCE
+
+| ID | Type | Reference |
+|---|---|---|
+| E-33 | DB | I4-001 (wallet BUY routes/EQ text), I4-002 (ACE 5m/1h confluence), I4-003 (indexes, assets, interval counts), I4-004 (snapshots), I4-005, I4-006 |
+| E-34 | DB | I1-007 (`entry_quality_score` 58/70/50/50/60/50; decision paths, order book, Bollinger 68.28%), I1-005 (raw/normalized scores), I2-001, I2-005, I2-008 |
+| E-35 | Code | `ExecutionIntelligenceService.java:65, 226-236, 397-457, 548-786, 976-1022, 1171-1223, 1257-1280, 1811-1816` |
+| E-36 | Code | `TradeExecutionValidationService.java:49, 62-113, 218-321` |
+| E-37 | Code | `MarketStrategyService.java:69-113`; `AnalysisService.java:960-976` |
+| E-38 | Code | `RangeEntryLocationService.java:35-37, 89-117` |
+| E-39 | Code | `HigherTimeframeBuyAssessmentService.java:15-51` |
+| E-40 | Config | `application.yml:348-389` (strategy weights and thresholds) |
+
+## UNKNOWNS
+
+- **U-24:** The sentiment value EGLD would have had at 20:55 UTC, and why EGLD, ACE and XRP had none while DOGE and SHIB did (F-30). Needs I5-004.
+- **U-25:** Why 5m #171559 (and the other RANGE 5m BUYs) had `final_entry_allowed = 0` (F-32). Needs I5-003.
+- **U-26:** Whether EQ 50–60, reward:risk below 1, and FIX-11G entries lose money across the whole history (F-27 to F-29). Needs I5-001 and I5-002.
+- **U-27:** Which EQ is authoritative for trade 143 (60 or 70) (F-34).
+- **U-28:** Which code revision was running on 2026-10-11/12, especially for FIX-154 (F-35). Needs deployment records or logs.
+- **U-15, U-17 and U-21** remain open (logs and a Replay run needed).
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: Outcome by entry route and higher-timeframe authority code for all closed positions (F-29, F-32, F-33, U-26).
+SQL:
+SELECT w.execution_reason, CASE WHEN w.execution_message LIKE '%BALANCED_NEUTRAL_5M_WATCH_1H%' THEN 'FIX11G' WHEN w.execution_message LIKE '%BALANCED_NEUTRAL_5M:%' THEN 'FIX112B' WHEN w.execution_message LIKE '%approved 100\%%' THEN 'BALANCED_FULL' WHEN w.execution_message LIKE '%approved 75\%%' OR w.execution_message LIKE '%BALANCED_STRONG%' THEN 'BALANCED_STRONG' WHEN w.execution_message LIKE '%approved 50\%%' OR w.execution_message LIKE '%BALANCED_EARLY%' THEN 'BALANCED_EARLY' ELSE 'OTHER' END AS htf_code, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS wins, SUM(p.realized_pnl < 0) AS losses, SUM(p.status = 'STOPPED') AS stopped, ROUND(SUM(p.realized_pnl), 4) AS pnl, ROUND(SUM(p.entry_price * p.quantity), 2) AS notional FROM crypto_ai.wallet_trade w JOIN crypto_ai.paper_position p ON p.signal_id = w.signal_id WHERE w.side = 'BUY' AND p.status IN ('CLOSED','STOPPED') GROUP BY w.execution_reason, htf_code ORDER BY w.execution_reason, htf_code LIMIT 60;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: Outcome by planned reward:risk band and by stored Entry Quality band, with notional for fee estimates (F-27, F-28, U-26).
+SQL:
+SELECT CASE WHEN (p.take_profit - p.entry_price) / NULLIF(p.entry_price - p.stop_loss, 0) < 0.75 THEN 'a_rr<0.75' WHEN (p.take_profit - p.entry_price) / NULLIF(p.entry_price - p.stop_loss, 0) < 1 THEN 'b_rr0.75-1' WHEN (p.take_profit - p.entry_price) / NULLIF(p.entry_price - p.stop_loss, 0) < 1.5 THEN 'c_rr1-1.5' ELSE 'd_rr>=1.5' END AS rr_band, CASE WHEN m.entry_quality_score < 55 THEN 'eq50-54' WHEN m.entry_quality_score < 70 THEN 'eq55-69' WHEN m.entry_quality_score < 85 THEN 'eq70-84' ELSE 'eq85+' END AS eq_band, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS wins, SUM(p.status = 'STOPPED') AS stopped, ROUND(SUM(p.realized_pnl), 4) AS pnl, ROUND(SUM(p.entry_price * p.quantity), 2) AS notional FROM crypto_ai.paper_position p LEFT JOIN crypto_ai.wallet_managed_position m ON m.entry_signal_id = p.signal_id WHERE p.status IN ('CLOSED','STOPPED') GROUP BY rr_band, eq_band ORDER BY rr_band, eq_band LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: Why the RANGE 5m BUYs had final_entry_allowed=0, and liquidity/authority fields for the six entry signals (F-28, F-32, U-25).
+SQL:
+SELECT id, symbol, interval_code, generated_at, decision, original_decision, total_score, market_regime, final_entry_allowed, primary_blocking_stage, strategy_entry_allowed, liquidity_status, liquidity_entry_allowed, entry_authority, entry_authority_max_position_percent, LEFT(liquidity_explanation, 300) AS liq_300 FROM crypto_ai.trade_signal WHERE id IN (163125,165311,165437,165942,170026,171559,156723,159408,165412,167668,171589,176710) ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: Sentiment availability by symbol around trade 137's entry and across 10-11/10-12, to test the F-30 counterfactual (U-24).
+SQL:
+SELECT symbol, sentiment_available, fundamental_available, COUNT(*) AS n, MIN(sentiment_score) AS min_s, MAX(sentiment_score) AS max_s FROM crypto_ai.trade_signal WHERE interval_code = '1m' AND generated_at BETWEEN '2026-10-11 20:00:00' AND '2026-10-12 10:10:00' GROUP BY symbol, sentiment_available, fundamental_available ORDER BY symbol LIMIT 80;
+SELECT id, symbol, generated_at, sentiment_available, sentiment_score, LEFT(explanation, 200) AS expl_200 FROM crypto_ai.trade_signal WHERE interval_code = '1m' AND sentiment_available = 1 AND generated_at BETWEEN '2026-10-11 20:50:00' AND '2026-10-11 21:00:00' ORDER BY generated_at LIMIT 20;
+### END_DB_REQUEST
+
+## Self-review
+
+- **Revised:**
+  - Iteration 4 F-25 † items are resolved. 137 is FIX-11G, not an unknown profile. 172 is BALANCED_STRONG, not FIX-11G.
+  - U-22 is closed in substance: quiet markets, from candle trade counts.
+  - The 15% sizes on 162 and 182 are explained.
+- **Facts versus inferences:**
+  - Facts: the EQ values, the thresholds, the route codes, and the absence of any downtrend gate in the code.
+  - Inferences: the EQ component breakdown in F-28; the trade 137 counterfactual (F-30), which depends on I5-004; and the RANGE 5m blocking cause (F-32).
+- **Labelling:** no entry verdict uses later price. The I4-005 and I2 highest-price data are used only for outcomes.
+- **Not claimed:**
+  - That FIX-11G, FIX-119 or the score normalization are code defects. They are deliberate rules with inconsistent bars.
+  - That the code on 10-12 equals the working tree (F-35).
+- **Plan for Iteration 6:**
+  - Fold in the I5 results.
+  - Quantify how much each systemic class costs across all positions.
+  - Draft regression checks:
+    - FIX-11G against FIX-112B parity
+    - a raw 5m bearish decision reaching the 1m gates
+    - a 5m with `final_entry_allowed = 0` used as confirmation
+    - missing-component normalization against the RANGE exception
+    - a minimum planned reward:risk or target-versus-fee floor

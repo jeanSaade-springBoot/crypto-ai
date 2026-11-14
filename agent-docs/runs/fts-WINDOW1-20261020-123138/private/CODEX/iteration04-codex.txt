@@ -1,0 +1,90 @@
+## FINDINGS — Iteration 4: code / trade route
+
+- **[PROJECT EVIDENCE]** No assigned DB artifacts exist under `db/CODEX`; no source-level route can be attributed to any individual frozen trade: **182, 172, 162, 158, 143, 137**.
+
+- **[PROJECT EVIDENCE]** Current direct-ingestion route is:
+  `BinanceKlineService` → input transaction (candle + canonical 1m `market_price_event` as `PENDING`) → protection transaction → observer transaction → closed-candle dispatch. The observed time is Binance message event time `E`, represented as a UTC `Instant`. [BinanceKlineService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BinanceKlineService.java:93), [KlineTransactionCoordinator.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:31)
+
+- **[PROJECT EVIDENCE]** For a canonical 1m observation, protection rejects invalid, future, stale, and out-of-order prices as `NON_CANONICAL`; otherwise it completes the price receipt as `APPLIED` in the protection-effects transaction. An aged unresolved direct receipt can become `PROTECTION_NOT_APPLIED`. Thus candle OHLC must not be substituted for missing accepted price-event evidence. [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:54), [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:40)
+
+- **[PROJECT EVIDENCE]** A new `paper_position` is created only after a signal is claimed, locked, freshness-checked, approved by execution intelligence, revalidated against a recent canonical execution price, and accepted by paper-wallet BUY execution. The stored row records entry signal, execution price, current stop/target, quantity, and `opened_at`. [SignalProcessingCoordinator.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:39), [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:340)
+
+- **[PROJECT EVIDENCE]** Current live-price protection evaluates, in order: reached target/continuation, stop loss, profit-lock hard floor, profit-lock exit policy, normal multi-timeframe exit policy, then near-TP protection. A mechanical terminal exit first performs wallet liquidation and then synchronizes the matching open `paper_position`, with an immutable `production_exit_audit` attempt. [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:165)
+
+- **[PROJECT EVIDENCE]** Current normal signal exit policy permits:
+  - `HTF_SELL_CONFIRMED`: bearish 1h and non-supportive 5m;
+  - `SELL_CONFIRMED`: bearish 1m and bearish 5m while 1h is not bullish.
+  
+  A profit-lock breach can instead be `PROFIT_LOCK_HTF_EXIT`, `PROFIT_LOCK_BEARISH_CONFIRMATION`, or fallback `PROFIT_LOCK_EXIT`; it may hold only under the specified supportive context. [PositionExitPolicy.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:12)
+
+- **[PROJECT EVIDENCE]** The mapped `paper_position.closed_at` is assigned from application `Instant.now()` when the row is closed. It is not the Binance observation timestamp. Therefore it cannot alone establish observation-to-protection/exit latency; the needed comparison is accepted `market_price_event.observed_at` against position, wallet, and audit timestamps. [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487), [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:391)
+
+- **[PROJECT EVIDENCE]** Source maps `paper_position.realized_pnl` as price-difference P&L on remaining quantity, preserving any earlier near-TP partial-harvest P&L. It does not by itself prove fee-inclusive net P&L; wallet execution evidence is required for reconciliation. [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:495)
+
+- **[AGENT INFERENCE]** For every frozen loss, the likely durable reconstruction chain is:
+  `paper_position` → entry/exit `trade_signal` → `signal_processing_work` → entry/exit `wallet_trade` and `wallet_managed_position` → `market_price_event` → `production_exit_audit` / `position_management_event`.
+  This is a route to query, not evidence that every listed record exists or that the current source revision ran for these historical trades.
+
+## EVIDENCE
+
+- [BinanceKlineService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BinanceKlineService.java:101)
+- [KlineTransactionCoordinator.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:31)
+- [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:50)
+- [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:402)
+- [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:173)
+- [ProductionExitAudit.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:18)
+
+## UNKNOWNS
+
+- **[PROJECT EVIDENCE]** Actual schema, rows, and runtime version are still unobserved. The source mappings above require DB confirmation.
+- **[AGENT INFERENCE]** No conclusion is justified yet for any frozen trade’s entry quality, exit reason, protection correctness, timing, fee-adjusted P&L, duplicate prevention, or Replay comparability.
+- **[PROJECT EVIDENCE]** No claim can be made that the current source route was deployed when IDs 182, 172, 162, 158, 143, or 137 were opened or closed.
+- **[PROJECT EVIDENCE]** Snapshot metadata remains inconsistent: `2026-10-20 11:54:53 UTC` would be `2026-10-20 14:54:53 KSA`, not the supplied `2026-10-20 12:31:38 KSA`.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Schema-first confirmation of the durable entities and columns needed to connect the six frozen authoritative `paper_position` rows to entry, protection, exit, wallet, and audit evidence. No historical row values are requested until this schema result exists.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    table_type
+FROM information_schema.tables
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'position_management_event'
+  )
+ORDER BY table_name;
+
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'position_management_event'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST

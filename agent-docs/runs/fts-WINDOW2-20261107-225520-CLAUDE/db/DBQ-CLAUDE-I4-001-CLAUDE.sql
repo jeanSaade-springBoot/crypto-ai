@@ -1,0 +1,1 @@
+SELECT installed_rank, version, description, installed_on, success FROM crypto_ai.flyway_schema_history WHERE CAST(version AS UNSIGNED) >= 95 ORDER BY installed_rank LIMIT 40

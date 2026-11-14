@@ -1,0 +1,210 @@
+# Claude: FTS WINDOW2, Iteration 4 (code and trade route, self-review)
+
+The six frozen trades are 182, 172, 162, 158, 143 and 137, all Production paper positions in `crypto_ai.paper_position`. This was analysis only: no code, config, database, git or deploy actions. I read none of Codex's files, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or `DATABASE_QUERY_LOG.md`. Plan mode was active, but neither Write nor ExitPlanMode was available, so this report is inline.
+
+**Bottom line:**
+- **Time zone (T1) is confirmed.** Every timestamp our query wrapper returns is KSA, not UTC, so the "KSA" times in Iterations 1–2 were 3 hours late.
+- **Trade 143 is a confirmed entry-logic defect.** It used an outdated 5m BUY, then checked the fill against the 1m plan rather than that 5m signal's own target.
+- **Replay can't reproduce trade 143.** Its signal ordering prevents the defect from happening there, so the defect is invisible to Replay testing.
+- **Trades 162 and 182 followed the rules,** but each exposes a weak rule.
+- **Trades 137, 158 and 172 are valid losses.**
+
+## Time zone (T1): confirmed (PROJECT EVIDENCE)
+
+- **Session zone (I3-001):** the session uses the system zone ("Arab Standard Time"), and `NOW()` minus `UTC_TIMESTAMP()` is 180 minutes.
+- **Known anchor (I3-002):** event 1788491 displays as 22:40:01.028. Its epoch value 1791747601.028 equals 2026-10-11T19:40:01.028Z, which matches the `priceObservedAt` the app logged.
+
+**Rule:**
+- Displayed `TIMESTAMP` values are **KSA**; UTC is the displayed value minus 3 hours.
+- `DATETIME(6)` columns are stored and shown as literal values, so they are not converted (I3-003). These are `trade_signal.btc_context_evaluated_at` and `trade_signal.btc_signal_generated_at`.
+- Time literals in my SQL are read in the same KSA session zone.
+- This contradicts `DATABASE_INVESTIGATION_RULES.md` ("Raw MySQL timestamps are UTC"). I have reported it and changed no document; it needs dual-agent review.
+
+Corrected entry and exit times, from `wallet_trade.executed_at` (I3-004):
+
+| Trade | Entry, KSA / UTC | Exit, KSA / UTC |
+|---|---|---|
+| 137 EGLD | 10-11 20:55:03.017 / 17:55:03 | 21:00:08.935 / 18:00:08 |
+| 143 EGLD | 10-11 22:40:03.115 / 19:40:03 | 22:43:35.046 / 19:43:35 |
+| 158 XRP | 10-12 02:35:02.988 / 10-11 23:35:02 | 03:30:04.217 / 00:30:04 |
+| 162 DOGE | 10-12 04:02:04.210 / 01:02:04 | 04:26:04.134 / 01:26:04 |
+| 172 SHIB | 10-12 06:36:02.935 / 03:36:02 | 07:15:43.492 / 04:15:43 |
+| 182 ACE | 10-12 09:57:04.232 / 06:57:04 | 10:05:18.504 / 07:05:18 |
+
+## Trade route map (PROJECT EVIDENCE: wallet_trade messages from I2-004/I3-004, plus code)
+
+| Trade | Entry route (`execution_reason` / code) | Entry quality (EQ, 0–100), size | Exit route and code |
+|---|---|---|---|
+| 137 | IMMEDIATE_VALIDATION via the FIX-11G rule `BALANCED_NEUTRAL_5M_WATCH_1H` (`TradeExecutionValidationService.java:263-284`) | 58, 25% | SELL_CONFIRMED on the live-price path (`PositionExitPolicy.java:35-43`) |
+| 143 | SETUP_TIMEFRAME_ATR (`ExecutionIntelligenceService.java:628-641`, `:1472-1514`) | 60, 25% | PROFIT_LOCK_HARD_EXIT (`LivePositionProtectionService.java:207-216`) |
+| 158 | SETUP_CONFIRMATION_WAKEUP, FIX-023 (`ExecutionIntelligenceService.java:397-457`) | 25% | SELL_CONFIRMED, live path |
+| 162 | ACCUMULATED_EVIDENCE | 50 (LATE_ENTRY), 15% | SIGNAL_SELL on the signal path (`PaperTradingService.java:197-208`, `validateSell` at `TradeExecutionValidationService.java:165-191`) |
+| 172 | IMMEDIATE_VALIDATION, BALANCED_STRONG | 60, 25% | HTF_SELL_CONFIRMED (`PositionExitPolicy.java:25-33`) |
+| 182 | IMMEDIATE_VALIDATION via the FIX-11G rule | 50, 15% | SELL_CONFIRMED, live path |
+
+## FINDINGS
+
+### R1. Trade 143's last price check used the 1m plan, not the 5m authority (PROJECT EVIDENCE; answers U-T2)
+
+- **Which signal is checked:** in `PaperTradingService.java:296-350`, the signal checked is the 1m signal (159408), not the 5m one. The final check, `revalidateAtExecutionPrice` (`ExecutionIntelligenceService.java:1150-1169`), compares the fill only against that 1m signal's stop and target.
+- **Stop and target source:** the position's stop and target also come from the 1m signal (`PaperTradingService.java:408-409`).
+- **The 5m plan was unused for risk:** the 5m signal 159285 had stop 3.96607 and target 4.01322. Neither was used for the position or for the "price above target" check.
+- **Result:** a fill at 4.033, above the 5m signal's own target, passed because the 1m target was higher.
+- **Contradiction:** the route's own message says the 5m BUY "remains the setup-risk authority". In code, the 5m signal only grants permission, caps the size, and supplies the ATR for the decision-time entry-quality score.
+
+### R2. Entry quality uses different ATRs at decision time and at execution (PROJECT EVIDENCE)
+
+- At decision time, entry quality uses the 5m ATR (`ExecutionIntelligenceService.java:634`).
+- The comment at `:631-633` says the 1m ATR is wrong for this route.
+- The execution-time recheck, `assessEntryQualityAtPrice` (`:857-859`), still uses the 1m ATR.
+- This was not the cause of 143's loss, since the entry passed anyway, but the two checks are inconsistent.
+
+### R3. An ATR position size of 0% is treated as "not set", which becomes 100% (PROJECT EVIDENCE; intent unclear)
+
+- `PaperTradingService.java:328-330` turns `atrRecommendedPositionPercent <= 0` into 100.
+- Signal 159408's own ATR plan said WAIT_FOR_RETRACEMENT at 0%. Its effective size became 100 × 25% = 25%.
+- This may be intended for this route; it is a design question, not a proven bug.
+
+### R4. The 5m signal race is built into the design, and Replay cannot reproduce trade 143 (PROJECT EVIDENCE + AGENT INFERENCE)
+
+- **Production:**
+  - The 5m signal is picked as the newest one generated at or before the 1m signal (`ExecutionIntelligenceService.java:2455-2461` and `:2606-2608`).
+  - The 1m and 5m analyses run in parallel, and nothing waits for the 5m signal from the same candle close.
+  - The newer 5m WATCH (159407) was generated 2 ms after the 1m signal, so the older 5m BUY 159285 was used.
+- **Replay:**
+  - Replay stamps every signal's generation time with the candle close time (`RegressionTestWorker.java:584`). At equal close times it orders 1h, then 5m, then 1m (`:557-560`, `:787-793`).
+  - It then opens the full signal timeline for execution (`ShadowProductionReplayService.java:105`).
+  - Replay's copy of 1m signal 159408 is stamped 19:40:00Z and therefore sees 5m 159407 (WATCH). The route's bullish check (`:1486`) fails, so Replay never makes the 143 entry.
+- **Parity gap:** Replay produces the correct outcome but is not at parity with Production, so it can't detect this defect.
+- **Precedent:**
+  - FIX-141 already fixed this same ordering problem for BTC context, by selecting on candle open time (`BtcMarketContextService.java:84`, `ExecutionReplayScope.java:122-137`).
+  - The 5m confirmation lookups were never moved to that method. They are in `validateBuy` (`TradeExecutionValidationService.java:81`), `validateSell` (`:169`), and the setup-ATR, breakout and transition routes.
+- **Asymmetry:**
+  - Trade 158 shows the system handles a *late bullish* 5m signal: the FIX-023 wakeup fired when the 5m BUY arrived 21 ms after the 1m signal.
+  - Nothing handles a late *non-bullish* 5m signal that replaces an older BUY, which is the 143 case.
+  - Exits act on a later price tick using the newest stored signals (`LivePositionProtectionService.java:95-97`), so they normally see the same-close 5m signal. Entries do not.
+
+### R5. One 5m BUY probably authorised two EGLD entries within 4 minutes (PROJECT EVIDENCE partial + AGENT INFERENCE; check with I4-002)
+
+- **Sequence:**
+  - #356 bought via SETUP_TIMEFRAME_ATR at 22:36:03 KSA (signal 159321).
+  - #357 exited via PROFIT_LOCK_EXIT at 22:39:41 KSA; its message says "5m=BUY".
+  - #358 re-entered 22 s later, 0.93% higher than that exit.
+- **Why it points to one signal:** 159285 is the only 5m BUY in that window.
+- **No check would stop a re-use:**
+  - The setup route has no "authority already used" check. `BUY_CONTINUATION` covers only the direct 1m path (`TradeExecutionValidationService.java:67-79`).
+  - A grep found no re-entry cooldown.
+
+### R6. Trade 182: a 5m signal that was bearish before downgrading passes every direct-BUY gate (PROJECT EVIDENCE; design gap)
+
+- **What the gates read:** the FIX-154 assessment (`HigherTimeframeBuyAssessmentService.java:20-26`) and the FIX-11G rule (`TradeExecutionValidationService.java:263-284`) read only the stored `decision`.
+- **Effect on 182:**
+  - The 5m signal was stored as NEUTRAL; its original decision was STRONG_SELL.
+  - It was downgraded by the multi-timeframe step because the 1h was WATCH.
+  - So the 5m bearish veto did not fire, and FIX-11G granted 25%.
+- **Minimum quality:** the entry quality was 50, exactly at the chase cutoff (`ExecutionIntelligenceService.java:229`, `:1173`).
+- **Inconsistent across routes:** other routes do check `original_decision`, at `:1425-1426` and `:1542`.
+
+### R7. Trade 162: the FIX-119 late-entry guard is skipped if there is a single BUY observation (PROJECT EVIDENCE)
+
+- The guard is skipped when `buyCount > 0` (`ExecutionIntelligenceService.java:1275-1280`).
+- The wallet message shows "1 BUY, 9 WATCH" and entry quality 50 (LATE_ENTRY), so one BUY in ten was enough to skip it.
+- The rule was followed as written; the threshold is weak.
+
+### R8. Trade 143's exit followed the coded order (PROJECT EVIDENCE)
+
+- **Exit at 4.027:**
+  - The stop was not hit (`LivePositionProtectionService.java:174`).
+  - The profit lock had triggered, and the price was below the hard floor of entry × 1.0005 = 4.035 (`:210-216`). That gave PROFIT_LOCK_HARD_EXIT.
+- **Cause of the loss:** the price jumped straight through the lock and the floor (T3), not the order of the checks.
+- **Labelling issue:** a reason starting "PROFIT_LOCK_" can carry a negative P&L, which is misleading in reports.
+
+### R9. Update on the 143 price gap (T3) (PROJECT EVIDENCE + AGENT INFERENCE)
+
+- **Event counts for the 22:43 KSA minute (I3-005):**
+  - EGLD had 19 events, the same as BNB and ENA. BTC had 27 and ONG had 2.
+  - Every symbol is below the 30 that a full 2-second cadence would give.
+  - No row is anything other than APPLIED.
+- **Interpretation:** the number of pushes varies with each symbol's activity. That favours "Binance sent fewer pushes" (cause a) over "our app dropped them" (cause b). It is not proof, because rejected observations leave no database row.
+- **Other open positions during the exit (I3-006):** only PEPE (139) and ICP (141). There was little protection work competing on the shared thread (T4).
+
+### R10. T5 (timing) confirmed from stored fields (PROJECT EVIDENCE, I3-004)
+
+The execution price was 1.48–3.20 s old for every BUY, well inside the 15 s limit.
+
+## CLASSIFICATION (Iteration 4)
+
+- **137, 158, 172:** valid, rule-following losses, made likely by the stop/target geometry (F1).
+- **162:** follows the rules; the rule itself is weak (R7).
+- **182:** follows the rules; design gap (R6).
+- **143:** confirmed entry-logic defect.
+  - The 2 ms 5m race (R4).
+  - The 5m/1m authority mismatch (R1–R3).
+  - Probable re-use of the same 5m BUY (R5).
+  - The current Replay can't reproduce it (R4).
+
+## UNKNOWNS
+
+- **U-I4-1:** signal 159408's stop, target, ATR and size fields, and whether the execution-time entry quality was logged (I4-001).
+- **U-I4-2:** which 5m signal authorised #356 (I4-002).
+- **U-I4-3:** how often the same-close 5m race decided any BUY across the population (I4-003).
+- **U-I4-4:** the FIX-154 audit rows for 137 and 182; schema first (I4-004).
+- **U-I4-5:** profit and loss by entry route (I4-005).
+- **U-T3 / U8, carried over:** whether the EGLD gaps were exchange-side or app-side, and why trading stopped after the last close. Both need the gzip logs, which my tools can't read.
+
+## DB_REQUESTS
+
+All time literals below are KSA, matching the wrapper session.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: Risk-plan fields for the 143 race signals and the prior EGLD entry signal (R1, R3, R4, R5)
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, generated_at, created_at, decision, original_decision, total_score, confidence_score, final_entry_allowed, atr_immediate_entry_allowed, atr_entry_type, atr_recommended_position_percent, atr_at_signal, latest_price, stop_loss, take_profit, risk_reward_ratio, data_quality_valid FROM crypto_ai.trade_signal WHERE id IN (159285, 159320, 159321, 159407, 159408) ORDER BY generated_at;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: Which 5m signal authorised the earlier EGLD SETUP_TIMEFRAME_ATR entry #356 (R5)
+SQL:
+SELECT id, symbol, side, execution_reason, signal_id, executed_at, LEFT(execution_message, 2000) AS execution_message FROM crypto_ai.wallet_trade WHERE id IN (356, 357);
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: How often a BUY on a 5m boundary missed the same-close 5m signal, which was generated later, and with what result (R4)
+SQL:
+SELECT wt.id AS wallet_id, wt.symbol, wt.execution_reason, wt.executed_at, s1.id AS s1_id, s1.generated_at AS g1, s5.id AS s5_id, s5.generated_at AS g5, s5.decision AS d5_same_close, TIMESTAMPDIFF(MICROSECOND, s1.generated_at, s5.generated_at) AS g5_minus_g1_us, pp.id AS position_id, pp.realized_pnl, pp.close_reason FROM crypto_ai.wallet_trade wt JOIN crypto_ai.trade_signal s1 ON s1.id = wt.signal_id AND s1.interval_code = '1m' LEFT JOIN crypto_ai.trade_signal s5 ON s5.symbol = s1.symbol AND s5.interval_code = '5m' AND s5.candle_open_time = DATE_SUB(DATE_ADD(s1.candle_open_time, INTERVAL 1 MINUTE), INTERVAL 5 MINUTE) LEFT JOIN crypto_ai.paper_position pp ON pp.signal_id = s1.id WHERE wt.side = 'BUY' AND wt.executed_at >= '2026-10-01 00:00:00' AND MOD(MINUTE(s1.candle_open_time), 5) = 4 ORDER BY wt.executed_at LIMIT 300;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: Schema of the FIX-154 audit and opportunity tables, before querying rows for 137 and 182 (R6) and the 143 opportunity anchor (R2)
+SQL:
+SELECT table_name, column_name, data_type, column_type FROM information_schema.columns WHERE table_schema = 'crypto_ai' AND table_name IN ('buy_htf_assessment_audit', 'execution_opportunity') ORDER BY table_name, ordinal_position;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-005
+Purpose: Profit and loss since 10-11 by entry route and FIX-11G sub-route (R5–R7, F1)
+SQL:
+SELECT wt.execution_reason, (wt.execution_message LIKE '%BALANCED_NEUTRAL_5M_WATCH_1H%') AS fix11g, COUNT(*) AS n, SUM(pp.realized_pnl > 0) AS wins, SUM(pp.realized_pnl < 0) AS losses, ROUND(SUM(pp.realized_pnl), 6) AS sum_pnl, ROUND(AVG(pp.realized_pnl), 6) AS avg_pnl FROM crypto_ai.paper_position pp JOIN crypto_ai.wallet_trade wt ON wt.signal_id = pp.signal_id AND wt.side = 'BUY' AND wt.status = 'EXECUTED' WHERE pp.opened_at >= '2026-10-11 00:00:00' AND pp.status IN ('CLOSED', 'STOPPED') GROUP BY wt.execution_reason, fix11g ORDER BY n DESC;
+### END_DB_REQUEST
+
+## Self-review (Iteration 4)
+
+- **Time labels:** all KSA labels now rest on the confirmed T1, and every UTC value is displayed minus 3 hours. This report fixes the Iteration 1–2 labels.
+- **Evidence:**
+  - All R-findings cite code lines that I read this iteration.
+  - R4's Replay outcome is inferred from code; I did not run Replay.
+  - R5 depends on I4-002.
+  - No EXTERNAL RESEARCH was used this iteration.
+- **Not done:** no documents updated. The T1 rule contradiction and F8 (FIX-153/154 live in Production, against AGENTS.md) still need dual-agent review.
+- **Plan for Iteration 5:**
+  - Apply the I4 results.
+  - Measure how often the R4 race occurs.
+  - Write the correction and regression-check proposals. These are proposals only:
+    - Select the 5m signal by candle time, as FIX-141 does.
+    - Use one source of risk authority for the setup route.
+    - Add an "authority already used" check.
+    - Check `original_decision` on the direct-BUY path.

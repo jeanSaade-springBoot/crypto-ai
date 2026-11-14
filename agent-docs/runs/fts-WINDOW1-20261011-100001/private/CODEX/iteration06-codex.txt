@@ -1,0 +1,67 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen study set remains exactly `paper_position` IDs **104, 101, 96, 91, 82, 78**. No substitutions.
+- **PROJECT EVIDENCE:** `db/CODEX/` contains no result artifacts. Therefore no selected trade has durable DB evidence for its symbol, timing, entry, exit reason, P&L, wallet effect, audit row, or price-protection route.
+- **PROJECT EVIDENCE:** No per-trade root cause is established. The only confirmed root cause is an evidence gap in this investigation track—not a trader defect.
+- **PROJECT EVIDENCE:** In current source, ordinary stop-loss exits are persisted as `STOPPED`; the frozen study selection requires `CLOSED`. Subject to DB confirmation, this cohort excludes normal stop-loss records and is more likely to contain signal exits, profit-lock exits, take-profit paths, near-TP-related closures, or manual closes. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:170) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:173)
+- **PROJECT EVIDENCE:** A material reconciliation risk exists in the signal-close route: `completeClose` persists `paper_position` as closed before attempting the linked wallet exit, then catches wallet exceptions. A `CLOSED` paper loss is therefore not, by itself, proof of a corresponding wallet SELL. This is a source-level risk, not evidence that it occurred for any frozen ID. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487)
+- **PROJECT EVIDENCE:** Conversely, live price-protection routes call mechanical wallet exit first and close the paper position only on success. This distinction makes `production_exit_audit`, wallet ledger, and managed-position evidence essential to identify the actual route. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:165)
+- **AGENT INFERENCE:** Until those records are available, each loss must remain classified as **insufficient evidence**—not a strategy failure, stale-data incident, execution defect, or protection defect.
+- **PROJECT EVIDENCE:** The snapshot metadata has a two-second inconsistency: `2026-10-11 07:00:03 UTC` converts to **2026-10-11 10:00:03 KSA**, while the supplied snapshot KSA time is `10:00:01`. The frozen IDs and intended `10:00:00 KSA` window clock are unchanged.
+- **EXTERNAL RESEARCH:** None. A public source cannot establish a cause for these private, paper-trading records; the next evidence must be the bounded local DB record set.
+
+## EVIDENCE
+
+- The current `PaperPosition` model contains entry/exit signal linkage, close reason, exit reason, prices, P&L, and UTC lifecycle fields. [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:39)
+- `production_exit_audit` is intended to preserve the true close trigger separately from the signal used as contextual evidence. [ProductionExitAuditService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:32)
+- For a breached profit lock, current policy exits unless 1h/5m continuation conditions justify a protected hold; `WATCH/WATCH/NEUTRAL` does not qualify. [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:55)
+
+## UNKNOWNS
+
+- Whether the mandated selection is independently reproducible from the database at the snapshot.
+- Each trade’s symbol, entry/exit UTC and KSA times, close reason, quantity, prices, fees, and loss amount.
+- Whether any selected `CLOSED` position lacks a corresponding wallet exit.
+- Whether any loss was a validated SELL, profit-lock exit, take-profit path, normal higher-timeframe exit, or manual close.
+- Per-trade signal freshness, data quality, higher-timeframe context, canonical price-event evidence, and Replay relevance.
+- Which source/configuration version was actually running at each trade.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Read actual deployed schemas before constructing linkage queries for the six frozen losses.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+SHOW CREATE TABLE crypto_ai.trade_signal;
+SHOW CREATE TABLE crypto_ai.wallet_trade;
+SHOW CREATE TABLE crypto_ai.wallet_managed_position;
+SHOW CREATE TABLE crypto_ai.production_exit_audit;
+SHOW CREATE TABLE crypto_ai.position_analysis;
+SHOW CREATE TABLE crypto_ai.signal_processing_work;
+SHOW CREATE TABLE crypto_ai.market_price_event;
+SHOW CREATE TABLE crypto_ai.candle;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I6-002  
+Purpose: Obtain authoritative rows for exactly the frozen positions and independently check the declared current selection. Returned timestamps are UTC; report KSA only as UTC plus three hours.  
+SQL:
+```sql
+SELECT p.*
+FROM crypto_ai.paper_position AS p
+WHERE p.id IN (104, 101, 96, 91, 82, 78)
+ORDER BY FIELD(p.id, 104, 101, 96, 91, 82, 78);
+
+SELECT
+    id,
+    status,
+    closed_at,
+    realized_pnl
+FROM crypto_ai.paper_position
+WHERE status = 'CLOSED'
+  AND closed_at IS NOT NULL
+  AND realized_pnl < 0
+ORDER BY closed_at DESC
+LIMIT 6;
+```
+### END_DB_REQUEST

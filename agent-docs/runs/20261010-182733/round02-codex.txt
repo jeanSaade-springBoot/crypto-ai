@@ -1,0 +1,57 @@
+## FINDINGS
+
+- **[PROJECT EVIDENCE]** RPR-0.6 is not complete or safe for technical-design approval. Its “complete” registry, storage boundary, and staging contract conflict with current Replay code and schema.
+
+- **[PROJECT EVIDENCE]** The artifact names a non-current run table (`regression_test_run`), while current Replay uses `analysis_test_run` and writes many omitted Replay-owned tables.
+
+- **[PROJECT EVIDENCE]** Isolation is not fully designed: current paths read `wallet_settings`, query Production `wallet_trade` for a Replay chart, and call the Binance market-data client for minimum-order constraints.
+
+- **[PROJECT EVIDENCE]** `ANALYSIS_PARITY` has no defined comparison contract or wired oracle. `ReplayParityValidator` exists but has no caller.
+
+- **[PROJECT EVIDENCE]** The spec omits active shared BUY behavior: `TradeExecutionValidationService` invokes FIX-154 higher-timeframe assessment. The artifact neither registers its dependent classes/audit behavior nor defines Replay treatment.
+
+## EVIDENCE
+
+- **[PROJECT EVIDENCE]** RPR-0.6 declares `regression_test_run` as Replay-owned output, but the source schema defines `analysis_test_run`; no `regression_test_run` definition was found. [RPR-0.6](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:54) · [baseline migration](C:/workspace/crypto-ai-trader-mysql/src/main/resources/db/migration/B105__fix_153_trader_only_baseline.sql:1046)
+
+- **[PROJECT EVIDENCE]** Replay currently creates `analysis_test_run` and a `fix122_replay_revision` row before asynchronous worker execution. The request/service/controller files needed to qualify profile/mode before business output are absent from the RPR registry. [RegressionTestService](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:210) · [RegressionTestRunRequest](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/dto/RegressionTestRunRequest.java:5)
+
+- **[PROJECT EVIDENCE]** Existing Replay writes omitted tables including `analysis_test_result`, `trade_signal_test`, `execution_opportunity_test`, `position_management_test`, and observer tables. [RegressionTestWorker](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:345) · [RegressionTestService](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:379)
+
+- **[PROJECT EVIDENCE]** M04 cannot be verified from the proposed design: current Replay persists output during processing, while FIX-122 audit writes use a separate transaction that intentionally survives caller rollback. [RPR-0.6](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:89) · [RegressionTestWorker](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:636) · [StopLossEvidenceStore](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/StopLossEvidenceStore.java:48)
+
+- **[PROJECT EVIDENCE]** The no-account/no-HTTP promise lacks a complete dependency contract. Current Replay loads `wallet_settings`; `DynamicProfitLockService` can create it; and `BinanceMinimumExecutionPolicy` calls `BinanceMarketDataClient`. [ShadowProductionReplayService](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:79) · [DynamicProfitLockService](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/DynamicProfitLockService.java:327) · [BinanceMinimumExecutionPolicy](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/BinanceMinimumExecutionPolicy.java:29)
+
+- **[PROJECT EVIDENCE]** Current Replay charting reads Production `wallet_trade`, a forbidden account-state table under RPR-0.6. The spec must either remove this endpoint from the new route or explicitly define it as an out-of-scope, separately authorized diagnostic. [RPR-0.6](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:52) · [RegressionTestService](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:549)
+
+- **[PROJECT EVIDENCE]** RPR requires retained price-event ID and ordering slot, but the current Replay read model returns only timestamp, price, and source. [RPR-0.6](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:56) · [MarketPriceEventService](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118)
+
+- **[PROJECT EVIDENCE]** The parity validator compares 13 fields but has no usage outside its own class. RPR gives no match key, eligibility set, mismatch policy, or transition plan for current `PRODUCTION_PARITY` labels. [ReplayParityValidator](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ReplayParityValidator.java:17) · [RPR-0.6](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:21)
+
+- **[PROJECT EVIDENCE]** Baseline Replay currently always invokes both defensive-risk observation and one-candle observer paths, while RPR names only the latter and says experimental paths cannot enter baseline output. [ShadowProductionReplayService](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:100) · [ShadowProductionReplayService](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:178)
+
+- **[PROJECT EVIDENCE]** Current shared validation invokes FIX-154 assessment during BUY validation; its audit store intentionally suppresses Production-audit writes in Replay. RPR needs an explicit parity/evidence rule for this active behavior. [TradeExecutionValidationService](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:93) · [BuyHtfAssessmentAuditStore](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BuyHtfAssessmentAuditStore.java:41)
+
+## OBJECTIONS
+
+- **[PROJECT EVIDENCE]** The artifact fails the repository’s required change-contract granularity: it lacks method-by-method current→new behavior, exact schema objects, transaction/publication/crash-recovery rules, and a complete file registry. [AGENTS.md](C:/workspace/crypto-ai-trader-mysql/AGENTS.md:339)
+
+- **[AGENT INFERENCE]** A revision must provide a verified read/write/dependency matrix covering every Replay output, all account/config/network paths, and all observer/audit paths.
+
+- **[AGENT INFERENCE]** It must define staging ownership, foreign keys, terminal states, idempotency, publication atomicity, cancellation races, and crash recovery. “Discard staged artifacts” is insufficient while independent transactions exist.
+
+- **[AGENT INFERENCE]** It must define `ANALYSIS_PARITY`: exact candidate set, match identity, compared fields, ordering/clock evidence, pass/fail criteria, and refusal conditions. Otherwise the label can overstate parity.
+
+- **[AGENT INFERENCE]** It must explicitly model Production admission outcomes such as data-quality blocks, unavailable history, and historical-only processing rather than treating all non-trades as infrastructure errors or allowing simulated trades for candles Production would not execute.
+
+- **[AGENT INFERENCE]** It must resolve the scope contradiction: RPR says no Production strategy change, yet registers modifications to shared Production services and the protection path. A safe revision needs explicit invariants, transaction/lock-order regression tests, and measurable Production-freshness acceptance criteria.
+
+## UNKNOWNS
+
+- **[PROJECT EVIDENCE]** No database, production runtime, SSH target, or secrets were accessed.
+
+- **[AGENT INFERENCE]** Historical windows may lack the required configuration, ordering, order-book, derivatives, or sentiment provenance. The design must fail closed until the qualifier can prove availability per dependency.
+
+- **[PROJECT EVIDENCE]** The reviewed artifact SHA-256 is `5C057C181459727E7D62F580F525FDB4392E15BBEAD7A27F5BAA2F3AAADF5A03`; the worktree is materially dirty, so its stated Git baseline alone cannot identify an implementable snapshot.
+
+VERDICT: REJECTED

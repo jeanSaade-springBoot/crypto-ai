@@ -1,0 +1,206 @@
+# Daily failed-trade study, WINDOW1: Claude track, Iteration 7 (self-challenge)
+
+**Bottom line:** the Iteration 6 conclusions mostly hold, but checking them against the I6 query results and the code found four errors or overstatements. None changes the classification of any trade, but two make the conclusions stronger.
+
+1. **Trade 143: my Iteration 6 explanation of its score was wrong.** The score of 60 holds, but only on the old 5-minute signal's ATR. On the newer 5-minute signal's ATR it would score 70. So the old signal supplied both the entry permission and the ATR the score used. This strengthens RC-4.
+2. **Trade 158 is now resolved.** It scored 60 when the decision was made, but exactly 50 at the execution-time recheck, which is the lowest score that still passes. Different routes use different ATRs for the same entry (new F-57).
+3. **Trade 162 was more marginal than I said.** The 24 ms truncation was decisive: one more minute of age would have scored 45 and blocked the entry.
+4. **One of my evidence methods was partly invalid.** The "recent rejection zone" text is only written when the size cap actually reduces the position. Its absence proves nothing for 162. It still counts as evidence for 172, whose position was cut from 75% to 25%.
+
+Gaps I6 left open, now closed:
+- **U-23 (opportunity reference prices):** the anchor and best entry prices are consistent with every stored score.
+- **U-24 (P&L after fees):** the trades with reward/risk below 1 are net negative after fees (about −0.63 to −0.93 USDT).
+
+I made no code, config, database, git or deployment changes. Plan mode is active, but no Write or ExitPlanMode tool is available, so this message is the whole Iteration 7 output.
+
+**Inputs:**
+- Files: CHARTER, my I1–I6 outputs, results I6-001/002/003 and I5-001.
+- Code: `ExecutionIntelligenceService` lines 350-449, 860-1028, 1145-1219, 1228-1297, 1440-1514 and 1964-2068; `TradeExecutionValidationService` lines 255-314.
+- I did not re-read AGENTS/AGREED_KNOWLEDGE/DECISIONS/DB rules/claude-docs this iteration; I relied on what I loaded in I1–I5.
+- I did not read any CODEX, LIVE_* or other-agent memory files.
+
+**Time convention:** the result files show KSA. This is F-23, proven by I3-001: the study session uses the SYSTEM time zone, which is UTC+3. UTC = shown time − 3 h.
+
+---
+
+## Score rules re-checked in the code [PROJECT EVIDENCE, `ExecutionIntelligenceService:976-1022`]
+
+Starting from 100, the score subtracts:
+
+| Term | Penalty |
+|---|---|
+| Rise from the reference low | >1.5% → −10, >3% → −22, >5% → −35, >8% → −50 |
+| Distance from the reference low, in ATRs | >2.5 → −10, >4 → −20, >6 → −30 |
+| Opportunity age | >20 min → **−5**, >40 → −10, >60 → −15 |
+| Reward/risk | <1 → −30, <1.25 → −15, ≥2 → +5 |
+| Rejected high | −12, but the floor applies: if the score was ≥50 before this penalty, it stays ≥50 (line 1000) |
+| Other | HIGH_VOLATILITY −10; STOP_EXPOSED liquidity penalty; BREAKOUT +5 only if the rise is ≤3% **and** the distance is ≤2.5 ATR |
+
+- **Grades:** 85 or more Excellent, 70 Good, 55 Acceptable, 50 Late; below 50 is a Chase and is blocked (`CHASE_ENTRY_BLOCKED`).
+- **Which ATR each route uses:**
+  - Direct and Balanced routes: the 1-minute signal's ATR (lines 538, 848-849).
+  - Wake-up routes (lines 364, 439) and the setup-ATR route (line 634): the **5-minute** ATR.
+  - The execution-time recheck, FIX-056 (lines 1167 → 858): **always the 1-minute ATR**.
+
+## FINDINGS
+
+**F-55: Trade 143's score breakdown corrected (corrects F-46 / C-10).** [PROJECT EVIDENCE: I6-001, I6-002, I5-001, lines 1472-1491 and 634]
+- **The 5-minute signal the route used.** The route (REDUCED_POSITION_ALLOWED) looks for the newest 5-minute signal at or before the 1-minute signal 159408 (22:40:01.634 KSA / 19:40:01.634 UTC).
+  - The newer 5-minute signal 159407 was generated 2 ms later (22:40:01.636 KSA) and is a WATCH, so it is excluded.
+  - That leaves 159285: a BUY from 22:35:01.553 KSA / 19:35:01.553 UTC, with ATR **0.009073**.
+- **The reference low** is 3.972 (signal 159233, 22:33:00 KSA / 19:33:00 UTC), the lowest of the newest 20 one-minute signals. The opportunity anchor (4.032) is not lower, so it does not apply.
+- **Decision score:**
+  - Rise 1.51% → −10.
+  - Distance 0.060 / 0.009073 = **6.61 ATR** → −30.
+  - Reward/risk 1.5 → 0; age 0 → 0.
+  - **Score 60 ✓.**
+- **What I6 got wrong:** it said the distance was "above 6 even on the 5-minute ATR". That is only true for 159285. On 159407's ATR (0.013497) the distance is 4.45 ATR → −20 → 70, and on the 1-minute ATR (0.010899) it is 5.50 → −20 → 70.
+- **Execution recheck** (1-minute ATR, price 4.033):
+  - distance 5.60 ATR → −20;
+  - rise 1.54% → −10;
+  - reward/risk 1.39 → 0.
+  - **Score 70.**
+- **Effect on RC-4:** it gets stronger. The superseded 5-minute BUY supplied both the entry permission and the ATR that kept the score at 60. With 159407, `isBullish(WATCH)` is false and the route returns null (line 1486).
+
+**F-56: Trade 158 resolved: 60 at decision, exactly 50 at execution (replaces F-46's "50 or 60").** [PROJECT EVIDENCE + arithmetic]
+- **Route:** wake-up (FRESH_5M_CONFIRMATION, line 439), which scores with 5-minute signal 165415's ATR of 0.0018787.
+- **Reference:** the opportunity's best price 0.0027 below the entry (1.4082 vs 1.4109). The 30-minute window low is 1.4084 (02:20:01 KSA / 2026-10-11 23:20:01 UTC).
+- **Decision score:**
+  - distance 0.0027 / 0.0018787 = 1.44 ATR → 0;
+  - age 53 min (opportunity started 01:42:00 KSA / 2026-10-11 22:42:00 UTC) → −10;
+  - reward/risk 0.327 → −30.
+  - **Score 60.**
+- **Execution recheck** (1-minute ATR 7.696e-4, price 1.4108):
+  - distance 3.38 ATR on the best price, or 3.12 on the window low → −10 either way;
+  - reward/risk at the fill price 0.346 → −30;
+  - age −10.
+  - **Score exactly 50**, the lowest score that passes.
+- **Why this is proven:** any reference below 1.40782 would have scored under 50 and been blocked, and the trade did execute. So the result does not depend on when the best price was set.
+
+**F-57 (new): the decision and the execution recheck use different ATRs.** [PROJECT EVIDENCE for the mechanism; the impact is AGENT INFERENCE] Severity: medium, design inconsistency.
+- The setup-ATR route's own explanation (line 1510) says it uses "the authoritative 5m ATR so a tiny 1m ATR cannot manufacture a false late-stage chase". FIX-056 (line 1167) then re-scores with the 1-minute ATR anyway.
+- **The effect is not consistent in direction:**
+  - 158: 60 at decision, 50 at execution (stricter).
+  - 143: 60 at decision, 70 at execution (looser).
+- The recheck therefore is not re-checking the same quantity the decision checked. This adds to RC-3.
+
+**F-58: Trade 162's 24 ms age truncation was decisive (strengthens F-46).** [PROJECT EVIDENCE: I6-002 `started_at` 03:41:02.836972 KSA / 00:41:02.837 UTC, signal 04:02:02.813094 KSA / 01:02:02.813 UTC]
+- The age was 20 min 59.976 s, which `toMinutes()` truncates to 20. An age over 20 would cost −5, giving **45**, which is below 50 and blocked.
+- So trade 162 passed the chase gate only because of the truncation.
+
+**F-59: My "no rejection text" evidence is only partly valid (corrects the I6 rule).** [PROJECT EVIDENCE, lines 1213-1214]
+- `applyInitialEntryQualityGuard` returns the original decision, without adding the "recent rejection zone" text, whenever the size cap does not reduce the position.
+- **Where the absence still counts:**
+  - **172:** valid. BALANCED_STRONG gave 75%, the cap cut it to 25%, so the text would have been written.
+  - **162:** not valid as corroboration. "No rejected-high penalty" now rests only on the line-962 argument (the entry price was the window high, from I5-001), which still holds.
+- This is C-12.
+
+**F-60: U-23 closed: the opportunity reference prices are consistent with every stored score.** [PROJECT EVIDENCE, I6-002]
+
+| Trade | Opportunity anchor / best | Effect |
+|---|---|---|
+| 162 | 0.08685 / **0.08675** | Best equals the window low, so 4.72 ATR → 50 |
+| 182 | 0.1879 / 0.1879 | Window low 0.1875 is lower, so 5.95 ATR stands |
+| 172 | 5.48e-6 | Window low 5.47e-6 stands, so 2.94 ATR → 60; age 14 min |
+| 137 | 3.998 | Reference ≥3.998, distance ≤0.23 ATR, so the score before the penalty was 70 and the rejected high (−12) gives **58** |
+
+- The I6-001 ATRs also reproduce the scores for 176692 (5.16 ATR → 50 held by the floor) and 167646 (3.21 ATR, age 19 min → 60 → 48 → held at 50).
+
+**F-61: U-24 closed: trades with reward/risk below 1 lose money after fees.** [PROJECT EVIDENCE I6-003, plus EXTERNAL RESEARCH R-1 for the fee rate]
+- **The group:** 27 positions (18 wins, 8 losses, 1 flat), gross **+0.2764 USDT**, total entry notional **605 USDT** (7 × 15, 20 × 25).
+- **After fees:** a round trip of 0.15–0.20% costs about 0.91–1.21 USDT, so the group is net **≈ −0.63 to −0.93 USDT**, about −0.02 to −0.03 per trade.
+- **The frozen six:** notional 130 USDT, so fees ≈ 0.20–0.26. Their real loss would be about −0.47 to −0.53, against −0.273 recorded. Paper fills record `fee_usdt = 0` (F-12).
+- This confirms RC-1 with numbers. It assumes Binance VIP 0 taker fees.
+
+**F-62: I re-checked F-52 and F-53 against I6-003.** [PROJECT EVIDENCE]
+- 37 STOPPED positions (all STOP_LOSS).
+- 8 CLOSED losses totalling −0.3069; the frozen six total −0.2732, so 3.37% of realised losses.
+- Only 3 positions with reward/risk below 1 were stopped out: 118, 134 and 185.
+- All correct.
+
+**F-63: Trade 182 sits close to two limits.** [PROJECT EVIDENCE + arithmetic]
+- The ATR distance was 5.95, and 6 is the next penalty step. If the ATR had been below 1.500e-4 (the actual value, 1.51214e-4, is 0.8% above that), the score would have been 40.
+- At 40 the floor does not apply (it was below 50 before the penalty), so the rejected high takes it to 28, which is blocked.
+- So 182 passed only because of the floor, with 0.05 ATR to spare. F-48 still holds.
+
+**F-64 (unknown, not a root cause): where the 15% size came from.** [PROJECT EVIDENCE: notionals]
+- 162 and 182 were each sized at 15 USDT. Their authority allowed 25% (FIX-11G = 25; the accumulated route's minimum is 25), and the score-50 cap is 25.
+- I found no 15% constant in the code paths I read.
+
+### Corrections
+
+| ID | What changes |
+|---|---|
+| C-11 | 143: "above 6 even on the 5-minute ATR" is restricted to the **superseded** 159285. On 159407's ATR the score would be 70 (F-55). |
+| C-12 | The "no rejection text" rule only counts as evidence when the cap reduced the size (F-59). |
+| C-13 | 158 is resolved: 60 at decision, 50 at execution (F-56). |
+| C-14 | 162's age truncation is upgraded from incidental to **decisive** (F-58). |
+
+## ROOT CAUSE SYNTHESIS (final candidate, judged only on information available at entry)
+
+| Trade | Root cause | Classification |
+|---|---|---|
+| 182 ACE | RC-1 (net-negative edge after fees); RC-2: the floor held a 38 at 50, 0.05 ATR from the next penalty step (F-48, F-63) | Followed the rules; design defect |
+| 172 SHIB | RC-1; RC-3 (F-26) | Valid loss with design gaps |
+| 162 DOGE | RC-3: the accumulated route skipped the guards that blocked the earlier BUY (F-47); passed by a 24 ms truncation (F-58); RC-1 | Logic defect |
+| 158 XRP | RC-1 (target smaller than fees); passed the execution recheck at exactly 50; ATR mismatch between routes (F-56, F-57) | Followed the rules; design gap |
+| 143 EGLD | RC-4: a superseded 5-minute BUY supplied both the permission and the ATR (F-55, F-24); RC-2 | Defect (signal selection) |
+| 137 EGLD | RC-1; RC-2 (counter-trend entry) | Followed the rules; design gap |
+
+- **Ruled out:** data freshness and execution delay (F-22, F-29).
+- **Exits:** none defective, apart from 143's exit mechanics (F-14, F-25).
+
+## REGRESSION CHECKS TO PROPOSE (AGENT INFERENCE; analysis only, nothing implemented)
+
+1. **RC-1:** a Replay study comparing P&L after fees for reward/risk below 1 against 1 or more, using the 0.1% per-side fee.
+2. **RC-2:** a fixture where the rejected high would push 50→38, plus 176710's geometry (the floor holds it at 50). Expect the decision to be recorded and visible.
+3. **RC-3:** run 167646 then 167668 in sequence. Expect both routes to apply the same FIX-041 and post-bearish guards. Also a test that the execution recheck uses the same ATR as the decision (F-57).
+4. **RC-4:** a 1-minute signal and a 5-minute signal generated 2 ms apart (159408 / 159407). Check that Replay and Production pick the same 5-minute signal.
+5. **Age boundary:** an age of 20 min 59.976 s should give the same result in Replay and Production. This guards the truncation semantics.
+
+## EXTERNAL RESEARCH
+
+- R-1 (fees) and R-2 (`Duration.toMinutes()` truncation) are unchanged from I6. I did no new searches.
+
+## UNKNOWNS
+
+- **U-18‴:** which guard blocked 167646, and what cancelled 176692. Only the logs can settle this; the I6 log request still stands.
+- **U-25:** whether the high-score stop-outs come from position size or from entry selection. Out of scope.
+- **U-26:** where the 15% size for 162 and 182 came from (F-64).
+- **U-27:** whether the stored score for 158/143 is the decision score or the execution score. The FIX-056 recheck result is not stored separately.
+- **U-28:** the route preconditions for 143 (159285's ATR-immediate and final-entry flags, and 159408 being ATR-extended) are inferred from the route's code, not read from the data.
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-001
+Purpose: Settle U-26, U-27 and F-59. Pull bounded excerpts of `entry_reason` for the frozen six, and flag the rejection-zone and Entry Quality text plus the position percent. Read-only, filtered by ID.
+SQL:
+SELECT id, signal_id, LENGTH(entry_reason) AS len,
+       INSTR(entry_reason,'recent rejection zone') AS rej_pos,
+       INSTR(entry_reason,'Entry Quality') AS eq_pos,
+       SUBSTRING(entry_reason, GREATEST(INSTR(entry_reason,'Entry Quality')-1,1), 240) AS eq_excerpt,
+       LEFT(entry_reason, 300) AS head_excerpt
+FROM paper_position
+WHERE id IN (137,143,158,162,172,182)
+ORDER BY id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-002
+Purpose: Settle U-28 by confirming the route preconditions for 143 and 158. The first statement confirms the flag column names before they are used.
+SQL:
+SHOW COLUMNS FROM trade_signal LIKE '%allowed%';
+SELECT id, interval_code, generated_at, decision, original_decision,
+       atr_immediate_entry_allowed, final_entry_allowed, atr_recommended_position_percent
+FROM trade_signal
+WHERE id IN (159285,159407,159408,165412,165415)
+ORDER BY id
+### END_DB_REQUEST
+
+---
+
+**Self-review of Iteration 7:**
+- **Proven:** the 143 breakdown on 159285's ATR; 158 at 60 then 50; 162's truncation being decisive; the limited validity of the explanation-text evidence; U-23 and U-24 closed; F-52 re-verified.
+- **Inference:** the size of the impact of the ATR mismatch (F-57); the fee rate.
+- **Iteration 8:** freeze the findings using the I7-001/002 results and the log results, if they are supplied.

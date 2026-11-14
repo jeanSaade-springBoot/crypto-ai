@@ -1,0 +1,33 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No Codex DB-result files are available yet; therefore no database forensic conclusion can be made for frozen positions `182, 172, 162, 158, 143, 137`.
+- **PROJECT EVIDENCE:** The authoritative entity is `crypto_ai.paper_position`; the frozen cohort and selection predicate remain exactly as supplied. No substitution occurred.
+- **PROJECT EVIDENCE:** Iteration 1 requested actual schema evidence but no result was supplied in the Codex DB evidence folder. This iteration requests the six authoritative rows without assuming their non-ID columns.
+- **PROJECT EVIDENCE:** Snapshot metadata is internally inconsistent by two seconds: `2026-10-19 15:00:03 UTC` converts to `2026-10-19 18:00:03 KSA`, while the declared snapshot KSA time is `18:00:01`. Preserve both values; do not silently normalize either.
+- **AGENT INFERENCE:** Until the position rows, linked execution records, and canonical price-event evidence are supplied, it is not possible to classify any loss as a valid strategy loss, protection issue, execution defect, or accounting discrepancy.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `AGENTS.md` requires read-only, bounded queries; timestamps must be interpreted as UTC and reported in KSA as UTC+03:00.
+- **PROJECT EVIDENCE:** `DATABASE_INVESTIGATION_RULES.md` confirms agents do not receive credentials and must request coordinator-executed evidence.
+- **PROJECT EVIDENCE:** The Codex trade-investigation guidance requires position lifecycle, execution, signal, and accepted price-event evidence; a saved signal or OHLC candle cannot substitute for a committed protection effect.
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- Every position’s symbol, entry/exit time, status, quantity, entry/exit prices, stop, TP, exit reason, and realized P&L.
+- Whether present database rows still reflect the frozen-snapshot state; a current query alone cannot prove a past snapshot without audit/history evidence.
+- Position-to-wallet-trade and position-to-signal linkage.
+- The first canonical accepted price observation meeting the recorded exit threshold.
+- Whether fees, partial exits, or position accounting reconcile to each negative realized P&L.
+- Whether the proof-query outputs `DBQ-FTS-001` through `DBQ-FTS-005` exist but have not yet been supplied to the Codex evidence folder.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Retrieve the complete authoritative, bounded `paper_position` records for the six frozen IDs. This exposes the actual available columns and establishes each position’s lifecycle, financial fields, and potential linkage keys before requesting dependent execution/signal/protection evidence. Returned values are current DB evidence and must not by themselves be represented as proof of the earlier frozen snapshot time.  
+SQL:
+SELECT pp.*
+FROM crypto_ai.paper_position AS pp
+WHERE pp.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(pp.id, 182, 172, 162, 158, 143, 137);
+### END_DB_REQUEST

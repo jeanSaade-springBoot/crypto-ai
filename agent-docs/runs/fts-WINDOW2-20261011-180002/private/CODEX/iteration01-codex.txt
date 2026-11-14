@@ -1,0 +1,66 @@
+## FINDINGS
+
+- **[AGENT INFERENCE]** Trade reconstruction cannot yet establish any trade-specific entry, protection, exit, or P&L facts: the permitted CODEX database evidence folder is empty.
+- **[PROJECT EVIDENCE]** The frozen scope is preserved exactly: paper-position IDs `104, 101, 96, 91, 82, 78`; no replacement trades considered.
+- **[PROJECT EVIDENCE]** `paper_position` links entry evidence through `signal_id` and can link exit context through `exit_signal_id`; its stored `close_reason`, `entry_reason`, and `exit_reason` are relevant audit evidence.
+- **[PROJECT EVIDENCE]** Live protection is intended to close managed/paper positions from accepted price observations for stop loss, take profit, or profit lock; a candle’s OHLC must not substitute for missing intra-candle price-event evidence.
+- **[AGENT INFERENCE]** Snapshot timestamps conflict by two seconds: `2026-10-11 15:00:04 UTC` converts to `18:00:04 KSA`, not the supplied `18:00:02 KSA`. This does not affect the frozen ID selection, but later evidence must retain raw UTC and explicitly computed KSA.
+
+## EVIDENCE
+
+- **[PROJECT EVIDENCE]** `PaperPosition.java`: authoritative position fields include symbol, entry/exit price, realized P&L, entry/exit signals, reasons, and UTC open/close timestamps.
+- **[PROJECT EVIDENCE]** `WalletTrade.java`: wallet fills retain executed time, price, quantity, fee, realized P&L, execution reason/message, and linked signal.
+- **[PROJECT EVIDENCE]** `LivePositionProtectionService.java` and `PositionExitPolicy.java`: intended protection ordering includes take-profit, stop-loss, and profit-lock evaluation; actual behavior requires persisted position, wallet, and price-event evidence.
+- **[PROJECT EVIDENCE]** `DATABASE_INVESTIGATION_RULES.md`: actual schema must be read before selecting columns; raw database timestamps are UTC.
+- **[EXTERNAL RESEARCH]** None.
+
+## UNKNOWNS
+
+For each frozen trade (`104`, `101`, `96`, `91`, `82`, `78`), all remain unknown pending database evidence:
+
+- Symbol, side, entry/exit UTC and KSA times.
+- Entry and exit signal IDs; decision, freshness, quality, risk/reward, and contemporaneous context.
+- Actual exit trigger and whether accepted price-event evidence proves it.
+- Wallet-fill linkage, fees, quantity reconciliation, and realized-P&L consistency.
+- Signal-processing lifecycle, delays, retries, or failures.
+- Whether evidence supports a valid losing trade, strategy weakness, execution/protection defect, or insufficient evidence.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Confirm the current `crypto_ai` schema before requesting trade-specific evidence for the six frozen `paper_position` records.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'signal_processing_work',
+      'production_exit_audit',
+      'position_management_event'
+  )
+ORDER BY
+    FIELD(
+        table_name,
+        'paper_position',
+        'trade_signal',
+        'wallet_trade',
+        'wallet_managed_position',
+        'market_price_event',
+        'signal_processing_work',
+        'production_exit_audit',
+        'position_management_event'
+    ),
+    ordinal_position;
+```
+### END_DB_REQUEST

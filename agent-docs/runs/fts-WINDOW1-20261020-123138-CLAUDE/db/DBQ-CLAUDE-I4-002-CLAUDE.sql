@@ -1,0 +1,2 @@
+SELECT id, signal_id, execution_reason, gross_amount_usdt, LEFT(execution_message, 1500) AS msg FROM crypto_ai.wallet_trade WHERE id IN (344,358,392,403,426,451) ORDER BY id;
+SELECT id, decision, original_decision, total_score, confidence_score, momentum_score, macd_score, rsi_score, final_entry_allowed, atr_immediate_entry_allowed, atr_recommended_position_percent FROM crypto_ai.trade_signal WHERE id IN (159285,159407,159408) ORDER BY id;

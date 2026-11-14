@@ -1,0 +1,1 @@
+SELECT table_name, table_rows FROM information_schema.tables WHERE table_schema = 'crypto_ai' AND (table_name LIKE '%replay%' OR table_name LIKE '%regression%' OR table_name LIKE '%\_test') ORDER BY table_name LIMIT 60;

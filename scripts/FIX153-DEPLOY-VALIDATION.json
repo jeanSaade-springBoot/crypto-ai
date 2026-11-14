@@ -1,0 +1,7 @@
+{
+  "verification": "STATIC_ONLY_NOT_POWERSHELL_EXECUTION",
+  "launch_contract_checks": 13,
+  "other_uploaded_scripts_unchanged": 14,
+  "database_modified": false,
+  "deployed": false
+}

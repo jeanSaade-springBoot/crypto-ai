@@ -1,0 +1,126 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No permitted DB-result artifacts exist in `db/CODEX`; the six frozen positions therefore cannot yet be assigned an entry, exit route, or defect conclusion.
+
+- **PROJECT EVIDENCE:** Current source has two materially different exit routes:
+  - Live-price protection: `market_price_event` → `LivePositionProtectionService` → wallet mechanical exit → `paper_position` close → `production_exit_audit`.
+  - Signal processing: durable `signal_processing_work` → `PaperTradingService` → paper close plus signal-linked wallet exit/audit.
+  
+  `paper_position.close_reason` alone is insufficient to distinguish the actual path; `production_exit_audit`, wallet records, and price-event evidence are required.
+
+- **PROJECT EVIDENCE:** Entry order is wallet-first. `PaperTradingService` obtains a fresh canonical price, revalidates the BUY, writes the wallet BUY, then creates `paper_position` using that fresh execution price and executed quantity. The entry signal’s `latest_price` is decision evidence, not necessarily the fill price.
+
+- **PROJECT EVIDENCE:** For live protection, TP and SL are checked before profit-lock, normal confirmed exits, and near-TP handling. Mechanical exits are wallet-first and use the observed live price. A price event is marked `APPLIED` only in the effects transaction after the protection callback completes; `APPLIED` can still be a no-position/no-op callback.
+
+- **AGENT INFERENCE — candidate temporal-integrity issue, not trade-specific proof:** `LivePositionProtectionService.onPrice(symbol, price, observedAt, eventId)` validates the event’s `observedAt`, but subsequently reads the newest 1m/5m/1h signals without constraining `generated_at <= observedAt`. Thus, if protection processing is delayed but still within the 15-second price-age limit, a profit-lock or signal-driven exit may use a signal generated after the actual price observation. Near-TP logic has a limited “not future relative to evaluation time” guard, but not an observation-time guard. This requires DB evidence before attributing it to any frozen trade.
+
+- **PROJECT EVIDENCE:** Paper and wallet P&L are gross-price calculations in the reviewed routes; paper close computes `(exit - entry) × quantity`, while automatic wallet trades persist `fee_usdt = 0`. The six losses are valid as negative paper P&L by the frozen selection, but their fee-adjusted economic loss cannot be inferred from current source.
+
+- **PROJECT EVIDENCE:** The supplied snapshot values remain inconsistent: `2026-10-25 15:00:04 UTC` converts to `2026-10-25 18:00:04 KSA`, while the supplied KSA snapshot is `18:00:02`. This has no demonstrated impact on a frozen trade.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `PaperTradingService.java:106-417` — signal route, fresh-price entry, wallet-first BUY, and paper-position creation.
+- **PROJECT EVIDENCE:** `LivePositionProtectionService.java:53-247, 391-411` — price-event validation; TP/SL/profit-lock/normal-exit order; mechanical wallet-first exit; paper close and audit.
+- **PROJECT EVIDENCE:** `PositionExitPolicy.java:18-94` — confirmed 1m/5m and 1h exit conditions; profit-lock hold/exit logic.
+- **PROJECT EVIDENCE:** `WalletAutoExecutionService.java:79-197, 475-565` — execution-time BUY price persistence; gross paper-wallet fills; mechanical exit ordering.
+- **PROJECT EVIDENCE:** `MarketPriceEventService.java:40-115` — stale/future rejection, ordering, and durable protection outcome semantics.
+- **PROJECT EVIDENCE:** `ProductionExitAuditService.java:27-59` — immutable close-trigger/context evidence.
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- For IDs `182, 172, 162, 158, 143, 137`: symbol, entry/exit UTC timestamps and KSA conversions, prices, quantity, P&L, close trigger, signal context, stop/TP geometry, and whether protection observed the threshold promptly.
+- Whether the candidate observation-time/signal-time issue occurred for any frozen trade.
+- Whether the current workspace source/version and configuration were active when these positions closed.
+- Wallet/position/audit linkage and whether any selected paper close lacked the corresponding durable execution evidence.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Read the actual schema before selecting code-route joins and columns for the frozen paper positions.  
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_managed_position',
+      'wallet_trade',
+      'production_exit_audit',
+      'market_price_event',
+      'signal_processing_work',
+      'position_analysis',
+      'position_management_event'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-002  
+Purpose: Obtain the authoritative lifecycle rows for exactly the six frozen losses; no substitution or Replay table.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-003  
+Purpose: After DBQ-CODEX-I4-001 confirms the code-mapped columns, reconstruct the durable wallet, audit, signal, and live-price route for only the six frozen positions.  
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    a.*
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.production_exit_audit a
+    ON a.paper_position_id = p.id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, a.audited_at;
+
+SELECT
+    p.id AS paper_position_id,
+    wmp.*
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.wallet_managed_position wmp
+    ON wmp.entry_signal_id = p.signal_id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, wmp.opened_at;
+
+SELECT
+    p.id AS paper_position_id,
+    wt.*
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.wallet_trade wt
+    ON wt.signal_id = p.signal_id
+    OR wt.signal_id = p.exit_signal_id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, wt.executed_at, wt.id;
+
+SELECT
+    p.id AS paper_position_id,
+    mpe.*
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.market_price_event mpe
+    ON mpe.symbol = p.symbol
+   AND mpe.observed_at >= p.opened_at
+   AND mpe.observed_at <= p.closed_at
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, mpe.observed_at, mpe.id;
+```
+### END_DB_REQUEST

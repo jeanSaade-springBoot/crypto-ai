@@ -1,0 +1,51 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen population remains exactly `paper_position` IDs 182, 172, 162, 158, 143, and 137. The permitted CODEX database-evidence directory is empty, so no individual entry can yet be rated supported, weak, or defective.
+
+- **PROJECT EVIDENCE:** Current code rejects a BUY if final execution-time entry quality is below 50/100 (`CHASE_ENTRY`). The score re-evaluates price expansion from a 30-minute reference/opportunity base, ATR extension, opportunity age, execution-price risk/reward, recent rejection zone, volatility regime, and stop-exposed liquidity. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:848)
+
+- **PROJECT EVIDENCE:** A current approved BUY is revalidated using a canonical price observation no more than 15 seconds old; it is cancelled if that price is already at/below stop or at/above target. The decision-time signal price is not the fill authority. [ExecutionPriceAuthorityService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionPriceAuthorityService.java:20) [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1150)
+
+- **PROJECT EVIDENCE:** Current direct BUY validation also requires a 1m bullish signal, fresh 5m confirmation, fresh 1h context, higher-timeframe assessment, and profile-specific sizing authority. [TradeExecutionValidationService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:62)
+
+- **AGENT INFERENCE:** These are the current source rules, not proof of what was deployed when any frozen trade entered. Without the durable signal, wallet execution, and applicable configuration/version evidence, no historical rule-compliance or entry-quality conclusion is defensible.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** The supplied snapshot has a two-second label discrepancy: UTC `2026-11-07 19:55:22` converts to KSA `2026-11-07 22:55:22`, while the supplied KSA label says `22:55:20`. This does not alter the frozen trade set.
+- **PROJECT EVIDENCE:** No trade-specific DB result artifacts are available in `db/CODEX`.
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- Each position’s entry signal, wallet BUY, execution price/observation time, quantity, and actual entry timestamp.
+- The entry signal’s score, confidence, final-entry flag, ATR plan, stop/target, risk/reward, liquidity, BTC, data-quality, and higher-timeframe evidence.
+- The preceding 30-minute 1m signals and any execution-opportunity record needed to reconstruct the contemporaneous reference price and entry-quality score.
+- Whether current source/version/configuration governed these historical entries.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Establish the actual deployed columns needed to reconstruct entry quality for only the six frozen positions before requesting trade-specific evidence.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'execution_opportunity',
+      'signal_processing_work',
+      'market_price_event',
+      'wallet_managed_position'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

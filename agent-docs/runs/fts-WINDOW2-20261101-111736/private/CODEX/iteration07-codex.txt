@@ -1,0 +1,49 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen population remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitute trades or Replay rows were used.
+- **PROJECT EVIDENCE:** `db/CODEX/` is empty. No schema, position, wallet, signal, audit, price-event, or log result has been executed for this track. Therefore, there is still **no confirmed trade-specific root cause**.
+- **AGENT INFERENCE:** Prior route observations are not explanations for any frozen loss. Current source cannot establish the historical build, configuration, mode, or rules that applied at entry/exit.
+- **PROJECT EVIDENCE:** `paper_position.closed_at` is set from application `Instant.now()` in both signal and live-protection close paths. It is a recorded close/persistence time, not the Binance observation time. A delay claim requires the matching accepted price event, wallet SELL, and audit evidence—not a timestamp comparison alone.
+- **PROJECT EVIDENCE:** The current live-protection path attempts the mechanical wallet exit before closing `paper_position`; the current signal path saves the paper close before invoking the wallet exit. The latter runs inside the coordinator’s transaction, so source order alone does not prove a committed paper/wallet divergence. Records are required.
+- **PROJECT EVIDENCE:** Project documents conflict on FIX-154 status: permanent instructions describe it as pending, while Codex material/current source describe an implementation record. This conflict reinforces that current code must not be treated as trade-time behavior.
+
+## EVIDENCE
+
+- Empty allowed evidence path: `agent-docs/runs/fts-WINDOW2-20261101-111736/db/CODEX/`.
+- `PaperTradingService.java:464-532` sets `closedAt=Instant.now()`, saves the paper position, then invokes the signal-linked wallet exit.
+- `LivePositionProtectionService.java:165-239, 391-411` calls `executeMechanicalExit(...)` before `closePaper(...)`; `closePaper` sets `closedAt=Instant.now()`.
+- `SignalProcessingCoordinator.java:64-105` runs the signal business flow in a `REQUIRES_NEW` transaction and completes work in that transaction.
+- `MarketPriceEventService.java:50-115` distinguishes observation time from accepted callback completion and preserves `PENDING`/`APPLIED`/`NON_CANONICAL` outcomes.
+- **EXTERNAL RESEARCH:** None used.
+
+## UNKNOWNS
+
+- Whether each frozen ID was actually closed-negative at the snapshot; a present-day query can detect drift but cannot recreate the unpreserved snapshot clock.
+- Each trade’s symbol, UTC/KSA entry and close times, entry/exit signals, close reason, quantities, prices, fees, and P&L reconciliation.
+- Whether any loss was a valid stop/strategy outcome, execution/protection failure, stale-data issue, or paper/wallet inconsistency.
+- The exact accepted protection event and historical runtime configuration/version for each trade.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Establish the physical authoritative position schema, retrieve only the six frozen positions, and detect any present-day drift from the frozen negative-closed selection. Results must treat all timestamps as UTC; this request does not claim to recreate the original snapshot.
+
+SQL:
+```sql
+SHOW CREATE TABLE paper_position;
+
+SELECT *
+FROM paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+
+SELECT id, status, closed_at, realized_pnl
+FROM paper_position
+WHERE status = 'CLOSED'
+  AND closed_at IS NOT NULL
+  AND realized_pnl < 0
+ORDER BY closed_at DESC
+LIMIT 6;
+```
+
+### END_DB_REQUEST

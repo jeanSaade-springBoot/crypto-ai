@@ -1,0 +1,140 @@
+# CLAUDE — FTS WINDOW2, Iteration 1: Trade reconstruction
+
+**Run:** `fts-WINDOW2-20261025-180002` · **Frozen trades:** 182, 172, 162, 158, 143, 137 (used as given, none substituted)
+**Snapshot:** 2026-10-25 15:00:04 UTC = 2026-10-25 18:00:02 KSA
+
+I haven't received any database results yet: `agent-docs/runs/fts-WINDOW2-20261025-180002/db/CLAUDE/` doesn't exist and I have no private files. So this iteration only sets the scope and the evidence plan. I can't reconstruct any trade from what I have.
+
+## FINDINGS
+
+- **F-I1-01 (PROJECT EVIDENCE):** The charter and `FROZEN_TRADE_SELECTION.md` agree on the six IDs, the selection rule and the snapshot time. The authoritative entity is `crypto_ai.paper_position`. Replay (`wallet_position_test`) is excluded.
+- **F-I1-02 (PROJECT EVIDENCE):** `agent-docs/AGREED_KNOWLEDGE.md` and `agent-docs/DECISIONS.md` are both empty. No shared facts exist yet that apply to these trades.
+- **F-I1-03 (PROJECT EVIDENCE, schema from migrations; still to be checked against the live DB):**
+  - `paper_position`: id, symbol, side, status, quantity, entry_price, stop_loss, take_profit, exit_price, realized_pnl, close_reason (VARCHAR 40), entry_reason and exit_reason (MEDIUMTEXT, FIX-144 `V100`), signal_id, exit_signal_id, opened_at, closed_at. Source: `B105__fix_153_trader_only_baseline.sql:168`, `:417`.
+  - `production_exit_audit`: has a unique key on `paper_position_id`, plus close_trigger and audited_at (`B105…:1367`).
+  - `wallet_trade`: has no position FK. It links to a trade only through `signal_id` / `execution_key`, or by symbol and time window (`B105…:641`, `:702`).
+  - `market_price_event`: the baseline has only `(symbol, observed_at, price, source)`. Any status column (LEGACY/APPLIED…) comes from a later migration and has to be confirmed with DBQ-CLAUDE-I1-001.
+- **F-I1-04 (AGENT INFERENCE):** Matching `wallet_trade` to `paper_position` by symbol and time window is a heuristic. It must be confirmed through `signal_id`/`execution_key` before any P&L reconciliation.
+
+## EVIDENCE
+
+| ID | Source | Content |
+|---|---|---|
+| E-01 | `agent-docs/runs/fts-WINDOW2-20261025-180002/CHARTER.md` | Frozen IDs, selection, snapshot |
+| E-02 | `.../FROZEN_TRADE_SELECTION.md` | Same IDs; proof queries DBQ-FTS-001..005 (I don't have their results) |
+| E-03 | `B105__fix_153_trader_only_baseline.sql:129,168,417,641,689,1367,1442` | Baseline schema |
+| E-04 | `V100__fix_144_paper_position_reason_capacity.sql:6` | entry_reason/exit_reason are MEDIUMTEXT |
+
+## UNKNOWNS
+
+- U-01: The live column set of every table involved, especially the status/provenance columns on `market_price_event` and `trade_signal`.
+- U-02: For each trade: symbol, side, entry and exit values, SL/TP, close_reason, and opened_at/closed_at in UTC and KSA.
+- U-03: The entry signal for each trade (interval, decision, scores, mode, blocking stage) and its exit signal, if any.
+- U-04: Wallet fills, including fees, which automatic trades record as 0.
+- U-05: Which price observation triggered each exit, and how much price evidence exists inside each position's lifetime.
+- U-06: The application version or FIX level and the `shared-market.mode` that was live when each trade happened.
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-001
+Purpose: Get the actual live schema of the tables involved before choosing columns (AGENTS.md rule).
+SQL:
+SELECT TABLE_NAME, ORDINAL_POSITION, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'crypto_ai'
+  AND TABLE_NAME IN ('paper_position','trade_signal','wallet_trade','wallet_managed_position','production_exit_audit','market_price_event','position_management_event','execution_opportunity','signal_processing_work','position_analysis')
+ORDER BY TABLE_NAME, ORDINAL_POSITION
+LIMIT 1500;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-002
+Purpose: Core lifecycle of the six frozen positions, with lifetime in seconds.
+SQL:
+SELECT id, symbol, side, status, quantity, entry_price, stop_loss, take_profit, exit_price, realized_pnl, close_reason, signal_id, exit_signal_id, opened_at, closed_at, TIMESTAMPDIFF(SECOND, opened_at, closed_at) AS held_sec
+FROM crypto_ai.paper_position
+WHERE id IN (182,172,162,158,143,137)
+ORDER BY id DESC
+LIMIT 6;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-003
+Purpose: Entry and exit reason text for the six positions, length-bounded.
+SQL:
+SELECT id, CHAR_LENGTH(entry_reason) AS entry_len, LEFT(entry_reason, 3000) AS entry_reason_head, CHAR_LENGTH(exit_reason) AS exit_len, LEFT(exit_reason, 2000) AS exit_reason_head
+FROM crypto_ai.paper_position
+WHERE id IN (182,172,162,158,143,137)
+ORDER BY id DESC
+LIMIT 6;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-004
+Purpose: Entry and exit signals behind each position (baseline columns only; extended columns will be requested after I1-001).
+SQL:
+SELECT p.id AS position_id, 'ENTRY' AS role, s.id AS signal_id, s.symbol, s.interval_code, s.decision, s.total_score, s.trend_score, s.volume_score, s.momentum_score, s.sentiment_score, s.fundamental_score, s.latest_price, s.stop_loss, s.take_profit, s.generated_at, LEFT(s.explanation, 1500) AS explanation_head
+FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id
+WHERE p.id IN (182,172,162,158,143,137)
+UNION ALL
+SELECT p.id, 'EXIT', s.id, s.symbol, s.interval_code, s.decision, s.total_score, s.trend_score, s.volume_score, s.momentum_score, s.sentiment_score, s.fundamental_score, s.latest_price, s.stop_loss, s.take_profit, s.generated_at, LEFT(s.explanation, 1500)
+FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.exit_signal_id
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY position_id DESC, role
+LIMIT 12;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-005
+Purpose: The close trigger that was actually recorded for each position.
+SQL:
+SELECT id, paper_position_id, wallet_position_id, symbol, close_trigger, source_signal_id, source_signal_decision, source_signal_original_decision, position_analysis_id, position_recommendation, entry_price_usdt, exit_price_usdt, stop_loss_usdt, take_profit_usdt, LEFT(close_explanation, 1500) AS close_explanation_head, audited_at
+FROM crypto_ai.production_exit_audit
+WHERE paper_position_id IN (182,172,162,158,143,137)
+ORDER BY paper_position_id DESC
+LIMIT 12;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-006
+Purpose: Wallet fills around each position's lifetime (±2 min), used for P&L and fee reconstruction. The match is by symbol and time window until signal/execution_key confirms it.
+SQL:
+SELECT p.id AS position_id, w.id AS wallet_trade_id, w.signal_id, w.execution_key, w.side, w.quantity, w.price_usdt, w.gross_amount_usdt, w.fee_usdt, w.net_amount_usdt, w.cost_basis_usdt, w.realized_pnl_usdt, w.realized_pnl_percent, w.execution_type, w.status, w.executed_at, LEFT(w.notes, 300) AS notes_head
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.wallet_trade w ON w.symbol = p.symbol AND w.executed_at BETWEEN p.opened_at - INTERVAL 2 MINUTE AND p.closed_at + INTERVAL 2 MINUTE
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC, w.executed_at
+LIMIT 120;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-007
+Purpose: How much price-event evidence each position has over its lifetime, and the price range (an aggregate only, before pulling individual rows).
+SQL:
+SELECT p.id AS position_id, p.symbol, COUNT(e.id) AS events, MIN(e.observed_at) AS first_obs, MAX(e.observed_at) AS last_obs, MIN(e.price) AS min_price, MAX(e.price) AS max_price, MAX(TIMESTAMPDIFF(SECOND, p.opened_at, p.closed_at)) AS held_sec
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.market_price_event e ON e.symbol = p.symbol AND e.observed_at BETWEEN p.opened_at AND p.closed_at
+WHERE p.id IN (182,172,162,158,143,137)
+GROUP BY p.id, p.symbol
+ORDER BY p.id DESC
+LIMIT 6;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-008
+Purpose: Managed-position state and management events (SL/TP moves, profit lock) for each position's symbol and lifetime.
+SQL:
+SELECT p.id AS position_id, m.id AS event_id, m.wallet_position_id, m.event_type, m.old_value_usdt, m.new_value_usdt, m.market_price_usdt, LEFT(m.reason, 400) AS reason_head, m.occurred_at
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.position_management_event m ON m.symbol = p.symbol AND m.occurred_at BETWEEN p.opened_at - INTERVAL 1 MINUTE AND p.closed_at + INTERVAL 1 MINUTE
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC, m.occurred_at
+LIMIT 200;
+### END_DB_REQUEST
+
+## Next iteration (iteration 2)
+
+Once results come back, I'll build a UTC/KSA timeline for each trade (candle → signal → entry → protection → exit). I'll recompute P&L from the wallet fills and pull the extended `trade_signal` columns (signal mode, entry-allowed flag, blocking stage, data quality) and the price-event status columns found by I1-001. I'll also add queries on candles and data quality over each entry window.
+
+**Self-review:** I haven't stated any cause or defect, because there is no DB evidence to support one. I made no code, config, DB, git or doc writes. I read only the shared docs, `claude-docs/` and this run's charter and frozen selection, and did not open the other agent's files, `LIVE_TEAM_STATUS.md` or `LIVE_EVENTS.log`.

@@ -1,0 +1,106 @@
+## FINDINGS
+
+- **[PROJECT EVIDENCE]** No Codex DB artifacts are present in the permitted `db/CODEX/` folder. Therefore none of the frozen losses—**182, 172, 162, 158, 143, 137**—can yet be assigned an entry or exit route.
+
+- **[PROJECT EVIDENCE]** Current source has this entry route:
+
+  `closed candle → saved TradeSignal → signal_processing_work claim/freshness check → execution intelligence → fresh execution-price authority → wallet BUY → PaperPosition OPEN`
+
+  The processing coordinator claims durable work, takes normal symbol/position locks, then checks freshness before executing business logic. [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:39)
+
+- **[PROJECT EVIDENCE]** A new paper position stores its entry signal, fresh execution price, stop, target, executed quantity, and `opened_at` only after the wallet BUY succeeds. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:375)
+
+- **[PROJECT EVIDENCE]** There are two materially different exit routes:
+  - **Live-price protection:** canonical price event → protection evaluation → successful mechanical wallet exit → `paper_position` close → `production_exit_audit`. This covers TP, absolute stop-loss, profit-lock variants, and confirmed multi-timeframe exits. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:173)
+  - **Signal processing:** a fresh signal may close an open paper position for TP, stop, profit lock, or validated SELL. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:170)
+
+- **[PROJECT EVIDENCE]** For live-price protection, `market_price_event.APPLIED` proves the protection callback committed, but does not alone prove an exit; the matching wallet SELL, paper-position mutation, and audit record remain necessary. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:82)
+
+- **[PROJECT EVIDENCE]** The durable route joins to test per frozen trade are:
+  - Entry: `paper_position.signal_id` → `trade_signal.id`; then `wallet_managed_position.entry_signal_id` and BUY `wallet_trade.signal_id`.
+  - Signal exit: `paper_position.exit_signal_id` → `trade_signal.id`; then SELL `wallet_trade.signal_id`.
+  - Mechanical exit: `production_exit_audit.paper_position_id` and `wallet_position_id`; corresponding SELL `wallet_trade` has an execution key based on that managed-position ID. [ProductionExitAuditService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:32)
+
+- **[AGENT INFERENCE]** A mechanical-route loss is not evidence of a protection failure merely because it is negative. It may be a valid `STOP_LOSS`; the exact `close_reason`, price event, wallet SELL, and audit must agree before judging it.
+
+- **[AGENT INFERENCE]** A signal-route reconciliation needs extra care: `PaperTradingService` persists the paper close before attempting the wallet signal-linked exit, while the live protection route closes paper only after `executeMechanicalExit(...)` succeeds. This is a route-specific consistency risk to test against records, not a confirmed defect in any frozen trade. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487)
+
+- **[PROJECT EVIDENCE]** P&L cannot be validated from `paper_position` alone where there were progressive adds or near-TP partial harvests. Paper P&L preserves prior partial-harvest P&L; wallet P&L uses managed-position average cost and records individual SELLs. [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:211)
+
+- **[EXTERNAL RESEARCH]** None used.
+
+## EVIDENCE
+
+- `paper_position` has entry/exit signal IDs, lifecycle prices, P&L, reasons, and UTC lifecycle timestamps. [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:45)
+- `production_exit_audit` is one-per-paper-position diagnostic evidence, preserving terminal trigger separately from contextual signal. [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:29)
+- Current source does not establish which build/configuration was active for any frozen trade; it is a route map, not trade-specific proof.
+
+## UNKNOWNS
+
+- Symbol, entry/exit UTC timestamps and resulting KSA timestamps for all six frozen IDs.
+- Which exit path each used, its true trigger, relevant price-event ID, and protection latency.
+- Whether wallet, managed-position, paper-position, and audit records reconcile.
+- Whether any trade had a partial exit, progressive add, missing audit, stale signal, or execution-price gap.
+- Runtime version/configuration and ingestion mode at each entry.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Establish the actual snapshot schema and foreign-key/index relationships needed to safely map each frozen `paper_position` to its entry signal, processing work, wallet/managed-position lifecycle, protection evidence, and exit audit before requesting trade rows.
+
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    c.extra,
+    k.constraint_name,
+    k.referenced_table_name,
+    k.referenced_column_name
+FROM information_schema.columns AS c
+LEFT JOIN information_schema.key_column_usage AS k
+    ON k.table_schema = c.table_schema
+   AND k.table_name = c.table_name
+   AND k.column_name = c.column_name
+   AND k.referenced_table_name IS NOT NULL
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'wallet_managed_position',
+      'production_exit_audit',
+      'position_analysis',
+      'position_management_event',
+      'market_price_event'
+  )
+ORDER BY c.table_name, c.ordinal_position, k.constraint_name;
+
+SELECT
+    table_name,
+    index_name,
+    non_unique,
+    seq_in_index,
+    column_name
+FROM information_schema.statistics
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'wallet_managed_position',
+      'production_exit_audit',
+      'position_analysis',
+      'position_management_event',
+      'market_price_event'
+  )
+ORDER BY table_name, index_name, seq_in_index;
+```
+
+### END_DB_REQUEST

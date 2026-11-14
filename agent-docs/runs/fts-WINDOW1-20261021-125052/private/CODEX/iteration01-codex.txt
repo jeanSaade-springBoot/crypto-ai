@@ -1,0 +1,59 @@
+## Iteration 1 — Trade reconstruction
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+- Frozen scope retained exactly: `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutes used.
+- The permitted `db/CODEX/` folder contains no query results, so no trade-specific entry, protection, exit, or P&L facts are available yet.
+- Source establishes `paper_position` as the lifecycle record with entry/exit prices, stop, target, realized P&L, entry/exit signals, close reason, and UTC open/close timestamps. It does not prove any values for these six rows.
+- Source shows live price protection can close/synchronize a paper position for stop loss, take profit, profit lock, or near-TP partial-harvest paths. The actual exit path for each frozen trade remains unproven without DB evidence.
+
+**AGENT INFERENCE**
+
+- Reconstruction must begin with actual schema discovery, then use the authoritative position records to derive exact signal, execution, and protection joins. Inferring joins from source alone would violate the investigation rules.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+### UNKNOWNS
+
+- Each trade’s symbol, entry/exit UTC and KSA times, prices, quantity, realized P&L, close reason, and linked signal IDs.
+- Whether a wallet-managed position, wallet executions, accepted price events, processing work, or immutable exit audit records exist for each trade.
+- Whether each loss was a valid strategy outcome, an execution/protection issue, a data-quality issue, or unsupported by evidence.
+- Runtime version, ingestion mode, and historically active configuration for the six trades.
+- The supplied snapshot timestamps conflict:  
+  - supplied UTC `2026-10-22 10:28:18` converts to KSA `2026-10-22 13:28:18`;  
+  - supplied KSA `2026-10-21 12:50:52` converts to UTC `2026-10-21 09:50:52`.  
+  Therefore neither can be treated as the conversion of the other; I retain the stated clock-drift caveat.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual `crypto_ai` schemas for the authoritative position entity and candidate evidence tables before selecting columns or constructing joins for the six frozen trades.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'wallet_managed_position',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'position_management_event',
+      'production_exit_audit',
+      'position_analysis'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

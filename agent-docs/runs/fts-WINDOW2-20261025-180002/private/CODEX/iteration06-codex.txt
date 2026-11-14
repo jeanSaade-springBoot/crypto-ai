@@ -1,0 +1,93 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No results exist in the permitted `db/CODEX/` folder. Therefore the root cause for frozen trades `182, 172, 162, 158, 143, 137` is **UNDETERMINED**. No trade-specific defect, valid-loss classification, or exit-path conclusion is justified.
+
+- **PROJECT EVIDENCE — candidate exit-temporal defect:** [`LivePositionProtectionService.java:54`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:54) validates `observedAt`, then calls an overload that discards it. That overload selects the newest 1m/5m/1h signals without an `generated_at <= observedAt` boundary ([lines 95–97](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:95)). A delayed-but-still-fresh price event could therefore make a profit-lock or normal signal exit using signals created after the observed price. This cannot explain a pure fixed stop-loss or TP, whose threshold checks precede those signal paths.
+
+- **PROJECT EVIDENCE — candidate entry-quality defect:** The stated evidence window is 30 minutes, but Production `recentSignals(...)` fetches only the newest 20 signals ([`ExecutionIntelligenceService.java:2601`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:2601)). The later loop excludes future signals and stops at the 30-minute cutoff ([lines 871–892](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:871)). With more than 20 rows in 30 minutes—or delayed processing with future rows occupying the limit—the calculation can omit older lows and prior rejection evidence, understating chase/ATR extension and making a BUY score too permissive. This is not yet attributable to a frozen trade or its historical runtime version.
+
+- **EXTERNAL RESEARCH:** Binance documents Spot kline events with separate UTC event time, candle close time, and closed-state fields; updates are periodic rather than an execution ledger. This supports preserving the actual observation timestamp throughout protection processing, but proves nothing about these six trades. [Binance WebSocket kline documentation](https://developers.binance.com/zh-CN/docs/products/spot/testnet/web-socket-streams)
+
+- **AGENT INFERENCE:** The supplied snapshot conversion is inconsistent: `2026-10-25 15:00:04 UTC` converts to `2026-10-25 18:00:04 KSA`, not the supplied `18:00:02 KSA`. This is a two-second metadata discrepancy, not trade evidence.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `paper_position` is authoritative for selection, but its rows and linked wallet/audit/price-event records are unavailable.
+- **PROJECT EVIDENCE:** Mechanical threshold priority is TP, then SL, then profit-lock and normal signal exits. [LivePositionProtectionService.java:99](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:99)
+- **PROJECT EVIDENCE:** The source includes a time-bounded signal helper only for a separate near-TP path; it is not used for the normal/profit-lock evaluations above. [LivePositionProtectionService.java:336](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:336)
+
+## UNKNOWNS
+
+- Each trade’s symbol, UTC/KSA lifecycle, entry/exit signals, realized gross/net P&L, fees, and close route.
+- Whether an accepted price event near each close was delayed and paired with future-generated signals.
+- Whether any entry had more than 20 relevant 1m signals in its preceding 30 minutes.
+- Whether this workspace version was active when the six positions traded.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Confirm actual schema before selecting root-cause evidence columns and joins.  
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+    'paper_position',
+    'trade_signal',
+    'market_price_event',
+    'production_exit_audit',
+    'wallet_trade',
+    'wallet_managed_position'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-002  
+Purpose: After DBQ-CODEX-I6-001 confirms the mapped columns, test the exit-temporal hypothesis only for the six frozen positions by showing near-close price events and any later-generated signal available before the recorded close.  
+SQL:
+```sql
+WITH frozen AS (
+    SELECT id, symbol, opened_at, closed_at
+    FROM crypto_ai.paper_position
+    WHERE id IN (182, 172, 162, 158, 143, 137)
+)
+SELECT
+    f.id AS paper_position_id,
+    mpe.*,
+    ts.id AS later_signal_id,
+    ts.interval_code AS later_signal_interval,
+    ts.generated_at AS later_signal_generated_at,
+    ts.decision AS later_signal_decision
+FROM frozen f
+JOIN crypto_ai.market_price_event mpe
+  ON mpe.symbol = f.symbol
+ AND mpe.observed_at >= f.closed_at - INTERVAL 2 MINUTE
+ AND mpe.observed_at <= f.closed_at
+LEFT JOIN crypto_ai.trade_signal ts
+  ON ts.symbol = f.symbol
+ AND ts.interval_code IN ('1m', '5m', '1h')
+ AND ts.generated_at > mpe.observed_at
+ AND ts.generated_at <= f.closed_at
+ORDER BY f.id, mpe.observed_at, mpe.id, ts.generated_at, ts.id;
+
+SELECT
+    p.id AS paper_position_id,
+    p.*,
+    a.*
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.production_exit_audit a
+  ON a.paper_position_id = p.id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, a.audited_at;
+```
+### END_DB_REQUEST

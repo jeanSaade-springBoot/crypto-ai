@@ -1,0 +1,1 @@
+SELECT o.id, o.symbol, o.status, o.started_at, o.created_at, o.last_evidence_at, o.anchor_entry_price, o.best_entry_price, o.buy_count, o.watch_count, o.neutral_count, o.bearish_count, o.evidence_score, o.opportunity_health, o.last_bearish_at FROM execution_opportunity o WHERE o.id IN (35535,36524,37621,37952,39062,40290) ORDER BY o.id

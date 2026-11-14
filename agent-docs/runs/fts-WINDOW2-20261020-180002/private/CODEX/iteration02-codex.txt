@@ -1,0 +1,46 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen cohort remains exactly `paper_position` IDs 182, 172, 162, 158, 143, and 137. No substitution made.
+- **PROJECT EVIDENCE:** The permitted `db/CODEX` directory is empty. No results for `DBQ-FTS-001..005` or the prior schema request are available.
+- **PROJECT EVIDENCE:** Database rules require actual schema evidence before selecting trade-specific columns or joining related entities. Therefore no per-trade forensic conclusion is justified yet.
+- **PROJECT EVIDENCE:** Study metadata has a two-second conversion discrepancy: UTC `2026-10-20 15:00:04` converts to KSA `2026-10-20 18:00:04`, while the charter declares KSA `18:00:02`. This does not alter the frozen IDs.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Read the mandated shared context, database-investigation rules, Codex documentation, WINDOW2 charter, and CODEX iteration-1 artifacts.
+- **EXTERNAL RESEARCH:** None.
+- **AGENT INFERENCE:** None beyond the schema-gating conclusion above.
+
+## UNKNOWNS
+
+For each frozen trade, the symbol, lifecycle timestamps, entry/exit prices, close reason, realized P&L composition, linked signals, protection evidence, execution records, and data-quality state remain unverified.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Obtain actual `crypto_ai` schema evidence for the authoritative position table and bounded candidate related entities before issuing trade-specific forensic queries.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    data_type,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'position_analysis',
+      'position_management_event',
+      'production_exit_audit',
+      'signal_processing_work',
+      'market_price_event'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

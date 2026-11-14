@@ -1,0 +1,1 @@
+SELECT m.* FROM wallet_managed_position m WHERE m.id = 172

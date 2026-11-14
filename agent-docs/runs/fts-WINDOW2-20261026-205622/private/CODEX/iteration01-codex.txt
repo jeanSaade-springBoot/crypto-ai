@@ -1,0 +1,79 @@
+## FINDINGS
+
+**PROJECT EVIDENCE:** WINDOW2 freezes exactly these failed paper positions: **182, 172, 162, 158, 143, 137**. The authoritative entity is `crypto_ai.paper_position`; snapshot selection excludes Replay `wallet_position_test`.
+
+**PROJECT EVIDENCE:** The snapshot’s actual capture time was **2026-10-26 18:07:57 UTC / 20:56:22 KSA**, not the intended 18:00 KSA window clock. No exact 18:00 KSA state is available.
+
+**FINDING:** No isolated CODEX database evidence files exist yet under the permitted `db/CODEX` folder. Therefore, no trade timeline, entry/exit classification, P&L reconciliation, or defect conclusion can be made without inventing facts.
+
+**PROJECT EVIDENCE:** Trade reconstruction must use durable position, execution, signal, work, candle, and accepted price-event evidence. Candle OHLC must not be substituted for missing intra-candle protection evidence.
+
+## UNKNOWNS
+
+- Symbols, entry/exit UTC timestamps, exit reasons, prices, quantities, stops, targets, and realized P&L for all six IDs.
+- How each `paper_position` links to wallet/execution and entry/exit signals.
+- Whether accepted price-event evidence establishes the exit trigger.
+- Runtime mode/version and Replay comparability for these trades.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual `crypto_ai` schemas before selecting trade-reconstruction columns.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-002  
+Purpose: Retrieve the authoritative lifecycle records for the six frozen failed trades only.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-003  
+Purpose: Establish durable database relationships from paper positions to executions, signals, and protection evidence.  
+SQL:
+```sql
+SELECT
+    kcu.table_name,
+    kcu.constraint_name,
+    kcu.column_name,
+    kcu.referenced_table_name,
+    kcu.referenced_column_name
+FROM information_schema.key_column_usage kcu
+WHERE kcu.table_schema = 'crypto_ai'
+  AND kcu.table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event'
+  )
+ORDER BY kcu.table_name, kcu.constraint_name, kcu.ordinal_position;
+```
+### END_DB_REQUEST

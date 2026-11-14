@@ -1,0 +1,1 @@
+SELECT status, COUNT(*) n, SUM(closed_at IS NOT NULL) with_close, SUM(realized_pnl < 0) neg_pnl FROM paper_position GROUP BY status

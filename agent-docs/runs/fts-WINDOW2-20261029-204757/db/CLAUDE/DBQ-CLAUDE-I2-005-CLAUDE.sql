@@ -1,0 +1,1 @@
+SELECT symbol, COUNT(*) AS n, MIN(observed_at) AS first_obs, MAX(observed_at) AS last_obs FROM market_price_event WHERE observed_at BETWEEN '2026-10-11 22:43:20' AND '2026-10-11 22:43:40' GROUP BY symbol ORDER BY symbol LIMIT 100

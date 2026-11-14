@@ -1,0 +1,160 @@
+# Claude, failed-trade study WINDOW1, iteration 7: self-challenge of iteration 6
+
+Iteration 6 named fresh-reversal entries (F-37) and a 0.5% floor stop (F-42) as causes running across the six trades. The new data contradicts both claims, so I am withdrawing them. Four other statements in iteration 6 were wrong or overstated and are corrected below. The one specific logic flaw (F-38, trade 182) still stands, but there is no evidence that it costs money across the system.
+
+This was analysis only: no code, config, database, git or deploy changes. I did not read the Codex private or database folders, `LIVE_*` or Codex memory. A filename search did list Codex file names, but I opened none of them. Plan mode is on, but there is no plan-file write tool or exit-plan tool in this session, so this message is the iteration output.
+
+**Inputs:**
+- My query results I6-001, I6-002 and I6-003, plus I1-002, I1-004, I1-005, I1-006, I4-002, I4-004 and I5-003 (read again).
+- Code: `ExecutionIntelligenceService` (EIS) `:948-1001`.
+- Migrations V107 and V109.
+
+**Time rule (unchanged):** the database stores UTC, but the query tool shows `TIMESTAMP` columns in KSA. Times below are KSA. For example, I6-001 shows `priceObservedAt=2026-10-11T23:35:00Z` next to `executed_at 02:35:02` on 10-12, which confirms the tool shows +03:00.
+
+---
+
+## EVIDENCE
+
+### E-1: trade 158's Entry Quality score now rebuilds exactly (PROJECT EVIDENCE: I6-001, `EIS:948-989`)
+- **Open opportunity:** XRP opportunity **37621** (route `SETUP_CONFIRMATION_WAKEUP`, health 82) started 2026-10-12 01:42:00.086 KSA and executed 02:35:04.811 KSA. That is an age of **53 min**.
+- **Age penalty:** `ageMinutes > 40` costs −10 (`EIS:988`). My rebuild of 60 − 10 gives **50**, which matches the stored score. **U-32 is closed; all six scores now reproduce.**
+- **History of the setup:** 37621 had 20 evidence signals (2 BUY / 9 WATCH / 5 NEUTRAL / 4 bearish). The 20 XRP opportunities before it were all cancelled (`BEARISH_REVERSAL` or `OPPORTUNITY_HEALTH_EXHAUSTED`).
+- **The order record agrees** (`wallet_trade` 392): the 1m signal 165412 executed, and the 5m signal 165415 was "confirmation authority only".
+
+### E-2: correction to trade 172 (PROJECT EVIDENCE: I6-001)
+- Iteration 6 said "no opportunity" for 172. **That was wrong.**
+- SHIB opportunity **39062** was `EXECUTED` at 06:36:05.087 KSA:
+  - route `IMMEDIATE_VALIDATION`, higher-timeframe profile `BALANCED_STRONG`;
+  - health 92, 16 evidence signals (3 BUY / 3 WATCH / 9 NEUTRAL / 1 bearish);
+  - started 06:22:01.478 KSA, so the age was 14 min and the age penalty was 0.
+- The rebuilt score of 60 does not change. The factual record does.
+- Before it, there were about 40 one-signal `BEARISH_REVERSAL` / `HEALTH_EXHAUSTED` cancellations (04:30–06:21 KSA).
+
+### E-3: trade 137 used the FIX-11G route, but its 5m signal was genuinely NEUTRAL (PROJECT EVIDENCE: I1-006, I4-002, I4-004)
+- `wallet_trade` 344 shows the route `BALANCED_NEUTRAL_5M_WATCH_1H`. Its 5m signal 156721 has `decision=NEUTRAL` and `original_decision=NEUTRAL`.
+- So the F-38 flaw (a 5m that was bearish before being downgraded) does **not** apply to 137. Only 182 has it.
+
+---
+
+## FINDINGS: corrections and withdrawals
+
+### F-43: F-37 is rejected as a cause of losses; correction direction 5 is withdrawn (PROJECT EVIDENCE: I6-002)
+Outcomes by the number of 1m STRONG_SELL signals in the 15 minutes before entry, across all 193 closed or stopped positions:
+
+| STRONG_SELLs in prior 15 min | n | Loss rate | Stopped | Gross P&L (USDT) |
+|---|---|---|---|---|
+| 0 | 126 | 52% | 51 | −1.463 |
+| 1–4 | 33 | **67%** | 16 | **−2.920** |
+| 5 or more | 34 | **41%** | 8 | **+0.212** |
+
+- Trades 137 (12 STRONG_SELLs), 143 (10) and 182 (16) are all in the **best** bucket.
+- The code behaviour behind F-37 (the `break` at `EIS:2270-2275`) is real, but it does not lose money system-wide. 137, 143 and 182 are ordinary losers within a class that makes money overall.
+- **AGENT INFERENCE:** the 1–4 bucket (a short dip, then a BUY) is the weak spot. This is a new hypothesis, not a finding: n=33 and nothing controls for route or size.
+
+### F-44: F-42 / M2 is reframed: the floor-stop class is the *less* bad class, and fees are the real constraint (PROJECT EVIDENCE: I6-003)
+Floor-stop and ATR-stop classes compared:
+
+| Class | n | Loss rate | Stopped | Gross P&L | Gross per trade | Estimated fee at 0.2% | Estimated net |
+|---|---|---|---|---|---|---|---|
+| FLOOR_STOP | 93 | 45% | 23 (25%) | −0.793 | −0.0085 | 4.638 | **−5.43** |
+| ATR_STOP | 100 | 59% | 52 (52%) | −3.378 | −0.0338 | 7.752 | **−11.13** |
+
+These totals are my arithmetic over the I6-003 rows. They add up to 193 trades.
+
+- **Iteration 6 said these positions "almost never reach the stop". That was wrong:** 25% of floor-stop trades were stopped out. It only held for the take-profit < 0.40% subset in I5-004.
+- **What survives (AGENT INFERENCE from the I6-003 ratios):** floor-stop winners average about **0.20–0.22% gross** of position value (`PROFIT_LOCK` 0.222%, `PROFIT_LOCK_EXIT` 0.205%). That is about the same as a 0.15–0.20% round trip, so even the winners are close to zero after fees. ATR-stop winners make 0.38–1.13%.
+- **Also wrong in iteration 6:** "`fee_usdt = 0` on every row" was too broad. `paper_position` has **no fee column** (I6-003 schema). `wallet_trade.fee_usdt` is 0 for the six trades' fills (I1-006); whether that holds system-wide is unverified (I7-001).
+
+### F-45: the frozen selection has a structural bias (PROJECT EVIDENCE: CHARTER + I6-003)
+- The selection rule `status=CLOSED` excludes `STOPPED`.
+- The 75 STOPPED positions lost **−15.88 USDT gross**, against **−4.17** for all 193.
+- The CLOSED losers (signal and HTF exits) total about **−1.3 USDT across roughly 26 trades**.
+- So the six studied trades come from a class that explains less than 10% of gross losses. Their mechanisms must not be presented as the system's main loss driver.
+- **Side observation, out of scope:** `PROFIT_LOCK_HARD_EXIT` closed 4 of 6 trades at a loss.
+
+### F-46: F-38 stands as a logic flaw, but its cost is unproven (PROJECT EVIDENCE: I4-002 again)
+- 8 BUYs had a downgraded bearish 5m signal; 3 lost (**38%**, which is *below* the system rate).
+- Iteration 6's figure of −0.054 per BUY is driven by the size of a few losses, not by how often they lose. n=8.
+- The classification stays: **confirmed code inconsistency (182), candidate defect, no evidence that it costs money system-wide.**
+
+### F-47: confounds in all my system-wide statistics (AGENT INFERENCE)
+F-39, F-41, F-43 and F-44 pool trades without separating code versions. Route, Entry Quality score and position size are also linked: high scores get bigger positions and use the immediate route. None of these are significance-tested. They should be called *suggestive* (I7-002 asks for a daily breakdown).
+
+### F-48: three of six trades entered at exactly the Entry Quality cutoff of 50 (PROJECT EVIDENCE: E-1 and iteration 6)
+- Trades 158, 162 and 182 all scored exactly 50. For 158 the margin is 7 minutes of opportunity age (an age over 60 min costs −15 and gives 45). It is not a knife-edge like 162 or 182.
+- The 50–54 band is the best system-wide (F-39), so sitting at the cutoff is not, by itself, a sign that a trade will lose.
+
+### F-49: the docs contradict the evidence on FIX-154 (PROJECT EVIDENCE)
+- AGENTS.md says FIX-154 is "not-yet-implemented".
+- But migrations `V107__fix_154_trusted_higher_timeframe_buy.sql` and `V109__fix_154_forward_replay_and_audit_columns.sql` exist, and `buy_htf_assessment_audit` holds Production rows for 2026-10-11 KSA (I4-004).
+- This is reported, not resolved. It needs review by both agents under the "Do not start from zero" rule.
+
+---
+
+## Revised classification of each trade (AGENT INFERENCE on PROJECT EVIDENCE)
+
+| Trade | Classification | Change from iteration 6 |
+|---|---|---|
+| 137 | Valid losing trade; rules followed (FIX-11G with a genuinely NEUTRAL 5m) | F-37 removed as the cause |
+| 143 | Candidate entry defect: the 5m signal used for entry authority had already been superseded, a 2 ms ordering race (F-11, F-18); Replay unconfirmed | F-37 removed as a contributor |
+| 158 | Valid losing trade; score 50 explained (opportunity 53 min old, −10); R/R 0.33 | U-32 closed |
+| 162 | Valid under Production rules; candidate Replay-parity defect (F-40, a 24 ms age boundary) | Unchanged |
+| 172 | Candidate design gap: a 5m signal whose own entry was blocked was used as BUY confirmation (F-25); went through opportunity 39062 | "No opportunity" corrected |
+| 182 | Confirmed logic inconsistency (F-38), effect on P&L unproven | F-37 removed |
+
+**Mechanisms across trades:**
+- M1 (F-37): **withdrawn**.
+- M2 (F-42): now "fee-bound winners" (F-44), and it applies to the whole system, not only these six.
+- M3 (timeframe authority reads labels, not evidence; trades 143, 172, 182): kept.
+
+**Correction directions** (each needs a specification and approval):
+1. Pass the 5m's original decision to `validateBuy`.
+2. Order timeframe lookups by candle close time.
+3. Make the BUY authority respect the 5m's `final_entry_allowed`.
+4. Fee and tick awareness, re-scoped to the whole system.
+5. **Withdrawn.**
+
+---
+
+## UNKNOWNS
+- **U-18:** the logs are gzipped and could not be read, so the FIX-11G and FIX-105 log lines are MISSING.
+- **U-21:** no Replay run, so F-18 and F-40 are unconfirmed.
+- **U-35:** the account's fee tier.
+- **U-36:** whether `wallet_trade.fee_usdt` is 0 system-wide.
+- **U-37:** whether results are stable across days or code versions.
+- **U-38:** list-level evidence for the 8 F-38 trades.
+
+---
+
+## DB REQUESTS
+Time literals and `DATE()` are read in the query tool's +03:00 session, so they are KSA days.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-001
+Purpose: U-36. Check system-wide fee recording in `wallet_trade`.
+SQL:
+SELECT COUNT(*) AS n, SUM(fee_usdt<>0) AS nonzero_fee, ROUND(SUM(fee_usdt),6) AS fee_sum, MIN(executed_at) AS first_exec, MAX(executed_at) AS last_exec FROM crypto_ai.wallet_trade;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-002
+Purpose: U-37 / F-47. Daily outcome breakdown (KSA days) to expose code-version or regime effects.
+SQL:
+SELECT DATE(opened_at) AS d_ksa, COUNT(*) AS n, SUM(realized_pnl<0) AS losers, SUM(status='STOPPED') AS stopped, ROUND(SUM(realized_pnl),6) AS gross_pnl, ROUND(SUM(quantity*entry_price),2) AS notional FROM crypto_ai.paper_position WHERE status IN ('CLOSED','STOPPED') GROUP BY d_ksa ORDER BY d_ksa LIMIT 60;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-003
+Purpose: U-38 / F-46. List each BUY whose 5m was a downgraded bearish signal, with outcome and size.
+SQL:
+SELECT DISTINCT p.id, p.symbol, p.status, p.close_reason, p.realized_pnl, ROUND(p.quantity*p.entry_price,4) AS notional, f.id AS five_id, f.decision, f.original_decision, a.final_result, p.opened_at FROM crypto_ai.paper_position p JOIN crypto_ai.buy_htf_assessment_audit a ON a.reference_signal_id=p.signal_id JOIN crypto_ai.trade_signal f ON f.id=a.five_minute_signal_id WHERE f.original_decision IN ('SELL','STRONG_SELL') AND f.decision NOT IN ('SELL','STRONG_SELL') ORDER BY p.opened_at LIMIT 50;
+### END_DB_REQUEST
+
+---
+
+## Self-review for iteration 7
+- **Withdrawn with data:** two of my own cross-trade mechanisms, F-37 (I6-002) and the floor-stop part of F-42 (I6-003).
+- **Factual errors corrected:** 172 "no opportunity", "almost never reach the stop", and "fee_usdt on every row".
+- **Selection bias stated (F-45),** which limits how far any conclusion from these six trades generalises.
+- **Contradiction recorded (F-49)** between the docs and the evidence on FIX-154.
+- **Iteration 8:** fold in I7-001 to I7-003, then freeze the final registry.

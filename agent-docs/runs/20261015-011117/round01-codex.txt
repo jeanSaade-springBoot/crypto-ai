@@ -1,0 +1,48 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The preparation is not freeze-ready: P01–P07 are all pending, including exact baseline hashes, evidence E03–E10, canonical specification, approvals, async guard proof, and sealed acceptance criteria. [Preparation gates](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:53)
+
+- **PROJECT EVIDENCE:** The required canonical specification remains a different, unfrozen `RPR-0.4-DRAFT`; the reviewed RPR-0.9.12 resides outside the workspace and its hash cannot substitute for the mandated canonical artifact. [Canonical draft](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:1)
+
+- **PROJECT EVIDENCE:** The document requires test/log assertions against “Section 3.3.1,” but contains no such decision-precedence section. The implementation oracle for TP, stop, profit-lock, rebase, and near-TP ordering is therefore absent. [Unresolved references](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:152)
+
+- **PROJECT EVIDENCE:** Current Replay violates the desired boundary: it reads `wallet_settings`, invokes shared execution validation, uses wallet-shaped state, invokes live Binance minimum-order evaluation, queries `wallet_trade`, and writes shared diagnostics. The preparation accurately identifies these as target gaps, not completed protections. [Replay dependencies](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:45) [Live Binance path](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:687) [Shared diagnostics/account read](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/StopLossEvidenceStore.java:37)
+
+- **PROJECT EVIDENCE:** Equal-time price-event replay cannot currently be certified: SQL orders by `(observed_at,id)`, but `PriceEvent` retains neither ID nor delivery status; Replay then sorts only by timestamp. R156-06 correctly names the necessary future repair. [Projection](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118) [Replay sort](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:89)
+
+- **PROJECT EVIDENCE:** The “zero Production code changes” boundary is not yet made enforceable. R156-05 names `ExecutionReplayScope`, which is injected into multiple Production-path services; its current thread-local mode also falls back to account evidence whenever no scope is active. The preparation does not identify a Replay-only replacement file graph that proves Production source remains untouched. [R156-05](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:72) [Thread-local scope](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionReplayScope.java:31) [Account fallback](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/EntryConsumptionPolicy.java:20)
+
+- **AGENT INFERENCE:** The Replay-only objective is technically achievable, but only by adding a genuinely Replay-owned execution/evidence path and leaving all existing Production/shared-path source unchanged. The present preparation is not sufficiently specific to prove that constraint.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** The current working tree is materially dirty, so P01’s reproducible-baseline requirement is objectively unmet.
+- **PROJECT EVIDENCE:** `AnalysisService` uses a broad historical decision graph—sentiment, fundamentals, prior indicators, ATR, regime, strategy, market/BTC context, derivatives, order-book liquidity, and final decision. R156-04 specifies only limited policy and exchange-constraint fixtures, while the required full as-of input/refusal registry is not present in the preparation. [Analysis dependencies](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:73) [As-of calls](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:220) [R156-04](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:71)
+
+- **PROJECT EVIDENCE:** Null regenerated signal IDs presently disable Replay consumption rather than establish a stable Replay-owned key. [Null behavior](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionReplayScope.java:84)
+
+- **PROJECT EVIDENCE:** The narrow `fix122_evaluation` exception is owner-approved, and its current delete excludes Production rows (`test_run_id IS NULL`). However, it remains a shared-table operation requiring the promised exact allow-list and direct/async proof before freeze. [Exception](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:84) [Current purge](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:360)
+
+## OBJECTIONS
+
+- **AGENT INFERENCE:** Freeze must define “zero Production code changes” as a mechanically auditable rule: no edits to shared/Production-path classes, or a precise allow-list of Replay-only branches proven unreachable from Production. As written, R156-05 leaves this material boundary ambiguous.
+
+- **AGENT INFERENCE:** Do not implement policy mirrors until every analysis-time input has a dated provenance, fingerprint, availability-time rule, and refusal/non-comparable outcome. Otherwise current configuration or late-arriving evidence can create look-ahead bias.
+
+- **AGENT INFERENCE:** Do not freeze parity percentages until the confidence method, denominator, exclusion cap, cohort stratification, transaction-cost/slippage stance, and sealed acceptance period are stated before acceptance data is opened. P07 correctly recognizes this but remains pending.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No database, production system, runtime service, or private logs were accessed; no tests were executed.
+
+- **AGENT INFERENCE:** Historical reconstruction of all policy/configuration inputs and full price-tail coverage is unproven.
+
+## FINDINGS FOR JEAN
+
+- **AGENT INFERENCE:** Do not freeze FIX-156 under the no-Production-touch rule yet.
+
+- **PROJECT EVIDENCE:** Complete P01–P07/E03–E10; place the exact reviewed specification in the required canonical artifact; add the missing precedence oracle; and produce a class-by-class Replay-only file registry that excludes Production/shared source edits.
+
+- **AGENT INFERENCE:** Require an explicit refusal path for every unavailable historical input and a sealed, cost-aware acceptance protocol to prevent selective exclusions and Replay/Production drift.
+
+VERDICT: REJECTED

@@ -1,0 +1,16 @@
+Field	Type	Null	Key	Default	Extra
+signal_id	bigint	NO	PRI	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+interval_code	varchar(10)	NO		NULL	
+candle_open_time	timestamp(6)	NO		NULL	
+origin	varchar(20)	NO		NULL	
+status	varchar(30)	NO	MUL	NULL	
+attempts	int	NO		0	
+owner_token	varchar(36)	YES		NULL	
+next_attempt_at	timestamp(6)	NO		NULL	
+updated_at	timestamp(6)	NO		NULL	
+completed_at	timestamp(6)	YES		NULL	
+paper_position_id	bigint	YES		NULL	
+failure_stage	varchar(40)	YES		NULL	
+error_message	mediumtext	YES		NULL	
+source_event_id	bigint	YES	MUL	NULL

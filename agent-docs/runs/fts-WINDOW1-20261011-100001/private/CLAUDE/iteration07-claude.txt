@@ -1,0 +1,184 @@
+# Claude, failed-trade study WINDOW1, iteration 7: self-challenge
+
+This round I re-tested my iteration-6 conclusions against the I6 query results, the code, and Binance's public market data. Most findings held, but three did not survive unchanged:
+
+- **AERO part of F-30 retracted:** my AERO "missed stop" was a mistake on my part. I compared an early price with a stop that was raised later.
+- **F-31 downgraded:** the "bought at the top of the range" reading of F-31 is weaker than I claimed.
+- **Tick size moved to a primary factor:** it is now a primary cause for three of the six trades, not just a contributing weakness.
+
+The UNI part of F-30, a stop crossed during the restart gap, is now confirmed against Binance's own data.
+
+This was analysis only: no code, config, DB, git, doc or deploy writes. I didn't open Codex's private or db folders, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or Codex memory. I analysed the frozen trades **104, 101, 96, 91, 82, 78** and substituted none. This session has no Write or ExitPlanMode tool, so the plan file was not written and the findings are in this message only.
+
+**Time basis:** UTC = the value the DB wrapper displays − 3 h; KSA = the displayed value. This was checked independently this round (SC-1). DB_REQUEST literals are in KSA on purpose.
+
+## 1. Self-challenge results
+
+### SC-1: the time basis is confirmed independently
+*PROJECT EVIDENCE + EXTERNAL RESEARCH*
+
+- **Binance's own data:** Binance's public API (`/api/v3/klines`, UNIUSDT 1m) reports:
+  - 2026-10-10 15:00 UTC: low **7.624**
+  - 15:01 UTC: low **7.628**
+- **Our DB:** it shows the same lows on the candles displayed as 18:00 and 18:01 (I5-005).
+- **Arithmetic check:** the epoch 1791642904 in I3-002 works out to 14:35:04 UTC on 10-10, and the wrapper displays it as 17:35:04.
+- **Conclusion:** the displayed values are KSA, and the BACKFILL candles match Binance exactly.
+
+### SC-2: the UNI stop breach (F-30) is confirmed and better pinned down
+*PROJECT EVIDENCE*
+
+- **The stop only ratchets on adds:** an add can only raise the stop, to the add signal's stop (`WalletAutoExecutionService.java:151-154`).
+- **UNI's last add was before the outage:** wallet position 109 shows `last_scale_in_at` 17:45:06 KSA. Its stop moved from the entry signal's 7.62568 to **7.628665** then, and stayed there through the outage. Profit lock was inactive.
+- **The breach:** Binance shows lows of 7.624 at 15:00 UTC and 7.628 at 15:01 UTC (18:00 and 18:01 KSA). Both are below the stop and both fall inside the gap in price events, 17:59:05–18:02:25 KSA (I6-002).
+- **The late exit:** the next live price at or below the stop came at 18:15 KSA (low 7.627), and the exit executed at 18:15:47 KSA.
+- **Financial effect:** negligible this time. Price recovered to 7.668 by 18:04.
+- **Status: CONFIRMED.** During a restart, protection does not run, and backfilled lows are never checked against open stops. This is a real occurrence of the `AGENTS.md` release gate on protecting open positions during application replacement. UNI is outside the frozen set, so this does not change any trade verdict.
+
+### SC-3: the AERO half of F-30 is retracted
+*PROJECT EVIDENCE + AGENT INFERENCE*
+
+- **My mistake:** in iteration 6 I compared the 17:57–17:58 KSA lows (0.9071 and 0.9081) with the stop **0.908416**.
+- **Why it's wrong:** wallet position 110 shows that 0.908416 is the stop after the ratchet from the TREND_ADD at **18:10:07 KSA**. Before that add, the active stop was the entry signal's **0.903046**.
+- **No live price crossed the active stop:**
+  - lowest live price before the add: 0.9056, at 18:02 KSA;
+  - lowest live price after the add: 0.9141;
+  - the position then closed through profit lock at 18:13:04 KSA.
+- **Nothing was missed:** the stop was never breached at any point.
+- **The wick-sampling idea:** that protection misses short wicks between price updates has no support from this case, and remains unproven in general. Price events arrived 14–24 per minute (roughly every 2.5–4 s).
+- **Not yet verified:** that the add signal's stop was exactly 0.908416. I7-002 checks it.
+
+### SC-4: new F-34, stop changes on an add leave no audit record
+*PROJECT EVIDENCE + AGENT INFERENCE*
+
+- **The gap:** the ratchet at `WalletAutoExecutionService.java:151-157` silently changes `stop_loss_usdt` and `take_profit_usdt`. It writes no `position_management_event` row.
+- **What I don't know yet:** I6-004 came back as an empty file, so I can't tell "no rows" from "query failed". I7-001 re-asks.
+- **Why it matters:** the error in SC-3 came directly from this missing history. Anyone reconstructing a trade sees only the final stop, not the stop that was active at a given moment.
+- **Classification:** an observability defect candidate. It did not cause any loss.
+
+### SC-5: F-31 ("entered at the top of the range") is downgraded, and tick size is promoted
+*PROJECT EVIDENCE: I6-003. Interpretation: AGENT INFERENCE.*
+
+Where each entry sat in the 30 minutes of closed 1m candles before it:
+
+| Trade | 30m low–high | Entry | Position in range | Range width in ticks |
+|---|---|---|---|---|
+| 78 PEPE | 4.02–4.06e-6 | 4.06e-6 | 100% | 4 |
+| 91 SHIB | 5.47–5.48e-6 | 5.48e-6 | 100% | **1** |
+| 96 PEPE | 4.04–4.06e-6 | 4.06e-6 | 100% | 2 |
+| 82 XLM | 0.1977–0.1987 | 0.1984 | 70% | 10 |
+| 101 AERO | 0.9349–0.9517 | 0.9488 avg (first fill 0.9504) | 83% (92%) | 168 |
+| 104 ENA | 0.2228–0.2251 | 0.2248 | 87% | 23 |
+
+- **Why F-31 is weaker:** buying near the 30-minute high is normal for a TREND_FOLLOWING entry. For 91 the whole range was a single tick, so "top of the range" means nothing there. F-31 shrinks to one point: an hourly RANGE_MEAN_REVERSION SELL is treated as a neutral signal. That point is already part of RC-1.
+- **New F-35: tick size is a primary factor for 78, 91 and 96.**
+  - **Coarse ticks:** all three are PEPE or SHIB, where one tick is 0.18–0.25% of the price.
+  - **ATR is smaller than one tick:** SHIB's ATR of 0.09% is about half a tick. An ATR measured on prices that can only move in whole ticks says little about volatility, yet the stop and target are built from it.
+  - **Fees take a whole tick:** a 0.2% round-trip fee is roughly one full tick.
+  - **Effect:** the stop/target distances of 1.5–3.4 ticks (I5) are close to coin flips on single price moves. This upgrades F-26 from a contributing weakness to a primary factor for these three trades. (The tick sizes are from DB price spacing, AGENT INFERENCE; I didn't fetch `exchangeInfo`.)
+
+### SC-6: F-29 (104 chased a spike) passes its own disproval test
+*PROJECT EVIDENCE*
+
+- In iteration 5 I said F-29 would fail if 104 had entered close to the 30-minute low.
+- It didn't: the entry was at 87% of the range, about 0.9% above the low, which is about 5 ATR. **F-29 stands.**
+
+### SC-7: F-23 (82's entry-quality clamp) is still not proven component by component
+*AGENT INFERENCE*
+
+- I6-003 gives the range but not the scoring components (U-17 stays open).
+- The arithmetic argument from iteration 5 is unchanged. It is still labelled AGENT INFERENCE.
+
+### SC-8: the code I cite may not match what Production runs
+*Residual risk*
+
+- **Uncommitted changes:** the working tree has many uncommitted changes, so the code I read may differ from the deployed JAR.
+- **Mitigation:** the Production exit code `HTF_SELL_CONFIRMED` and the 1h-SELL entry behaviour (I4-008, I5-002) match the code at `PositionExitPolicy.java:25-32` and `HigherTimeframeBuyAssessmentService.java:46-47`. RC-1 is supported by what Production actually did, not only by the source.
+- **Still unverified:** that the JAR equals the working tree.
+
+### SC-9: the outcome bands (F-32) are probably confounded
+*AGENT INFERENCE*
+
+- **Confounding:** RC-1 losses (low-ATR coins with a 1h SELL) and the tick-size losses (SC-5) may be concentrated in particular entry-quality bands. That alone could produce the pattern.
+- **Keep it as a lead:** F-32 is a hypothesis for the next window, not a finding.
+- **Caveats unchanged:** n = 72, one day, signal reward/risk rather than reward/risk at the fill.
+
+### SC-10: the FIX-154 contradiction (F-33) is wider than I said
+*PROJECT EVIDENCE*
+
+- **Docs that call it pending:** `claude-docs/ARCHITECTURE.md:19` and `claude-docs/TRADING_RULES.md:124` also say FIX-154 is "pending, not implemented", as does `AGENTS.md`.
+- **No record of a decision:** `agent-docs/AGREED_KNOWLEDGE.md` and `DECISIONS.md` have no FIX-154 entry.
+- **Reality:** the code and the V107/V109 migrations are live.
+- **Action:** report the contradiction for dual-agent handling. I didn't edit anything.
+
+## 2. Current findings after the self-challenge
+
+| ID | Status |
+|---|---|
+| RC-1: the same 1h SELL is treated as neutral at entry and as an exit trigger (78, 91, 96, 104) | **Holds.** Supported by code and by Production behaviour. |
+| RC-2: 82 had weak geometry, plus the restart defect (F-21) | Holds. The causal link to F-21 is still unproven. |
+| RC-3: 101 was lost by the exit policy (FIX-118) | Holds. |
+| F-30, UNI: stop crossed during the outage | **Confirmed**, including against Binance's data. |
+| F-30, AERO: stop crossed but not acted on | **Retracted.** |
+| F-31: entries at the top of the range | **Downgraded** and folded into RC-1. |
+| F-34: stop changes on an add leave no audit record | **New.** Observability defect candidate. |
+| F-35: tick size is a primary factor for 78, 91, 96 | **New.** Upgrades F-26. |
+| F-32: entry-quality score doesn't track outcomes | **Hypothesis only** (confounded). |
+| F-33: FIX-154 is live but documented as pending | Contradiction; also affects `claude-docs`. |
+
+## 3. Verdicts (AGENT INFERENCE)
+
+| Trade | Verdict |
+|---|---|
+| 78, 91, 96 | Followed the rules. Primary causes: RC-1 and coarse ticks (F-35). Logic-defect candidate. |
+| 104 | Followed the rules. RC-1 plus a spike chase (F-29). |
+| 82 | Followed the rules, with weak geometry (F-23, F-24). A confirmed data-path defect (F-21) existed upstream, but its causal link to the loss is unproven. |
+| 101 | Valid entry. The loss came from the FIX-118 exit policy. |
+
+## 4. Unknowns
+
+- **U-10:** I can't read the `.gz` logs with my tools.
+- **U-17:** the exact entry-quality components (F-23).
+- **U-18:** whether `QUALITY_DECAY` changes the opportunity's status, and so should block a wake-up.
+- **U-20:** reduced to confirming the stop on AERO's add signal (I7-002).
+- **U-21:** whether the FIX-154 code is an approved revision of the design.
+- **U-22 (new):** whether the I6-004 result means "no rows" or a failed query (I7-001).
+- **U-23 (new):** whether the Production JAR matches the working tree.
+- **Replay:** not run.
+  - RC-1, F-23–F-29 and F-35 should reproduce in Replay, because the logic is deterministic.
+  - F-21 and F-30 are effects of the Production restart and won't appear in Replay.
+  - F-30 is a Replay parity gap: Replay works from complete candles, while Production missed the 18:00 low.
+
+## 5. DB_REQUEST blocks
+The literals are in KSA, the wrapper's session time zone.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-001
+Purpose: U-22/F-34: count management events per wallet position (UNI 109, AERO 110 and the frozen trades' wallet positions) so that zero rows can be told apart from a failed query
+SQL:
+SELECT m.id AS wallet_position_id, m.symbol, m.opened_at, COUNT(e.id) AS events, GROUP_CONCAT(DISTINCT e.event_type) AS event_types FROM wallet_managed_position m LEFT JOIN position_management_event e ON e.wallet_position_id = m.id WHERE m.id IN (109,110) OR m.entry_signal_id IN (SELECT signal_id FROM paper_position WHERE id IN (104,101,96,91,82,78)) GROUP BY m.id, m.symbol, m.opened_at ORDER BY m.id LIMIT 20
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-002
+Purpose: SC-3/U-20: confirm where the stop ratchet came from. Stop and target of each BUY signal for UNI and AERO during their holds
+SQL:
+SELECT t.id, t.symbol, t.side, t.execution_reason, t.executed_at, t.price_usdt, s.id AS signal_id, s.interval_code, s.decision, s.stop_loss, s.take_profit FROM wallet_trade t LEFT JOIN trade_signal s ON s.id = t.signal_id WHERE t.symbol IN ('UNIUSDT','AEROUSDT') AND t.executed_at BETWEEN '2026-10-10 17:43:00' AND '2026-10-10 18:16:00' ORDER BY t.executed_at LIMIT 20
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-003
+Purpose: F-34 applied to the frozen trades: final wallet stop/target, entry stage and last add time, to find any frozen trade whose active stop changed during the hold (expected: only 101)
+SQL:
+SELECT p.id AS paper_id, p.symbol, p.entry_price, m.id AS wallet_id, m.stop_loss_usdt, m.take_profit_usdt, m.entry_stage, m.last_scale_in_at, m.profit_lock_state, m.profit_lock_price_usdt FROM paper_position p JOIN wallet_managed_position m ON m.entry_signal_id = p.signal_id AND m.symbol = p.symbol WHERE p.id IN (104,101,96,91,82,78) ORDER BY p.id
+### END_DB_REQUEST
+
+## 6. Sources and labels
+
+- **PROJECT EVIDENCE:**
+  - Code: `WalletAutoExecutionService.java:129-161`, `PositionExitPolicy.java:20-50`, `HigherTimeframeBuyAssessmentService.java:13-53`, `V65__persist_position_management_events.sql`.
+  - DB: I3-001/002, I5-005, I6-001/002/003; I6-004 returned an empty file.
+- **EXTERNAL RESEARCH:** [Binance klines API, UNIUSDT 1m from 14:59 UTC on 2026-10-10](https://api.binance.com/api/v3/klines?symbol=UNIUSDT&interval=1m&startTime=1791644340000&limit=4), confirming the time basis and the BACKFILL lows.
+- **AGENT INFERENCE:**
+  - the AERO retraction rests on the ratchet code until I7-002 confirms it;
+  - tick sizes inferred from price spacing;
+  - the F-35 interpretation, the F-32 confounding, the verdicts and the Replay claims.

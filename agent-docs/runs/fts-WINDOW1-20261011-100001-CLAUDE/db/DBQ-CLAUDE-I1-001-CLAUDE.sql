@@ -1,0 +1,1 @@
+SELECT id, symbol, side, status, quantity, entry_price, stop_loss, take_profit, exit_price, realized_pnl, close_reason, signal_id, exit_signal_id, opened_at, closed_at, LEFT(entry_reason,1500) AS entry_reason, LEFT(exit_reason,1500) AS exit_reason FROM paper_position WHERE id IN (104,101,96,91,82,78) ORDER BY id

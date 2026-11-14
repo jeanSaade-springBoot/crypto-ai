@@ -1,0 +1,61 @@
+## FINDINGS — Iteration 1: reconstruction gate
+
+- No trade-specific database evidence is available in the permitted `db/CODEX/` directory; it is empty.
+- Therefore none of the six frozen `paper_position` IDs—182, 172, 162, 158, 143, 137—can yet be reconstructed without inventing facts.
+- The authoritative selection, snapshot, exclusion rules, and UTC→KSA conversion rule are accepted exactly as provided. Snapshot: UTC `2026-10-12 15:00:04`; KSA `2026-10-12 18:00:03`.
+
+## EVIDENCE
+
+**PROJECT EVIDENCE**
+
+- Current source maps `paper_position` to entry/exit signal IDs, entry/exit prices, SL/TP, lifecycle timestamps, close reason, and realized P&L.
+- Current protection path records terminal paper-position closures after a successful mechanical wallet exit; `production_exit_audit` is intended to preserve terminal trigger/context evidence.
+- Current `PositionExitPolicy` distinguishes `STOP_LOSS`, `TAKE_PROFIT`, profit-lock exits, and confirmed multi-timeframe exits.
+- Trade investigation guidance forbids replacing missing intra-candle protection evidence with candle OHLC.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+**AGENT INFERENCE**
+
+- No causal conclusion, rule-compliance verdict, or valid-loss/defect classification is possible before the actual schema and frozen-position rows are supplied.
+
+## UNKNOWNS
+
+- Actual physical schemas and migration state of required tables.
+- Symbol, entry/exit UTC timestamps, and therefore KSA timeline for each frozen ID.
+- Entry and exit signals, wallet executions, fees, protection observations, close triggers, and P&L reconciliation.
+- Runtime version/mode and whether equivalent Replay evidence exists.
+
+## DB_REQUEST
+
+```sql
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001
+Purpose: Read the actual crypto_ai schema before requesting any trade data. Establish the exact available columns/tables for bounded reconstruction of frozen paper_position IDs 182, 172, 162, 158, 143, and 137.
+SQL:
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'wallet_managed_position',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'production_exit_audit',
+      'position_management_event',
+      'candle'
+  )
+ORDER BY table_name, ordinal_position;
+### END_DB_REQUEST
+```

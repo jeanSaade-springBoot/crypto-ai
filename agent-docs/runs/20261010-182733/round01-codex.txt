@@ -1,0 +1,57 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE — REJECT:** RPR-0.6 is not complete enough for dual-agent technical-design approval. Its declared “complete” registry and data boundary conflict with the current Replay entry point and output schema.
+
+- **PROJECT EVIDENCE — REJECT:** The proposed no-account/no-HTTP boundary is not specified across all active dependency paths. It therefore cannot yet prove isolated virtual-account execution.
+
+- **PROJECT EVIDENCE — REJECT:** The staging/publish design is not implementable safely from this specification: it lacks the required schema, transaction, publication, cancellation, and recovery contracts.
+
+- **PROJECT EVIDENCE — REJECT:** The design cannot yet support its `ANALYSIS_PARITY` label safely where historical configuration, dependency provenance, or ordering is absent.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** The specification says qualification happens before a generated Replay artifact and names `regression_test_run` as the Replay-owned run table. [FINAL_CHANGE_SPECIFICATION_RPR-0.6.md](C:\workspace\crypto-ai-trader-mysql\agent-docs\FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:15), [FINAL_CHANGE_SPECIFICATION_RPR-0.6.md](C:\workspace\crypto-ai-trader-mysql\agent-docs\FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:54)
+
+  Current code instead inserts `analysis_test_run` before it starts the asynchronous worker. [RegressionTestService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\RegressionTestService.java:210) [RegressionTestService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\RegressionTestService.java:232)
+
+  `RegressionTestService` and the request/controller contract are absent from RPR6-01 through RPR6-17. A worker-only change cannot enforce “before artifact exists.”
+
+- **PROJECT EVIDENCE:** The declared write boundary omits existing Replay outputs, including `analysis_test_result`, `trade_signal_test`, `execution_opportunity_test`, and `position_management_test`. Current migrations establish these as run-owned outputs. [B105__fix_153_trader_only_baseline.sql](C:\workspace\crypto-ai-trader-mysql\src\main\resources\db\migration\B105__fix_153_trader_only_baseline.sql:1092) [B105__fix_153_trader_only_baseline.sql](C:\workspace\crypto-ai-trader-mysql\src\main\resources\db\migration\B105__fix_153_trader_only_baseline.sql:1111) [B105__fix_153_trader_only_baseline.sql](C:\workspace\crypto-ai-trader-mysql\src\main\resources\db\migration\B105__fix_153_trader_only_baseline.sql:1222)
+
+- **PROJECT EVIDENCE:** Current Replay writes generated signal rows during processing and catches per-candle failures so processing continues. [RegressionTestWorker.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\RegressionTestWorker.java:636) [RegressionTestWorker.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\RegressionTestWorker.java:688) RPR-0.6’s M04 requires the opposite—discard staged artifacts on any invariant/error—but gives no concrete staging tables, foreign keys, publish transaction, or orphan recovery plan. [FINAL_CHANGE_SPECIFICATION_RPR-0.6.md](C:\workspace\crypto-ai-trader-mysql\agent-docs\FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:89)
+
+- **PROJECT EVIDENCE:** Replay currently reads `wallet_settings` directly in `ShadowProductionReplayService`; the same class also reads it repeatedly for profit-lock logic. [ShadowProductionReplayService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:79) [ShadowProductionReplayService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\ShadowProductionReplayService.java:999)
+
+  The experimental observer separately reads the same production repository. [OneCandleContinuationGraceReplayObserver.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\regression\service\OneCandleContinuationGraceReplayObserver.java:195)
+
+  `DynamicProfitLockService` can create and save default production wallet settings when none exist. [DynamicProfitLockService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\position\service\DynamicProfitLockService.java:327)
+
+- **PROJECT EVIDENCE:** `BinanceMinimumExecutionPolicy` invokes `BinanceMarketDataClient`, so “no Replay HTTP” requires a concrete virtual-constraint input/port design, not only a policy name in the registry. [BinanceMinimumExecutionPolicy.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\wallet\service\BinanceMinimumExecutionPolicy.java:29) [BinanceMinimumExecutionPolicy.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\wallet\service\BinanceMinimumExecutionPolicy.java:38)
+
+- **PROJECT EVIDENCE:** RPR-0.6 requires accepted price observations to retain ID and ordering slot, but the current price-event read model returns only timestamp, price, and source; the service is absent from the “complete” registry. [FINAL_CHANGE_SPECIFICATION_RPR-0.6.md](C:\workspace\crypto-ai-trader-mysql\agent-docs\FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:56) [MarketPriceEventService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\market\service\MarketPriceEventService.java:118) [MarketPriceEventService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\market\service\MarketPriceEventService.java:173)
+
+- **PROJECT EVIDENCE:** Current analysis has separate historical derivatives and order-book paths. [AnalysisService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\service\AnalysisService.java:326) [AnalysisService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\service\AnalysisService.java:339) The specification recognizes missing historical context but does not provide a dependency-by-dependency eligibility matrix or durable profile schema sufficient to distinguish a valid `ANALYSIS_PARITY` claim from an input-declared simulation. [FINAL_CHANGE_SPECIFICATION_RPR-0.6.md](C:\workspace\crypto-ai-trader-mysql\agent-docs\FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:36) [FINAL_CHANGE_SPECIFICATION_RPR-0.6.md](C:\workspace\crypto-ai-trader-mysql\agent-docs\FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:88)
+
+## OBJECTIONS
+
+- **PROJECT EVIDENCE:** The artifact fails the repository’s mandatory specification contract: it does not provide full paths, complete affected-file coverage, concrete new schema, or method-level inputs/outputs, transactionality, failure behavior, and concurrency for its new profile, certificate, staging, and virtual-account components.
+
+- **AGENT INFERENCE:** The minimum revision must add `RegressionTestService`, request/controller validation, `MarketPriceEventService`, `WalletExecutionSizingPolicy`, `ExecutionPriceAuthorityService`, and every direct account/config/network dependency to the registry, or explicitly prove why each is untouched.
+
+- **AGENT INFERENCE:** The revised contract must define immutable virtual-profile fields and hashes: execution profile, reserve, daily limits, profit-lock values, fee/slippage/fill model, exchange constraints, precision rules, configuration/version identity, and each evidence item’s as-of timestamp/provenance.
+
+- **AGENT INFERENCE:** The revised contract must define a single terminal-state model. `FAILED_PROFILE_EVALUATION`, forbidden dependency, cancellation, refusal, and success cannot be left outside the stated three outcome labels.
+
+- **AGENT INFERENCE:** The revised contract must state exact atomic publication behavior: staging ownership, foreign keys, uniqueness/idempotency, run visibility, cancellation race handling, rollback behavior, and durable cleanup/recovery after process crash.
+
+- **AGENT INFERENCE:** Tests must add equal-timestamp price-event ordering and trace-ID preservation, all omitted-output-table publication checks, no-HTTP enforcement through the real Binance-constraint path, and an explicit historical configuration/provenance refusal matrix.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No production database, runtime, or external system was accessed.
+
+- **AGENT INFERENCE:** I cannot establish whether historical windows possess sufficient persisted configuration/version and dependency provenance without a bounded database evidence review; RPR-0.6 must fail closed until its qualifier defines and verifies those conditions.
+
+- **PROJECT EVIDENCE:** The reviewed artifact SHA-256 is `5C057C181459727E7D62F580F525FDB4392E15BBEAD7A27F5BAA2F3AAADF5A03`. Its Git baseline is the current `HEAD`, but the worktree is materially dirty; its proposed future re-hash is not a substitute for a complete design contract.
+
+VERDICT: REJECTED

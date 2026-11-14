@@ -1,0 +1,17 @@
+installed_rank	version	description	type	installed_on	success
+96	96	fix 140 history retirement audit	SQL	2026-10-03 16:11:06	1
+97	97	fix 141 btc context freshness	SQL	2026-10-03 16:11:07	1
+98	98	fix 141 reconciliation scan index	SQL	2026-10-03 16:11:07	1
+99	99	fix 142 delivery ownership	SQL	2026-10-03 16:11:07	1
+100	100	fix 144 paper position reason capacity	SQL	2026-10-04 00:15:43	1
+101	101	fix 145 operator work cancellation	SQL	2026-10-04 01:06:29	1
+102	102	fix 147 cutover approver account	SQL	2026-10-04 23:44:33	1
+103	103	fix 149 fresh admission indexes	JDBC	2026-10-05 01:38:10	1
+104	104	fix 150 protection entry evidence	SQL	2026-10-06 00:58:53	1
+105	105	fix 151 delivery selection indexes	SQL	2026-10-06 01:50:51	1
+106	106	fix 153 local candle evidence	SQL	2026-10-09 01:12:00	1
+107	107	fix 154 trusted higher timeframe buy	SQL	2026-10-10 00:15:21	1
+108	108	fix 153 local candle reconciliation	SQL	2026-10-10 00:15:21	1
+109	109	fix 154 forward replay and audit columns	SQL	2026-10-10 01:52:45	1
+110	110	fix 156 replay owned tables	SQL	2026-10-15 01:58:18	1
+111	111	fix 156 replay profile evidence	SQL	2026-10-17 03:11:55	1

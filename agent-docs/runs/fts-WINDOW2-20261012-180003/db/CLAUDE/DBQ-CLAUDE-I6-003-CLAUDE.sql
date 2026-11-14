@@ -1,0 +1,1 @@
+SELECT id, symbol, interval_code, candle_open_time, decision, original_decision, final_entry_allowed, atr_immediate_entry_allowed, generated_at, created_at FROM trade_signal WHERE id IN (95135,95262,95260,125306,125434,125433,142297,142423,142422,159285,159407,159408,161084,161210,161209,172833,172958,172956) ORDER BY symbol, generated_at

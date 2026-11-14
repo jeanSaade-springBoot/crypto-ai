@@ -1,0 +1,188 @@
+# Iteration 3: log and timing forensics for the six frozen trades (Claude)
+
+The most important result is about time labels. The timestamps I reported as UTC in iterations 1 and 2 are very likely KSA already. Each one is probably 3 hours later than true UTC. This changes the clock labels on every finding, but not the gaps between events.
+
+The other results this round:
+- Trade 101's loss is now explained, and the stored data rules out a bad price print.
+- The fill-time check has no minimum risk/reward.
+- The application log files that cover the trade times are gzipped. My tools cannot search them, so I could not use any application log evidence.
+
+This was analysis only: no code, config, DB, git or deploy changes. Plan mode was active, but no plan-file write or ExitPlanMode tool was available, so this text is the whole deliverable.
+
+**Isolation disclosure:** one of my repo-wide searches (a time-zone grep) returned two lines from `private/CODEX/iteration03-codex.stderr.txt`. The lines were the text of a time-zone query. I did not open that file, and nothing below relies on it. My conclusions come only from the evidence cited.
+
+## FINDINGS
+
+**T1. The DB times in our evidence files are most likely KSA, not UTC (PROJECT EVIDENCE; this contradicts DATABASE_INVESTIGATION_RULES.md)**
+
+| Wallet trade | Stored `execution_price_observed_at` | `priceObservedAt` written by Java in the message | Difference |
+|---|---|---|---|
+| 195 | 2026-10-10 17:35:04.248 | 2026-10-10T14:35:04.248Z | +3h |
+| 257 | 2026-10-11 02:12:03.690 | 2026-10-10T23:12:03.690Z | +3h |
+| 264 | 2026-10-11 05:35:04.601 | 2026-10-11T02:35:04.601Z | +3h |
+| 231 | 2026-10-10 21:40:03.473 | 2026-10-10T18:40:03.473Z | +3h |
+
+Why the Java value is the true UTC one:
+- The message value is a Java `Instant`, which always prints in UTC (`PaperTradingService.java:383`, `ExecutionPriceAuthorityService.java:51`).
+- The application writes with session `time_zone='+00:00'` and Hibernate `time_zone: UTC` (`application.yml:13-35`).
+- Every relevant column is MySQL `timestamp(6)` (DBQ-CLAUDE-I1-007, I2-005, DBQ-FTS-001). MySQL converts these to the reading session's time zone when they are read.
+- `scripts/agent-db-query.ps1` never sets `time_zone`. So the investigation session most likely uses the server's default (SYSTEM), which is KSA on this host.
+- The live log `logs/crypto-ai-trader.log` prints `14:08:01` for `candleOpenTime=14:07:00Z`, so its clock is UTC.
+
+Consequences:
+- **The application is not affected.** It reads and writes in UTC. Only our investigation output shows shifted times.
+- **Durations, ordering and price paths are unchanged.**
+- **Every absolute "UTC" time in iterations 1 and 2 is likely KSA.** The true UTC is that time minus 3 hours. For example, trade 104 opened at 05:35:07 KSA, which is 02:35:07 UTC.
+- **Queries that compare to fixed times are still consistent**, because the same session shifts both sides. That includes I2-003 and I2-006.
+- DBQ-CLAUDE-I3-001 is the decisive check. Until it returns, the tables below show times exactly as the DB returned them, labelled "DB-shown".
+
+**T2. Trade 101 (AERO): the loss came from FIX-118/120's TP-extension rebase, not from a gap or bad price (PROJECT EVIDENCE: I2-002, I2-003, I2-004, I1-005, I1-008)**
+
+Timeline (DB-shown times, 2026-10-11; the gaps between events are exact):
+
+| DB-shown time | Event |
+|---|---|
+| 02:16:04 | Average entry becomes 0.948789 after the second buy (wallet trade 258) |
+| 02:18:39.8 → 02:18:41.7 | Price jumps 0.9508 → 0.9564 (+0.59% in one 2-second update; events 1475622 → 1475629) |
+| 02:18:41.676 | Profit lock activates. Progress to the old target is about 77%, above the 70% activation level. Lock price is 0.954694, about +0.62% above entry |
+| 02:19:19.684 | Price 0.9588 reaches the take-profit (TP) of 0.958631. The continuation check passes (1h=BUY) and the TP is extended to 0.963551 (event 31) |
+| same moment | Measured against the new target, progress is 67.8%, below 70%. The lock moves to state `TP_EXTENSION_REBASE` (`DynamicProfitLockService.java:238-245`) |
+| 02:20:43–02:20:45 | Price 0.9549 → 0.9541 crosses the earned lock of 0.954694. No exit: during the rebase the lock is deliberately not allowed to trigger (`:107-111`) |
+| 02:21:23.7 → 02:21:25.7 | Price 0.9497 → 0.9487 (10 ticks in one 2-second update) crosses the hard floor of 0.949263 (entry × 1.0005, `:164-166`) |
+| 02:21:25.706 | Exit (wallet trade 259) at the price that triggered it, 0.9487. That is below the entry of 0.948789, giving −0.004681 USDT |
+
+What this shows:
+- The 0.9586 level from iteration 2 was real: about 25 normal updates traded at 0.957–0.9588.
+- There was no outlier print and no missing price event.
+- Under the rules as coded, the TP extension at +1.06% replaced an earned lock at +0.62% with a floor at +0.05%. That floor is smaller than one normal 2-second move.
+- `LivePositionProtectionService.java:187-190` says earned profit is "not left completely unprotected". In practice almost all of it was.
+- **Classification: a confirmed protection design defect. The code ran exactly as written.**
+- The same pattern appears before FIX-154 too: a pre-V107 `PROFIT_LOCK_HARD_EXIT` loss of −0.0779 USDT (DBQ-CLAUDE-I2-007).
+
+**T3. No minimum risk/reward is checked at fill time (PROJECT EVIDENCE: `ExecutionIntelligenceService.java:1150-1168`)**
+- `revalidateAtExecutionPrice` checks only two things: the fill price is above the stop, and below the target. It then runs the entry-quality cap.
+- That confirms iteration-2 F4 and F5:
+  - Trade 78 was filled with a real risk/reward of about 0.76.
+  - Trades 82 and 91 were entered from signals with risk/reward of 0.45 and 0.55.
+- The only risk/reward minimum I found is `BREAKOUT_RETRACEMENT_MIN_RR=1.15` (`:212`, `:1539`). It applies only to the breakout-retracement path.
+- The wake-up path also uses the 1m signal's stop and target, not the 5m trigger's. Trade 91 traded at 0.546 although its 5m trigger 121201 had 1.136. Trade 104 traded at 1.09 against 1.50 on its trigger 133251 (I2-008 and the messages in I1-008).
+
+**T4. The HTF_SELL exit mismatch is fully proven for 78, 91 and 104 (PROJECT EVIDENCE: I2-001)**
+- The SETUP_WAKEUP audit rows are 1106, 1318 and 1560.
+- Each read the 1h signal as raw SELL, treated it as NEUTRAL, classed it `SOFT_CONFLICT` with a 25% cap, and approved it as `BALANCED_STRONG`.
+- The 1h SELL was 2104 s, 2404 s and 2103 s old at entry.
+- The exits then used that same 1h SELL (DB-004 shows no new 1h signal). That closes iteration-2 U1.
+- Ages in the audit are measured from candle close time, not from when the signal was generated. For example: 18:03:02.926 − 3782 s = 17:00:00.9.
+
+**T5. Timing and latency: no execution delay contributed (PROJECT EVIDENCE: I1-005, I1-008, I2-001, I2-004, I1-006)**
+
+| Trade | Candle close → decision | Decision → wallet buy | Wallet → paper record | 5m NEUTRAL → wallet exit |
+|---|---|---|---|---|
+| 78 | 4.17 s | 1.46 s | 1.17 s | about 8 s |
+| 91 | 4.56 s | 1.43 s | 1.28 s | about 25 s |
+| 96 | 1.67 s | 1.46 s | 1.22 s | about 4 s |
+| 101 | 3.09 s | 1.49 s | 1.98 s | n/a |
+| 104 | 3.96 s | 1.51 s | 1.61 s | about 6 s |
+| 82 | 2.93 s | 2.03 s | 1.30 s | n/a (5m SELL 117761 → exit about 9.7 s) |
+
+- Every entry used a fresh price, 0.4–2.6 s old at execution.
+- The paper position always closes 1.2–2 s after the wallet. `paper_position` close times are therefore not the execution times.
+- Trade 91's 25 s exit delay is unexplained. The exit runs only when a new price event arrives (`onPrice`), so SHIB updates were probably sparse or rejected. DBQ-CLAUDE-I3-005 checks this.
+- **Classification: no stale-data or execution-delay defect for any of the six entries.**
+
+**T6. A signal gap at the DB-shown 18:00 boundary on 2026-10-10 is likely global (PROJECT EVIDENCE plus AGENT INFERENCE)**
+- For XLM, the 5m candle opening at DB-shown 17:55 and the 1h candle opening at DB-shown 17:00 have no signals (DB-004). Both close at DB-shown 18:00.
+- DBQ-CLAUDE-I2-006 returned an empty file for **all** symbols. There was not even a header, so a wrapper error cannot be ruled out.
+- If T1 holds, that boundary is 15:00 UTC, which is 18:00 KSA.
+- Two causes fit: a WebSocket reconnect or application restart right at the close boundary, or a missed final closed-kline event. AGENTS.md already names the closed-kline case. Neither is proven.
+- Effect on trade 82: its entry used a 1h signal 3782 s old and a 5m signal 482 s old. Both were within limits, so this is not a rule breach. Its effect on the trade's outcome is unknown.
+- Signals at hour boundaries arrive about 9 s after close instead of about 4 s (17:00:09 and 19:00:08 DB-shown). That is a normal load pattern.
+
+**Provisional classification after iteration 3**
+
+| Trade | Classification |
+|---|---|
+| 78 | Entry/exit 1h mismatch defect (F2/T4), plus fill-time risk/reward 0.76 with no floor (T3) |
+| 91 | F2/T4 defect, plus entry risk/reward 0.55 (T3); exit came 25 s after the trigger (open question) |
+| 96 | F2 defect |
+| 104 | F2/T4 defect |
+| 101 | **Confirmed** TP-extension rebase protection defect (T2) |
+| 82 | Valid loss under the rules; risk/reward 0.45 (T3); entered right after the likely global boundary gap (T6) |
+
+## EVIDENCE
+- **DB:** DBQ-CLAUDE-I1-001/005/006/007/008, I2-001/002/003/004/005/007/008, and I2-006 (the empty result), plus DBQ-FTS-001.
+- **Code:**
+  - `DynamicProfitLockService.java:107-111,164-166,217-245`
+  - `LivePositionProtectionService.java:99-133,185-199,207-217,235-243`
+  - `ExecutionIntelligenceService.java:212,1150-1183`
+  - `PaperTradingService.java:340-385`
+  - `ExecutionPriceAuthorityService.java:30-51`
+  - `application.yml:13-35`
+  - `scripts/agent-db-query.ps1` (no time-zone setting)
+- **Logs:** `logs/crypto-ai-trader.log` starts at 2026-10-11T14:08 UTC, after all six trades.
+  - The archives for the trade period are gzipped and could not be searched: `crypto-ai-trader.2026-10-10.0-12.log.gz` and `2026-10-11.0-6.log.gz`.
+  - No log evidence was used.
+- **External research:** none.
+
+## UNKNOWNS
+- **U1:** Proof of the T1 offset (DBQ-CLAUDE-I3-001).
+- **U2:** Whether the boundary gap is global, and why: restart, reconnect, or a recovery that wrote `BACKFILL` with no analysis (I3-002 to I3-004).
+- **U3:** Why trade 91's exit came 25 s after the trigger (I3-005).
+- **U4:** Log confirmation of T2 and T6. This needs the coordinator to search the gz archives. Useful search terms:
+  - `[FIX-120][PRODUCTION][TP_GEOMETRY_REBASE] positionId=130`
+  - `REBASE_HARD_FLOOR`
+  - WebSocket reconnect or startup lines around 2026-10-10T15:00Z
+- **U5:** Replay reproduction. Not attempted, because running Replay creates state.
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-001
+Purpose: T1. Prove the investigation session's time zone and the offset applied to timestamp columns. Log reference: signal 150942 has candleOpenTime=2026-10-11T14:07:00Z.
+SQL:
+SELECT @@session.time_zone AS session_tz, @@global.time_zone AS global_tz, @@system_time_zone AS system_tz, NOW(6) AS now_session, UTC_TIMESTAMP(6) AS now_utc, TIMESTAMPDIFF(MINUTE, UTC_TIMESTAMP(), NOW()) AS offset_minutes, (SELECT candle_open_time FROM trade_signal WHERE id=150942) AS sig150942_open_rendered, (SELECT execution_price_observed_at FROM wallet_trade WHERE id=195) AS wt195_observed_rendered;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-002
+Purpose: T6. Signal coverage per interval and candle around the DB-shown 18:00 boundary on 2026-10-10, across all symbols.
+SQL:
+SELECT interval_code, candle_open_time, COUNT(*) AS n_signals, MIN(generated_at) AS first_gen, MAX(generated_at) AS last_gen FROM trade_signal WHERE generated_at BETWEEN '2026-10-10 17:50:00' AND '2026-10-10 18:10:00' GROUP BY interval_code, candle_open_time ORDER BY candle_open_time, interval_code LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-003
+Purpose: T6. Candle rows behind the missing signals (closed flag, ingestion source, write times).
+SQL:
+SELECT symbol, interval_code, open_time, close_time, closed, ingestion_source, close_transition_token IS NOT NULL AS has_token, created_at, updated_at FROM candle WHERE symbol IN ('XLMUSDT','PEPEUSDT','AEROUSDT') AND ((interval_code='5m' AND open_time IN ('2026-10-10 17:50:00','2026-10-10 17:55:00','2026-10-10 18:00:00')) OR (interval_code='1h' AND open_time IN ('2026-10-10 16:00:00','2026-10-10 17:00:00')) OR (interval_code='1m' AND open_time BETWEEN '2026-10-10 17:58:00' AND '2026-10-10 18:01:00')) ORDER BY symbol, interval_code, open_time LIMIT 100;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-004
+Purpose: T6. Analysis outcomes and reconciliation audit for the boundary identities (DESCRIBE first, then a bounded read).
+SQL:
+SELECT symbol, interval_code, candle_open_time, outcome, reason_code, signal_id, origin, created_at FROM candle_analysis_outcome WHERE candle_open_time IN ('2026-10-10 17:55:00','2026-10-10 17:00:00','2026-10-10 17:59:00') AND interval_code IN ('1m','5m','1h') ORDER BY interval_code, symbol LIMIT 200; DESCRIBE local_reconciliation_audit;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-005
+Purpose: T5/U3. The price events that triggered the four HTF_SELL exits, including any non-APPLIED (rejected) ones.
+SQL:
+SELECT symbol, id, observed_at, price, delivery_status, outcome_reason, created_at FROM market_price_event WHERE (symbol='SHIBUSDT' AND observed_at BETWEEN '2026-10-10 21:45:00' AND '2026-10-10 21:45:31') OR (symbol='PEPEUSDT' AND observed_at BETWEEN '2026-10-10 17:50:00' AND '2026-10-10 17:50:13') OR (symbol='PEPEUSDT' AND observed_at BETWEEN '2026-10-10 22:45:00' AND '2026-10-10 22:45:09') OR (symbol='ENAUSDT' AND observed_at BETWEEN '2026-10-11 05:40:00' AND '2026-10-11 05:40:10') ORDER BY symbol, observed_at LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-006
+Purpose: U5 for iteration-2 F3. How far each frozen trade moved in its favour and against it while open, from 1m candles. Bounded to the six positions.
+SQL:
+SELECT p.id AS position_id, p.symbol, p.entry_price, MAX(c.high_price) AS max_high, MIN(c.low_price) AS min_low, COUNT(*) AS n_1m FROM paper_position p JOIN candle c ON c.symbol=p.symbol AND c.interval_code='1m' AND c.open_time >= p.opened_at - INTERVAL 1 MINUTE AND c.open_time <= p.closed_at WHERE p.id IN (104,101,96,91,82,78) GROUP BY p.id, p.symbol, p.entry_price ORDER BY p.id;
+### END_DB_REQUEST
+
+### LOG_REQUEST (coordinator; the archives are gzipped and I have no decompression tool)
+- `crypto-ai-trader.2026-10-10.*.log.gz`, roughly 14:45–15:15Z: lines with `WebSocket`, `reconnect`, `Started`, `FIX-153`, `RECONCIL`, `BACKFILL`.
+- `crypto-ai-trader.2026-10-10.*/2026-10-11.*.log.gz`: lines with `positionId=130` or `REBASE_HARD_FLOOR`, and `SHIBUSDT` around 18:45:00–18:45:31Z.
+
+**Labels:**
+- **PROJECT EVIDENCE:** T1 (the shift), T2, T3, T4 and T5.
+- **AGENT INFERENCE:** that the session uses the SYSTEM time zone (T1), the cause of the T6 gap, and the cause of the T5 delay for trade 91.
+- **EXTERNAL RESEARCH:** none.

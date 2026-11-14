@@ -1,0 +1,1 @@
+SELECT symbol, interval_code, candle_open_time, generated_at, signal_mode, decision, data_quality_valid FROM trade_signal WHERE interval_code IN ('5m','1h') AND ((interval_code='5m' AND candle_open_time='2026-10-10 17:55:00') OR (interval_code='1h' AND candle_open_time='2026-10-10 17:00:00')) ORDER BY symbol, interval_code LIMIT 200;

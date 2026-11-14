@@ -1,0 +1,1 @@
+DESCRIBE wallet_trade; DESCRIBE wallet_managed_position; DESCRIBE position_management_event; DESCRIBE market_price_event;

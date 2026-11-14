@@ -1,0 +1,1 @@
+SELECT UTC_TIMESTAMP() utc_now, NOW() session_now, @@session.time_zone tz, CURRENT_USER() usr

@@ -1,0 +1,8 @@
+exit_code=1
+duration_ms=145
+row_count=n/a
+--- stdout ---
+
+--- stderr ---
+ERROR 2005 (HY000): Unknown MySQL server host 'localhost --port=3307 --user=ai_investigator --database=crypto_ai --batch --raw --comments --default' (11001)
+

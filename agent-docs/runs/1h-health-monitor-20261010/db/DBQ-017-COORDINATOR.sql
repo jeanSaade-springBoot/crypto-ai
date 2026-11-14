@@ -1,0 +1,1 @@
+SELECT symbol, open_time, close_time, closed FROM candle WHERE interval_code='1h' AND close_time>='2026-10-10 17:59:00' AND close_time<'2026-10-10 18:01:00' ORDER BY symbol

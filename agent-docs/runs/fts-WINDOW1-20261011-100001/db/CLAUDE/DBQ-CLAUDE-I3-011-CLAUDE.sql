@@ -1,0 +1,1 @@
+SELECT status, close_reason, COUNT(*) AS n, SUM(realized_pnl < 0) AS losses, SUM(realized_pnl) AS pnl_sum, AVG(TIMESTAMPDIFF(SECOND, opened_at, closed_at)) AS avg_hold_s FROM paper_position WHERE closed_at >= '2026-10-10 00:15:21' AND closed_at <= '2026-10-11 10:00:03' GROUP BY status, close_reason ORDER BY n DESC

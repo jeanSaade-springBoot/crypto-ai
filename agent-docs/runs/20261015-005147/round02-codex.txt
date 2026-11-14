@@ -1,0 +1,55 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Preparation is not complete or implementation-ready by its own status: P01–P07 remain pending; E03–E10 are uncompleted; no approved canonical FIX-156 specification exists. The required canonical file is still RPR-0.4-DRAFT, not RPR-0.9.11.
+
+- **PROJECT EVIDENCE:** The stated decision-order test oracle is missing. T156-02a/b and logging require “Section 3.3.1,” but this 400-line preparation contains no such section. The test suite therefore has no frozen authoritative precedence order to implement or validate.
+
+- **PROJECT EVIDENCE:** The new `fix122_evaluation` exception is materially inaccurate. The table-specific delete is scoped to non-null `test_run_id`, but the actual “Delete Data” operation purges every Replay run and resets `analysis_test_run` AUTO_INCREMENT. Run IDs can therefore be reused; the code explicitly warns of this. A rule allowing only rows of the “active Replay run” does not describe the existing purge, and `runId` is not a durable unique correlation identity.
+
+- **PROJECT EVIDENCE:** The proposed dated fixture contract is incomplete against the actual analysis path. `analyzeForRegression` uses sentiment, fundamentals, prior indicators, ATR risk, regime state, market context, dynamic strategy properties, confluence, BTC context, order-book liquidity, derivatives, and final-decision services. R156-04 explicitly specifies only a BUY/dynamic-profit-lock profile and D28 exchange constraint; D53/D54 cover only sentiment configuration and prior snapshots. No complete as-of configuration/input inventory or per-input refusal rule is stated.
+
+- **PROJECT EVIDENCE:** Major current Replay boundary violations remain real: direct `wallet_settings` reads, shared BUY validation, live Binance `exchangeInfo`, shared diagnostics writes, `wallet_trade` chart reads, signal-price fallback, and experimental observers. These are valid target gaps, not evidence that an implementation is ready.
+
+- **PROJECT EVIDENCE:** The current price projection orders SQL by `(observed_at, id)` but discards both ID and delivery status from `PriceEvent`; `ShadowProductionReplayService` then re-sorts only by time. R156-06 correctly identifies the required repair, but current code cannot meet equal-time ordering or evidence provenance requirements.
+
+- **PROJECT EVIDENCE:** Claude’s older assertion that this preparation lacks a logging registry is no longer correct: the current document has one at §6. That correction does not cure the missing Section 3.3.1 oracle or pending gates.
+
+## EVIDENCE
+
+- Pending gates and canonical mismatch: [preparation §3](C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:51), [canonical draft header](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:3).
+
+- Missing precedence authority: [required but absent Section 3.3.1 references](C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:140).
+
+- Shared-table exception: [§4.2a](C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:82); actual broad purge and ID reset: [RegressionTestService](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:342), [ID reset](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:401); explicit reuse warning: [Fix122ProvenSnapshot](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/Fix122ProvenSnapshot.java:7).
+
+- Broad analysis dependencies: [AnalysisService](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:73), [as-of evaluation flow](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:227); limited fixture requirement: [R156-04](C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:69).
+
+- Current prohibited dependencies: [Replay constructor/settings](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:45), [live Binance request](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/client/binance/BinanceMarketDataClient.java:159), [shared diagnostic write and wallet read](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/StopLossEvidenceStore.java:37), [chart wallet_trade read](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:549).
+
+- Lost price identity/status: [MarketPriceEventService](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118), [time-only replay sort](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:89).
+
+## OBJECTIONS
+
+- **AGENT INFERENCE:** Do not freeze R156-05’s shared-table exception without a stable immutable run UUID and a concurrency/retention policy. Otherwise purge/reuse can make certificates and logs refer to the wrong historical run.
+
+- **AGENT INFERENCE:** Do not implement mirrors until the document names every analysis-time configuration and external/historical input, its provenance, as-of availability rule, fingerprint, and refusal/non-comparable outcome. Otherwise current values can silently produce look-ahead bias.
+
+- **AGENT INFERENCE:** Static reachability tests are necessary but insufficient alone; the frozen contract must define the exact allowed graph and verify asynchronous, reflection/dynamic-SQL, and controller/output paths.
+
+- **AGENT INFERENCE:** The proposed 99% claim remains statistically underdefined until the confidence method, denominator, exclusion cap, and whether thresholds apply overall or per exit class are frozen before acceptance data is opened.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No database, production system, runtime service, or private logs were accessed.
+
+- **AGENT INFERENCE:** Historical sources for dated `wallet_settings`, dynamic strategy/scoring properties, and Binance exchange constraints remain unproven. The plan must refuse or classify periods where they cannot be reconstructed.
+
+- **AGENT INFERENCE:** The external RPR-0.9.11 draft was not established as the canonical workspace contract; its claimed hash cannot substitute for P01.
+
+## FINDINGS FOR JEAN
+
+- **AGENT INFERENCE:** This is a useful preparation inventory, but it is not freeze- or implementation-ready.
+- **PROJECT EVIDENCE:** Before any authorization, complete P01–P07/E03–E10; put the exact reviewed specification at the mandated canonical path; add the missing precedence oracle; correct §4.2a for global purge/run-ID reuse; and fully register as-of analysis inputs and refusals.
+- **AGENT INFERENCE:** Require the acceptance protocol to prevent selective exclusions, look-ahead contamination, and Replay/Production drift before interpreting any parity percentage.
+
+VERDICT: REJECTED

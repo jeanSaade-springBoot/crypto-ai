@@ -1,0 +1,1 @@
+SELECT interval_code, COUNT(*) n, MAX(generated_at) last_generated_at, TIMESTAMPDIFF(MINUTE, MAX(generated_at), NOW()) stale_vs_session_now_min FROM trade_signal WHERE interval_code IN ('1m','5m','1h') GROUP BY interval_code ORDER BY interval_code

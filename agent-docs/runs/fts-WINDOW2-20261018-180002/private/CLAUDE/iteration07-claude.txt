@@ -1,0 +1,175 @@
+# Claude: FTS WINDOW2, Iteration 7 (self-challenge)
+
+**Scope.** This covers the six frozen Production trades only (182, 172, 162, 158, 143 and 137 in `crypto_ai.paper_position`). It is analysis only: no code, config, DB, git or deploy changes. I did not read Codex's files, `LIVE_*` or `DATABASE_QUERY_LOG.md`. The plan-file Write and ExitPlanMode tools were not available, so this report is inline, as in Iterations 3–6.
+
+## Bottom line
+
+My two main Iteration 6 conclusions don't hold up against the I6 results.
+
+1. **I withdraw "stop/target geometry against costs" as the root cause of these recorded losses.**
+   - These six are **gross** losses: the exit was below the entry, from −0.13% to −0.34% (I6-001). Paper trading charges no fees, so fees caused none of the recorded loss.
+   - At population level, the low-ATR, R:R < 0.5 band is the **best gross band**: 9 of 12 won, average +0.072% (I6-002).
+   - The money is lost in the high-ATR, R:R ≥ 1.5 band: average −0.150% gross, with 21 stop-outs out of 35.
+   - Geometry against costs is still real, but it is a different finding. Net of an assumed 0.2% round trip, every band is negative. That is a profitability warning about the whole system, not the reason these six lost.
+2. **Giving back gains is a pattern across the population, not just in these six.**
+   - 21 of 47 losers reached 30% or more of the way to their target before closing at a loss (I6-003).
+   - Five of the six frozen trades did too: 137 at about 47%, 158 at 33%, 162 at 31%, 172 at 33%, and 143 at about 95% of its extended target. Only 182 never moved in its favour (0%).
+3. **Time-zone rule T1 is downgraded from "confirmed" to "supported by the code, but the proof was circular."**
+4. **The Iteration 6 guard claims needed corrections:**
+   - The guard counterfactual for 182 holds, but for a narrower reason than I gave.
+   - The guard does **not** cover 137, which I had implied.
+   - My Iteration 6 "score < 60" argument confused two different scores.
+
+---
+
+## FINDINGS
+
+### F7-1. The fee/geometry root cause is withdrawn for the recorded losses
+
+**PROJECT EVIDENCE: I6-001, I6-002**
+
+The frozen six fall into these bands:
+
+| Band | Frozen trades in the band | Band result |
+|---|---|---|
+| R:R < 0.5, ATR < 0.10% | 158, 162, 182 | 9 of 12 won gross; the 3 losers are most likely exactly these three |
+| R:R 0.5–1, ATR 0.10–0.167% | 137, 172 | 6 of 11 won |
+| R:R ≥ 1.5, ATR ≥ 0.25% | 143 | — |
+
+- **What this means (AGENT INFERENCE):** a low R:R did not make losses likely. In this sample, small targets were usually hit, because 47 of 48 winners are in the ≥ 70% progress band.
+- **Earlier claim corrected:** in Iteration 6 I wrote that 158 "can't be won net of fees." That is true net of fees, but it is irrelevant to its recorded −0.128% gross loss.
+- **The cost finding becomes system-level:**
+  - Assuming a 0.2% round trip, the average net result is negative in every band (I6-002: −0.128% to −0.350%).
+  - The fee assumption is still unverified (U-I6-2).
+  - This changes proposal P3 from "the root cause for 158/162" to "the economics of the whole system, which the zero-fee ledger hides."
+
+### F7-2. The actual loss mechanism: an early favourable move, then a signal exit below the entry
+
+**PROJECT EVIDENCE: I6-001, I6-003, FTS-005; inference labelled**
+
+| Trade | Held for | Best progress toward target | Exit | Exit return |
+|---|---|---|---|---|
+| 137 | 5 m | ~47% | SELL_CONFIRMED | −0.300% |
+| 143 | 3.5 m | ~95% (of extended target) | PROFIT_LOCK_HARD_EXIT | −0.149% |
+| 158 | 55 m | ~33% | SELL_CONFIRMED | −0.128% |
+| 162 | 24 m | ~31% | STRONG_SELL | −0.345% |
+| 172 | 40 m | ~33% | HTF_SELL_CONFIRMED | −0.182% |
+| 182 | 8 m | 0% | SELL_CONFIRMED | −0.212% |
+
+- **Cross-check:** the p70+ loss bucket sums to −0.037193, which is exactly 143's `realized_pnl`. So 143 is one of the two p70+ losers, and the I6-003 join is clean: the totals reconcile to −1.5557 USDT.
+- **Still unknown (AGENT INFERENCE):** whether the SELL-family exits *saved* money compared with holding to the original stop/target, or *cost* money. This is now the deciding question for the five signal-exit trades (I7-002).
+- Trade 137's exit at −0.30% is 60% of the way to its stop, so the SELL exit protected it only a little.
+
+### F7-3. Correcting the Iteration 6 guard counterfactual (E5)
+
+**PROJECT EVIDENCE: code and I6-004**
+
+- `balancedEarlyPostBearishGuard` (`ExecutionIntelligenceService.java:2078-2137`) arms only on a **5m** SELL/STRONG_SELL within 20 minutes (`:178`, `:2090-2095`). It reads `strongerDecision(decision, original_decision)`. A run of **1m** STRONG_SELL signals does not arm it.
+- **For 182:**
+  - Its 5m signals 176278, 176403, 176529 and 176655 all show `decision` NEUTRAL with `original_decision` STRONG_SELL. The last of them was generated at 09:55:03 shown time, before the 09:57:06 entry.
+  - So the guard would arm, and the recovery count would be 0 against the required 2 (`:2097-2107`). That alone would pause the entry.
+  - **Withdrawn:** my Iteration 6 "score 50 < 60" argument. The 60 at `:181`/`:2108` is the Entry Quality score, not `total_score`. I have not verified 182's Entry Quality.
+- **For 137:**
+  - Every 5m signal in its 20-minute lookback has NEUTRAL for both `decision` and `original_decision` (156216 to 156721).
+  - So the guard would **not** arm, and P2 would not change 137. The nine-signal 1m STRONG_SELL run from E6 is not read by this guard.
+- **New point for 182 (PROJECT EVIDENCE, `AnalysisService.java:364-411`):**
+  - `original_decision` is the base decision from the score. `decision` is what FinalDecisionService returns.
+  - The FIX-11G route, BALANCED_NEUTRAL_5M_WATCH_1H, therefore treated a 5m bar demoted from STRONG_SELL to NEUTRAL as genuinely neutral, with 5m scores of 22–28.
+  - Why the demotion happened is unknown (I7-003).
+
+### F7-4. Time-zone rule T1: my earlier proof was circular
+
+**PROJECT EVIDENCE plus a self-correction**
+
+- **Why I3-002 proves nothing:** `UNIX_TIMESTAMP(col)` interprets the displayed value in the session zone. The session is SYSTEM, which is Arab Standard Time, +180 minutes (I3-001). So the query returns "shown minus 3 h" for **any** column type.
+- **What still supports T1:**
+  - The app writes with session `+00:00` (`application.yml:22`, `:24`, `:35`).
+  - The baseline DDL declares these columns `TIMESTAMP(6)` (`B105__fix_153_trader_only_baseline.sql:80`, `:151`, `:187-188`, `:215`).
+  - MySQL converts `TIMESTAMP` values to the session zone when reading them. So *if* the Production columns really are `TIMESTAMP`, the wrapper shows KSA and T1 holds.
+  - Not every column is `TIMESTAMP`: `btc_signal_generated_at` is `DATETIME(6)` (`:509`).
+- **Status:** T1 is plausible but not proven until I7-001 confirms the actual Production column types. Until then:
+  - Each time I quote is labelled "shown," meaning the wrapper display.
+  - The KSA reading of it follows T1.
+  - The UTC reading is shown time minus 3 h, but **only if T1 holds**.
+- **Example:** 182 was entered at 09:57:06 shown, which is 09:57:06 KSA and 06:57:06 UTC under T1.
+- If I7-001 shows `DATETIME`, every KSA time in Iterations 3–6 shifts +3 h. That would not change any difference between two times in this study.
+
+### F7-5. Per-trade classification (revised; to be frozen in Iteration 8)
+
+| Trade | Classification | Change from Iteration 6 |
+|---|---|---|
+| 143 | **Defect**: the 5m race plus the 1m/5m risk-authority mismatch (R1, R4, Q3). Its planned target was +0.79%, at a signal R:R of 1.50; it was later extended to +1.77%. | The planned target is now separated from the extended one. Iteration 6's E2 showed only the extended +1.77%. |
+| 182 | **Design gap**: the FIX-11G route lacks the BALANCED_EARLY post-bearish guard and ignores the demoted STRONG_SELL. | The reason is narrowed to the recovery count. The score argument is withdrawn. |
+| 162 | **Weak rule**: the FIX-119 `buyCount > 0` exemption, plus a late entry at the top of its range (0.90). | The fee argument is removed. |
+| 158 | **Valid loss**: a weak WATCH at the top of its range (0.80); exited on a signal after 33% progress. | Changed from "a config that loses money" to a valid loss. Geometry moves to the system-level finding. |
+| 137 | **Valid loss**: a probable rejected high (Q4); exited on a signal at −0.30%. | It is explicitly **not** covered by P2. |
+| 172 | **Valid loss**: a ±3-tick price plan, mostly rounding noise (Q6). | Unchanged. |
+
+**Replay (unchanged reasoning):** the five non-defect trades run on shared code, so Replay should reproduce them if the signal and opportunity state match. Trade 143 can't be reproduced (R4). Replay also charges no fees.
+
+## Revised proposals (not authorised)
+
+- **P2:** stays, with a narrower scope. It covers 182 only. The regression check must also include FIX-11G entries **without** recent 5m bearish context, which must be unchanged.
+- **P3:** split in two.
+  - P3a, a fee model for paper trading and Replay (observability).
+  - P3b, a gate that the target must clear costs. P3b is now a business decision for the whole system, not a fix for these trades.
+- **P7 (new, research only):** measure how the signal exits (SELL_CONFIRMED, STRONG_SELL, HTF_SELL_CONFIRMED) performed against holding to the original bracket, using I7-002 and then the population. Don't propose any change to the exits until that result exists.
+
+## UNKNOWNS
+
+- **U-I7-1:** the actual Production column types (I7-001). This decides T1.
+- **U-I7-2:** whether the signal exits beat holding to the bracket (I7-002).
+- **U-I7-3:** why 182's 5m STRONG_SELL signals were demoted to NEUTRAL (I7-003).
+- **U-I7-4:** 182's Entry Quality score.
+- **Carried over:**
+  - U-I6-1: the actual Production `ATR_*` overrides.
+  - U-I6-2: the Binance.com fee tier.
+  - U-T3: whether 143's price gaps came from the exchange or the app (needs the gzip logs).
+  - U8: why trading stopped.
+
+## DB_REQUESTS
+
+The time literals below are the wrapper's shown values; under T1 they are KSA.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-001
+Purpose: Confirm the actual Production data types of the time columns used in this study (F7-4, T1)
+SQL:
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'crypto_ai' AND ((TABLE_NAME = 'paper_position' AND COLUMN_NAME IN ('opened_at', 'closed_at')) OR (TABLE_NAME = 'trade_signal' AND COLUMN_NAME IN ('generated_at', 'candle_open_time')) OR (TABLE_NAME = 'candle' AND COLUMN_NAME = 'open_time') OR (TABLE_NAME = 'market_price_event' AND COLUMN_NAME IN ('observed_at', 'created_at'))) ORDER BY TABLE_NAME, COLUMN_NAME;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-002
+Purpose: Outcome only, not entry assessment. Within 180 minutes after the entry minute, which of the planned signal stop and target the 1m candles would have touched first, compared with the actual signal exit (F7-2, U-I7-2)
+SQL:
+SELECT '137' AS t, MIN(CASE WHEN high_price >= 4.011875113389 THEN open_time END) AS first_tp, MIN(CASE WHEN low_price <= 3.979005 THEN open_time END) AS first_sl, MAX(high_price) AS hi, MIN(low_price) AS lo, COUNT(*) AS n FROM crypto_ai.candle WHERE symbol = 'EGLDUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-11 20:56:00' AND '2026-10-11 23:56:00' UNION ALL SELECT '143', MIN(CASE WHEN high_price >= 4.064696518344 THEN open_time END), MIN(CASE WHEN low_price <= 4.010202321104 THEN open_time END), MAX(high_price), MIN(low_price), COUNT(*) FROM crypto_ai.candle WHERE symbol = 'EGLDUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-11 22:41:00' AND '2026-10-12 01:41:00' UNION ALL SELECT '158', MIN(CASE WHEN high_price >= 1.413208867638 THEN open_time END), MIN(CASE WHEN low_price <= 1.4038455 THEN open_time END), MAX(high_price), MIN(low_price), COUNT(*) FROM crypto_ai.candle WHERE symbol = 'XRPUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-12 02:36:00' AND '2026-10-12 05:36:00' UNION ALL SELECT '162', MIN(CASE WHEN high_price >= 0.087240722576 THEN open_time END), MIN(CASE WHEN low_price <= 0.08661475 THEN open_time END), MAX(high_price), MIN(low_price), COUNT(*) FROM crypto_ai.candle WHERE symbol = 'DOGEUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-12 04:03:00' AND '2026-10-12 07:03:00' UNION ALL SELECT '172', MIN(CASE WHEN high_price >= 0.000005510418 THEN open_time END), MIN(CASE WHEN low_price <= 0.00000546255 THEN open_time END), MAX(high_price), MIN(low_price), COUNT(*) FROM crypto_ai.candle WHERE symbol = 'SHIBUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-12 06:37:00' AND '2026-10-12 09:37:00' UNION ALL SELECT '182', MIN(CASE WHEN high_price >= 0.188853643224 THEN open_time END), MIN(CASE WHEN low_price <= 0.187458 THEN open_time END), MAX(high_price), MIN(low_price), COUNT(*) FROM crypto_ai.candle WHERE symbol = 'ACEUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-12 09:58:00' AND '2026-10-12 12:58:00';
+### END_DB_REQUEST
+
+Caveat: when the first-target and first-stop times fall in the same minute, the order within that candle is ambiguous. The entry minute is excluded because its high and low may come before the fill.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-003
+Purpose: Why 182's 5m STRONG_SELL signals were demoted to NEUTRAL (F7-3, U-I7-3)
+SQL:
+SELECT id, generated_at, decision, original_decision, total_score, LEFT(final_decision_explanation, 600) AS final_expl FROM crypto_ai.trade_signal WHERE id IN (176529, 176655) ORDER BY id;
+### END_DB_REQUEST
+
+## Self-review (Iteration 7)
+
+- **Withdrawn:**
+  - The geometry-against-fees root cause for the recorded losses (F7-1).
+  - The "score < 60" counterfactual (F7-3).
+  - The idea that P2 covers 137 (F7-3).
+  - I3-002 as proof of T1 (F7-4).
+- **Code read this iteration:**
+  - `ExecutionIntelligenceService.java:172-187, 2070-2144`
+  - `AnalysisService.java:340-419`
+  - `application.yml` time-zone lines (grep)
+  - B105 DDL column types (grep)
+  - `TradeSignal` column names (grep)
+- **No EXTERNAL RESEARCH this iteration.** The Iteration 6 fee and stream sources still apply.
+- **Plan for Iteration 8:**
+  - Apply I7-001 to I7-003.
+  - Settle T1.
+  - Freeze the per-trade classification and the root-cause shares.
+  - Make no new hypotheses unless the data forces one.

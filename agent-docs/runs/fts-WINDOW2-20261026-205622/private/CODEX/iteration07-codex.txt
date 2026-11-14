@@ -1,0 +1,143 @@
+## FINDINGS
+
+**PROJECT EVIDENCE — correction to iterations 1–6:** DB evidence is now present. Earlier statements that all six trades were unreconstructable are superseded.
+
+All six frozen `paper_position` rows are closed losses and each has one `production_exit_audit` record:
+
+| ID | Symbol | Opened UTC → KSA | Closed UTC → KSA | Audited close trigger |
+|---:|---|---|---|---|
+| 182 | ACEUSDT | 2026-10-12 09:57:06 → 12:57:06 | 10:05:20 → 13:05:20 | `SELL_CONFIRMED` |
+| 172 | SHIBUSDT | 06:36:05 → 09:36:05 | 07:15:45 → 10:15:45 | `HTF_SELL_CONFIRMED` |
+| 162 | DOGEUSDT | 04:02:06 → 07:02:06 | 04:26:04 → 07:26:04 | `STRONG_SELL` |
+| 158 | XRPUSDT | 02:35:04 → 05:35:04 | 03:30:06 → 06:30:06 | `SELL_CONFIRMED` |
+| 143 | EGLDUSDT | 2026-10-11 22:40:04 → 2026-10-12 01:40:04 | 22:43:36 → 01:43:36 | `PROFIT_LOCK_HARD_EXIT` |
+| 137 | EGLDUSDT | 20:55:04 → 23:55:04 | 21:00:12 → 2026-10-12 00:00:12 | `SELL_CONFIRMED` |
+
+The six recorded losses total **-0.273187610158 USDT** before any unproven fee/partial-exit reconciliation.
+
+**PROJECT EVIDENCE:** None exited at its fixed stop-loss or take-profit price. Trades 182, 172, 162, 158, and 137 exited above their stop and below their target, consistent with thesis/confirmed-sell exits rather than fixed-stop execution. Trade 143 reached 95.35% of target progress, then an accepted price of 4.027 crossed its configured hard profit floor of 4.0350165.
+
+**PROJECT EVIDENCE:** All 1,566 persisted in-holding price events returned by DBQ-CODEX-I6-003 are `APPLIED` with `PROTECTION_CALLBACK_COMPLETED`; there are no persisted `PENDING`, rejected, or unresolved rows in that bounded evidence set. This proves committed protection callbacks for the recorded observations, not complete Binance tick coverage.
+
+**AGENT INFERENCE — route attribution:** Five exits are strongly consistent with live-price protection: their last accepted price equals the recorded exit price and precedes paper closure by 1.208–3.089 seconds. Trade 162 differs: its last price event was 0.08673, while the exit price was 0.08675 and the `STRONG_SELL` audit signal was generated afterward. It is therefore most consistent with the signal-processing close route.
+
+**PROJECT EVIDENCE — C1 self-challenge:** C1 remains a real current-source temporal-causality defect: `onPrice(... observedAt ...)` validates the observation but calls an overload that retrieves newest 1m/5m/1h signals without an as-of `generated_at <= observedAt` constraint. However, the available terminal ordering does not attribute C1 to these losses: for the five likely live-price exits, the audit source signal precedes the terminal accepted observation. Trade 162 appears signal-driven, not a delayed-price-event decision. A complete negative test still needs the requested event-to-signal timing query.
+
+**PROJECT EVIDENCE — C2 self-challenge:** C2 is materially relevant to trade 162: current `PaperTradingService.completeClose` saves the paper close before attempting and catching the signal-linked wallet exit. The audit’s `wallet_position_id` proves an entry-managed position existed; it does not prove a wallet SELL committed. For the five likely mechanical exits, current source only closes paper after `executeMechanicalExit(...)` returns success, but historical source/version parity and wallet-ledger rows remain unproven.
+
+**PROJECT EVIDENCE:** The stored entry reasons show each entry was intentionally reduced in size (15% for 182/162; 25% for 172/158/143/137). That is contemporaneous decision evidence, but not an independent proof of historical configuration, data quality, wallet BUY, or entry-price freshness.
+
+**EXTERNAL RESEARCH:** None used.
+
+## EVIDENCE
+
+- [DBQ-CODEX-I6-001 result](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/fts-WINDOW2-20261026-205622/db/CODEX/DBQ-CODEX-I6-001-CODEX-result.txt): schema and relationships.
+- [DBQ-CODEX-I6-002 result](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/fts-WINDOW2-20261026-205622/db/CODEX/DBQ-CODEX-I6-002-CODEX-result.txt): authoritative positions and immutable exit audits.
+- [DBQ-CODEX-I6-003 result](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/fts-WINDOW2-20261026-205622/db/CODEX/DBQ-CODEX-I6-003-CODEX-result.txt): 1,566 persisted in-holding price receipts.
+- [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:54): observed-time loss and unconstrained latest-signal lookup.
+- [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487): paper-close-before-wallet-exit sequence.
+- [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:20): implemented confirmed-SELL and higher-timeframe exit rules.
+
+## UNKNOWNS
+
+- Wallet BUY/SELL records, fees, quantity reconciliation, and whether trade 162 has a committed sell.
+- Exact historical runtime version/configuration; current source is not proof it was the exact deployed code on 2026-10-11/12.
+- Complete C1 absence/presence across every accepted price event.
+- Independent entry validation: source signals, data-quality flag, work claim, freshness, and execution-price evidence.
+- Replay comparability; no Replay was run.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Reconcile each frozen paper position to exact entry/exit signals and wallet executions; specifically prove or disprove C2 for signal-driven trade 162 and mechanical-exit ledger evidence for the other five.
+
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.opened_at AS paper_opened_at_utc,
+    p.closed_at AS paper_closed_at_utc,
+    p.entry_price,
+    p.exit_price,
+    p.realized_pnl,
+    p.close_reason,
+    a.wallet_position_id,
+    a.close_trigger,
+    a.source_signal_id AS audit_source_signal_id,
+    entry_signal.id AS entry_signal_id,
+    entry_signal.interval_code AS entry_interval,
+    entry_signal.decision AS entry_decision,
+    entry_signal.generated_at AS entry_signal_generated_at_utc,
+    exit_signal.id AS audit_signal_id,
+    exit_signal.interval_code AS audit_interval,
+    exit_signal.decision AS audit_decision,
+    exit_signal.latest_price AS audit_signal_latest_price,
+    exit_signal.generated_at AS audit_signal_generated_at_utc,
+    wt.id AS wallet_trade_id,
+    wt.execution_key,
+    wt.signal_id AS wallet_signal_id,
+    wt.side AS wallet_side,
+    wt.status AS wallet_status,
+    wt.quantity AS wallet_quantity,
+    wt.price_usdt AS wallet_price,
+    wt.decision_price_usdt,
+    wt.execution_price_observed_at,
+    wt.cost_basis_usdt,
+    wt.realized_pnl_usdt,
+    wt.fee_usdt,
+    wt.execution_reason,
+    wt.executed_at AS wallet_executed_at_utc,
+    wt.execution_message
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.production_exit_audit a
+  ON a.paper_position_id = p.id
+LEFT JOIN crypto_ai.trade_signal entry_signal
+  ON entry_signal.id = p.signal_id
+LEFT JOIN crypto_ai.trade_signal exit_signal
+  ON exit_signal.id = a.source_signal_id
+LEFT JOIN crypto_ai.wallet_trade wt
+  ON wt.signal_id IN (p.signal_id, a.source_signal_id)
+  OR wt.execution_key LIKE CONCAT('POSITION:', a.wallet_position_id, ':%')
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, wt.executed_at, wt.id;
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-002  
+Purpose: Test C1 directly by locating any accepted direct-price receipt whose processing record was created after its observation but after a same-symbol 1m/5m/1h signal had become available. Returned rows are candidates only, not proof of the signal selected.
+
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    mpe.id AS market_price_event_id,
+    mpe.observed_at AS observed_at_utc,
+    mpe.created_at AS receipt_created_at_utc,
+    mpe.price AS observed_price,
+    s.id AS later_signal_id,
+    s.interval_code,
+    s.decision,
+    s.generated_at AS later_signal_generated_at_utc
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.market_price_event mpe
+  ON mpe.symbol = p.symbol
+ AND mpe.observed_at >= p.opened_at
+ AND mpe.observed_at <= p.closed_at
+ AND mpe.source = 'BINANCE_KLINE_DIRECT_FIX153'
+ AND mpe.delivery_status = 'APPLIED'
+JOIN crypto_ai.trade_signal s
+  ON s.symbol = p.symbol
+ AND s.interval_code IN ('1m', '5m', '1h')
+ AND s.generated_at > mpe.observed_at
+ AND s.generated_at <= mpe.created_at
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, mpe.observed_at, mpe.id, s.generated_at, s.id
+LIMIT 5000;
+```
+
+### END_DB_REQUEST

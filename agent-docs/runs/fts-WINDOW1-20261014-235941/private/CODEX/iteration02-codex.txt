@@ -1,0 +1,59 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen Window1 cohort is exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. I did not substitute or expand it.
+- **PROJECT EVIDENCE:** The supplied snapshot clocks conflict by three seconds: `2026-10-14 20:59:44 UTC` converts to **23:59:44 KSA**, while the supplied KSA snapshot is **23:59:41**. The intended 10:00 KSA window is also not reconstructible from the snapshot.
+- **AGENT INFERENCE:** No trade-specific conclusion is presently justified. The designated Codex database-evidence folder is empty and the named Iteration 1 Codex files are absent at the specified run-root paths.
+- **PROJECT EVIDENCE:** The project’s own investigation procedure requires durable position, execution, signal, price-event, candle, and work-state evidence before classifying a loss as strategy behavior, data-quality failure, protection failure, delay, or defect.
+
+## EVIDENCE
+
+- Loaded required shared context, database investigation rules, Window1 charter, and Codex project documents.
+- Did not read any prohibited peer/private/dashboard/event artifacts.
+- **EXTERNAL RESEARCH:** None.
+- No database query was executed; credentials were neither requested nor exposed.
+
+## UNKNOWNS
+
+For every frozen ID: symbol, entry/exit timestamps, entry/exit price, quantity, exit reason, linked signal/work records, protection-event path, realized-P&L reconciliation, contemporaneous candle quality, and whether the behavior followed the rules.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Schema-first discovery of the authoritative position table and likely bounded forensic relations before selecting columns or joins.  
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    c.extra
+FROM information_schema.columns AS c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-002  
+Purpose: Retrieve the authoritative lifecycle records for only the six frozen paper positions, without assuming unverified non-key columns.  
+SQL:
+```sql
+SELECT pp.*
+FROM crypto_ai.paper_position AS pp
+WHERE pp.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(pp.id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST

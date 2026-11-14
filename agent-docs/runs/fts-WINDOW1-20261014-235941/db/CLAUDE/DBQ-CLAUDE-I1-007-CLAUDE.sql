@@ -1,0 +1,1 @@
+SELECT status, COUNT(*) AS n, SUM(realized_pnl < 0) AS neg, MAX(closed_at) AS newest_close FROM paper_position WHERE closed_at > '2026-10-12 10:05:20.486035' GROUP BY status

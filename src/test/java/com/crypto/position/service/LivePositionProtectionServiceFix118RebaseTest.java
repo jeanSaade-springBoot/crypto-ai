@@ -1,7 +1,6 @@
 package com.crypto.position.service;
 
 import com.crypto.audit.service.ProductionExitAuditService;
-import com.crypto.domain.PositionStatus;
 import com.crypto.position.repository.PositionManagementEventRepository;
 import com.crypto.repository.PaperPositionRepository;
 import com.crypto.repository.TradeSignalRepository;

@@ -117,6 +117,10 @@ public class AnalysisService {
     @Transactional
     public TradeSignal analyzeRecoveredForProcessing(TechnicalIndicator indicator, Instant at) {
         TradeSignal signal = analyzeRecovered(indicator, at);
+        // This legacy LIVE-mode recovery route is execution-capable; it must not
+        // retain the historical-only marker used by non-executing catch-up rows.
+        signal.setSignalMode("RECOVERY_EXECUTABLE");
+        signal = signalRepository.save(signal);
         processingStore.register(signal, com.crypto.execution.processing.ProcessingOrigin.RECOVERY);
         return signal;
     }
@@ -144,6 +148,8 @@ public class AnalysisService {
     public TradeSignal analyze(TechnicalIndicator indicator) {
         IndicatorSnapshot snapshot = toSnapshot(indicator);
         TradeSignal signal = buildSignal(snapshot, Instant.now(), false, false);
+        // FIX-153: physical createdAt and persisted mode distinguish live latency from as-of history.
+        signal.setSignalMode("LIVE");
         return signalRepository.save(signal);
     }
 
@@ -165,6 +171,7 @@ public class AnalysisService {
         IndicatorSnapshot snapshot = toSnapshot(indicator);
         Instant asOf = evaluationTime == null ? snapshot.candleOpenTime() : evaluationTime;
         TradeSignal signal = buildSignal(snapshot, asOf, true, false);
+        signal.setSignalMode("HISTORICAL_ONLY");
         return signalRepository.save(signal);
     }
 
@@ -413,6 +420,8 @@ public class AnalysisService {
                 .btcRelationshipType(btcContext.relationshipType())
                 .btcContextStatus(btcContext.contextStatus())
                 .btcContextEntryAllowed(btcContext.entryAllowed())
+                // FIX-154: persist the generating context, not a later lookup.
+                .dataQualityValid(marketContext.dataValid())
                 .btcContextInterval(btcContext.btcInterval())
                 .btcContextDecision(btcContext.btcDecision())
                 .btcContextTrendScore(btcContext.btcTrendScore())

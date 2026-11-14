@@ -1,0 +1,80 @@
+## FINDINGS
+
+- **[PROJECT EVIDENCE]** `db/CODEX/` remains empty. No trade-specific database evidence is available for frozen IDs `104, 101, 96, 91, 82, 78`; no root cause, P&L reconciliation, or execution verdict is supportable.
+
+- **[PROJECT EVIDENCE]** The prior EDUUSDT “trade 104” attribution must be downgraded. Current signal-path logging labels `profitLock.walletPositionId()` as `positionId`; that is a wallet-managed-position ID, not proof of `paper_position.id=104`. The observed 14:45–14:46 UTC EDUUSDT sequence is an unlinked candidate until database records join it to the frozen paper position.
+
+- **[PROJECT EVIDENCE]** A source-level exit-route divergence exists, but is not yet a defect in any frozen trade:
+  - Live protection gives stop loss priority, then applies `PositionExitPolicy` to a profit-lock breach.
+  - Signal processing checks take-profit, then directly closes on an authoritative triggered profit lock before evaluating stop loss; it does not call `PositionExitPolicy`.
+  
+  This can explain different decisions from similar market state, but historical runtime version, managed-position link, and persisted close reason are unknown.
+
+- **[PROJECT EVIDENCE]** A `paper_position` close and a `production_exit_audit` row do not prove a matching wallet exit. `PaperTradingService` saves the paper close, catches wallet-exit failures, then records audit evidence. Each selected “failed trade” is therefore only a negative paper-position result until wallet fills, quantities, fees, and partial realizations reconcile.
+
+- **[PROJECT EVIDENCE]** The prior ~39.3-second EDUUSDT interval is not evidence of a latency failure. It is only a time difference between two unlinked log events; the recorded 207 ms lock wait cannot be compared to it causally without identity linkage.
+
+- **[PROJECT EVIDENCE]** Project records conflict on FIX-154 state: `AGENTS.md` describes it as pending, while `CHANGELOG_AI.md` records an implementation on 2026-10-10. Current source/configuration cannot establish which version or rule set was active for historical entries or exits.
+
+- **[AGENT INFERENCE]** The strongest present conclusion for all six frozen IDs is **insufficient durable evidence**, not strategy loss, protection failure, accounting defect, or valid execution.
+
+- **[AGENT INFERENCE]** The supplied snapshot metadata has a two-second conversion discrepancy: `2026-10-11 15:00:04 UTC` converts to `2026-10-11 18:00:04 KSA`, not `18:00:02 KSA`. Frozen IDs remain unchanged; no reselection is warranted.
+
+- **[EXTERNAL RESEARCH]** None used. The prior generic intrabar/OHLC citation is not relied upon; project evidence already forbids substituting candle OHLC for accepted price-event ordering.
+
+## EVIDENCE
+
+- [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:173) performs mechanical wallet exit before paper close and delegates breached profit locks to the policy.
+- [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:175) logs wallet-managed `positionId` and directly invokes the signal profit-lock close path.
+- [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:457) persists paper closure before catching wallet-exit failure.
+- [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:12) defines diagnostic audit evidence, not financial-effect proof.
+- [TRADE_INVESTIGATION_AGENT.md](/C:/workspace/crypto-ai-trader-mysql/codex-docs/TRADE_INVESTIGATION_AGENT.md:23) requires identity linkage, historical mode/version, accepted price evidence, and financial reconciliation.
+
+## UNKNOWNS
+
+- Exact symbol, entry/exit signals, timestamps, reason, quantity, P&L components, fees, and partial exits for every frozen ID.
+- Whether the EDUUSDT logs belong to paper position `104`.
+- Whether any frozen position had a matching executed wallet exit.
+- Historical mode, deployed revision, configuration, and FIX-154 applicability.
+- Accepted/rejected price-event chain and first actual exit trigger per trade.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Establish the actual schema, timestamp-rendering context, and authoritative lifecycle records before attempting any linkage. This is required to resolve whether the EDUUSDT candidate belongs to frozen paper position `104` and to construct non-ambiguous wallet/audit queries.
+
+SQL:
+```sql
+SELECT
+    @@session.time_zone AS session_time_zone,
+    @@global.time_zone AS global_time_zone,
+    @@system_time_zone AS system_time_zone;
+
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'production_exit_audit',
+      'wallet_managed_position',
+      'wallet_trade',
+      'trade_signal',
+      'market_price_event',
+      'position_management_event',
+      'signal_processing_work'
+  )
+ORDER BY table_name, ordinal_position;
+
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (104, 101, 96, 91, 82, 78)
+ORDER BY FIELD(id, 104, 101, 96, 91, 82, 78);
+```
+### END_DB_REQUEST
+
+Documentation check: no update is applicable; this was analysis-only and project writes are prohibited.

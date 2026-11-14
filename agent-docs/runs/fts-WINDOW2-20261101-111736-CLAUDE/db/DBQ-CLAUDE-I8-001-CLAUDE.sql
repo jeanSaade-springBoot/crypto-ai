@@ -1,0 +1,1 @@
+SELECT COUNT(*) AS n_rows, COUNT(DISTINCT t.test_run_id) AS n_runs, MIN(t.generated_at) AS first_gen, MAX(t.generated_at) AS last_gen FROM trade_signal_test t WHERE t.generated_at BETWEEN '2026-10-11 17:00:00' AND '2026-10-12 12:00:00' LIMIT 1

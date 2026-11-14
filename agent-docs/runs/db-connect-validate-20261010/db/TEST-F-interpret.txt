@@ -1,0 +1,5 @@
+- Authenticated database: not available.
+- Authenticated DB user: not available.
+- `trade_signal` row count: not available (`row_count=n/a`).
+
+The wrapper failed before connecting; the supplied host argument was malformed.

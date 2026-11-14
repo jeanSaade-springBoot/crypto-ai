@@ -1,0 +1,76 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No permitted result files exist in `db/CODEX/`. Therefore none of frozen positions `182, 172, 162, 158, 143, 137` can yet be classified individually as a valid strategy loss, an execution defect, a protection failure, or an accounting discrepancy.
+
+- **PROJECT EVIDENCE — correction to prior hypothesis:** `completeClose(...)` saves `paper_position` before invoking the signal-linked wallet exit. The wallet method can return normally without a SELL when an execution key already exists, no open managed position exists, or quantity is non-positive. This remains a real reconciliation risk for a signal-path close. However, prior wording that a caught wallet exception necessarily leaves a durable closed paper row was too strong: the business body runs inside `SignalProcessingCoordinator`’s `REQUIRES_NEW` transaction, and a propagated transactional exception may mark that transaction rollback-only. Durable rows—not source order alone—must decide this for each trade.
+
+- **PROJECT EVIDENCE:** The same distinction applies to profit-lock closes: `PaperTradingService.closeFromProfitLock(...)` saves the paper close before calling `executeProfitLock(...)` and does not inspect its boolean result. A normal `false` return could leave a paper-only close; an exception requires transaction-outcome evidence.
+
+- **PROJECT EVIDENCE:** `production_exit_audit.close_trigger` is useful route evidence, but it is not financial-settlement proof. Its current write occurs after the wallet call and relies on current code/schema being applicable to the historical trade. Missing audit data cannot by itself prove no exit occurred.
+
+- **PROJECT EVIDENCE:** `market_price_event` status `APPLIED` means the protection callback completed; it does not prove a paper or wallet position existed or closed. It cannot replace managed-position and wallet-trade reconciliation.
+
+- **AGENT INFERENCE:** The selection predicate and six IDs are frozen study scope, not independently proven snapshot facts. A present-day query can test whether they match the predicate now, but cannot prove they were the newest six at the intended snapshot because the exact window clock was not preserved.
+
+- **AGENT INFERENCE:** The supplied snapshot clocks remain internally inconsistent: `2026-10-30 12:24:16 UTC` would be `2026-10-30 15:24:16 KSA`, not the declared `2026-10-29 20:47:57 KSA`. This does not change the mandatory IDs.
+
+## EVIDENCE
+
+- `PaperTradingService.completeClose(...)`: paper close precedes `executeSignalLinkedExit(...)`.
+- `WalletAutoExecutionService.executeSignalLinkedExit(...)`: several normal early-return paths precede wallet SELL creation.
+- `SignalProcessingCoordinator`: business processing executes in a `REQUIRES_NEW` transaction.
+- `ProductionExitAuditService.record(...)`: audit is diagnostic, post-close evidence.
+- `LivePositionProtectionService.onPrice(...)`: `APPLIED` can follow a no-op protection callback.
+
+**EXTERNAL RESEARCH:** None added in this iteration.
+
+## UNKNOWNS
+
+- Every frozen trade’s symbol, entry and close timestamps, entry/exit signal linkage, close trigger, route, price evidence, and P&L reconciliation.
+- Whether each paper close has matching managed-position closure and executed BUY/SELL wallet records.
+- Whether any historical transaction committed after an ignored normal return versus rolled back after an exception.
+- The deployed revision/configuration active at each trade.
+- Replay comparability.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Verify the actual schema and current frozen-row/selection evidence before any route, wallet, or protection joins. This can test the predicate now, but cannot reconstruct the unpreserved snapshot state.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'production_exit_audit',
+      'wallet_managed_position',
+      'wallet_trade',
+      'market_price_event',
+      'trade_signal',
+      'position_analysis',
+      'signal_processing_work'
+  )
+ORDER BY table_name, ordinal_position;
+
+SELECT id, status, closed_at, realized_pnl
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+
+SELECT id, status, closed_at, realized_pnl
+FROM crypto_ai.paper_position
+WHERE status = 'CLOSED'
+  AND closed_at IS NOT NULL
+  AND realized_pnl < 0
+ORDER BY closed_at DESC
+LIMIT 6;
+```
+### END_DB_REQUEST

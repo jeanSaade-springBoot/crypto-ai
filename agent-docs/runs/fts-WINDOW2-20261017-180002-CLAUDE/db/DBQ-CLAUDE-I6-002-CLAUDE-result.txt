@@ -1,0 +1,5 @@
+sell_run	n	losers	stopped	pnl_gross
+a_ge10	5	4	2	-0.7341
+b_5-9	18	6	2	0.2096
+c_1-4	21	9	4	-0.3477
+d_0	149	82	67	-3.2985

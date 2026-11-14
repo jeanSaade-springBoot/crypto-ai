@@ -1,0 +1,2 @@
+id	symbol	side	quantity	price_usdt	decision_price_usdt	execution_price_observed_at	execution_reason	execution_key	signal_id	executed_at
+407	DOGEUSDT	SELL	172.314761631246	0.086750000000	NULL	NULL	SIGNAL_SELL	168277:SELL	168277	2026-10-12 04:26:04.134283

@@ -1,0 +1,1 @@
+SELECT * FROM wallet_managed_position WHERE symbol IN ('UNIUSDT','AEROUSDT') AND opened_at BETWEEN '2026-10-10 17:43:00' AND '2026-10-10 17:52:00' ORDER BY opened_at LIMIT 5

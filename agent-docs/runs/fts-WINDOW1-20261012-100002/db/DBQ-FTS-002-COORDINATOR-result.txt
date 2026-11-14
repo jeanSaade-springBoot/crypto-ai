@@ -1,0 +1,4 @@
+status	n	with_close	neg_pnl
+CLOSED	110	110	25
+STOPPED	70	70	70
+OPEN	2	0	NULL

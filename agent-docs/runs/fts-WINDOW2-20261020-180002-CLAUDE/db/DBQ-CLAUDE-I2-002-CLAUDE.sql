@@ -1,0 +1,2 @@
+DESCRIBE crypto_ai.position_management_event;
+SELECT * FROM crypto_ai.position_management_event WHERE wallet_position_id IN (166,172,187,191,201,211) ORDER BY wallet_position_id, occurred_at LIMIT 150;

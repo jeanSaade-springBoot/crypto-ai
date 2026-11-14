@@ -1,0 +1,4 @@
+1. Source title: RFC 3339 — *Date and Time on the Internet: Timestamps*  
+2. URL: https://www.rfc-editor.org/rfc/rfc3339.html  
+3. Publication date: July 2002  
+4. **EXTERNAL RESEARCH:** RFC 3339 defines an Internet timestamp format as a profile of ISO 8601, including UTC offsets and the familiar `YYYY-MM-DDTHH:MM:SSZ` form.

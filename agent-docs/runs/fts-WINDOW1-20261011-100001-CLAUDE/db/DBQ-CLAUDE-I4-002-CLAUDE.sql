@@ -1,0 +1,1 @@
+DESCRIBE candle_analysis_outcome

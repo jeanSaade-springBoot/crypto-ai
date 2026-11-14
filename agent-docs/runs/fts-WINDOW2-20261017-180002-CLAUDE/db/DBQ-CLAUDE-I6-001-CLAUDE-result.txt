@@ -1,0 +1,11 @@
+status	stop_kind	atr_bucket	n	losers	pnl_gross	pnl_after_fee	avg_move_pct
+CLOSED	atr	c_0.25-0.50	21	5	4.8545	2.9997	0.611
+CLOSED	atr	d_ge0.50	2	0	0.6020	0.4214	0.630
+CLOSED	floored	a_lt0.10	35	9	0.4455	-1.1749	0.048
+CLOSED	floored	b_0.10-0.25	57	12	5.2027	2.1875	0.295
+CLOSED	floored	c_0.25-0.50	3	0	0.6000	0.2895	0.409
+STOPPED	atr	c_0.25-0.50	30	30	-7.9631	-10.4971	-0.661
+STOPPED	atr	d_ge0.50	3	3	-1.4189	-1.6475	-1.286
+STOPPED	floored	a_lt0.10	3	3	-0.2843	-0.3940	-0.516
+STOPPED	floored	b_0.10-0.25	35	35	-5.4051	-7.5877	-0.511
+STOPPED	floored	c_0.25-0.50	4	4	-0.8042	-1.1534	-0.474

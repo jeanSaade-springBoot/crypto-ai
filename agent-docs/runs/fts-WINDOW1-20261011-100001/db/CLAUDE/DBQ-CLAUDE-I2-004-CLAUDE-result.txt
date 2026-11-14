@@ -1,0 +1,2 @@
+id	wallet_position_id	symbol	event_type	old_value_usdt	new_value_usdt	market_price_usdt	reason	occurred_at
+31	130	AEROUSDT	TAKE_PROFIT_EXTENDED	0.958630559740	0.963551424473	0.958800000000	Continuation PASS (HTF_TREND): current=WATCH, 5m=WATCH, 1h=BUY, trend=21/18, momentum=9/7, volume=16/soft 10, thesisPressure=0/8 trend, 0/5 momentum. Volume is advisory during a healthy winner; cooling volume alone does not end the trend.	2026-10-11 02:19:19.678295

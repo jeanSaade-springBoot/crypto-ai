@@ -1,0 +1,241 @@
+# Daily failed-trade study, WINDOW1: Claude track, Iteration 4 (code and trade route, self-review)
+
+**Bottom line:** I traced each of the six losing trades through the entry-route code, and all six took routes the code allows. The losses come from rule-design gaps, not malfunctions:
+- **No minimum reward/risk on the routes these six trades used.** A reward/risk below 1 only lowers the Entry Quality score.
+- **Different routes apply different rules for the same weak setup.**
+- **Replay and Production pick a different 5-minute signal in the same situation.**
+
+I made no changes to code, configuration, the database, git or deployments. No `Write` or `ExitPlanMode` tool was available, so there is no plan file and this message is the whole Iteration 4 output.
+
+**Inputs:**
+- My results DBQ-CLAUDE-I3-001 to 006.
+- Code:
+  - `ExecutionIntelligenceService`: lines 390-457, 460-786, 940-1030, 1171-1290, 1472-1514, 1964-2144.
+  - `TradeExecutionValidationService`: lines 62-163, 218-321, 367-386.
+  - `BuyHtfAssessmentAuditStore`.
+  - `RegressionTestWorker`: lines 550-620 and 787-793.
+  - `ExecutionReplayScope`: lines 99-120.
+- As required, I did not read `private/CODEX/`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md`, or the other agent's memory files.
+
+---
+
+## FINDINGS
+
+**F-23 is now confirmed: the result files show KSA, not UTC.** [PROJECT EVIDENCE, I3-001]
+- The study's MySQL session time zone is `SYSTEM`, which is Arab Standard Time (UTC+3).
+- Wallet trade 358 shows `22:40:01.028`, but its stored epoch is `1791747601.028`, which is 2026-10-11 19:40:01.028 UTC.
+- So every DB time shown in this study's result files is KSA; subtract 3 h for UTC. From here on, every time I give is converted and labelled.
+- **Remaining issue for the tooling:** `DATABASE_INVESTIGATION_RULES.md:35` is correct about how values are stored, but it does not make the study client set `time_zone='+00:00'`. That should be fixed in the tooling, not the application.
+
+### Route map of the six frozen trades
+
+| Trade | Route | Rule that allowed it (code) | Entry Quality | Reward/risk |
+|---|---|---|---|---|
+| 137 | `IMMEDIATE_VALIDATION` | FIX-11G: 5m NEUTRAL + 1h WATCH, 25% (`TradeExecutionValidationService:263-284`) | 58 | 0.64 |
+| 143 | `SETUP_TIMEFRAME_ATR` | 5-minute BUY owns the ATR risk (`ExecutionIntelligenceService:1472-1514`) | 60 | n/a |
+| 158 | `SETUP_CONFIRMATION_WAKEUP` | `evaluateConfirmedSetupWakeupInternal` (lines 397-457) | n/a | 0.33 |
+| 162 | `ACCUMULATED_EVIDENCE` | `accumulatedDecision` → BALANCED_EARLY (lines 1964-2067) | 50 (LATE_ENTRY) | n/a |
+| 172 | `IMMEDIATE_VALIDATION` | BALANCED_STRONG (`TradeExecutionValidationService:306-308`) | 60 | n/a |
+| 182 | `IMMEDIATE_VALIDATION` | FIX-11G: 5m NEUTRAL + 1h WATCH, 25% | 50 (LATE_ENTRY) | 0.48 |
+
+Source for the route columns: opportunity rows 35535, 36524, 37621, 37952, 39062 and 40290 (I2-003).
+
+---
+
+**F-31: These entry routes have no minimum reward/risk.** [PROJECT EVIDENCE] Severity: high, design gap. It explains part of trades 137, 158 and 182.
+- The only place `IMMEDIATE_VALIDATION`, `SETUP_TIMEFRAME_ATR`, `SETUP_CONFIRMATION_WAKEUP` and `ACCUMULATED_EVIDENCE` use reward/risk is the Entry Quality score (`ExecutionIntelligenceService:991-993`). There, a value below 1 subtracts 30 points.
+- Only the breakout-retracement and reversal-retracement routes enforce a real minimum (lines 1539 and 1631).
+- The ACE (182) arithmetic works as follows:
+  - Taking 30 points off 100 still leaves 70.
+  - The penalty for a recent rejected high cannot push the score below the cut-off of 50 (lines 995-1002).
+  - So a trade whose target is half the size of its stop can still reach the minimum score of 50 needed for FIX-11G.
+- [AGENT INFERENCE] The two trades that scored exactly 50 (162 and 182) fit that floor, but the code does not record the score's components. See DBQ-CLAUDE-I4-003 and the log request.
+- Trade 158 entered with reward/risk 0.33. The wake-up route checks the 1-minute signal's freshness, entry permission and ATR permission (lines 422-427). It never checks reward/risk.
+
+**F-32: Trade 162. The earlier BUY was probably blocked as too late, and that same BUY then unlocked a weaker entry one minute later.** [PROJECT EVIDENCE for the code paths; the reason 167646 was blocked is AGENT INFERENCE] Severity: high, the routes contradict each other.
+- **Inputs at 01:01 UTC (04:01 KSA):**
+  - 1-minute signal 167646 was BUY 76, `STANDARD_ENTRY`, with final entry and ATR entry both allowed.
+  - The 5-minute and 1-hour signals were both WATCH.
+- **Why it did not execute:**
+  - The direct route `validateBuy` → `balancedBuy` returns `BALANCED_EARLY` when both timeframes are WATCH (lines 314-316).
+  - FIX-041 (`ExecutionIntelligenceService:672-684`) then holds back any BALANCED_EARLY entry graded `LATE_ENTRY`.
+  - That is the most likely reason 167646 did not execute.
+- **What happened next, at 01:02 UTC (04:02 KSA):**
+  - Signal 167668, a WATCH, entered through `ACCUMULATED_EVIDENCE`.
+  - It had the **same BALANCED_EARLY permission and the same LATE_ENTRY 50 grade** that FIX-041 blocks on the direct route.
+- **Why the late-entry check did not stop it:**
+  - FIX-119 (`applyAccumulatedLateEntryTimingGuard`, lines 1271-1279) normally defers a late accumulated entry.
+  - It is bypassed when the opportunity's evidence includes at least one BUY.
+  - The opportunity counted "1 BUY, 9 WATCH" (row 37952), and that one BUY is almost certainly 167646.
+- **Net effect:** the direct route refused a late, early-profile entry, and the opportunity-memory route then entered the same setup, one minute later, at a higher price (0.08705 vs 0.08693).
+- **What proves it:** for 167646, a `buy_htf_assessment_audit` row with path `DIRECT_BUY` and final result `BALANCED_EARLY` would show that the profile check passed. The blocking step afterwards is only stored in an opportunity row that was later overwritten. See DBQ-CLAUDE-I4-001.
+
+**F-33: Trades 182 and 137 both entered through the FIX-11G 25% rule, and that rule ignores reward/risk.** [PROJECT EVIDENCE]
+- The FIX-11G rule (lines 263-284) requires:
+  - final entry allowed on the 1-minute signal;
+  - Entry Quality of at least 50;
+  - no BTC conflict, strong conflict or stale BTC context.
+- The code comment says deliberately "Do NOT add a second confidence threshold."
+- In 182 the earlier BUY 176692 (06:56 UTC / 09:56 KSA) was not executed, but 176710 a minute later was. The 5-minute and 1-hour inputs were the same for both, since no new 5-minute signal had closed.
+- The likeliest cause is that 176692's Entry Quality was below 50, so FIX-11G was "not granted" for it. The code logs that decision at INFO level (lines 289-295).
+- Two of the six losses came through this one rule. Whether that is unusual across all trades is unknown; see DBQ-CLAUDE-I4-002.
+
+**F-34: Replay sees the same-candle 5-minute signal, Production usually does not. This is a structural Replay/Production gap.** [PROJECT EVIDENCE] This settles U-14 at the code level.
+- **Replay:**
+  - Every Replay signal's `generatedAt` is set to the candle close (`RegressionTestWorker:584, 616`).
+  - The Replay timeline is ordered by close time, then 1h → 5m → 1m (lines 557-560 and 787-793).
+  - So the 5-minute signal for a boundary is added before the 1-minute signal, with an **equal** timestamp. The `!isAfter(ref)` check (`ExecutionReplayScope:112`) therefore includes it.
+- **Production:** generation uses the wall clock, and in 28 of 32 cases the 5-minute signal was generated *after* the 1-minute one (I2-008), so it is excluded.
+- **Consequence:** where both candles close at the same moment, Replay decides against the current 5-minute bar and Production against the previous one (up to 5 minutes older). The "fresh" limit is 20 minutes (`FIVE_MINUTE_MAX_AGE`, lines 66 and 42).
+- **Cases where the recorded 5-minute input differs from the same-candle 5-minute signal:** at least five, not counting the wake-up routes, whose trigger is the newer 5-minute signal by design (I3-006):
+
+  | Position | Route | 5-minute used | Same-candle 5-minute |
+  |---|---|---|---|
+  | 100 | — | STRONG_BUY | WATCH |
+  | 123 | — | BUY | WATCH |
+  | 143 | — | BUY | WATCH |
+  | 148 | SETUP_TIMEFRAME_ATR | WATCH | BUY |
+  | 175 | SETUP_TIMEFRAME_ATR | NEUTRAL | BUY |
+  | 179 | IMMEDIATE_VALIDATION | WATCH | BUY |
+
+  - In 143, Replay would see WATCH. `setupTimeframeAtrAuthoritySignal` requires a bullish 5-minute signal (line 1486), so the route would return nothing. Trade 143 would most likely not happen in Replay.
+  - The gap cuts both ways: positions 148, 175 and 179 missed a newer bullish 5-minute signal.
+- Still unverified by an actual Replay run.
+
+**F-35: Trade 143 never went through the FIX-154 higher-timeframe check or the profile check.** [PROJECT EVIDENCE]
+- `setupTimeframeAtrAuthorityDecision` checks only these things:
+  - the 5-minute signal is bullish, with final and ATR entry allowed;
+  - the 1-hour signal is not bearish.
+- It never calls `validateBuy` or `validateBuyContext`, so no `buy_htf_assessment_audit` row is expected for signal 159408.
+- In 143 the result would match anyway (5m BUY + 1h NEUTRAL = BALANCED_STRONG). But this route skips the configured profile and FIX-154 entirely.
+
+**F-26 is confirmed in code: trade 172 counted a rejected 5-minute signal as bullish.** [PROJECT EVIDENCE]
+- `balancedBuy(SignalDecision five, …)` receives only the decision label.
+- The `TradeSignal` that carries `finalEntryAllowed` and confidence is never passed in (lines 106-107 and 300-308).
+- So 5-minute signal 171559 (BUY, confidence 49, `final_entry_allowed=0`) gave the trade BALANCED_STRONG, 75%.
+- One open question: FIX-154's `effectiveFiveMinute` could change the label. Whether it did here will show in DBQ-CLAUDE-I4-001.
+
+**F-27 is confirmed in code: trade 158's route.**
+- The wake-up passes `validateBuyContext(fiveMinuteTrigger, "SETUP_WAKEUP")` (line 435) with the **trigger itself** as the reference. So `latestAtOrBefore` returns the trigger's own BUY, which gave BALANCED_STRONG.
+- The opportunity row's evidence is computed as of the 1-minute signal (line 438), which is why it still shows 5m=WATCH.
+- No defect beyond F-31.
+
+**F-36: AGENTS.md conflicts with the code and database about FIX-154.** [PROJECT EVIDENCE]
+- AGENTS.md describes FIX-154 as "not-yet-implemented".
+- But V107 was installed 2026-10-09 21:15 UTC (2026-10-10 00:15 KSA), and `validateBuy` and `validateBuyContext` call `htfAssessment.assess(...)` (lines 93 and 145).
+- They also write `buy_htf_assessment_audit` best-effort, on a separate thread (`BuyHtfAssessmentAuditStore:38-53`).
+- So FIX-154 was in effect for every direct BUY and every BUY-context check on these trades.
+- I am reporting this rather than accepting either version. Only the Production audit rows can prove what was deployed (DBQ-CLAUDE-I4-001).
+
+**F-25 addendum (U-12′), the 8-second gap in stored prices during the trade 143 crash.** [PROJECT EVIDENCE + AGENT INFERENCE]
+- I3-002 shows no rows of any delivery status between 19:43:27.038 and 19:43:35.021 UTC (22:43:27 → 22:43:35 KSA).
+- Ticks also stopped about every 2 seconds earlier in the minute (:19, :21, then :27).
+- No rejected or duplicate rows are stored, so the missing updates were never persisted, whether Binance did not send them or the ingestion did not keep them.
+- I can't tell which from the DB. Ingestion code or logs are needed (log request below).
+- The write delay outside minute boundaries stays under 60 ms (I3-003), so this was not a processing lag.
+
+**F-37 (refines F-29): write-delay spikes are rare, not tied to the minute boundary.** [PROJECT EVIDENCE, I3-003]
+- The worst write delays (stored time − Binance time) occurred at seconds 6, 22, 37 and 51, at 1.1–1.9 s.
+- The delay at second 0 peaked at 312 ms.
+- So U-19 is answered: there is no consistent delay at the minute boundary.
+- Separately, the local clock runs about 120 ms behind Binance on even seconds (average −120 ms).
+
+---
+
+## EVIDENCE: Updated classification after Iteration 4
+
+| Trade | Classification |
+|---|---|
+| 182 | Followed the rules (FIX-11G) with an Entry Quality of exactly 50 and reward/risk 0.48. **Design gap F-31 / F-33.** The better BUY 176692 was skipped, probably for low Entry Quality (unverified). |
+| 172 | Followed the rules, but **design gap F-26**: a 5-minute signal its own checks had rejected counted as bullish. |
+| 162 | **Routes contradict each other (F-32):** FIX-041 blocks a late BALANCED_EARLY entry on the direct route, while the accumulated route let the same setup through. FIX-119 was bypassed because of the blocked BUY 167646. |
+| 158 | Followed the designed wake-up route. **Design gap F-31** (reward/risk 0.33). |
+| 143 | Decided on a superseded 5-minute signal (F-24). Replay would most likely reject it (F-34). Bypassed FIX-154 (F-35). The exit was correct. |
+| 137 | Followed the rules (FIX-11G) with reward/risk 0.64. **Design gap F-31.** Mean-reversion entry against a bearish streak. |
+
+---
+
+## UNKNOWNS
+
+- **U-18′:** The actual reason 167646 and 176692 were not executed. Proof needs the audit rows (I4-001) plus FIX-11G and FIX-041 evidence in the logs.
+- **U-20:** The breakdown of the Entry Quality score for 162 and 182, and whether the rejected-high floor set the 50.
+- **U-21:** Whether the FIX-154 effective decision changed any 5-minute or 1-hour label for these trades, mainly 172.
+- **U-12″:** Whether the ingestion code drops or merges kline updates. I have not traced the code that writes `market_price_event`.
+- **U-14′:** Confirming F-34 needs an actual Replay run over EGLDUSDT 2026-10-11 19:30–19:45 UTC (22:30–22:45 KSA).
+- **Logs:** still unread, because they are gzip-compressed (F-30).
+
+## LOG REQUEST (for the coordinator; log times are UTC)
+
+`rg -z` over `logs/crypto-ai-trader.2026-10-1[12]*.log.gz`:
+- `FIX-11G .*signalId=(176692|176710|156723)`
+- `signalId=167646`
+- `BALANCED_EARLY_LATE_ENTRY_BLOCKED|CHASE_ENTRY_BLOCKED` for DOGEUSDT 01:00–01:03 UTC and ACEUSDT 06:55–06:58 UTC
+- `EGLDUSDT` 19:43:25–19:43:37 UTC (ingestion, reconnect, dropped or deduplicated messages)
+
+## DB_REQUESTS
+
+The statements below filter only by ID, so they don't depend on the session time zone. They are read-only. Times in the results will still show as KSA unless the session is set to `SET SESSION time_zone='+00:00'` first; that setting lasts only for the session and writes no data.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: FIX-154 audit evidence for the six entry signals and the two skipped BUYs (U-18′, U-21, F-32, F-33, F-35, F-36). Expect no row for 159408 (F-35).
+SQL:
+SELECT id, reference_signal_id, evaluation_path, evaluated_at, UNIX_TIMESTAMP(evaluated_at) AS eval_epoch, one_hour_signal_id, one_hour_raw_decision, one_hour_effective_decision, one_hour_age_seconds, one_hour_data_quality_valid, five_minute_signal_id, five_minute_raw_decision, five_minute_effective_decision, five_minute_age_seconds, five_minute_data_quality_valid, assessment_band, hard_confirmation_present, max_initial_percent, legacy_veto_result, final_result, LEFT(final_reason,400) AS reason, created_at
+FROM buy_htf_assessment_audit
+WHERE reference_signal_id IN (156723,159408,165412,165415,167646,167668,171589,176692,176710,176655)
+ORDER BY reference_signal_id, id
+LIMIT 100
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: Win/loss and P&L by entry route and decision code, for every position opened since 10-11 (are FIX-11G and the other routes over-represented among losers?)
+SQL:
+SELECT o.execution_source, o.decision_code, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losers, ROUND(SUM(p.realized_pnl),4) AS pnl_sum, ROUND(AVG(p.realized_pnl),4) AS pnl_avg
+FROM paper_position p
+JOIN execution_opportunity o ON o.symbol=p.symbol AND o.executed_at=p.opened_at
+WHERE p.status='CLOSED' AND p.closed_at IS NOT NULL AND UNIX_TIMESTAMP(p.opened_at) >= UNIX_TIMESTAMP('2026-10-11 00:00:00')
+GROUP BY o.execution_source, o.decision_code
+ORDER BY n DESC
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: Planned reward/risk at entry versus the result, for all positions since 10-11 (F-31). Also, for each I3-006 case where the 5-minute input differed from the same-candle 5-minute signal, whether it won or lost (F-34).
+SQL:
+SELECT p.id, p.symbol, o.execution_source, o.decision_code, s.decision, s.confidence_score,
+       ROUND((s.take_profit - s.latest_price)/NULLIF(s.latest_price - s.stop_loss,0),3) AS planned_rr,
+       p.realized_pnl, p.close_reason
+FROM paper_position p
+JOIN trade_signal s ON s.id=p.signal_id
+JOIN execution_opportunity o ON o.symbol=p.symbol AND o.executed_at=p.opened_at
+WHERE p.status='CLOSED' AND p.id >= 99
+ORDER BY p.id
+LIMIT 120
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: Every 1-minute and 5-minute signal around the two skipped BUYs (01:00–01:03 UTC DOGE, 06:54–06:58 UTC ACE), selected by ID range so the session time zone doesn't matter. This lets the Entry Quality inputs be rebuilt (U-20).
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, generated_at, decision, original_decision, total_score, confidence_score, latest_price, stop_loss, take_profit, atr_at_signal, atr_immediate_entry_allowed, final_entry_allowed, market_regime, btc_context_status, liquidity_status, entry_authority, entry_authority_max_position_percent
+FROM trade_signal
+WHERE (symbol='DOGEUSDT' AND id BETWEEN 167580 AND 167680)
+   OR (symbol='ACEUSDT' AND id BETWEEN 176600 AND 176720)
+ORDER BY symbol, generated_at
+LIMIT 80
+### END_DB_REQUEST
+
+---
+
+**Self-review of Iteration 4:**
+- **Confirmed:**
+  - F-23: the study client's session time zone (I3-001).
+  - F-31: no minimum reward/risk on these routes.
+  - F-34: the Replay/Production 5-minute selection gap, at code level.
+  - F-35: trade 143 skipped FIX-154 and the profile check.
+  - F-36: AGENTS.md says FIX-154 is not implemented, but the code and V107 show it was.
+  - F-26 and F-27 confirmed in code.
+- **Not yet proven:** F-32 (162's earlier BUY blocked by FIX-041) and F-33 (182's earlier BUY failing FIX-11G). The code paths are identified, but the actual reason for each needs I4-001 plus the logs.
+- **Correction to earlier iterations:** U-19 is closed; there is no consistent delay at the minute boundary.
+- **Planned for Iteration 5:** risk/reward and fees per trade, reading I4-002 and I4-003, and tracing the ingestion code for U-12″.

@@ -1,0 +1,204 @@
+# CLAUDE: FTS WINDOW2, Iteration 3 (log and timing forensics, self-review only)
+
+**Scope:** I kept the six frozen IDs (182, 172, 162, 158, 143, 137) and did not substitute any. I made no writes, and I did not read the Codex folders, LIVE_TEAM_STATUS.md or LIVE_EVENTS.log. The planning tools this session expects (Write, ExitPlanMode) are not available, so this output exists only here.
+
+**Inputs:** the results of my iteration 2 queries DBQ-CLAUDE-I2-001 to 009, plus the code at `LivePositionProtectionService.java`, `PositionExitPolicy.java`, `ExecutionIntelligenceService.java`, `BinanceKlineService.java`, `MarketPriceEventService.java` and `ShadowProductionReplayService.java`.
+
+**Log coverage:** production application logs are **not available** to me. `logs/crypto-ai-trader.log` starts at 2026-10-19 14:32:18, is a local development run (PID 77592), and contains nothing from 2026-10-11 or 2026-10-12. I did not use SSH because the session is unattended. Every timing finding below therefore comes from persisted database timestamps, not log lines.
+
+---
+
+## FINDINGS
+
+### F-I3-01: The frozen selection leaves out every stop-loss loss (high severity, a scope finding)
+[PROJECT EVIDENCE: `LivePositionProtectionService.java:174-183`, I2-009]
+
+- A live stop-loss closes the paper position with `PositionStatus.STOPPED` (line 178), not `CLOSED`.
+- The charter selects only `status=CLOSED`, so no stop-loss exit can ever be chosen.
+- I2-009 shows **75 STOPPED positions, all of them losers, totalling −15.876 USDT gross.** The six frozen trades total only −0.273 USDT.
+- **Effect:** the study covers small signal-driven and profit-lock losses and misses the largest loss class.
+- I kept the frozen IDs as instructed. This needs a coordinator decision for future windows. I3-005 checks the date range of the STOPPED rows.
+
+### F-I3-02: Trade 143 gapped straight through the lock; there was no protected hold
+[PROJECT EVIDENCE: I2-004, I2-002, I2-003, I2-001, code]
+
+This settles U-I2-1 and corrects the implication in F-I2-04.
+
+Timeline (UTC / KSA):
+
+| Event | UTC (2026-10-11) | KSA (2026-10-12) | Price |
+|---|---|---|---|
+| Entry (wallet trade 358) | 22:40:03.115 | 01:40:03 | 4.033 |
+| Profit lock activated | 22:40:23.057 | 01:40:23 | 4.056 |
+| TP extended | 22:40:41 and 22:41:13 | 01:40:41 and 01:41:13 | target 4.0647 → 4.0805 → 4.1043 |
+| Peak | 22:41:55.024 | 01:41:55 | 4.101 |
+| Last tick at or above the lock (4.0758) | 22:43:27.038 | 01:43:27 | 4.100 |
+| Next tick, already below floor 4.0350 and entry | 22:43:35.021 | 01:43:35 | 4.027 |
+| Sale | 22:43:35.046 | 01:43:35 | 4.027 |
+
+- The lock activated **20 s after entry**: 4.056 is at least 70% of the way to the original target (4.0552).
+- Ticks normally arrive about every 2 s. Here there was an **8.0 s gap** between the last tick above the lock and the first tick below the floor, so no price between 4.0758 and 4.035 was ever observed.
+- The sale followed that tick by **25 ms**, so the protection reacted correctly.
+- If a tick inside the band had been seen, `evaluateProfitLockBreach` (`PositionExitPolicy.java:88`) would have returned `PROFIT_LOCK_EXIT`, because 1h was NEUTRAL, not WATCH or bullish. That would have been a small profitable exit.
+- **Conclusion:** the loss came from a feed or observation gap combined with a flash wick (the 22:43 candle had low 3.994 and the largest volume in the window, 6382). It was not a hold-policy defect.
+- The exit text "4.027 reached the protected profit-lock level 4.0758" is still misleading.
+- Position 142 shows the same pattern 4 minutes earlier: ticks went from 4.040 at 22:39:35 to 3.996 at 22:39:41 (a 6 s gap) and crossed its lock at 4.0255 in one step.
+
+### F-I3-03: Trade 143's entry may have relied on a superseded 5m signal (defect candidate, strong)
+[PROJECT EVIDENCE + AGENT INFERENCE]
+
+- The 1m candle 22:39–22:40 closes on the same boundary as the 5m candle 22:35–22:40.
+- **Opportunity 36524** was recorded at **22:40:01.633945 UTC** (01:40:01 KSA) with `five_minute_decision=BUY` and route `SETUP_TIMEFRAME_ATR`. Its text calls this "the fresh 5m BUY".
+- **The 5m signal for the boundary that had just closed, 159407, was WATCH**, generated at **22:40:01.635944 UTC**, which is **2 ms later**.
+- So the BUY used was most likely 159285, from candle 22:30, generated 22:35:01. That candle had already been superseded.
+- **Why the code allows this:**
+  - `setupTimeframeAtrAuthoritySignal` calls `latestAtOrBefore(current, "5m", 20 min)` (`ExecutionIntelligenceService.java:1485`, `:2455-2462`).
+  - That lookup is keyed on the 1m signal's `generated_at` and accepts any 5m signal up to 20 minutes old.
+  - It does not check which candle the 5m signal belongs to, and it does not wait for the 5m analysis of the same boundary.
+- **Counterfactual (inference):** with 5m = WATCH, line 1486 returns null, so the `SETUP_TIMEFRAME_ATR` route closes.
+  - The 1m signal itself was `WAIT_FOR_RETRACEMENT`, recommended 0%, `atr_overextended=1` (I2-007).
+  - So 143 was probably not executable. Replay needs to confirm this.
+- **Not yet proven:** the `generated_at` of 1m signal 159408. I3-001 fetches it.
+- **Other entries checked:**
+  - 137, 158, 162, 172 and 182 used 5m signals that were current at the time.
+  - Only 143's entry candle closed on a 5m boundary.
+  - I3-002 measures how often this happens across all executed entries.
+
+### F-I3-04: Exit delays were real but cost nothing
+[PROJECT EVIDENCE: I2-001, I2-005, I2-006, code]
+
+- Every live exit is evaluated only inside `onPrice`, meaning on the next 1m price event for that symbol (`BinanceKlineService.java:108`, `LivePositionProtectionService.java:54-72`).
+- So the exit delay equals the wait for the next tick after the signal that made the exit possible.
+
+| ID | Signal that made the exit possible (UTC / KSA) | Sale (UTC / KSA) | Delay | Price cost of the delay |
+|---|---|---|---|---|
+| 158 | 5m SELL 166821, 03:30:01.464 / 06:30:01 | 03:30:04.217 / 06:30:04 | 2.8 s | none: sold at 1.4090 vs signal price 1.4089 |
+| 137 | 5m SELL 156852, 21:00:02.921 / 10-12 00:00:02 | 21:00:08.935 / 00:00:08 | 6.0 s | at most 0.001 (the 21:00 candle range was 3.987–3.989) |
+| 182 | 5m STRONG_SELL 176934, 10:05:03.926 / 13:05:03 | 10:05:18.504 / 13:05:18 | 14.6 s | none: the 10:05 candle was flat at 0.1880 |
+| 172 | 5m NEUTRAL 172588, 07:15:04.578 / 10:15:04 | 07:15:43.492 / 10:15:43 | **38.9 s** | none: flat at 0.00000548 from 07:13 to 07:15 |
+| 162 | 1m STRONG_SELL 168277, 04:26:02.794 / 07:26:02 (signal path) | 04:26:04.134 / 07:26:04 | 1.3 s | none |
+| 143 | sub-floor tick, 22:43:35.021 / 01:43:35 | 22:43:35.046 / 01:43:35 | 0.025 s | none at the exit; the cost came from the gap before it (F-I3-02) |
+
+- **172 (AGENT INFERENCE):** the 39 s lag is probably because no SHIB price event arrived; the 07:14 candle has volume 0. I3-003 checks this.
+- **172's trigger is now explained** (this answers the F-I2-06 question):
+  - The 1h SELL 172201 was generated at 07:00:06 UTC (10:00:06 KSA).
+  - The exit only became possible when the 5m signal changed from WATCH (supportive) to NEUTRAL at 07:15:04.
+  - This follows `PositionExitPolicy.java:25-33`.
+- **Classification:** the exits followed the rules, and the delay did not change any result.
+
+### F-I3-05: Entries were filled quickly and at the expected price
+[PROJECT EVIDENCE: I2-005, I2-007, I1 data]
+
+- Each wallet buy came about 3 s after the 1m candle closed.
+- Fill prices matched the signal price, or were one tick away:
+  - 137: 3.999 vs 3.999
+  - 143: 4.033 vs 4.032 (+1 tick)
+  - 158: 1.4108 vs 1.4109
+  - 162: 0.08705 vs 0.08705
+  - 172: 0.00000549 vs 0.00000549
+  - 182: 0.1884 vs 0.1884
+- I found no execution delay or stale-data defect at entry.
+
+### F-I3-06: Trade 182 entered while the 5m signals were bearish underneath
+[PROJECT EVIDENCE: I2-006]
+
+- From 09:00 to 10:00 UTC (12:00–13:00 KSA), 12 consecutive ACE 5m signals had `original_decision` SELL or STRONG_SELL.
+- Each was shown as NEUTRAL with status `CONFLICT`.
+- The entry route `BALANCED_NEUTRAL_5M_WATCH_1H` read 5m as NEUTRAL.
+- This is an entry-quality weakness, not a timing defect. It ties to the FIX-154 direction only as context.
+
+### F-I3-07: The low reward:risk (F-I2-02) did not drive the losses
+[PROJECT EVIDENCE: I2-009]
+
+| Group | Trades | Losers | Net PnL (USDT) | Net per trade |
+|---|---|---|---|---|
+| Reward:risk below 1 | 69 | 28 (41%) | −0.120 | −0.0017 |
+| Reward:risk 1 or more | 124 | 73 (59%) | −4.050 | −0.033 |
+
+- Trades with the inverted reward:risk lost less often and lost less in total.
+- F-I2-02 is still a confirmed design weakness, but **it is not a demonstrated cause.** It would matter if real fees applied (paper fees are 0).
+
+### F-I3-08: Replay can reproduce the 143 gap
+[PROJECT EVIDENCE: `ShadowProductionReplayService.java:460-490`]
+
+- Replay evaluates the same hard floor and profit lock per recorded price event, using `event.observedAt()`.
+- So replaying the stored `market_price_event` rows should reproduce the 8 s gap and the 4.027 exit.
+- The entry race in F-I3-03 can only be reproduced if Replay orders same-boundary 1m and 5m signals the way Production does. I have not checked that yet; it is planned for iteration 4.
+
+---
+
+## Provisional classification (updated)
+
+| ID | Classification |
+|---|---|
+| 137, 158, 172, 182 | Losing trades within the rules. Exit timing was fine. 182 also had masked bearish 5m signals before entry. |
+| 162 | Losing trade within the rules, entered on WATCH via accumulated evidence. Signal-path exit was on time. |
+| 143 | Two parts: **(a)** a defect candidate in entry admission, where the 5m authority came from a superseded candle; **(b)** an exit loss caused by an observation gap. The protection logic itself was correct. |
+
+---
+
+## UNKNOWNS
+- **U-I3-1:** The `generated_at` of 1m signal 159408. This decides F-I3-03 (I3-001).
+- **U-I3-2:** Whether the 8 s EGLD gap was EGLD-specific (Binance sent nothing) or a stall across the whole stream. Event-ID spacing (about 27 IDs in 8 s, similar to the surrounding rate) suggests other symbols kept flowing. This is inference until I3-004.
+- **U-I3-3:** Binance documents a 2000 ms kline update speed but does not say whether it skips pushes when nothing changes [EXTERNAL RESEARCH: developers.binance.com web-socket-streams]. So gaps of 4–12 s cannot yet be attributed to Binance.
+- **U-I3-4:** The production logs for 2026-10-11 and 2026-10-12. Missing evidence that needs coordinator or SSH access. Log lines to look for: `[FIX-118][PRODUCTION][LIVE_TRIGGER]` and `Live PROFIT_LOCK protected hold` for EGLD 22:43, and the analysis-dispatch order at the 22:40:00 boundary.
+- **U-I3-5:** The date range of the STOPPED losses (I3-005).
+- **U-I3-6:** Whether Replay orders same-boundary signals the same way Production does.
+- **U-I2-7 (carried over):** Not verified: the real fee tier.
+
+---
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-001
+Purpose: Prove the same-boundary 1m/5m order behind 143 (F-I3-03) and check the other five entries the same way. Columns are proven by I2-006 and I2-007.
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, generated_at, decision, original_decision, final_entry_allowed, atr_entry_type, atr_recommended_position_percent, atr_overextended, total_score, confidence_score, latest_price FROM crypto_ai.trade_signal WHERE id IN (159285,159321,159407,159408,156721,156723,165412,165415,167616,167668,171559,171589,176655,176710) ORDER BY symbol, generated_at LIMIT 20
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-002
+Purpose: How often executed entries on a 5m boundary were admitted before that boundary's 5m signal existed, and what happened to those trades.
+SQL:
+SELECT eo.id AS opportunity_id, eo.symbol, eo.execution_source, eo.five_minute_decision, eo.executed_at, s1.id AS one_id, s1.candle_open_time AS one_candle, s1.generated_at AS one_generated, s5.id AS five_id, s5.decision AS five_decision, s5.original_decision AS five_original, s5.generated_at AS five_generated, pp.id AS paper_id, pp.status, pp.realized_pnl FROM crypto_ai.execution_opportunity eo JOIN crypto_ai.trade_signal s1 ON s1.id = eo.latest_signal_id AND s1.interval_code = '1m' JOIN crypto_ai.trade_signal s5 ON s5.symbol = s1.symbol AND s5.interval_code = '5m' AND s5.candle_open_time = s1.candle_open_time - INTERVAL 4 MINUTE LEFT JOIN crypto_ai.paper_position pp ON pp.signal_id = s1.id WHERE eo.status = 'EXECUTED' AND MOD(MINUTE(s1.candle_open_time), 5) = 4 AND s5.generated_at > s1.generated_at ORDER BY eo.executed_at LIMIT 200
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-003
+Purpose: Price-event timing around each live exit, to explain the 38.9 s, 14.6 s and 6.0 s lags (F-I3-04).
+SQL:
+SELECT id, symbol, observed_at, price, delivery_status, outcome_reason, created_at FROM crypto_ai.market_price_event WHERE (symbol = 'SHIBUSDT' AND observed_at BETWEEN '2026-10-12 07:14:50' AND '2026-10-12 07:16:00') OR (symbol = 'ACEUSDT' AND observed_at BETWEEN '2026-10-12 10:04:55' AND '2026-10-12 10:05:30') OR (symbol = 'EGLDUSDT' AND observed_at BETWEEN '2026-10-11 21:00:00' AND '2026-10-11 21:00:12') OR (symbol = 'XRPUSDT' AND observed_at BETWEEN '2026-10-12 03:30:00' AND '2026-10-12 03:30:06') ORDER BY symbol, observed_at, id LIMIT 200
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-004
+Purpose: Was the stream alive during the two EGLD gaps (U-I3-2)? Also lists the largest EGLD gaps between price events over the life of 142 and 143.
+SQL:
+SELECT 'GAP_143' AS win, symbol, COUNT(*) AS n, MIN(observed_at) AS first_obs, MAX(observed_at) AS last_obs, SUM(delivery_status <> 'APPLIED') AS non_applied FROM crypto_ai.market_price_event WHERE observed_at > '2026-10-11 22:43:27.038' AND observed_at < '2026-10-11 22:43:35.021' GROUP BY symbol
+UNION ALL
+SELECT 'GAP_142', symbol, COUNT(*), MIN(observed_at), MAX(observed_at), SUM(delivery_status <> 'APPLIED') FROM crypto_ai.market_price_event WHERE observed_at > '2026-10-11 22:39:35.030' AND observed_at < '2026-10-11 22:39:41.029' GROUP BY symbol LIMIT 100;
+SELECT observed_at, price, TIMESTAMPDIFF(MICROSECOND, LAG(observed_at) OVER (ORDER BY observed_at, id), observed_at) / 1000000 AS gap_s FROM crypto_ai.market_price_event WHERE symbol = 'EGLDUSDT' AND observed_at BETWEEN '2026-10-11 22:36:00' AND '2026-10-11 22:44:00' ORDER BY gap_s DESC LIMIT 15
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-005
+Purpose: Size and date range of the STOPPED losses left out of the selection (F-I3-01). Columns are proven by I2-008.
+SQL:
+SELECT id, symbol, entry_price, exit_price, realized_pnl, close_reason, signal_id, opened_at, closed_at FROM crypto_ai.paper_position WHERE status = 'STOPPED' ORDER BY closed_at DESC LIMIT 15;
+SELECT DATE(closed_at) AS utc_day, COUNT(*) AS n, SUM(realized_pnl) AS gross_pnl FROM crypto_ai.paper_position WHERE status = 'STOPPED' GROUP BY DATE(closed_at) ORDER BY utc_day DESC LIMIT 40
+### END_DB_REQUEST
+
+---
+
+## Self-review (iteration 3)
+- Every timestamp is labelled UTC or KSA. 137 and 143 cross midnight in KSA, and their KSA dates are shown.
+- **Corrections made this iteration:**
+  - F-I2-04: I had treated the protected hold as a possible cause. The tick data rules it out (F-I3-02).
+  - F-I2-02: I had called the inverted reward:risk a strong defect candidate. The aggregate data says it is not the cause (F-I3-07).
+- **Not called a confirmed defect:** F-I3-03 is code-plus-timestamp evidence, but it still needs I3-001, then I3-002 and a Replay check.
+- **Plan for iteration 4:**
+  - Settle F-I3-03 and measure how common it is.
+  - Check how Replay orders same-boundary signals.
+  - Classify the EGLD gaps.
+  - Size the STOPPED blind spot and record it as a recommendation for the selection criterion.

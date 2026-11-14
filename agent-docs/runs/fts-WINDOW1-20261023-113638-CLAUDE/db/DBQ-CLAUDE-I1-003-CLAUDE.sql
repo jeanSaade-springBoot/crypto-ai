@@ -1,0 +1,6 @@
+SELECT id, paper_position_id, wallet_position_id, symbol, close_trigger, source_signal_id,
+       source_signal_decision, source_signal_original_decision, position_analysis_id, position_recommendation,
+       entry_price_usdt, exit_price_usdt, stop_loss_usdt, take_profit_usdt, close_explanation, audited_at
+FROM production_exit_audit
+WHERE paper_position_id IN (182,172,162,158,143,137)
+ORDER BY paper_position_id DESC;

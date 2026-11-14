@@ -1,0 +1,3 @@
+position_id	id	event_type	old_value_usdt	new_value_usdt	market_price_usdt	occurred_at	reason
+143	51	TAKE_PROFIT_EXTENDED	4.064696518344	4.080544777516	4.067000000000	2026-10-11 22:40:41.049731	Continuation PASS (STANDARD): current=WATCH, 5m=WATCH, 1h=NEUTRAL, trend=19/16, momentum=9/7, volume=16/soft 8, thesisPressure=0/8 trend, 0/5 momentum. Volume is advisory during a healthy winner; cooling volume alone does not end the trend.
+143	52	TAKE_PROFIT_EXTENDED	4.080544777516	4.104317166274	4.081000000000	2026-10-11 22:41:13.035574	Continuation PASS (STANDARD): current=WATCH, 5m=WATCH, 1h=NEUTRAL, trend=19/16, momentum=9/7, volume=16/soft 8, thesisPressure=0/8 trend, 0/5 momentum. Volume is advisory during a healthy winner; cooling volume alone does not end the trend.

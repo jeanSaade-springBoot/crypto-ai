@@ -1,0 +1,1 @@
+SELECT id, subject_type, symbol, interval_code, candle_open_time, status, failure_reason, attempt_count, last_observation, late_live_close_at, resolved_at, created_at FROM local_reconciliation_audit WHERE created_at BETWEEN '2026-10-10 17:58:00' AND '2026-10-10 18:06:00' ORDER BY created_at LIMIT 200;

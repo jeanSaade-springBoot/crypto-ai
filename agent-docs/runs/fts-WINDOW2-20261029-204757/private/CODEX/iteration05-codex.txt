@@ -1,0 +1,58 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No permitted DB result files exist in `db/CODEX`; therefore entry quality for frozen trades `182, 172, 162, 158, 143, 137` is presently **unverifiable individually**. No trade can yet be called a chase, high-quality entry, or rule violation.
+
+- **PROJECT EVIDENCE:** Current entry flow requires a fresh canonical execution price after signal/HTF approval, then revalidates the execution decision at that price. A paper position is created only after wallet BUY execution returns true; its recorded entry price is that fresh execution price. `PaperTradingService.java:340-413`.
+
+- **PROJECT EVIDENCE:** Current entry-quality scoring is execution-price based, not merely signal-price based. It evaluates: expansion from a rolling/opportunity reference, ATR extension, opportunity age, current reward/risk, return near a rejected high, volatility regime, and stop-exposure liquidity risk. Score bands are:
+  - `85+` excellent
+  - `70–84` good
+  - `55–69` acceptable
+  - `50–54` late
+  - `<50` chase  
+  `ExecutionIntelligenceService.java:845-1029`.
+
+- **PROJECT EVIDENCE:** Current direct BUY validation requires a bullish 1m execution signal; fresh 5m evidence no older than 20 minutes; and fresh 1h context no older than 3 hours. Profile-specific rules then govern allowed allocation. `TradeExecutionValidationService.java:38-49, 62-112, 300-347`.
+
+- **PROJECT EVIDENCE:** Current source treats strategy, BTC, derivatives, and strong target-wall conditions as hard entry blocks; a current risk plan—price, stop, and target—is also mandatory. `ExecutionIntelligenceService.java:501-530, 2221-2239`.
+
+- **PROJECT EVIDENCE:** `trade_signal` persists the principal contemporaneous signals needed to assess entry: decision/original decision, scores, strategy/context gates, BTC, liquidity, ATR, stop, target, risk/reward, and generated time. `TradeSignal.java:17-411`. `wallet_trade` persists both decision and execution price, execution observation time, quantity, fee, and execution message. `WalletTrade.java:22-62`.
+
+- **AGENT INFERENCE:** The current code cannot be assumed to be the version active for these historical entries. Even a reconstructed entry-quality score must be reported as a reproduction under evidenced historical code/config only—not inferred from today’s source.
+
+- **AGENT INFERENCE:** The supplied snapshot timestamps are internally inconsistent: `2026-10-30 12:24:16 UTC` converts to `2026-10-30 15:24:16 KSA`, while the supplied KSA snapshot corresponds to `2026-10-29 17:47:57 UTC`. The frozen IDs remain authoritative; no exact time-window inference should use that clock pair.
+
+## EVIDENCE NEEDED FOR EACH FROZEN TRADE
+
+- `paper_position` entry signal, entry price, opened time, stop, target, quantity.
+- Entry `trade_signal`, plus symbol-matched 1m/5m/1h signals available at or before its generated time.
+- Matching executed BUY `wallet_trade`, including decision price, execution price, execution-price observation time, fee, and execution message.
+- `execution_opportunity` state around the entry to establish the anchor/best price and opportunity age used by the score.
+- Historical configuration/version evidence to establish profile, thresholds, and enabled route.
+
+## UNKNOWNS
+
+- Symbol, entry signal ID, execution route, and actual execution-price delay for all six frozen trades.
+- Each entry’s score/classification, reference price, ATR extension, reward/risk, and allocation.
+- Whether the entry was direct validation, accumulated evidence, retracement, transition, or a limited probe.
+- Whether current FIX-154 higher-timeframe/data-quality behavior existed at each entry.
+- Historical configuration and deployed source revision.
+
+**EXTERNAL RESEARCH:** None.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Read the actual `crypto_ai` schemas before issuing bounded joins to reconstruct contemporaneous entry-quality evidence for frozen paper positions `182, 172, 162, 158, 143, 137`.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+SHOW CREATE TABLE crypto_ai.trade_signal;
+SHOW CREATE TABLE crypto_ai.wallet_trade;
+SHOW CREATE TABLE crypto_ai.execution_opportunity;
+SHOW CREATE TABLE crypto_ai.buy_htf_assessment_audit;
+SHOW CREATE TABLE crypto_ai.signal_processing_work;
+```
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation state was changed.

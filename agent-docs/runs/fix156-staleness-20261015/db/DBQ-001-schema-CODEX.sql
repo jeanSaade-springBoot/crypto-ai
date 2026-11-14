@@ -1,0 +1,1 @@
+DESCRIBE candle; DESCRIBE trade_signal; DESCRIBE signal_processing_work; DESCRIBE candle_analysis_outcome; DESCRIBE execution_opportunity;

@@ -30,6 +30,8 @@ import java.util.Set;
 public class MarketDataBootstrapService implements ApplicationRunner {
     @org.springframework.beans.factory.annotation.Value("#{'${shared-market.mode:OFF}' == 'LIVE'}")
     private boolean sharedMarketEnabled;
+    @org.springframework.beans.factory.annotation.Value("${shared-market.mode:OFF}")
+    private String marketMode="OFF";
 
 
     private static final int REQUIRED_CANDLES = 300;
@@ -100,6 +102,12 @@ public class MarketDataBootstrapService implements ApplicationRunner {
                     inserted
             );
 
+            // FIX-153: bootstrap is data only. An imported close must never seed a signal
+            // or execute a STARTUP trade; only this trader's runtime closes qualify in OFF.
+            if("OFF".equals(marketMode)){
+                log.info("[FIX-153][BACKFILL_IMPORT_RETURNED] symbol={}, interval={}, inserted={}, analysis=false, execution=false",symbol,interval,inserted);
+                return;
+            }
             TechnicalIndicator indicator = technicalIndicatorService
                     .calculateAndPersist(symbol, interval, null)
                     .orElse(null);

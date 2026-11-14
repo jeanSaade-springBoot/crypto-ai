@@ -1,0 +1,188 @@
+# Claude, failed-trade study WINDOW1, iteration 4 of 8: code and trade route (self-review only)
+
+**Results:**
+- **Trade 143** entered only because its 1m signal could not yet see the newer 5m signal for the same candle close. It was generated 2 ms before that 5m signal.
+- **Trade 182** was admitted by a rule that assumes the 5m signal is not bearish, but its 5m signal had originally been STRONG_SELL and was softened to NEUTRAL.
+- **The other four** are valid losses under the current rules.
+- **The exits** all followed the rules.
+
+The 1m-before-5m ordering is not rare: it happened at 86% of 1m signals that close on a 5m boundary. That means Production and Replay diverge on about one in five 1m decisions.
+
+I could not save this as a file. The `Write` tool is disabled in this session, so the coordinator needs to save this output as the iteration record. Run `fts-WINDOW1-20261020-123138`; frozen trades 182, 172, 162, 158, 143 and 137, none substituted. I made no code, config, database or git changes, and opened no Codex files, LIVE_EVENTS.log or LIVE_TEAM_STATUS.md.
+
+**Time labels:** database values are stored in UTC, but the query wrapper displays them in KSA (offset +180 minutes, proven in query I1-001). Application log times are UTC. In this report **KSA** is the displayed value and **UTC = KSA − 3h**.
+
+## Which entry route each trade took
+*PROJECT EVIDENCE: query results I1-003 and I2-002, plus the code.*
+
+| Trade | 1m signal | Entry route | 5m signal it saw / later 5m for the same close | 1h signal it saw | Code |
+|---|---|---|---|---|---|
+| 137 EGLD | 156723 BUY | IMMEDIATE_VALIDATION, 25% exploratory rule for 5m NEUTRAL + 1h WATCH | 156721 NEUTRAL, generated 17.6 ms *before* the 1m / none | 155320 WATCH | `TradeExecutionValidationService.java:263-284` |
+| 143 EGLD | 159408 WATCH, ATR said wait | SETUP_TIMEFRAME_ATR | 159285 BUY, 5 minutes old / **159407 WATCH, 2.0 ms later** | 158388 NEUTRAL | `ExecutionIntelligenceService.java:628-641, 1472-1514` |
+| 158 XRP | 165412 WATCH | SETUP_CONFIRMATION_WAKEUP (FIX-023) | 165289 WATCH / **165415 BUY, 21 ms later**, which triggered the wake-up | 164516 NEUTRAL | `ExecutionIntelligenceService.java:390-457` |
+| 162 DOGE | 167668 WATCH | ACCUMULATED_EVIDENCE | 167616 WATCH | 167617 WATCH | `validateBuyContext` in `TradeExecutionValidationService.java:128-163` |
+| 172 SHIB | 171589 BUY | IMMEDIATE_VALIDATION, BALANCED_STRONG | 171559 BUY | 170667 NEUTRAL | `TradeExecutionValidationService.java:306-308` |
+| 182 ACE | 176710 BUY | IMMEDIATE_VALIDATION, same 25% rule as 137 | 176655 **NEUTRAL, originally STRONG_SELL** | 175258 WATCH | `TradeExecutionValidationService.java:263-284` |
+
+**Correction to iteration 2 (F5):** trade 158 used the FIX-023 wake-up hook (`ExecutionIntelligenceService.java:390-457`), not the FIX-014 hook (`:284-378`). The FIX-014 hook would have recorded the route as SETUP_TIMEFRAME_ATR (`:373-374`).
+
+## FINDINGS
+
+### R1: In Production, the 1m signal usually cannot see the 5m signal for the same close. CONFIRMED by database and code
+**PROJECT EVIDENCE**
+- Query I3-002 looked at 11,434 1m signals that close on a 5m boundary, from 10-11 to 10-17.
+- In **9,843 of them (86.1%)** the 1m was generated before its 5m, by 401 ms on average.
+- Production looks up the 5m and 1h signals with "generated at or before the 1m's generation time":
+  - `ExecutionIntelligenceService.java:2455-2462, 2606-2608`
+  - `TradeExecutionValidationService.java:367-378`
+  - `MultiTimeframeConfluenceService.java:105-113`
+- So at those boundaries the 1m normally uses the previous 5m, which is 5 minutes older.
+- Replay is different:
+  - It stamps each signal at the candle close (`RegressionTestWorker.java:584, 616`).
+  - It processes 1h, then 5m, then 1m when closes coincide (`:557-560`, `:787-793`).
+  - Its lookup includes equal times (`ExecutionReplayScope.java:118-119`).
+  - **So Replay always sees the 5m for the same close.**
+
+**AGENT INFERENCE**
+- This is a structural Production/Replay mismatch on about 20% of 1m decisions.
+- FIX-141 already fixed the same problem, but only for the BTC context (`ExecutionReplayScope.java:122-128`).
+- It breaks the "Replay = Production" rule written into `TradeExecutionValidationService.java:209-211, 259-262`.
+
+### R2: The system only corrects for the late 5m when it is bullish. CONFIRMED by code and database
+**PROJECT EVIDENCE**
+- When the late 5m is a BUY, the FIX-014 and FIX-023 wake-up hooks re-check the opportunity (`ExecutionIntelligenceService.java:284-457`).
+- When the late 5m is WATCH, NEUTRAL or SELL, nothing re-checks an entry already approved on the older 5m.
+- I3-002 lists 30 wallet BUYs since 10-11 where the 5m for the same close arrived after the 1m:
+  - **11** were wake-up entries, where the compensation worked.
+  - **17** went through other routes while that later 5m was WATCH or NEUTRAL.
+- One of the 17 repeats trade 143's pattern exactly: wallet trade **255 (ONG)**, SETUP_TIMEFRAME_ATR, with a 5m WATCH generated 1.0 ms after the 1m.
+
+**AGENT INFERENCE**
+- The bias favours entering: a stale bullish 5m counts as authority, and a late bullish 5m gets a second chance, but a late non-bullish 5m is never applied.
+- The real effect on the 17 depends on each route; query I4-003 measures it.
+
+### R3: Trade 143 would not have opened if 5m signal 159407 had been visible. This closes U2 with high confidence (code trace)
+**PROJECT EVIDENCE.** Going through the route order in `evaluateBuyInternal` (`ExecutionIntelligenceService.java:548-649`):
+- **Scout and breakout retracement** need ATR immediate-entry permission (`:1051`, `:1519`). Signal 159408 did not have it.
+- **Deferred continuation** (`:1725-1754`) accepts a 5m WATCH or BUY alike. It already returned nothing with the BUY scoring 83, so it cannot pass with the WATCH scoring 76.
+- **Reversal retracement** (`:1609-1637`) also returned nothing with the BUY.
+- **Higher-timeframe transition** (`:1408-1424`) needs a bullish 1h. The visible 1h was NEUTRAL.
+- **SETUP_TIMEFRAME_ATR** requires the 5m decision to be bullish (`:1486`). With WATCH 159407 it returns nothing.
+- The entry then reaches the ATR check and is **rejected as ATR_ENTRY_BLOCKED** (`:644-648`).
+
+**AGENT INFERENCE**
+- The only remaining doubt is whether reversal retracement returned nothing because of the 5m momentum, MACD or RSI scores. Query I4-002 checks those.
+- Trade 143 is upgraded to a **logic/parity defect: the entry existed only because of a 2 ms ordering race.** Replay would most likely not open it.
+
+### R4: Trade 158 would take a different route in Replay. Code inference
+**PROJECT EVIDENCE**
+- The FIX-023 wake-up needs the latest 1m signal to be at most 45 seconds old (`SETUP_WAKEUP_1M_MAX_AGE`, `ExecutionIntelligenceService.java:71, 420-424`).
+- In Replay the 5m is processed before the 1m for the same close, so the latest 1m it finds is the previous one, 60 seconds old. The hook therefore does nothing.
+- Replay's own 1m signal 165412 would see the 5m BUY directly and take SETUP_TIMEFRAME_ATR, capped at 30% (`:1499`), instead of the wake-up's 25% cap (`:440`).
+
+**AGENT INFERENCE**
+- Replay probably reproduces the entry, but with a different route, size cap and audit trail.
+- The same applies to all 11 wake-up entries in I3-002.
+
+### R5: Trade 182 shows that code paths treat the original 5m decision inconsistently. CONFIRMED in code
+**PROJECT EVIDENCE**
+- Three routes explicitly reject a 5m whose original decision was bearish, even if it was later softened:
+  - the FIX-014 wake-up (`ExecutionIntelligenceService.java:327, 337, 355`)
+  - the higher-timeframe transition (`:1425-1426`)
+  - reversal retracement (`:1634`)
+- The direct-BUY path that opened 182 (`TradeExecutionValidationService.java:81-112`) reads only the softened decision.
+- So 5m signal 176655, NEUTRAL but originally STRONG_SELL, was accepted by the 25% "5m NEUTRAL + 1h WATCH" rule (FIX-11G). That rule's own comment assumes "neither timeframe is bearish" (`:251-253`).
+- The softening happens in `MultiTimeframeConfluenceService.java:136-138`: a bearish 5m becomes NEUTRAL when any higher timeframe counts as bullish. A 1h WATCH with trend score 16 counts, because the threshold is 15 (`:24`).
+
+**AGENT INFERENCE**
+- Classification: **logic gap (inconsistent rules), high confidence.** What the intended rule should be needs a decision from Jean or the team.
+
+### R6: The current code is not the code that traded on 10-11/12. Contradiction reported
+**PROJECT EVIDENCE**
+- The current `validateBuy` calls the FIX-154 assessment class (`TradeExecutionValidationService.java:93-98`). Migrations V107 and V109 for FIX-154 exist in the repository.
+- But the 10-19 startup log reported the database at **migration 106**, and `claude-docs/TRADING_RULES.md:124` says FIX-154 is not implemented.
+
+**AGENT INFERENCE**
+- FIX-154 code very likely did not run for these trades.
+- I withdraw my iteration 2 citation of `HigherTimeframeBuyAssessmentService.java` as evidence of what ran.
+- The R5 conclusion still holds: the older 5M_BEARISH_VETO also checked only the softened decision (`claude-docs/TRADING_RULES.md:61`).
+- I could not read the older source because I had no git access in this session. Query I4-001 checks the migration history.
+
+### R7: All six exits followed the rules. CONFIRMED by code and database
+**PROJECT EVIDENCE.** The two exit rules (`PositionExitPolicy.java:25-43`):
+- **HTF_SELL_CONFIRMED** needs a bearish 1h and a 5m that is no longer supportive.
+- **SELL_CONFIRMED** needs a bearish 1m, a bearish 5m and a 1h that is not bullish.
+
+Each exit matched (query I3-004):
+
+| Trade | Exit | Signal that confirmed it |
+|---|---|---|
+| 137 | SELL_CONFIRMED | 5m 156852 SELL |
+| 158 | SELL_CONFIRMED | 5m 166821 SELL |
+| 182 | SELL_CONFIRMED | 5m 176934 STRONG_SELL |
+| 172 | HTF_SELL_CONFIRMED | 1h 172201 SELL with 5m 172588 NEUTRAL |
+| 162 | signal sell (`validateSell`, `TradeExecutionValidationService.java:165-190`) | 1m 168277 STRONG_SELL |
+
+### R8: Reward-to-risk on entry is unchanged from earlier iterations
+- The 0.5% minimum stop against a 3×ATR target (`AtrRiskService.java:34-41`) gives reward-to-risk below 1 on five of six trades.
+- None of the six routes used here checks reward-to-risk. Only scout (`:1055`) and retracement (`:1631`) do.
+- This remains a configuration/design candidate, not a route defect.
+
+## Classification after iteration 4
+
+| Trade | Classification |
+|---|---|
+| 137 | Valid loss under the rules (25% exploratory entry); poor reward-to-risk because of the minimum stop |
+| 143 | **Logic/parity defect:** the entry existed only because of the ordering race (R1–R3) |
+| 158 | Valid loss in Production; Replay would take a different route (R4) |
+| 162 | Valid loss (ACCUMULATED_EVIDENCE, entry quality 50) |
+| 172 | Valid loss (BALANCED_STRONG; target about 2 price ticks above entry) |
+| 182 | **Logic gap:** the 25% rule admitted a 5m that was originally STRONG_SELL (R5) |
+
+## UNKNOWNS
+- **U6:** The build and migration state actually running on 10-11/12 (I4-001).
+- **U2, remaining doubt:** whether reversal retracement depended on the 5m scores for trade 143 (I4-002).
+- **U12:** How many of the 17 exposed entries would have been blocked if the later 5m had been visible (I4-003).
+- **U13:** For the 1m signal's own multi-timeframe check, whether Production uses the analysis start time or the candle close as the reference. Not traced.
+- **U14:** Why trades 162 and 182 spent 15 USDT while the others spent 25 (I4-002).
+- **Still open from earlier iterations:**
+  - U4: the cause of the 10-17 halt.
+  - U10: the 1–3 s lag between wallet execution and the paper row.
+  - Searching the compressed logs.
+  - Replay reproduction, which needs authorisation.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: R6/U6. Recent Flyway history with dates, and whether the FIX-154 audit table exists.
+SQL:
+SELECT installed_rank, version, description, installed_on, success FROM crypto_ai.flyway_schema_history ORDER BY installed_rank DESC LIMIT 15;
+SELECT TABLE_NAME, CREATE_TIME FROM information_schema.TABLES WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME IN ('buy_htf_assessment_audit');
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: R3/U14. Validation code, size and explanation for each entry; 5m score inputs for 159285 versus 159407 to settle the remaining reversal-retracement doubt.
+SQL:
+SELECT id, signal_id, execution_reason, gross_amount_usdt, LEFT(execution_message, 1500) AS msg FROM crypto_ai.wallet_trade WHERE id IN (344,358,392,403,426,451) ORDER BY id;
+SELECT id, decision, original_decision, total_score, confidence_score, momentum_score, macd_score, rsi_score, final_entry_allowed, atr_immediate_entry_allowed, atr_recommended_position_percent FROM crypto_ai.trade_signal WHERE id IN (159285,159407,159408) ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: R2/U12. For exposed non-wake-up BUYs, the 5m actually used versus the later 5m for the same close, plus the position outcome.
+SQL:
+SELECT w.id AS wallet_trade_id, w.execution_reason, o.symbol, o.decision AS one_m, o.atr_immediate_entry_allowed AS one_m_atr_ok, (SELECT CONCAT(v.id,'|',v.decision,'|',v.original_decision) FROM crypto_ai.trade_signal v WHERE v.symbol=o.symbol AND v.interval_code='5m' AND v.generated_at<=o.generated_at ORDER BY v.generated_at DESC LIMIT 1) AS five_used, CONCAT(f.id,'|',f.decision,'|',f.original_decision) AS five_hidden, p.id AS paper_id, p.realized_pnl, p.close_reason FROM crypto_ai.wallet_trade w JOIN crypto_ai.trade_signal o ON o.id=w.signal_id AND o.interval_code='1m' JOIN crypto_ai.trade_signal f ON f.symbol=o.symbol AND f.interval_code='5m' AND f.candle_open_time=o.candle_open_time - INTERVAL 4 MINUTE LEFT JOIN crypto_ai.paper_position p ON p.signal_id=w.signal_id WHERE w.side='BUY' AND w.executed_at >= '2026-10-11 00:00:00' AND f.generated_at > o.generated_at AND w.execution_reason <> 'SETUP_CONFIRMATION_WAKEUP' ORDER BY w.id LIMIT 40;
+### END_DB_REQUEST
+
+## Self-review (iteration 4)
+- **Settled this iteration:**
+  - The ordering race is systematic, not rare (R1).
+  - Trade 143 depended on it (R3).
+  - The exact rule inconsistency behind trade 182 (R5).
+  - All exits followed the rules (R7).
+  - Trade 158's route is corrected to FIX-023.
+- **Withdrawn:** the FIX-154 class as evidence of what ran (R6).
+- **Next (iteration 5):**
+  - Use I4-001 to I4-003 to measure how much the defects cost.
+  - Check what FIX-11G and FIX-141 were meant to do in claude-docs and the changelog.
+  - Draft regression checks, with no implementation.

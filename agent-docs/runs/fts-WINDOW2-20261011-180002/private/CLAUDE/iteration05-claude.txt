@@ -1,0 +1,207 @@
+# Iteration 5: entry quality of the six frozen trades (Claude)
+
+Five of the six entries were weak by the system's own measures at the moment of entry, and the rules let all of them through. Three bought on a 1m WATCH signal rather than a BUY. Four entered against an hour-old 1h SELL that the system had relabelled as only a soft conflict. Three had a reward smaller than the risk once prices are rounded to the coin's tick size. Trade 101 was the only one where the entry itself looks sound.
+
+One correction to iteration 4 comes first: the population query I4-004 found that trades with risk/reward below 1 did **not** lose more than other trades. Risk/reward is therefore a gap in the entry checks, but I can no longer call it a proven cause of losses.
+
+This was analysis only: no code, config, DB, git or deploy changes. Plan mode was active, but I had no file-write or ExitPlanMode tool, so this text is the whole deliverable. I did not read the CODEX folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log or the other agent's memory.
+
+**Time labels:** DBQ-CLAUDE-I3-001 proved that our query wrapper displays stored UTC values in KSA. Below, "KSA" means the time as the DB displays it, and **UTC = displayed time − 3 h**.
+
+## FINDINGS
+
+**E0. Corrections to iteration 4 from the I4 results (PROJECT EVIDENCE)**
+
+- **R3 is downgraded (I4-004).** Results by entry risk/reward:
+
+| Risk/reward bucket | Trades | Losers | Total P&L |
+|---|---|---|---|
+| Below 1 | 44 | 21 | −0.448 |
+| 1 to 1.49 | 42 | 20 | +0.443 |
+| 1.5 and above | 33 | 23 | **−2.795** |
+
+  Risk/reward below 1 is still a gap in the entry checks, but it is **not shown to cause losses**. The ≥1.5 bucket is the worst. The join is approximate: it matches on symbol and within 5 s of the open, and P&L is size-weighted.
+- **R2 now has population support (I4-003).** All 7 `HTF_SELL_CONFIRMED` exits since 2026-10-03 lost money, a total of −0.433. In 5 of them, the newest 1h signal at exit was older than the entry.
+- **R5 is narrowed (I4-002).** The 5m 17:55 and 1h 17:00 candles were recovered (closed without analysis) only for AERO and ACE (audit 360–363). Other symbols had only the 1m 17:59 recovered or 18:00/18:01 backfilled.
+  - So "the 1h signal is missing for every symbol" was too broad.
+  - For XLM, the missing 5m and 1h signals came from somewhere else. One possibility is a final close event that never arrived and no recovery row in the window I queried. I have not proved this. DBQ-CLAUDE-I5-005 checks it.
+- **R7 is weakened (I4-001).** Recovery bursts happened at 01:53–01:55 KSA (10-10), 18:01–18:02 KSA (10-10) and 02:42 KSA (10-11). That is not a fixed daily time, so a 24-hour disconnect is unlikely to be the only cause. Restarts are an alternative explanation that I have not proved.
+- **I4-005:** every 18:00/18:01 1m backfill row is `SKIPPED_NOT_LIVE / GAP_BACKFILLED` with no signal, which matches the design.
+
+**E1. Three entries were bought on a 1m WATCH signal at the minimum allowed score (PROJECT EVIDENCE: I1-003, `ExecutionIntelligenceService.java:73,2214-2219`)**
+
+| Trade | 1m signal | Decision | Score / confidence | Entry path |
+|---|---|---|---|---|
+| 78 | 115049 | WATCH | **60** / 72 | Wake-up |
+| 91 | 121198 | WATCH | **60** / 73 | Wake-up |
+| 82 | 115669 | WATCH | 66 / 74 | Accumulated evidence |
+| 96 | 122431 | BUY (BREAKOUT) | 83 / 76 | Direct BUY |
+| 101 | 128170 | BUY | 83 / 74 | Direct BUY, then an add |
+| 104 | 133249 | BUY (BREAKOUT) | 79 / 78 | Direct BUY rejected, then wake-up |
+
+- A WATCH signal counts as "supportive" when its score is at least `WATCH_EVIDENCE_MIN_SCORE=60`. Trades 78 and 91 were exactly at that boundary.
+- In the wake-up path the actual buy is driven by this 1m signal (`:420-429`). The 5m BUY only confirms it (`:446-449`).
+
+**E2. The wake-up path skips most of the entry checks that other initial entries use (PROJECT EVIDENCE: `:397-457` compared with `:1047-1059`, `:1150-1168`, `:1257-1279`)**
+
+- The wake-up path checks only:
+  - the 5m trigger flags and the previous 5m not being bullish;
+  - the 1m signal being at most 45 s old and supportive;
+  - the non-ATR hard risk blocks;
+  - `validateBuyContext`, which treats a 1h SELL as a soft conflict;
+  - the entry-quality score, but only against the 50-point chase cutoff (`:1173`).
+- It does **not** apply:
+  - a minimum risk/reward;
+  - opportunity health or evidence momentum;
+  - the FIX-064 closed-candle price-action check (`immediatePriceAction`);
+  - the late-entry deferral (FIX-119 only covers `ACCUMULATED_EVIDENCE`);
+  - a raw 1h supportive check.
+- For comparison, the scout path requires entry quality ≥80, risk/reward ≥1.25, and a supportive raw 1h (`:1054-1059`).
+- It also measures how far price has moved in ATR units using the **5m** ATR (`fiveMinuteTrigger.getAtrAtSignal()`, `:439`), while risk/reward is measured on the **1m** stop and target. The 5m ATR is larger, so the move looks smaller and the entry is penalised less.
+- **Classification:** a confirmed design gap. It affects 78, 91 and 104. This is AGENT INFERENCE about effect; whether these checks would have blocked those trades needs Replay.
+
+**E3. Entering on a soft 1h conflict creates a position that can never be added to and exits on a hair trigger (PROJECT EVIDENCE: `:1044-1045,1077-1086`; `PositionExitPolicy.java:25-32`)**
+
+- Add-ons (`CONFIRMATION_ADD` / `TREND_ADD`) require the **raw** 1h decision to be WATCH or bullish. A 1h SELL that was treated as NEUTRAL at entry therefore blocks every add.
+- So trades 78, 91, 96 and 104 were structurally limited to their initial 25% (or 15%). They could never grow, but they closed at the first 5m NEUTRAL (R2).
+- One rule decided all three stages, and it was read three different ways:
+  - **entry:** the 1h SELL is softened to NEUTRAL;
+  - **add:** the 1h SELL is enforced and blocks the add;
+  - **exit:** the 1h SELL is enforced and closes the position.
+- This sharpens F2/R2: a soft-conflict entry has almost no way to make money.
+
+**E4. After rounding to the tick size, risk/reward fell below 1 for most entries (PROJECT EVIDENCE: I1-003, I2-008, wallet fills; arithmetic)**
+
+The stop triggers at the first tick at or below the stop price, and the target at the first tick at or above the target price.
+
+| Trade | Fill | Stop triggers at (ticks away) | Target triggers at (ticks away) | Risk/reward in ticks | Stored risk/reward |
+|---|---|---|---|---|---|
+| 78 | 4.06e-6 | 4.02e-6 (4) | 4.09e-6 (3) | **0.75** | 1.50 (signal price was 1 tick lower) |
+| 91 | 5.48e-6 | 5.45e-6 (3) | 5.50e-6 (2) | **0.67** | 0.546 |
+| 96 | 4.06e-6 | 4.03e-6 (3) | 4.09e-6 (3) | **1.00** | 1.31 |
+| 104 | 0.2248 | 0.2236 (12) | 0.2261 (13) | 1.08 | 1.09 |
+| 82 | 0.1984 | 0.1974 (10) | 0.1989 (5) | **0.50** | 0.453 |
+| 101 | 0.9504 | 0.9450 | 0.9587 | about 1.5 | 1.50 |
+
+- No part of the code accounts for tick size in risk/reward. On PEPE and SHIB the stored ratio says nothing useful about the real one.
+- Because of E0, this is classed as **an entry-quality weakness, with no proven link to the losses**.
+
+**E5. Trade 82: the entry was known to be poor before it happened, and the target sat beyond a known resistance (PROJECT EVIDENCE: wallet trades 204/205 in I1-008, I3-006, `:955-1003`)**
+
+- The fill message says "Entry Quality 50/100 (LATE_ENTRY); recent rejection zone near 0.198600". That means at least 2 recent signals were below an earlier high of 0.1986, and the entry was within 0.5% of it.
+- The target of 0.198849 was **above** that resistance. The entry at 0.1984 was only 2 ticks below it.
+- What happened next (outcome, kept separate from the entry assessment): the trade's highest price was exactly 0.1986 (I3-006). It never got past the known resistance, then fell to the `SELL_CONFIRMED` exit.
+- Context available at entry:
+  - The system had **taken profit on XLM 4 minutes earlier at 0.1983** (wallet 204, 17:59:03 KSA / 14:59:03 UTC) and re-bought **higher**, at 0.1984.
+  - It was the first live signal after the feed outage.
+  - It relied on a 1h signal 63 minutes old (R6).
+- Why the guards let it through:
+  - The rejection penalty is floored at the cutoff of 50 (`:1000-1002`), so it can never block an entry.
+  - FIX-119 did not apply, because the evidence included 2 BUYs and the 5m was BUY.
+- **Reclassified:** a loss allowed by the rules, with a **confirmed entry-quality design weakness**: a known resistance below the target only reduces the score. It is not a logic defect.
+
+**E6. Trade 78: the fill was one tick worse than the signal and nothing re-checked it (PROJECT EVIDENCE)**
+
+- The signal price was 4.05e-6 and the fill was 4.06e-6, about 0.25% worse.
+- At the fill price the stored risk/reward fell from 1.5 to 0.757. In ticks it was 0.75.
+- `revalidateAtExecutionPrice` re-scores entry quality (an R/R below 1 costs 30 points). But a 25% position stays at 25% because of the soft-conflict cap, so the re-score changed nothing.
+
+**E7. Trades 91 and 96 never moved in their favour; 78 moved one tick (PROJECT EVIDENCE: I3-006; outcome only)**
+
+| Trade | Highest price after entry | Ticks gained at best |
+|---|---|---|
+| 91 | equal to entry (5.48e-6) | 0 |
+| 96 | equal to entry (4.06e-6) | 0 (a BREAKOUT entry with entry-quality score 100) |
+| 78 | 4.07e-6 | +1 |
+| 104 | 0.2254 | +6 (target was +13) |
+
+- For trade 96, an entry-quality score of 100 alongside no favourable move suggests the breakout bought the top of the move.
+- Whether the fill was at the high of the 1m candle needs candle data (DBQ-CLAUDE-I5-003). This is AGENT INFERENCE until that returns.
+
+**E8. Trade 101: the entry looks sound (PROJECT EVIDENCE: audit 1523, wallet trades 257/258)**
+
+- Both the 1h and 5m context supported the trade: 1h BUY at 723 s old, 5m WATCH.
+- The first buy was 15% at "LATE_ENTRY 50". The add was 35% at entry quality 68, at a **lower** price (0.9481).
+- Price then reached +1.06%. The loss came from the protection logic (T2/R9), not from the entry.
+
+**Classification after iteration 5**
+
+| Trade | Entry quality at entry time | Main cause of the loss |
+|---|---|---|
+| 78 | Weak: 1m WATCH at score 60; fill risk/reward 0.76 (0.75 in ticks); soft 1h SELL | R2/E3 exit mismatch |
+| 91 | Weak: 1m WATCH at score 60; risk/reward 0.55 (0.67 in ticks); soft 1h SELL | R2/E3 |
+| 96 | Looked strong (score 100, BREAKOUT) but 1.0 in ticks; soft 1h SELL; no favourable move | R2/E3 |
+| 104 | Medium (score 65, risk/reward 1.09); soft 1h SELL | R2/E3 |
+| 101 | Sound | TP-extension rebase defect (T2/R9) |
+| 82 | Poor and flagged: LATE_ENTRY 50, target beyond a known resistance, risk/reward 0.45, stale context after the outage | Valid loss under the rules; entry-quality design weakness (E5) |
+
+## EVIDENCE
+- **DB:**
+  - DBQ-CLAUDE-I4-001 to I4-005 (new this round)
+  - I1-003, I1-006, I1-008, I2-001, I2-004, I2-008, I3-006
+- **Code:** all in `ExecutionIntelligenceService.java`
+  - `:71,73` (wake-up 1m age limit, WATCH minimum score)
+  - `:226-236` (entry-quality thresholds)
+  - `:397-457` (wake-up path)
+  - `:865-1030` (entry-quality scoring)
+  - `:1039-1086` (add-on rules)
+  - `:1150-1223` (fill-time check and entry-quality cap)
+  - `:1257-1279` (late-entry deferral)
+  - `:1811-1817` (risk/reward calculation)
+  - `:2214-2219` (supportive-signal test)
+- **Logs:** none; the archives are still gzipped.
+- **External research:** none this iteration.
+
+## UNKNOWNS
+- **U1:** Whether the WATCH-signal, soft-conflict and wake-up entries lose more across all trades than other entries (I5-001, I5-002).
+- **U2:** Where in the 1m candle trades 96 and 104 were filled (I5-003).
+- **U3:** What evidence lay behind trade 82's rejection zone and accumulated evidence, and whether that evidence came from before the outage (I5-004).
+- **U4:** Why the XLM 5m 17:55 and 1h 17:00 signals are missing although there is no recovery row for them (I5-005).
+- **U5:** Whether E2's missing checks would have blocked 78, 91 or 104. This needs Replay, which I have not run because it creates state.
+- **U6:** What caused the outage. R7 is now weaker; restart logs are needed.
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: E1/E2/U1. Population check since 2026-10-03: results by entry stage and by the entry 1m signal's decision. Aggregate only. Times are as the DB displays them (KSA).
+SQL:
+SELECT w.entry_stage, s.decision AS entry_1m_decision, COUNT(*) AS n, SUM(p.realized_pnl<0) AS losers, ROUND(SUM(p.realized_pnl),6) AS pnl_sum, ROUND(AVG(w.entry_quality_score),1) AS avg_eq FROM wallet_managed_position w JOIN trade_signal s ON s.id=w.entry_signal_id JOIN paper_position p ON p.symbol=w.symbol AND ABS(TIMESTAMPDIFF(SECOND,p.opened_at,w.opened_at))<=5 WHERE w.opened_at >= '2026-10-03 00:00:00' AND p.closed_at IS NOT NULL GROUP BY w.entry_stage, s.decision ORDER BY w.entry_stage, s.decision LIMIT 100;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: E3/U1. Population check: results by the raw decision of the newest 1h signal at entry (does entering against a 1h SELL/STRONG_SELL lose more?). Aggregate only.
+SQL:
+SELECT (SELECT h.decision FROM trade_signal h WHERE h.symbol=w.symbol AND h.interval_code='1h' AND h.generated_at<=w.opened_at ORDER BY h.generated_at DESC LIMIT 1) AS entry_1h_raw, COUNT(*) AS n, SUM(p.realized_pnl<0) AS losers, ROUND(SUM(p.realized_pnl),6) AS pnl_sum FROM wallet_managed_position w JOIN paper_position p ON p.symbol=w.symbol AND ABS(TIMESTAMPDIFF(SECOND,p.opened_at,w.opened_at))<=5 WHERE w.opened_at >= '2026-10-03 00:00:00' AND p.closed_at IS NOT NULL GROUP BY entry_1h_raw ORDER BY entry_1h_raw LIMIT 20;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: E7/U2. 1m candles around the BREAKOUT entries of 96 (PEPE) and 104 (ENA): where in the candle was the fill? Times are as displayed (KSA).
+SQL:
+SELECT symbol, open_time, open_price, high_price, low_price, close_price, volume, closed, ingestion_source FROM candle WHERE interval_code='1m' AND ((symbol='PEPEUSDT' AND open_time BETWEEN '2026-10-10 22:18:00' AND '2026-10-10 22:30:00') OR (symbol='ENAUSDT' AND open_time BETWEEN '2026-10-11 05:25:00' AND '2026-10-11 05:37:00')) ORDER BY symbol, open_time LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: E5/U3. XLM 1m signals behind trade 82's rejection zone (0.1986) and accumulated evidence (2 BUY / 14 WATCH): which came before the outage, and when was the recent high set?
+SQL:
+SELECT id, candle_open_time, generated_at, decision, total_score, confidence_score, latest_price, data_quality_valid FROM trade_signal WHERE symbol='XLMUSDT' AND interval_code='1m' AND generated_at BETWEEN '2026-10-10 17:35:00' AND '2026-10-10 18:03:03' ORDER BY generated_at LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-005
+Purpose: E0/U4. Candle rows, analysis outcomes and reconciliation audit for XLM 5m 17:55 and 1h 17:00 (displayed KSA), to explain the missing signals with no recovery row.
+SQL:
+SELECT 'candle' AS src, interval_code, open_time AS t, CAST(closed AS CHAR) AS a, ingestion_source AS b, CAST(updated_at AS CHAR) AS c FROM candle WHERE symbol='XLMUSDT' AND ((interval_code='5m' AND open_time='2026-10-10 17:55:00') OR (interval_code='1h' AND open_time='2026-10-10 17:00:00')) UNION ALL SELECT 'outcome', interval_code, candle_open_time, outcome, CONCAT(reason_code,'/',origin), CAST(created_at AS CHAR) FROM candle_analysis_outcome WHERE symbol='XLMUSDT' AND ((interval_code='5m' AND candle_open_time='2026-10-10 17:55:00') OR (interval_code='1h' AND candle_open_time='2026-10-10 17:00:00')) UNION ALL SELECT 'audit', interval_code, candle_open_time, status, failure_reason, CAST(created_at AS CHAR) FROM local_reconciliation_audit WHERE symbol='XLMUSDT' AND interval_code IN ('5m','1h') AND candle_open_time IN ('2026-10-10 17:55:00','2026-10-10 17:00:00') LIMIT 50;
+### END_DB_REQUEST
+
+**Labels:**
+- **PROJECT EVIDENCE:** E0, E1, E3, E5 and E6; the code and arithmetic parts of E2 and E4; the data in E7; E8.
+- **AGENT INFERENCE:**
+  - the effect of the missing checks in E2, and of the 5m-ATR mismatch;
+  - that E4 is not linked to the losses (drawn from I4-004, an approximate join);
+  - that trade 96 bought the top of the breakout (E7);
+  - the restart explanation in E0/R7.
+- **EXTERNAL RESEARCH:** none this iteration.

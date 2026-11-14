@@ -1,0 +1,5 @@
+2026-10-03
+PASS: diagnostic class compiled with Java17 compiler module and stubbed SLF4J; JDBC-proxy smoke checked autocommit correlation, implicit fetch end, decorated JDBC references and KSA starts.
+NOT SQL/H2/Java21/full-project validation.
+Previous isolated-v1-test-results.txt belongs to v1. Two new H2 tests not run here.
+XML syntax and Change Log JavaScript syntax passed. HistoricalBacklogRetirementService unchanged.

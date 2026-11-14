@@ -1,0 +1,10 @@
+﻿[23:51:47] [COORDINATOR] [STATUS] Launcher started Window=WINDOW1 TestMode=True Run=fts-WINDOW1-20261010-235147-TEST
+[23:51:50] [COORDINATOR] [EVIDENCE] Authoritative entity: paper_position CLOSED with closed_at and realized_pnl<0. Replay table wallet_position_test excluded. Ranking by closed_at not opened_at/signal.
+[23:51:50] [COORDINATOR] [STATUS] Frozen 6 trade IDs for both agents
+[23:51:50] [CODEX] [STATUS] Started unattended simulation start
+[23:52:05] [CODEX] [STATUS] Still working - elapsed 0m 15s; task: unattended simulation
+[23:52:13] [CODEX] [STATUS] Completed unattended simulation start
+[23:52:13] [CLAUDE] [STATUS] Started unattended simulation start
+[23:52:28] [CLAUDE] [STATUS] Still working - elapsed 0m 15s; task: unattended simulation
+[23:52:32] [CLAUDE] [STATUS] Completed unattended simulation start
+[23:52:32] [COORDINATOR] [STATUS] Simulation outputs md=C:\workspace\crypto-ai-trader-mysql\agent-docs\failed-trade-studies\11-10-26\failedtrade-window1-11-10-26.md pdfOk=False

@@ -1,0 +1,2 @@
+SELECT symbol, COUNT(*) AS n, MIN(observed_at) AS first_obs, MAX(observed_at) AS last_obs FROM market_price_event WHERE observed_at BETWEEN '2026-10-11 22:43:27' AND '2026-10-11 22:43:36' GROUP BY symbol ORDER BY symbol;
+SELECT id, occurred_at, observed_at, source_received_at, created_at, price, delivery_status FROM market_price_event WHERE symbol = 'EGLDUSDT' AND observed_at BETWEEN '2026-10-11 22:43:15' AND '2026-10-11 22:43:40' ORDER BY observed_at

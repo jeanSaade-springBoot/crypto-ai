@@ -1,0 +1,52 @@
+## FINDINGS — Iteration 2: Database Forensics
+
+- **PROJECT EVIDENCE:** The frozen study population remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutions were made.
+- **PROJECT EVIDENCE:** The permitted Codex database-evidence directory is empty. No executed database results are available yet, including the prior schema request.
+- **PROJECT EVIDENCE:** Source maps `paper_position` to its entry signal (`signal_id`), optional exit signal (`exit_signal_id`), prices, stop/target, realized P&L, reasons, and lifecycle timestamps. This is source evidence only; the current physical schema and six records still require DB confirmation.
+- **PROJECT EVIDENCE:** `wallet_trade` is linked to a signal, not directly to `paper_position`; `wallet_managed_position` records `entry_signal_id`. Ledger and managed-position association must therefore be proven by IDs, not inferred from nearby timestamps or matching symbols.
+- **AGENT INFERENCE:** Database forensics cannot yet determine whether any loss was a valid stop-loss, a protection defect, execution delay, strategy defect, or accounting discrepancy. The immediate evidence gap is the absence of bounded read-only query results.
+
+## EVIDENCE
+
+- `agent-docs/runs/fts-WINDOW1-20261016-124815/CHARTER.md`
+- `agent-docs/DATABASE_INVESTIGATION_RULES.md`
+- `agent-docs/runs/fts-WINDOW1-20261016-124815/private/CODEX/iteration01-codex.txt`
+- `src/main/java/com/crypto/domain/PaperPosition.java`
+- `src/main/java/com/crypto/wallet/domain/WalletTrade.java`
+- `src/main/java/com/crypto/wallet/domain/WalletManagedPosition.java`
+
+**EXTERNAL RESEARCH:** None consulted.
+
+## UNKNOWNS
+
+For every frozen trade, the following remain unverified: symbol, side, entry/exit signal IDs, entry/exit UTC timestamps and KSA conversions, entry/exit prices, stop/target, close reason, realized-P&L reconciliation, wallet ledger legs, managed-position evidence, accepted protection price events, and any Replay comparability.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Confirm the actual schema for the authoritative position and immediately related execution entities; prove that the charter selection resolves to the exact six frozen IDs; retrieve only those six authoritative position records for the next bounded forensic step. All returned timestamps are UTC and must be converted to KSA only in reporting.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+SHOW CREATE TABLE crypto_ai.trade_signal;
+SHOW CREATE TABLE crypto_ai.wallet_trade;
+SHOW CREATE TABLE crypto_ai.wallet_managed_position;
+
+SELECT
+    p.id,
+    p.status,
+    p.closed_at,
+    p.realized_pnl
+FROM crypto_ai.paper_position p
+WHERE p.status = 'CLOSED'
+  AND p.closed_at IS NOT NULL
+  AND p.realized_pnl < 0
+ORDER BY p.closed_at DESC
+LIMIT 6;
+
+SELECT
+    p.*
+FROM crypto_ai.paper_position p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST

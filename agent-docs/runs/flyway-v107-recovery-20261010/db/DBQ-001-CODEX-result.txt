@@ -1,0 +1,10 @@
+exit_code=0
+duration_ms=109
+row_count=2
+--- stdout ---
+installed_rank	version	description	type	script	checksum	installed_on	success
+107	107	fix 154 trusted higher timeframe buy	SQL	V107__fix_154_trusted_higher_timeframe_buy.sql	-501147284	2026-10-10 00:15:21	1
+108	108	fix 153 local candle reconciliation	SQL	V108__fix_153_local_candle_reconciliation.sql	-1630814269	2026-10-10 00:15:21	1
+
+--- stderr ---
+

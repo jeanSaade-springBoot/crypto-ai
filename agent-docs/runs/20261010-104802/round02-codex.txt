@@ -1,0 +1,29 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The actual Round-1 Claude prompt contains only `QUESTION: Perform`; no review target or technical claim is specified.
+- **PROJECT EVIDENCE:** Claude correctly identified that the coordinator will preserve and later publish that undefined question in its run summary and draft review.
+- **PROJECT EVIDENCE:** Claude’s claimed FIX-122 Production-setting defect is incorrect. Production reads `trading.fix122.enabled`; only active Replay scopes override it from the replay-run setting.
+- **PROJECT EVIDENCE:** Replay candle selection is not closed-only. A historical `closed=0` candle whose nominal close is within the requested window can reach signal analysis, so the finality concern is substantiated.
+- **AGENT INFERENCE:** There is no evidence that “Perform” was truncated from a longer intended question. It may simply be the question supplied to the coordinator. The asserted PowerShell-launch cause remains unproven.
+
+## EVIDENCE
+
+- Prompt content: `agent-docs/runs/20261010-104802/round01-claude.prompt.txt:15-17`.
+- Coordinator accepts any nonblank `$Question`: `agent-docs/coordinator.ps1:1-12`; it writes that value into findings/review artifacts: `:464-489`; and may construct durable-agreement text from an approved run: `:513-532`.
+- RPR-0.4 remains draft/not approved: `agent-docs/FINAL_CHANGE_SPECIFICATION.md:3-4, 313-317`. The response explicitly rejects it and calls for RPR-0.5 or later: `agent-docs/RPR-0.4_REVIEW_RESPONSE.md:4, 11-12, 77-78`.
+- Production FIX-122 configuration and mode selection: `src/main/java/com/crypto/execution/service/StopLossEvidenceService.java:32, 41, 49`; Replay override: `ShadowProductionReplayService.java:113-116`; request persistence: `RegressionTestService.java:229-231`.
+- Replay loads candles without `closed=1`: `RegressionTestWorker.java:509-512`; every loaded candle is added to the analysis timeline: `:543-548`; analysis proceeds based on calculated nominal close time, not `Candle.isClosed()`: `:580-616`. The closed-only query is confined to event-resolution diagnostics: `:519-525`.
+
+## OBJECTIONS
+
+- **AGENT INFERENCE:** Claude’s statement that Production’s FIX-122 setting “is never read” is contradicted by current code. Any replacement specification must distinguish the real issue—Replay can deliberately select a different revision—from a nonexistent lack of Production configuration.
+- **AGENT INFERENCE:** The proposed root cause for question truncation is plausible but unsupported without the coordinator invocation or shell history. Treating it as confirmed risks implementing a process fix for the wrong failure mode.
+- **AGENT INFERENCE:** The specification’s `PENDING` approval table and the response’s rejection are not necessarily contradictory: the table describes unrecorded approval status, while the response records a separate assessment. Rewording may improve clarity, but this is not proved to be a defect.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No specific document, implementation, trade, or design was supplied for review beyond “Perform.”
+- **PROJECT EVIDENCE:** No launch command establishes whether a longer question was lost before reaching the coordinator.
+- **AGENT INFERENCE:** The open-candle Replay path is a material parity risk, but its practical frequency and impact require a defined replay window plus test/database evidence.
+
+VERDICT: INSUFFICIENT_EVIDENCE

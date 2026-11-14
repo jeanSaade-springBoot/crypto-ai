@@ -1,0 +1,316 @@
+# CLAUDE: FTS WINDOW2, Iteration 3 of 8 (log and timing forensics)
+
+**Run:** `fts-WINDOW2-20261028-180002`. This was analysis only and I reviewed only my own work.
+
+**What I read:** AGENTS.md, CHARTER.md, my iteration-2 output, my results DBQ-CLAUDE-I2-001 to 009, the exit and protection code, and the logback configuration.
+
+**Isolation:** I did not open `private/CODEX/`, `db/CODEX`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or any Codex memory.
+
+**Writes:** none. The session was read-only, so this response is the iteration artifact.
+
+**Time convention:** all times below are derived from `UNIX_TIMESTAMP` epochs. They are shown as **UTC** and then **KSA** (UTC+3).
+
+---
+
+## FINDINGS
+
+### F0 (closed). The DB wrapper displays KSA, not UTC (PROJECT EVIDENCE)
+
+DBQ-CLAUDE-I2-001 returned:
+- `@@global.time_zone` = `@@session.time_zone` = `SYSTEM`
+- `@@system_time_zone` = `Arab Standard Time`
+- `session_offset_s` = **10800**
+
+So the raw values the wrapper shows are **KSA, not UTC**. The stored instants themselves are correct, because the application session forces UTC.
+
+This has a cross-agent consequence. Any DBQ-FTS or Codex value labelled "UTC" without epoch conversion is really KSA, so treating it as UTC adds 3 hours twice. `DATABASE_INVESTIGATION_RULES.md` ("raw MySQL timestamps are UTC") does not hold for wrapper output. Per governance this is a contradiction to report and investigate; I am not editing shared docs.
+
+### T1. Entry pipeline timing: entries were fresh (PROJECT EVIDENCE)
+
+All six frozen trades:
+
+| ID | 1m candle close (UTC) | Execution price observed | Signal | Wallet BUY | Paper open (UTC → KSA) | Close → paper |
+|---|---|---|---|---|---|---|
+| 137 | 10-11 17:55:00 | 17:55:00.032 | 156723 @ 01.576 | 03.017 | 17:55:04.510 → **20:55:04.510** | 4.5 s |
+| 143 | 10-11 19:40:00 | 19:40:01.028 | 159408 @ 01.634 | 03.115 | 19:40:04.858 → **22:40:04.858** | 4.9 s |
+| 158 | 10-11 23:35:00 | 23:35:00.328 | 165412 @ 01.469 | 02.988 | 23:35:04.811 → **10-12 02:35:04.811** | 4.8 s |
+| 162 | 10-12 01:02:00 | 01:02:02.580 | 167668 @ 02.813 | 04.210 | 01:02:06.415 → **04:02:06.415** | 6.4 s |
+| 172 | 10-12 03:36:00 | 03:36:01.457 | 171589 @ 01.507 | 02.935 | 03:36:05.087 → **06:36:05.087** | 5.1 s |
+| 182 | 10-12 06:57:00 | 06:57:02.437 | 176710 @ 01.850 | 04.232 | 06:57:06.476 → **09:57:06.476** | 6.5 s |
+
+- All signals were `LIVE` with `data_quality_valid=1`.
+- The EGLD candle rows match Binance's OHLC exactly. For example, the DB's 19:43 candle is 4.086 / 4.100 / 3.994 / 4.026, the same as the iteration-2 Binance kline. That closes U-New1 for EGLD.
+- Fill slippage against the decision price was at most one tick: 143 filled at 4.033 against 4.032, and 158 at 1.4108 against 1.4109.
+- **Conclusion:** neither stale data nor execution delay at entry contributed to any of the six losses.
+
+### T2. Normal exits fire only on the next price tick, not when the signal arrives (PROJECT EVIDENCE: code + DB)
+
+**Code.** `LivePositionProtectionService.onPrice` (`LivePositionProtectionService.java:75-244`) is the only caller of `PositionExitPolicy.evaluateNormalExit` (`:235`). It is invoked only from the 1m kline price callback (`BinanceKlineService.java:106-108`). A newly persisted SELL signal therefore does not close a position by itself. The exit waits for the next Binance 1m kline WebSocket message for that symbol.
+
+**Measured delay** (first moment the exit rule became true → exit):
+
+| ID | Rule became true (UTC) | Exit tick / wallet SELL (UTC) | Delay | Signal price → exit price |
+|---|---|---|---|---|
+| 137 | 5m SELL 156852 @ 18:00:02.921 | 18:00:08.935 | **6.0 s** | 3.988 → 3.987 |
+| 158 | 5m SELL 166821 @ 00:30:01.464 | 00:30:04.217 | 2.8 s | 1.4089 → 1.4090 |
+| 162 | 1m STRONG_SELL 168277 @ 01:26:02.794 | 01:26:04.134 (signal path `SIGNAL_SELL`) | 1.3 s | 0.08675 → 0.08675 |
+| 172 | 5m NEUTRAL 172588 @ 04:15:04.578 (1h SELL already set) | tick 04:15:43.462, wallet 04:15:43.492 | **38.9 s** | 0.00000548 → 0.00000548 |
+| 182 | 5m STRONG_SELL 176934 @ 07:05:03.926 | tick 07:05:18.446, wallet 07:05:18.504 | **14.6 s** | 0.1880 → 0.1880 |
+
+- **AGENT INFERENCE:** this is a design property, not a defect. The P&L effect on these six trades was 0 to −1 tick.
+- On illiquid symbols, where SHIB's price-event gap reached 56.5 s and ACE's 57.6 s (DBQ-CLAUDE-I2-005), a confirmed exit can wait almost a minute.
+- Replay shares the same price-event-driven design (FIX-052), so this should be reproducible there.
+- Whether any tick arrived inside these windows is checked by DBQ-CLAUDE-I3-003.
+
+### T3. Exits were held correctly by the coded policy (PROJECT EVIDENCE)
+
+`PositionExitPolicy.java:20-50` behaved as written on every trade:
+- **158:** a run of 1m SELLs from 00:21:00 to 00:29:00 UTC was held because 5m was NEUTRAL. It exited on the first bearish 5m.
+- **172:** the 1h SELL at 04:00:06.106 was held because 5m was WATCH, which counts as "supportive", at 04:00, 04:05 and 04:10. The trade exited when 5m turned NEUTRAL at 04:15:04.
+- **182:** 1m SELLs at 07:02:03 and 07:04:02 were held (5m NEUTRAL). The trade exited at the 5m STRONG_SELL.
+
+Two observations:
+- **Downgraded 5m signals:** the 182 window contains 5m rows whose `original_decision` was STRONG_SELL but whose `decision` was NEUTRAL (176655, 176792). The policy reads `decision`, so the exit was delayed until the 07:05 5m signal. **AGENT INFERENCE:** price was 0.1881 against an exit at 0.1880, so the effect was negligible. The downgrade stage is unidentified (U-I3-4).
+- **No freshness check on exit:** the exit lookup uses `findTop…OrderByGeneratedAtDesc` (`:95-97`) with no age bound. The ages at close were all appropriate for their interval: at most 58 s for 5m, and 1h signals belonged to the current hour. So nothing went wrong here. Note that the "freshness before execution" rule in AGENTS.md is not applied on this exit path.
+
+### T4. Trade 143's lock-vs-TP mismatch is explained; no defect (PROJECT EVIDENCE)
+
+This resolves iteration-2 F5.
+
+**Lifecycle (UTC → KSA):**
+- **Lock activation** at 19:40:23 UTC (**22:40:23 KSA**). At that point TP was still 4.064697, so the 70% activation level was 4.0552. The 19:40 candle's high was 4.067, so activation was consistent.
+- **First TP extension** at 19:40:41.050 (**22:40:41 KSA**), market price 4.067: TP 4.064697 → 4.080545.
+- **Second TP extension** at 19:41:13.036 (**22:41:13 KSA**), market price 4.081: TP 4.080545 → 4.104317.
+- **Lock level:** `highest` reached 4.101, which is 95.35% of the new geometry. The lock was 4.07579 and the hard floor was entry × 1.0005 = 4.0350165, as coded at `LivePositionProtectionService.java:210`.
+
+Both extensions follow `newTP = oldTP + 0.5 × (oldTP − entry)` exactly, as in `LivePositionProtectionService.java:108-110`.
+
+**The breach:**
+- The last tick before the breach was 19:43:27.038 at 4.100.
+- The next tick was 19:43:35.021 at **4.027**. That is an **8.0 s gap with a −1.78% jump**, and the first observed price was already below both the lock and the floor.
+- The wallet SELL followed **24 ms** after that tick (19:43:35.046), and the paper close followed 1.2 s later (19:43:36.229 UTC → **22:43:36.229 KSA**).
+- Later ticks were 4.018 and 4.016, and the candle low of 3.994 came later still, below the SL of 4.0102.
+
+**Classification:** a valid loss caused by a gap in observed prices. Protection reacted to the first ticks that were available. A stop-loss would have filled worse.
+
+**Re-entry whipsaw (PROJECT EVIDENCE):**
+- Trade 142 sold at 3.996 (PROFIT_LOCK_EXIT, 19:39:42.840 UTC).
+- Trade 143 bought at 4.033 just 22.0 s later, which is 0.93% higher.
+- I found no re-entry cooldown in production: grep for `cooldown|reentry|recentlyClosed|lastExit` returned only replay, monitor and REST-gate files.
+- This is a candidate rule gap, not a defect claim.
+
+### T5. Unexplained 8–14 s silences in a fast EGLD market (PROJECT EVIDENCE + EXTERNAL RESEARCH; open)
+
+- Binance documents a kline update speed of 2000 ms for the 1m interval.
+- During trade 143, which had RVOL about 21×, EGLD price events had gaps of 13.98 s (19:43:05.040 → 19:43:19.021) and 7.98 s (19:43:27.038 → 19:43:35.021).
+- The latency from observation to persistence on the persisted ticks was only 3–35 ms, so there was no consumer backlog.
+- Rejected observations (`STALE_PRICE` or `FUTURE_TIMESTAMP`) are **never persisted**: `MarketPriceEventService.recordPending` returns null and only logs (`MarketPriceEventService.java:53-58`). So the DB cannot tell "Binance sent nothing" apart from "the app rejected it".
+- **AGENT INFERENCE:** either Binance emits only when the kline changes, or messages were dropped or rejected. DBQ-CLAUDE-I3-002 (density across symbols in the same seconds) and the 10-11 log, if it still exists, should discriminate.
+- This is the only remaining open timing question for trade 143.
+
+### T6. The protection transaction lasts 1.2–3.2 s after the wallet SELL (PROJECT EVIDENCE + AGENT INFERENCE)
+
+- Gap from wallet `executed_at` to paper `closed_at` on mechanical exits: 137 3.19 s, 158 2.42 s, 172 1.99 s, 182 1.98 s, 143 1.18 s.
+- The paper open also lags the wallet BUY by 1.5–2.2 s on all six trades.
+- `executeMechanicalExit` runs inside the `onPrice` transaction. It takes the global daily-statistics row lock `FOR UPDATE` (`WalletAutoExecutionService.java:488`, `:553`), then calls `currentPortfolioValue()` and `captureSnapshot()`. Each of those runs one latest-closed-candle query per wallet asset (`WalletService.java:484-490`, `:592-607`).
+- **Inference:** the lock is held for seconds and serialises every symbol's exit and entry.
+- **No P&L effect**, because the price is fixed before this. But it may explain the 1.7–1.9 s observe-to-persist outliers in windows 158, 162 and 172, and possibly part of T5. DBQ-CLAUDE-I3-001 and I3-005 test this.
+
+### T7. Analysis latency degraded overnight (PROJECT EVIDENCE)
+
+Delay from candle close to 1m signal generation:
+
+| Window | Ordinary minute | 5m boundary | 1h boundary |
+|---|---|---|---|
+| 10-11 17:00–24:00 UTC | 0.0–0.2 s | about 1.5 s | about 1.5 s |
+| 10-12 01:00 UTC | about 2.8 s | 6.1 s | **9.2 s** |
+| 10-12 03:00–07:00 UTC | about 1.5–2.1 s | 3.0–3.4 s | 6.0 s |
+
+- Nothing exceeds a few seconds, so this is not material to the six outcomes.
+- It does feed T2: an exit can only be evaluated after both the signal and the next tick exist.
+- DBQ-CLAUDE-I3-006 quantifies this across the period.
+
+### T8. Application logs (PROJECT EVIDENCE: evidence gap)
+
+- `logback-spring.xml:27-30`: logs are UTC-stamped (`%date{…,UTC}`), with `maxHistory 7` and a 256 MB cap.
+- Only these trader archives exist locally: `logs/crypto-ai-trader.2026-10-12.{0..10}.log.gz`, plus 10-13, 10-14, 10-15 and 10-17.
+- **There is no 2026-10-11 file**, so the 137 and 143 windows (10-11 17:55–19:44 UTC) probably have no log evidence.
+- `crypto-ai-trader.log` starts on 2026-10-19.
+- My tools can't decompress `.gz` files, so **no log line was actually searched this iteration.** The LOG_REQUEST below asks the coordinator to do it.
+
+---
+
+## EVIDENCE INDEX
+
+| ID | Source |
+|---|---|
+| DB-I2-001 | Session time zone SYSTEM / Arab Standard Time, offset 10800 s; six trades' epochs |
+| DB-I2-002 | Seven entry/exit signals: freshness (1.47–2.81 s from close), HTF age, ATR plan |
+| DB-I2-003 | Wallet trades 344/346, 356/357, 358/359, 392/401, 403/407, 426/429, 451/454; `fee_usdt=0` |
+| DB-I2-004 | `position_management_event` 51/52; `production_exit_audit` rows 137, 141, 159, 163, 172, 181 |
+| DB-I2-005/006 | Price-event coverage (all APPLIED, gaps up to 57.6 s); EGLD ticks 1789237–1789430 |
+| DB-I2-007/008 | Newest 1m/5m/1h signal at close; full signal sequences; EGLD 1m candles |
+| DB-I2-009 | Trade 142 (PROFIT_LOCK_EXIT at 3.996, 19:39:42.840 UTC) |
+| C-T2 | `LivePositionProtectionService.java:75-244`; `BinanceKlineService.java:91-111`; `PositionExitPolicy.java:20-50` |
+| C-T5 | `MarketPriceEventService.java:40-58` (rejections are not persisted) |
+| C-T6 | `WalletAutoExecutionService.java:474-562`; `WalletService.java:484-607` |
+| C-T8 | `logback-spring.xml:27-30` |
+| X-WS | Binance spot WebSocket docs: kline update speed 2000 ms (non-1s intervals) |
+
+---
+
+## UNKNOWNS
+
+- **U-I3-1:** whether the EGLD silences at 19:43 were on Binance's side or the app's (T5).
+- **U-I3-2:** whether any tick arrived between the moment the exit rule became true and the exit for 137, 172 and 182 (T2).
+- **U-I3-3:** the cause of the 1–3 s wallet→paper lag and the 1.7–1.9 s persistence outliers (T6).
+- **U-I3-4:** which stage downgrades `original_decision` SELL/STRONG_SELL to a NEUTRAL `decision` (T3).
+- **U-I3-5:** what the logs show for 158, 162, 172 and 182; 137 and 143 probably have no logs (T8).
+- **Carried over:**
+  - U-New3: whether the inverted R:R is intended policy.
+  - U8: the deployed version on 10-11/12.
+  - Replay: confirming that a Replay run reproduces the tick-driven exit times.
+
+---
+
+## DB_REQUEST
+
+> Time windows use `FROM_UNIXTIME(epoch)`, which is interpreted in the same session time zone as the displayed TIMESTAMP columns, so the comparisons are self-consistent.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-001
+Purpose: Observe→persist latency by second-of-minute in each holding window; tests T6 contention around candle-close analysis
+SQL:
+SELECT p.id AS pid, SECOND(e.observed_at) DIV 5 * 5 AS sec_bucket, COUNT(*) AS n,
+       ROUND(AVG(TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at))/1000,1) AS avg_ms,
+       ROUND(MAX(TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at))/1000,1) AS max_ms
+FROM paper_position p
+JOIN market_price_event e ON e.symbol = p.symbol AND e.observed_at BETWEEN p.opened_at AND p.closed_at
+WHERE p.id IN (182,172,162,158,143,137)
+GROUP BY p.id, sec_bucket
+ORDER BY p.id DESC, sec_bucket
+LIMIT 100;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-002
+Purpose: Cross-symbol price-event density 19:42:50–19:43:45 UTC; a simultaneous gap on all symbols means a stream/consumer stall (T5)
+SQL:
+SELECT symbol, COUNT(*) AS n, UNIX_TIMESTAMP(MIN(observed_at)) AS first_epoch, UNIX_TIMESTAMP(MAX(observed_at)) AS last_epoch,
+       SUM(observed_at BETWEEN FROM_UNIXTIME(1791747785.1) AND FROM_UNIXTIME(1791747799.0)) AS n_in_gap1,
+       SUM(observed_at BETWEEN FROM_UNIXTIME(1791747807.1) AND FROM_UNIXTIME(1791747815.0)) AS n_in_gap2,
+       SUM(delivery_status <> 'APPLIED') AS n_not_applied
+FROM market_price_event
+WHERE observed_at BETWEEN FROM_UNIXTIME(1791747770) AND FROM_UNIXTIME(1791747825)
+GROUP BY symbol
+ORDER BY symbol
+LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-003
+Purpose: Every tick between the moment the exit rule became true and the exit, for 137/158/172/182 (T2)
+SQL:
+SELECT 'p137' AS w, id, symbol, UNIX_TIMESTAMP(observed_at) AS obs_epoch, price, delivery_status, outcome_reason
+FROM market_price_event WHERE symbol='EGLDUSDT' AND observed_at BETWEEN FROM_UNIXTIME(1791741600) AND FROM_UNIXTIME(1791741612.2)
+UNION ALL
+SELECT 'p158', id, symbol, UNIX_TIMESTAMP(observed_at), price, delivery_status, outcome_reason
+FROM market_price_event WHERE symbol='XRPUSDT' AND observed_at BETWEEN FROM_UNIXTIME(1791765000) AND FROM_UNIXTIME(1791765006.7)
+UNION ALL
+SELECT 'p172', id, symbol, UNIX_TIMESTAMP(observed_at), price, delivery_status, outcome_reason
+FROM market_price_event WHERE symbol='SHIBUSDT' AND observed_at BETWEEN FROM_UNIXTIME(1791778440) AND FROM_UNIXTIME(1791778545.5)
+UNION ALL
+SELECT 'p182', id, symbol, UNIX_TIMESTAMP(observed_at), price, delivery_status, outcome_reason
+FROM market_price_event WHERE symbol='ACEUSDT' AND observed_at BETWEEN FROM_UNIXTIME(1791788640) AND FROM_UNIXTIME(1791788720.5)
+ORDER BY w, obs_epoch
+LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-004
+Purpose: Trade 143's lock-activation tick (expected at about 19:40:23 UTC, price at least 4.0552) and the managed-position lock fields (T4)
+SQL:
+SELECT id, UNIX_TIMESTAMP(observed_at) AS obs_epoch, price, delivery_status
+FROM market_price_event
+WHERE symbol='EGLDUSDT' AND observed_at BETWEEN FROM_UNIXTIME(1791747604) AND FROM_UNIXTIME(1791747680)
+ORDER BY observed_at LIMIT 60;
+SELECT * FROM wallet_managed_position WHERE id = 172;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-005
+Purpose: Wallet snapshot timing compared with exit/entry commits, plus asset count; tests the T6 transaction-duration hypothesis
+SQL:
+SELECT COUNT(*) AS wallet_assets FROM wallet_asset;
+SELECT id, UNIX_TIMESTAMP(captured_at) AS cap_epoch
+FROM wallet_snapshot
+WHERE captured_at BETWEEN FROM_UNIXTIME(1791741300) AND FROM_UNIXTIME(1791741615)
+   OR captured_at BETWEEN FROM_UNIXTIME(1791747600) AND FROM_UNIXTIME(1791747820)
+   OR captured_at BETWEEN FROM_UNIXTIME(1791778540) AND FROM_UNIXTIME(1791778550)
+   OR captured_at BETWEEN FROM_UNIXTIME(1791788715) AND FROM_UNIXTIME(1791788725)
+ORDER BY captured_at LIMIT 60;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-006
+Purpose: Hourly distribution of 1m analysis latency (candle close → generated_at), 10-11 16:00 to 10-12 08:00 UTC (T7)
+SQL:
+SELECT FLOOR(UNIX_TIMESTAMP(candle_open_time)/3600)*3600 AS hour_epoch,
+       (UNIX_TIMESTAMP(candle_open_time)+60) % 300 = 0 AS five_min_boundary,
+       COUNT(*) AS n, COUNT(DISTINCT symbol) AS symbols,
+       ROUND(AVG(UNIX_TIMESTAMP(generated_at) - UNIX_TIMESTAMP(candle_open_time) - 60),3) AS avg_s,
+       ROUND(MAX(UNIX_TIMESTAMP(generated_at) - UNIX_TIMESTAMP(candle_open_time) - 60),3) AS max_s
+FROM trade_signal
+WHERE interval_code='1m' AND signal_mode='LIVE'
+  AND candle_open_time BETWEEN FROM_UNIXTIME(1791734400) AND FROM_UNIXTIME(1791792000)
+GROUP BY hour_epoch, five_min_boundary
+ORDER BY hour_epoch, five_min_boundary
+LIMIT 100;
+### END_DB_REQUEST
+
+### LOG_REQUEST (for the coordinator: read-only, bounded; I cannot decompress `.gz`)
+
+- **Files:** `logs/crypto-ai-trader.2026-10-12.*.log.gz`. Lines are UTC-stamped. First confirm whether any 2026-10-11 archive exists anywhere.
+- **Markers:**
+  - `Live signal-driven exit`
+  - `PRICE_NOT_CANONICAL`
+  - `EQUAL_TIMESTAMP_REJECTED`
+  - `KLINE_PHASE_FAILED_OR_UNCONFIRMED`
+  - `PENDING_RESOLVED`
+  - WebSocket reconnect/close
+  - `Deadlock`
+- **Symbols:** `XRPUSDT|DOGEUSDT|SHIBUSDT|ACEUSDT`
+- **UTC windows:**
+  - 2026-10-11T23:34–10-12T00:31
+  - 01:01–01:27
+  - 03:35–04:16
+  - 06:56–07:06
+- If a 10-11 file exists, also search EGLDUSDT 17:54–18:01 and 19:39–19:45 UTC for `PROFIT_LOCK`, `FIX-118` and the markers above.
+
+---
+
+## SELF-REVIEW (iteration 3)
+
+- **Coverage:** all six frozen trades have a reconstructed entry and exit timeline. None was substituted.
+- **Corrections:**
+  - F0 is now proven, so all times in this iteration come from epochs.
+  - Iteration-2 F5 (lock-vs-TP mismatch) is withdrawn as a defect candidate; T4 explains it.
+- **Defects:** **none confirmed.**
+- **Candidate design gaps** (recommendations only):
+  - T2: tick-driven exit delay on illiquid symbols
+  - T4: no re-entry cooldown after a profit-lock exit
+  - T5: rejected price observations leave no durable record
+  - T6: a seconds-long global lock in the protection transaction
+- **Provisional classifications:**
+  - 143: a valid loss from a price gap; entry quality was weak (iteration-2 F6).
+  - 137, 158, 162, 172, 182: valid losses under the coded rules; exit timing added at most one tick.
+  - The systemic causes remain iteration-2 F1 (inverted R:R from the 0.50% SL floor), F2 (fees excluded) and F3 (SHIB and ACE tick quantisation).
+- **Labelling and uncertainty:** each claim is tagged. No log line was actually searched (T8), and I state that explicitly.
+- **Next iteration:**
+  - Ingest the I3 results and coordinator log output.
+  - Trace the decision-downgrade stage (U-I3-4) and the origin of the 0.50% floor (U-New3) in claude-docs CHANGELOG/TRADING_RULES.
+  - Check Replay feasibility for trades 172 and 143.
+
+Sources:
+- [Binance Spot WebSocket Streams: kline update speed 2000 ms](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)
+- [Binance dev forum: 2000 ms is the fastest public rate](https://dev.binance.vision/t/how-can-i-improve-the-update-speed/9837)

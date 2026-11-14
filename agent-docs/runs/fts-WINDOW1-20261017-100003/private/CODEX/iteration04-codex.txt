@@ -1,0 +1,80 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Scope remains exactly the frozen `paper_position` IDs `182, 172, 162, 158, 143, 137`. No substitution made.
+- **PROJECT EVIDENCE:** The permitted Codex DB-evidence directory remains empty. No trade-specific route, trigger, timing, or defect can be attributed to any frozen trade.
+- **PROJECT EVIDENCE:** Current source has two principal terminal routes:
+  - Canonical 1m Binance observation → `market_price_event` → live protection → mechanical wallet exit → `paper_position` close.
+  - Closed candle → signal processing → paper-trading signal path → signal-linked wallet exit → `paper_position` close.
+- **PROJECT EVIDENCE:** For the direct-price route, input candle and canonical price event commit first; protection runs in a separate transaction before observer and close dispatch. A direct event is accepted only after timestamp/ordering validation and commits as `APPLIED`; `PENDING`, `NON_CANICAL`, or `PROTECTION_NOT_APPLIED` cannot prove successful protection.
+- **PROJECT EVIDENCE:** Direct-price exit precedence is: take-profit handling, absolute stop loss, protected-profit hard floor, profit-lock decision, then confirmed normal multi-timeframe exit. The normal policy permits `HTF_SELL_CONFIRMED` or `SELL_CONFIRMED`; profit-lock has its own outcomes.
+- **PROJECT EVIDENCE:** A live mechanical exit closes the wallet first; only a successful `executeMechanicalExit(...)` permits `closePaper(...)`. The close records terminal price, cumulative realized P&L, status, close reason, explanatory text, UTC close time, and immutable exit audit.
+- **PROJECT EVIDENCE:** `closePaper(...)` does not set `paper_position.exit_signal_id`. Therefore, a null exit-signal link is compatible with a valid direct-price TP/SL/profit-lock/signal-policy closure. Its evidence route is `production_exit_audit` plus related `market_price_event` and `wallet_trade`, not an inferred missing signal.
+- **PROJECT EVIDENCE:** Signal-path closes do set `exit_signal_id`; they can result from TP, SL, profit lock, or validated SELL/STRONG_SELL processing. This route uses the signal as context and records the actual terminal reason in wallet/audit data.
+- **PROJECT EVIDENCE:** Realized P&L may include a near-TP partial harvest. The terminal `paper_position` P&L retains already-realized partial P&L and adds the remaining-position result. A terminal row alone is therefore insufficient for a complete P&L reconciliation.
+- **AGENT INFERENCE:** Current source describes possible routes, not necessarily the deployed code/configuration when these six trades occurred. Historical build/configuration evidence is required before judging conformance.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `paper_position` contains entry/exit price, cumulative realized P&L, entry and optional exit signal links, close reason, explanation, and UTC lifecycle fields: [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:10).
+- **PROJECT EVIDENCE:** Binance ingestion persists canonical 1m price evidence and invokes protection before candle-close dispatch: [BinanceKlineService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BinanceKlineService.java:101), [KlineTransactionCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:36).
+- **PROJECT EVIDENCE:** Price-event acceptance/outcome semantics: [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:40).
+- **PROJECT EVIDENCE:** Live protection priority and terminal close logic: [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:99), [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:391).
+- **PROJECT EVIDENCE:** Multi-timeframe normal/profit-lock exit rules: [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:20).
+- **PROJECT EVIDENCE:** Signal-processing closure and partial-P&L treatment: [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:442).
+- **PROJECT EVIDENCE:** Immutable audit links a `paper_position` to wallet position, trigger, source signal, and position analysis where available: [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:29).
+- **EXTERNAL RESEARCH:** None.
+- **PROJECT EVIDENCE:** No code, configuration, database, Git, deployment, or other mutation occurred.
+
+## UNKNOWNS
+
+- Each frozen trade’s symbol, entry/exit UTC timestamps, corresponding KSA timestamps, reason, P&L, and partial-harvest status.
+- Which route actually closed each trade: direct price, signal path, position-manager stop, manual close, or another path.
+- Whether each close has accepted price-event evidence, a wallet SELL, an immutable audit, and coherent quantities/prices.
+- The historical application version, active configuration, and ingestion mode at each entry/exit.
+- The prior one-second supplied snapshot discrepancy remains: `2026-10-17 07:00:04 UTC` converts to `10:00:04 KSA`, whereas the supplied snapshot KSA is `10:00:03`. Both supplied values are preserved.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Obtain the authoritative frozen-position rows and physical schema needed to map their entry/exit linkage without assuming current source mappings equal the database.  
+SQL:
+
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-002  
+Purpose: Discover only the physical evidence tables and columns needed to reconstruct the direct-price, signal-path, wallet, partial-harvest, and immutable-audit routes for the six frozen positions.  
+SQL:
+
+```sql
+SELECT table_name,
+       ordinal_position,
+       column_name,
+       column_type,
+       is_nullable,
+       column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'position_analysis',
+      'position_management_event'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST

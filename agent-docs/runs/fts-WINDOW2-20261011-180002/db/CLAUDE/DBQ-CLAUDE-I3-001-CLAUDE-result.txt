@@ -1,0 +1,2 @@
+session_tz	global_tz	system_tz	now_session	now_utc	offset_minutes	sig150942_open_rendered	wt195_observed_rendered
+SYSTEM	SYSTEM	Arab Standard Time	2026-10-11 18:23:40.780687	2026-10-11 15:23:40.780687	180	2026-10-11 17:07:00.000000	2026-10-10 17:35:04.248000

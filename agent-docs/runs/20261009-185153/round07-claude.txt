@@ -1,0 +1,108 @@
+# Candle ingestion investigation, round 4: trader vs. collector ownership
+
+The verdict stays **REJECTED**. This round I checked the test files and the saved test reports. Two of my round-3 claims turned out to be wrong, and Codex and I both overstated the fresh-install blocker. The main defects are unchanged. Nothing was modified. This session has no file-write or ExitPlanMode tool, so this report is the only deliverable.
+
+## FINDINGS
+
+### Corrections to my own round-3 report
+
+**1. I withdraw "B105 may be silently ignored by this Flyway edition".**
+- The local Maven repository holds `flyway-core` 12.4.0.
+- `BaselineResolutionTest.java:10-14` checks that Flyway picks up `B105__fix_153_trader_only_baseline.sql` alongside V106. Its saved report shows 1 run, 0 failures, on Java 21.0.8 (`target/surefire-reports/...BaselineResolutionTest.txt:4`; `TEST-...xml:48`).
+- So this Flyway version recognises B105. Whether it actually executes on MySQL is still unproven (see point 3).
+- I also said "B105:1-4" as if the file were tiny. Those lines are only its header; the file is 2,272 lines and contains the full schema up to version 105.
+
+**2. I downgrade the duplicate `local-candle:` key from "possible startup failure" to minor.**
+- I said no test loads the configuration. That was wrong. `CutoverApprovalIsolationTest.java:16,26` starts a real `SpringApplication` with the default config locations, so it reads the classpath `application.yml`.
+- The compiled copy in `target/classes/application.yml` contains both keys (lines 40 and 447), and that test's report shows it passed (`...CutoverApprovalIsolationTest.txt:4`).
+- I cannot prove that test run used this exact file, so this is strong evidence but not proof.
+- Even if the second block replaced the first, the code defaults nearly match the first block: `enabled:false`, budget 10, grace 10, margin 2, delays 15000/5000 (`LocalCandleReconciliationService.java:44-48,58`). The only difference is `executor-size`, which would be 2 instead of 1 (`LocalCandleReconciliationConfig.java:15`). Low impact.
+
+**3. Codex and I both said V103 blocks a fresh trader-only install. That is overstated.**
+- B105 exists to skip V103 when installing into an empty schema.
+- `LocalCandleMySqlIT.freshFlywayBaselineUsesOnlyTraderSchema` (`:83-90`) runs a full migrate into a schema named `fix153_test_*`.
+- V103 throws unless the current database is named `crypto_ai` (`V103...java:39-40`). So if V103 ran in that test, the test would fail. A pass therefore proves B105 bypasses V103.
+- That test only runs when the `fix153-mysql` profile is enabled (`pom.xml:135-137`), and there is no report for it in `target/surefire-reports`.
+- Correct status: **a fix is designed and tested in code, but not yet shown to run.** AGENTS.md and `claude-docs/ARCHITECTURE.md:35-37` ("a fresh trader-only install fails") are probably out of date.
+- V103 still changes the collector's schema on databases that have existing Flyway history. That point from round 3 stands.
+
+### Codex's claims re-checked
+- **Confirmed:** `LIMIT 50` is applied before the due/evidence filtering (`LocalCandleReconciliationService.java:133` vs `:139-140`). It is worse than Codex said:
+  - `positiveLossEvidence` (`:198-207`) also runs after the limit.
+  - It needs either the next candle to exist or a reconnect after this candle's close.
+  - So up to 50 old open rows lacking that evidence can fill every slot for an interval until they age out of the window, and newer recoverable rows are never reached.
+- **Confirmed:** a `PENDING` candidate that ages out gets no final outcome.
+  - Candidates come only from inside the window (`:126,131`).
+  - Final outcomes are written only at `:188` and in `terminalUnavailable`.
+- **Codex was wrong** that `claude-docs` says direct ingestion is disabled in OBSERVE. Line 50 says "disabled in LIVE". The real errors are line 45, which groups OBSERVE with LIVE under the shared analysis path, and line 50, which says "never run together".
+- **Codex's other points are confirmed:** the backfill duplicate-key clause, OBSERVE running both paths, Replay selecting candles by time only, and the misleading source comments.
+
+### My finding A (re-confirmed, corrected framing from round 3 kept)
+- The ordinary backfill write closes an existing `closed=0` row but leaves its provenance as `RUNTIME` and its token NULL (`CandleRepository.java:173-188`).
+- It writes no audit row and no outcome.
+- Startup closes these rows before reconciliation could ever see them.
+- Existing tests don't cover it. `closedTransitionTokenAndOhlcvAreImmutableAndBackfillCannotCreateRuntimeClose` (`LocalCandleMySqlIT.java:40-52`) only backfills a candle that isn't already in the table; nothing tests backfill over an existing open runtime row.
+
+### Other documentation contradiction
+- `claude-docs/ARCHITECTURE.md:15` says "This workstation has Java 17 and cannot compile the project".
+- The saved test reports show a Java 21.0.8 run. Their date is unknown, so I can't tell which statement is current.
+
+### Side note (security, outside the question's scope)
+- B105 copies V7's seeded `admin` account, which has a default plaintext password (`B105:380-387`).
+- Every fresh install therefore starts with a known admin credential.
+
+## EVIDENCE
+- `CandleRepository.java:99-106, 126-145, 147-168, 169-212`
+- `LocalCandleReconciliationService.java:44-48, 58, 92-141, 161-207`
+- `LocalRuntimeSchemaChecks.java:17-27`
+- `V103__fix_149_fresh_admission_indexes.java:32-58`
+- `B105__fix_153_trader_only_baseline.sql:1-4, 380-387`
+- `BaselineResolutionTest.java:10-16` and its saved report (passed, Java 21.0.8)
+- `LocalCandleMySqlIT.java:20-27, 40-52, 83-90` (no saved report)
+- `CutoverApprovalIsolationTest.java:16-36` and its saved report (passed)
+- `pom.xml:25, 129-138`
+- `application.yml:36-51, 420-439, 447-459`
+- `target/classes/application.yml:40, 447`
+- `claude-docs/ARCHITECTURE.md:12-18, 35-37, 45-50`
+
+## OBJECTIONS (unresolved, material)
+1. **Startup and coin-activation imports close open `RUNTIME` rows** without an audit row, an outcome or a provenance change. This breaks AGENTS.md's "one durable terminal outcome" rule. Turning reconciliation on would not fix it.
+2. **OBSERVE in the main trader** runs direct ingestion, startup paper trading and collector consumption together, without the OFF-only safeguards.
+3. **Reconciliation:**
+   - it is disabled by default;
+   - candidates that age out get no final outcome;
+   - `LIMIT 50` is applied before the due and loss-evidence filters, so un-recoverable old rows can block newer ones.
+4. **The detector keeps its retry state in memory only**, with a short lookback.
+5. **No shared Binance REST rate-limit or ban handling** was found.
+6. **Replay parity is not shown.** Replay selects closed candles by time, not by provenance or outcome.
+7. **Documentation drift:**
+   - AGENTS.md calls the design "pending", but it is the code default;
+   - AGENTS.md and claude-docs say a fresh install fails because of V103, which B105 was built to prevent;
+   - claude-docs misdescribes OBSERVE;
+   - three source comments contradict their SQL.
+
+I removed two objections from round 3:
+- **Duplicate YAML key:** now minor (see point 2 above).
+- **Fresh install:** now "fix exists, not yet shown to run" rather than a blocker (see point 3 above).
+
+## UNKNOWNS
+- Whether `LocalCandleMySqlIT`, including the fresh migrate, has ever passed against MySQL 8.
+- The dates of the saved test reports relative to the current source.
+- Whether Boot 4.1 accepts the duplicate key, and whether later keys replace or merge with earlier ones.
+- Production artifact, mode, environment overrides and Flyway history (not accessed).
+- Actual deploy downtime.
+- Whether strategy/risk rules block typical OBSERVE startup signals.
+- How open positions stay protected while the application is being replaced.
+
+**Candidates for later solution review only (not authorised):**
+- Make the import insert-if-absent only, so it leaves non-`BACKFILL` open rows alone.
+- Filter reconciliation candidates to due rows with loss evidence before applying the limit, and add a final age-out outcome.
+- Run the `fix153-mysql` profile on disposable MySQL 8 to confirm the fresh install.
+- Merge the two YAML blocks.
+- Have the main trader refuse OBSERVE.
+- Add a shared REST rate-limit policy.
+- Make Replay select candles by provenance and outcome.
+- Correct claude-docs. Any AGENTS.md change needs your approval.
+
+## VERDICT
+REJECTED

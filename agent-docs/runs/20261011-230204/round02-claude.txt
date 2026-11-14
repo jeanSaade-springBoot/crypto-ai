@@ -1,0 +1,111 @@
+I couldn't write the plan file or call ExitPlanMode, because neither tool is available in this session, so the Round-2 review is below. Everything was read-only: no edits to the spec, code, configuration, database or git, and no Production access. I ran no internet searches, so nothing below is EXTERNAL RESEARCH.
+
+## FINDINGS
+
+### 1. Round-1 findings re-checked against the code
+
+**F-01 (BLOCKER) still holds.** [PROJECT EVIDENCE]
+- The Production signal path runs in this order: advisory, TP, profit-lock trigger, stop loss, rebase hard floor, SELL (suppressed while the lock is active), then 1m add only when the lock is inactive. It has no near-TP step.
+- The Production price path runs: TP (or TP extension), stop loss, rebase hard floor, profit lock, then near-TP last.
+- §3.3 at spec line 66 matches neither path.
+- Correction to my own severity: [AGENT INFERENCE] a lock price is normally above entry and a stop below it, so both firing on the same signal should be rare. It is still a freeze blocker, because §3.3 is the order the tests and the §7.2 "stop-loss precedence" gate are told to use.
+
+**F-02 (BLOCKER) still holds.** [PROJECT EVIDENCE]
+- When the toggle is off, Production returns inactive before any state change or hard-floor check (`DynamicProfitLockService.java:78-81`). When it is on, it calls the policy with a literal `true` (line 122).
+- Replay passes `settings.isDynamicProfitLockEnabled()` (`ShadowProductionReplayService.java:746`, 781). It also runs its rebase branch whatever the toggle (731-737).
+- Appendix B item 11 ("same arguments") is therefore false when the toggle is off.
+
+**F-03 (BLOCKER) still holds.** [PROJECT EVIDENCE]
+- Replay calls `BinanceMinimumExecutionPolicy.evaluate` at lines 534 and 687. That calls `BinanceMarketDataClient.getMinimumExecutableNotional`, which sends REST `GET /api/v3/exchangeInfo` (lines 159-166).
+- I found no cache in that client.
+- If the call fails, the result is `BINANCE_MINIMUM_UNAVAILABLE`, so the Replay outcome depends on the network.
+
+**F-05 (BLOCKER) still holds.** [PROJECT EVIDENCE]
+- The shared `TradeExecutionValidationService.settings()` (line 401) reads `wallet_settings` with no scope check. It feeds `requireNewBuyTransition` (line 67) and `executionProfile` (lines 100 and 152).
+- The signal lookups at 372 and 377 are scope-aware; the settings read is not.
+- "Remove all wallet_settings reads" (§8.2) cannot be met together with "no Production class modified" (§5).
+
+**Codex's Replay wallet-sizing claim is confirmed.** [PROJECT EVIDENCE] `ShadowProductionReplayService.java:79-82, 296-298, 319-320, 352-353`.
+
+**The zero-event fallback and the tail omission are confirmed.** [PROJECT EVIDENCE]
+- The fallback is gated by `exactPriceReplay = !livePrices.isEmpty()` (line 95) and starts at line 183.
+- Price events are drained only up to each signal's `generatedAt` (lines 126-128).
+
+**The automatic experimental observers are confirmed.** [PROJECT EVIDENCE] Lines 100-101, 133, 171 and 177-181.
+
+### 2. Corrections to my own Round-1 findings
+
+**F-08 overstated the problem; I'm downgrading it from MATERIAL defect to a boundary-definition ambiguity.** [PROJECT EVIDENCE]
+- `/runs/{id}/fix127` reads `signal_processing_work`. §3.1 explicitly allows that table as stored-outcome evidence. Listing it as a violation was my mistake.
+- The proven-trade routes read `wallet_trade` through `TradeInvestmentHistory.closedWallet` and `wallet()` (lines 44 and 67-74). Those routes are `/proven-trades/**`, not `/runs/**`; they enrich Production-sourced records.
+- The real problem: §2 names `RegressionTestService` as a whole as inside the boundary. Either these methods must be carved out explicitly, as `TradeReplayService` is, or they are in violation. The spec must say which.
+
+**I would now classify M-06 (D08) as "equivalent on decisions, not on side effects".** [AGENT INFERENCE] The non-1m wake-up still writes `fix122_evaluation` audit rows during generation. That conflicts with §6.2 item 1 (no writes before qualification), so D08 cannot be fully closed.
+
+### 3. New Round-2 findings
+
+**N-01 (MATERIAL): the spec's source-identity claim does not hold for the tree under review.** [PROJECT EVIDENCE]
+- The git status snapshot shows uncommitted changes to `ExecutionIntelligenceService.java`, `LivePositionProtectionService.java`, `TradeExecutionValidationService` neighbours, `CandleClosedAnalysisWorker.java`, `MarketPriceEventService.java` and others.
+- Several of these are Production classes that D-register rows depend on (D02/D09/D18/D21 and the price-path order).
+- [AGENT INFERENCE] Codex's statement that the Replay files match `A4A9…E9938` covers Replay files only, not these shared classes. I did not hash anything, so I can't confirm or refute it.
+- §10's statement that "every register row holds for both packages" is not proof for the current worktree.
+
+**N-02 (MATERIAL): the seeded lifecycle (F-06) also needs the TP-extension history.** [PROJECT EVIDENCE]
+- The Production signal path treats `wallet_managed_position.take_profit_usdt` as the authoritative TP and repairs `paper_position` from it (`PaperTradingService.java:157-168`).
+- E09 captures only the TP at entry. A seeded lifecycle without the later Production TP-extension events can't reproduce the TP and profit-lock geometry. It would also need an account-table extraction that the spec does not list.
+
+**N-03 (MATERIAL): Codex's registry objection is right but stops short.** [PROJECT EVIDENCE] The governance contract (item 6) requires a mandatory logging registry. The spec has none: no log IDs, correlation fields, or UTC/KSA format. Missing artifacts are therefore not only E01–E10 and the migration number.
+
+**N-04 (MINOR): no E01–E10 artifacts exist.** [PROJECT EVIDENCE] The glob for those names returned no files, which confirms Codex's claim.
+
+## EVIDENCE
+
+| Claim | Location |
+|---|---|
+| Signal-path order | `src/main/java/com/crypto/service/PaperTradingService.java:113-121, 133-137, 170-185, 190-195, 197-213, 217` |
+| Price-path order | `src/main/java/com/crypto/position/service/LivePositionProtectionService.java:166-180, 195-229, 248` |
+| Profit-lock toggle | `DynamicProfitLockService.java:78-81, 118-122`; `ShadowProductionReplayService.java:725-751, 777-783` |
+| Live HTTP call | `ShadowProductionReplayService.java:534, 687`; `BinanceMinimumExecutionPolicy.java:39-46`; `BinanceMarketDataClient.java:159-166` |
+| Validation settings read | `TradeExecutionValidationService.java:52, 67, 100, 152, 372, 377, 401` |
+| Replay wallet sizing and observers | `ShadowProductionReplayService.java:79-82, 95, 100-101, 113-116, 126-128, 183` |
+| Proven-trade `wallet_trade` reads | `RegressionTestController.java:141-154`; `RegressionTestService.java:651`; `TradeInvestmentHistory.java:44-74, 100-104` |
+| `/runs/{id}/fix127` | `Fix127DiagnosticsController.java:16, 36` (allowed evidence table) |
+| Labels and spec identity | Spec line 3 (`RPR-0.9.4-DRAFT`); canonical `FINAL_CHANGE_SPECIFICATION.md:3` (`RPR-0.4-DRAFT`) |
+
+## OBJECTIONS
+
+1. **Codex's Round-1 list misses the four code-level blockers** (F-01, F-02, F-03, F-05). [AGENT INFERENCE]
+   - Codex's blockers are mostly governance and evidence gaps. Mine show that the spec's own claims are wrong against the code.
+   - If the governance gaps alone were fixed, a re-freeze would still encode the wrong signal-path order and a false D14 equivalence.
+2. **The label contradiction (Codex, and my F-07) is agreed.** [AGENT INFERENCE] I add one point: refusal granularity (whole run versus per span, §1 against D25 and §3.3) is part of the same defect.
+3. **Statistics.** [AGENT INFERENCE] Judging 99% on a lower confidence bound needs about 300 or more comparable units per metric, even with zero mismatches (rule of three). §7.1 asks for per-exit-class reporting. If acceptance applies per class, rare classes (hard floor, near-TP, POSITION_STOP_LOSS) will never be evaluable. If it applies only overall, the §7.2 zero-critical-mismatch gate carries all the safety weight. The spec must choose before E06 is run, or the threshold-tuning risk Appendix C-2 warns about returns.
+4. **Selective exclusion.** [AGENT INFERENCE] I agree with Codex's point. Both sets of non-comparable classes enlarge the excluded set without a cap: "wallet-driven", "configuration not recoverable" (E10) and "availability not reconstructable" (§3.6). Coverage floor (a) is the only guard and it has no value. Freeze needs at least the method that will set it.
+
+## UNKNOWNS
+
+- Whether the Replay and shared-class sources in the current worktree match `A4A9…E9938`. I did not hash anything.
+- Whether `getMinimumExecutableNotional` is cached somewhere upstream, for example by a Spring cache or proxy. Grep found no cache in the client itself.
+- Historical `wallet_settings` values and TP-extension history. E10 and E09 do not exist yet.
+- Spec rows I did not re-verify this round: S01–S06, S08–S12 and S13 (the 13-field validator).
+
+## FINDINGS FOR JEAN
+
+1. **Not freeze-ready. Codex and I agree.** Our reasons add up rather than conflict.
+2. **The spec's claims about the code are wrong in four places:**
+   - the signal-path order in §3.3;
+   - D14's "same arguments" profit-lock claim;
+   - an unregistered live Binance call from Replay;
+   - a shared `wallet_settings` read that "Replay-only, no Production change" can't remove.
+3. **You need to decide on item 2's last point (F-05):** allow a narrow Production change, specify a scope guard or interceptor, or declare those decisions non-comparable.
+4. **Governance:**
+   - make the revision identity unambiguous and copy the spec to the canonical path;
+   - define a label for lifecycle results;
+   - add a logging registry;
+   - produce E01–E10;
+   - say whether the 99% threshold is per exit class or overall.
+5. **Two corrections to my Round 1:**
+   - The `/runs/{id}/fix127` read is allowed evidence, not a violation.
+   - The proven-trade `wallet_trade` reads are a boundary-definition question, not a confirmed D26 gap.
+6. **Seeded-entry design (Appendix C-1).** Before you confirm it, it must also carry the Production TP-extension history, not only the TP at entry.
+
+VERDICT: REJECTED

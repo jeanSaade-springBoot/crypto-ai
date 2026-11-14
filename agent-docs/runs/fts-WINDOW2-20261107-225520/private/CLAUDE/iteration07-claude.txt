@@ -1,0 +1,194 @@
+# CLAUDE: FTS WINDOW2, Iteration 7 (self-challenge)
+
+## Summary
+
+I checked my iteration-6 verdicts against the I6-001 to I6-005 results. Three of them need correcting, one is reframed, and two hold up:
+
+1. **Corrected: "Higher Entry Quality goes with more losses."** This was mostly a volatility mix effect. Once entries are grouped by ATR (average true range, a volatility measure), the gradient disappears in the low and high bands. ATR band explains outcomes better than Entry Quality does. Nearly all of the population's net loss (−4.13 of −4.17 USDT) is in the band where 1m ATR is 0.25% or more.
+2. **Withdrawn: "Require a current 1m BUY at execution."** Across the population, entries made while the 1m signal was WATCH did slightly *better* than entries made on a 1m BUY.
+3. **Softened: "1m STRONG labels flip within a minute."** Only 30 of 920 1m BUYs (3.3%) were followed by a bearish 1m one minute later. The flips I saw in the frozen trades went from bearish to BUY. That is a pattern in these trades, not a general finding.
+4. **Reframed: the frozen sample is unrepresentative.** Five of the six frozen trades are low-volatility entries. Low-volatility entries as a group are close to breakeven (−0.12 USDT over 69 positions). Their losses are noise in a bucket that does not drive losses, not the system's main way of losing money.
+5. **Confirmed: the noise-entry picture for 137, 158, 162, 172 and 182.** None of them ever moved more than 0.18% in their favour (I6-001).
+6. **Kept, with a sharper split: 143.** The defect is why the trade opened. The loss itself came from a feed gap at exit. While open, the trade was up as much as +1.69%.
+
+Scope: the six frozen IDs are unchanged and none was substituted. Nothing was written to the database, code or config. I did not read the Codex folders, LIVE_TEAM_STATUS.md or LIVE_EVENTS.log. This session has no Write or ExitPlanMode tool, so this output exists only here.
+
+---
+
+## FINDINGS
+
+### F-I7-01: Price moves for and against each trade while it was open
+[PROJECT EVIDENCE: I6-001, market_price_event between opened_at and closed_at]
+
+| ID | Entry | Highest | Best move in its favour | Lowest | Worst move against it | Exit | Ticks observed |
+|---|---|---|---|---|---|---|---|
+| 137 | 3.999 | 4.005 | +0.15% | 3.987 | −0.30% | 3.987 (exit at the low) | 30 |
+| 143 | 4.033 | **4.101** | **+1.69%** | 4.022 | −0.27% | 4.027 | 57 |
+| 158 | 1.4108 | 1.4116 | +0.06% | 1.4089 | −0.13% | 1.4090 | 856 |
+| 162 | 0.08705 | 0.08711 | +0.07% | 0.08670 | −0.40% | 0.08675 | 393 |
+| 172 | 5.49e-6 | 5.50e-6 | +0.18% (1 tick) | 5.48e-6 | −0.18% | 5.48e-6 | 200 |
+| 182 | 0.1884 | 0.1883 | **never above entry** | 0.1880 | −0.21% | 0.1880 | 30 |
+
+- **Five of the six never moved meaningfully in their favour.** This settles U-I6-1. It supports F-I6-02's view that these entries had no edge against short-term noise, on outcome evidence rather than inference. This table is outcome evidence only; it is not used to judge entry quality.
+- **The observation windows have gaps.** The first tick for 182 is at 09:57:26 UTC (12:57:26 KSA), 20 s after entry. The first tick for 172 is at 06:36:39 UTC (09:36:39 KSA), 34 s after entry. A price move in their favour during those gaps cannot be ruled out. With 30 ticks over 8 minutes, the ACE feed is also sparse.
+
+### F-I7-02: Trade 143 has two separate causes; my iteration-6 summary merged them
+[PROJECT EVIDENCE: F-I3-02, F-I4-01, I6-001]
+
+1. **Why it opened (a logic defect).** The entry was approved on 5m BUY 159285, which had already been replaced by 5m WATCH 159407 at 22:40:01.636 UTC (10-12 01:40:01 KSA). The mechanism is confirmed. That 143 would not have opened without the defect is still AGENT INFERENCE: it rests on the route-closure analysis at `ExecutionIntelligenceService.java:1486` and `:644`, and Replay has not been run.
+2. **Why it lost money (a feed gap, not a defect).**
+   - The price peaked at 4.101 at 22:41:55 UTC (01:41:55 KSA).
+   - There is an 8.0 s gap with no ticks, from 22:43:27 to 22:43:35 UTC (01:43:27 to 01:43:35 KSA). The price fell from 4.100 to 4.027 inside it, straight through the lock (4.0758) and the floor (4.035).
+   - The protection reacted 25 ms after the first tick below the floor.
+   - Had the ticks been continuous, the exit would most likely have been a profitable `PROFIT_LOCK_EXIT` (F-I3-02).
+
+**Correction:** F-I6-01 called 143 "Confirmed: timestamps plus code" without separating these two causes. The defect is behind the entry, not the loss amount. Fixing the defect would have prevented a trade that, on this occasion, was once up 1.69%. The same race let four losing entries through in I3-002, so the decision path is still wrong. But the cost of this defect cannot be shown from 143 alone (n = 7, net −1.283 USDT, F-I4-02).
+
+### F-I7-03: The Entry Quality inversion is mostly a volatility mix effect (corrects F-I6-03)
+[PROJECT EVIDENCE: I6-002, n = 193; group totals reconcile with I6-003's total of −4.171 USDT, and the 15 s match produced no duplicate rows]
+
+Loss rate by Entry Quality band (columns) within each ATR band (rows):
+
+| ATR band (1m) | 50–54 | 55–59 | 60–69 | 70+ | Whole band: n, loss rate, stop-out rate, net |
+|---|---|---|---|---|---|
+| below 0.1667% | 43% (n 47) | 33% (n 12) | 43% (n 7) | 33% (n 3) | 69, **41%**, 17%, **−0.12 USDT** |
+| 0.1667–0.25% | 33% (n 12) | 67% (n 3) | 42% (n 19) | 63% (n 27) | 61, **51%**, 43%, **+0.08 USDT** |
+| 0.25% and above | 50% (n 2) | 67% (n 3) | 69% (n 13) | 67% (n 45) | 63, **67%**, 59%, **−4.13 USDT** |
+
+- **No gradient in the low and high bands.** A gradient remains only in the middle band: 63% loss rate at 70+ against 33–42% in the lower score bands, with small groups.
+- **The two scores are entangled.** 77% of the 50–54 scores fall in the low ATR band, and 60% of the 70+ scores fall in the high ATR band. So Entry Quality is acting mostly as a stand-in for volatility.
+- **This supports the mechanism I proposed in F-I6-03 (AGENT INFERENCE).** The bands meet at 0.5% stop distance: 3 × 0.1667% and 2 × 0.25% both equal 0.5%.
+  - With 1m ATR below 0.25%, the 0.5% stop floor is wider than 2 × ATR. Reward:risk falls below 1 and the −30 penalty applies, so these entries score low but are rarely stopped out.
+  - With 1m ATR at 0.25% or more, the stop sits at 2 × ATR. These entries avoid the penalty, score high, and get stopped out 59% of the time.
+- **Revised statement:** Entry Quality does not separate good entries from bad ones once volatility is controlled for. The loss driver is entries on high-volatility 1m candles with stops at about 2 × the 1m ATR.
+- **Caveat:** I assume `atr_percent` is stored as a percentage (a 0.27% ATR for 143 fits that). I7-002 checks it.
+
+### F-I7-04: Tight stops carry the population's losses
+[PROJECT EVIDENCE: I6-003]
+
+| Stop distance (in 1m ATRs) | Total | Stopped out | Net (USDT) |
+|---|---|---|---|
+| below 2.5 | 97 | 57 (59%) | **−4.94** |
+| 2.5 or more | 96 | 18 (19%) | **+0.77** |
+
+**Self-challenges:**
+- **Collinearity.** Stop distance in ATRs largely mirrors the ATR band, because of the stop floor. This is the same effect as F-I7-03, not separate evidence.
+- **Scale-ins distort the measure.** `paper_position.stop_loss` is changed only on a progressive add (scale-in). The add raises the stop and averages the entry price (`PaperTradingService.java:263-271`). For those positions, "entry minus stop" no longer measures the original stop distance. I7-003 counts how many positions this affects.
+- **"Wider stops would help" is not shown.** A wider stop could just turn stop-outs into larger losses. What matters is whether the price recovered after the stop-out. I7-001 tests this. Until it does, recommendation 4 below stays a hypothesis.
+
+### F-I7-05: Withdrawn — requiring a current 1m BUY
+[PROJECT EVIDENCE: I6-004]
+
+| 1m signal at execution | n | Loss rate | Net (USDT) |
+|---|---|---|---|
+| WATCH | 115 | 49% (56) | −1.22 |
+| BUY or STRONG_BUY | 69 | 55% (38) | −2.22 |
+| NEUTRAL | 9 | 78% (7, all stopped out) | −0.72 |
+
+- WATCH entries did not do worse than BUY entries. Iteration 6's remediation item 2 is **not supported** and is withdrawn.
+- The noticeably weak group is **BUY in a BREAKOUT regime**: n 20, 70% losers, average −0.23%. It points the same way as F-I7-03, since breakout regimes tend to be the volatile ones (AGENT INFERENCE).
+- Entering on a NEUTRAL 1m (n 9, all 7 losses stopped out) is a small group but worth a look in iteration 8.
+
+### F-I7-06: Softened — the claim that 1m labels flip within a minute
+[PROJECT EVIDENCE: I6-005]
+
+- Only 30 of 920 1m BUYs (3.3%) on 2026-10-11 and 10-12 UTC were followed by a SELL or STRONG_SELL one minute later.
+- The flips in the frozen trades went the other way: a STRONG_SELL streak, then a BUY within one or two minutes (137, 143, 182).
+- I withdraw the general claim that a 1m STRONG label does not persist. What remains is a narrower question: **does a BUY that comes straight after a STRONG_SELL streak do worse?** I7-004 tests it on the population.
+
+### F-I7-07: Fees, sized
+[PROJECT EVIDENCE: I6-005; the fee rate is still EXTERNAL RESEARCH and unverified (U-I2-7)]
+
+- 32 of the 90 winners (36%) made less than 0.2% gross. Together they made 1.05 USDT of the 13.11 USDT won.
+- At a 0.2% round-trip fee, all 32 would become losses.
+- Total fee drag (0.2% times total traded value) is unknown. I7-002 adds total traded value.
+- None of this changes why the six frozen trades lost; paper fees are 0.
+
+### F-I7-08: The frozen sample sits in the population bucket that does not drive losses
+[AGENT INFERENCE from each trade's loss divided by its loss in ATR multiples (F-I6-02); I7-002 verifies]
+
+- **Implied 1m ATR:** 158 ≈ 0.06%, 162 ≈ 0.07%, 182 ≈ 0.08%, 137 ≈ 0.11%, 172 ≈ 0.12% (distorted by tick size), and 143 ≈ 0.27%.
+- **Five of the six are low-ATR entries.** That band totals −0.12 USDT over 69 positions, roughly breakeven. The CLOSED-only selection rule (F-I3-01) leaves out the high-ATR stop-outs, which carry about 99% of the net loss.
+- **For the study:** the per-trade fixes for the five valid losses (the late-entry exemption in F-I4-06, the `final_entry_allowed` gap in F-I4-04, and the 1h score of 16 against 15 in F-I4-05) are design inconsistencies worth correcting. They are not the population's main loss mechanism, and fixing them should not be expected to move total PnL much.
+
+---
+
+## Revised per-trade verdicts (candidates to freeze in iteration 8)
+
+| ID | Verdict | What changed since iteration 6 |
+|---|---|---|
+| 143 | **Logic defect on entry** (superseded 5m approval). **Feed or observation gap on exit.** Peak was +1.69%. | The two causes are now separated |
+| 162 | Valid loss: weak entry plus a one-BUY late-entry exemption. Best move +0.07%. | Outcome now confirmed by price data |
+| 172 | Valid loss: 5m approved despite `final_entry_allowed=0`; ATR smaller than one tick. Best move +1 tick. | Same |
+| 182 | Valid loss: bounce entry in a downtrend, approved by a 1h score of 16 against 15. **Never above entry** (with a 20 s gap in the data). | Same |
+| 158 | Valid loss: weak WATCH wakeup entry; diverges from Replay. Best move +0.06%. | WATCH entries are no longer treated as the cause |
+| 137 | Valid loss: bounce entry on the 25% exploratory route. Best move +0.15%. | Same |
+
+## Revised remediation direction (recommendation only, not authorised)
+
+1. **143 defect (unchanged):** choose the 5m and 1h approvals by candle identity (the FIX-141 pattern), and re-check them before execution. This also closes the Replay divergence in F-I4-03.
+2. ~~Require a current 1m BUY.~~ **Withdrawn** (F-I7-05).
+3. **Make Entry Quality independent of volatility**, or add a volatility or stop-in-noise term. It currently sorts entries by volatility in the wrong direction (F-I7-03).
+4. **Stop placement for high-ATR entries.** This is a hypothesis until I7-001 shows whether stopped-out prices recovered. It is a trading-rule change and needs the governed specification process.
+5. **Treat the feed gap as a separate protection risk.** Gaps of 6–8 s let price jump straight through a lock (positions 142 and 143). Look into the gap's cause, which is unknown.
+6. **Widen future study selection** to `status IN ('CLOSED','STOPPED')` (unchanged).
+7. The design inconsistencies (F-I4-04, -05, -06) are worth correcting, with low expected PnL impact.
+
+---
+
+## UNKNOWNS
+
+- **U-I7-1:** Whether stopped-out positions recovered to entry or target soon after the stop, which would show the stop was noise (I7-001).
+- **U-I7-2:** The unit of `atr_percent`, the ATR bands of the frozen trades, and total traded value for fee drag (I7-002).
+- **U-I7-3:** How many positions had a progressive add, which distorts the stop-distance measure (I7-003).
+- **U-I7-4:** Whether a BUY straight after a STRONG_SELL streak does worse across the population (I7-004).
+- **U-I7-5:** What caused the 6–8 s tick gaps (the Binance stream, a reconnect, or local processing). The Production logs are unavailable (U-I4-6).
+- **Carried:** U-I2-7 (fee tier), U-I4-5 (no Replay run), U-I4-6 (Production logs), U-I6-2 (the components behind the three scores of exactly 50).
+
+---
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-001
+Purpose: For each STOPPED position, the price range in the 30 minutes after the stop-out compared with entry and target. This tests whether stops were hit by noise or by real moves (U-I7-1, F-I7-04). The market_price_event columns were proven by I3-003 and I6-001.
+SQL:
+SELECT pp.id, pp.symbol, pp.entry_price, pp.stop_loss, pp.take_profit, pp.closed_at, MAX(e.price) AS max_30m_after, MIN(e.price) AS min_30m_after, (MAX(e.price) >= pp.entry_price) AS recovered_to_entry, (MAX(e.price) >= pp.take_profit) AS reached_tp_after, COUNT(e.id) AS n_events FROM crypto_ai.paper_position pp LEFT JOIN crypto_ai.market_price_event e ON e.symbol = pp.symbol AND e.observed_at > pp.closed_at AND e.observed_at <= pp.closed_at + INTERVAL 30 MINUTE WHERE pp.status = 'STOPPED' GROUP BY pp.id, pp.symbol, pp.entry_price, pp.stop_loss, pp.take_profit, pp.closed_at ORDER BY pp.id LIMIT 80
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-002
+Purpose: Check the unit of `atr_percent` and the ATR band of each frozen trade (U-I7-2, F-I7-08), and get total traded value for fee drag (F-I7-07).
+SQL:
+SELECT CONCAT('frozen_', pp.id) AS row_label, s.atr_percent, s.atr_at_signal, pp.entry_price, s.atr_at_signal / NULLIF(pp.entry_price, 0) * 100 AS atr_pct_recomputed, (pp.entry_price - pp.stop_loss) / NULLIF(pp.entry_price, 0) * 100 AS stop_pct, pp.entry_price * pp.quantity AS notional FROM crypto_ai.paper_position pp JOIN crypto_ai.trade_signal s ON s.id = pp.signal_id WHERE pp.id IN (137,143,158,162,172,182) UNION ALL SELECT 'population_total', NULL, NULL, NULL, NULL, COUNT(*), SUM(pp.entry_price * pp.quantity) FROM crypto_ai.paper_position pp WHERE pp.status IN ('CLOSED','STOPPED') LIMIT 10
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-003
+Purpose: Count completed positions that had a progressive add, which changes `stop_loss` and `entry_price` and distorts I6-003 (U-I7-3). The column name `entry_reason` is inferred from `PaperPosition.setEntryReason` and should be checked against information_schema first; it is kept as a separate query so a schema mismatch does not block the others.
+SQL:
+SELECT pp.status, SUM(pp.entry_reason LIKE '%Progressive add%') AS with_add, COUNT(*) AS n, SUM(CASE WHEN pp.entry_reason LIKE '%Progressive add%' THEN pp.realized_pnl ELSE 0 END) AS pnl_with_add FROM crypto_ai.paper_position pp WHERE pp.status IN ('CLOSED','STOPPED') GROUP BY pp.status LIMIT 5
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-004
+Purpose: Outcome of positions whose 1m execution signal came within 1–3 minutes after a 1m STRONG_SELL on the same symbol, against all other positions (U-I7-4, F-I7-06). Columns were proven by I6-005.
+SQL:
+SELECT (EXISTS (SELECT 1 FROM crypto_ai.trade_signal p WHERE p.symbol = s.symbol AND p.interval_code = '1m' AND p.decision = 'STRONG_SELL' AND p.candle_open_time BETWEEN s.candle_open_time - INTERVAL 3 MINUTE AND s.candle_open_time - INTERVAL 1 MINUTE)) AS after_strong_sell, COUNT(*) AS n, SUM(pp.realized_pnl < 0) AS losers, SUM(pp.status = 'STOPPED') AS stopped, SUM(pp.realized_pnl) AS net_pnl, AVG(pp.realized_pnl / NULLIF(pp.entry_price * pp.quantity, 0) * 100) AS avg_pnl_pct FROM crypto_ai.paper_position pp JOIN crypto_ai.trade_signal s ON s.id = pp.signal_id WHERE pp.status IN ('CLOSED','STOPPED') AND s.interval_code = '1m' GROUP BY after_strong_sell LIMIT 5
+### END_DB_REQUEST
+
+---
+
+## Self-review (iteration 7)
+
+- **Time labels:** every timestamp is labelled UTC, with KSA (UTC+3) alongside where it matters. 143's events fall on the KSA date 2026-10-12.
+- **Evidence labels:**
+  - PROJECT EVIDENCE: I6-001 to I6-005 and the code references.
+  - AGENT INFERENCE: the implied ATRs, the 143 counterfactual, the band-to-stop-floor mechanism, and the breakout/volatility link.
+  - EXTERNAL RESEARCH: carried from iteration 6 only (the fee rate); no new research this iteration.
+- **Claims withdrawn or corrected:**
+  - F-I6-03: the mechanism, now mostly a volatility effect.
+  - Remediation item 2: withdrawn.
+  - The general "1m flips" claim from F-I6-02.
+  - F-I6-01 for 143: the two causes are now separate.
+- **Plan for iteration 8:** fold in I7-001 to I7-004, freeze the per-trade verdicts and the root-cause hierarchy, and state the study-selection bias as a formal limitation.

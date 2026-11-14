@@ -1,0 +1,51 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen WINDOW2 cohort is exactly `paper_position` IDs `182, 172, 162, 158, 143, 137`. No substitutions will be made.
+- **PROJECT EVIDENCE:** No Codex-private DB evidence exists yet, so entry, exit, P&L, signal linkage, and protection path are not reconstructable at this point.
+- **PROJECT EVIDENCE:** The stated snapshot times conflict: `2026-10-19 15:00:03 UTC` converts to `2026-10-19 18:00:03 KSA`, not `18:00:01 KSA`. The intended window clock remains `18:00:00 KSA`; this three-second discrepancy needs preservation in the final study evidence.
+- **AGENT INFERENCE:** No causal conclusion about any frozen loss is justified before durable position/execution/signal evidence is supplied.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Charter and frozen selection define `crypto_ai.paper_position` as authoritative; selection is closed rows with negative realized P&L, ordered by `closed_at DESC`.
+- **PROJECT EVIDENCE:** Database rules require coordinator-executed, bounded read-only evidence and actual schema inspection before selecting columns.
+- **PROJECT EVIDENCE:** Current architecture documentation identifies the relevant reconstruction domains: `paper_position`, `wallet_trade`, `trade_signal`, `signal_processing_work`, `market_price_event`, and local candle/indicator evidence.
+- **EXTERNAL RESEARCH:** None used.
+
+## UNKNOWNS
+
+- Whether every frozen ID still satisfies the frozen selection predicate in the captured proof evidence.
+- Symbol, entry/exit UTC timestamps, realized P&L, quantities, entry/exit prices, stop/TP, and exit reasons.
+- Position-to-wallet-trade and position-to-signal linkage.
+- Whether a canonical accepted price observation proves the recorded exit trigger.
+- Whether the entry signal had fresh, quality-valid contemporaneous market context.
+- Whether any trade can be reproduced meaningfully in Replay; no Replay is requested or run.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Inspect the actual `crypto_ai` schema for the bounded trade-reconstruction entities before selecting data columns or asserting relationships for frozen paper-position IDs 182, 172, 162, 158, 143, and 137.  
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    c.extra
+FROM information_schema.columns AS c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'managed_position',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+### END_DB_REQUEST

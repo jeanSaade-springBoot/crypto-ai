@@ -1,0 +1,160 @@
+**Round 3: I'm still at INSUFFICIENT_EVIDENCE, but only one cheap check remains.** Every exit rule for this trade is now evidenced down to the price-event ID. Codex's own round-3 file accepts my N1–N4. What nobody has checked is whether a price at or above take-profit (TP) reached the system during 20:45–20:54Z and was rejected as stale or out of order. If one did, the answer to Q1 becomes "stale data" instead of "TP was never seen."
+
+Labels: **[PE]** PROJECT EVIDENCE · **[ER]** EXTERNAL RESEARCH · **[AI]** AGENT INFERENCE.
+
+**How I worked.** Read-only: no shell, no DB, no `crypto_ai_v2`. I can't decompress `.gz` files. For the exit-window log I used the raw 7-Zip output captured in Codex's round-2 transcript (`round02-codex.stderr.txt`) and checked each line against the source's log formats. I also read Codex's finished round-3 reply (`round03-codex.txt`) as a non-authoritative claim. `AGREED_KNOWLEDGE.md`, `DECISIONS.md` and `CODEX_LATEST.md` have no entries.
+
+## FINDINGS
+
+### Timeline, now at price-event level [PE]
+
+| Event | UTC (9 Oct) | KSA |
+|---|---|---|
+| 1m signal 89469 saved; its own processing declined to buy (`ACCUMULATED_EVIDENCE_DETERIORATED`) | 20:45:03.499 / 20:45:04.861 | 23:45:03.499 / 23:45:04.861 |
+| 5m trigger 89473 saved | 20:45:04.390 | 23:45:04.390 |
+| BUY 106 at 0.00000541 (5m wakeup route, executed on 89469) | 20:45:05.997 | 23:45:05.997 |
+| High-water mark moves 0.00000541 → 0.00000542 (42.14%) | 20:47:41.566 | 23:47:41.566 |
+| Event **1085348** at 0.00000543 observed / evaluated: lock armed at 0.000005421865 (84.28%) | 20:58:09.444 / .534 | 23:58:09.444 / .534 |
+| Three more evaluations at 0.00000543, none triggered | 20:58:11.539, 23.533, 37.584 | 23:58:11.539, 23.533, 37.584 |
+| Event **1085485** at 0.00000542 observed / evaluated: lock triggered | 20:58:43.449 / .543 | 23:58:43.449 / .543 |
+| SELL 107 `PROFIT_LOCK_EXIT` at 0.00000542 | 20:58:43.554 | 23:58:43.554 |
+| Event 1085485 committed as APPLIED | 20:58:43.839 | 23:58:43.839 |
+| Next 1m signal 89815 (after the close) | 20:59:02.743 | 23:59:02.743 |
+
+Log timestamps are UTC: the APPLIED line is stamped 390 ms after its own `observedUtc` [PE].
+
+### What this round adds
+
+**R3-1. The trigger was the first eligible one, and the event ID is tied to its price.**
+- While the lock is active, every accepted evaluation writes a LIVE_PATH log line (`LivePositionProtectionService.java:201-206`). Exactly five exist: four at 0.00000543 that didn't trigger, then event 1085485 at 0.00000542 [PE].
+- `finish()` commits APPLIED only if the row's id, symbol, time *and* price all match, and throws otherwise (`MarketPriceEventService.java:87-88`). The "committed" log line is written only after the commit (`:89-95`). So the log proves the database row was updated [PE].
+- Observation to decision took 94 ms, and the SELL was recorded 105 ms after the observation. There was no execution delay [PE].
+
+**R3-2. No accepted price ever reached TP, and none was quietly left unexecuted.**
+- The high-water mark only ever rises (`DynamicProfitLockService.java:100`). It was 0.00000542 until 20:58:09.444Z and 0.00000543 after that [PE].
+- The TP check runs before the lock check (`LivePositionProtectionService.java:100`). An accepted price at or above TP would either have extended TP or sold as TAKE_PROFIT.
+- `executeMechanicalExit` declines only when there is no open position or no coins (`WalletAutoExecutionService.java:490-505`).
+- TP was unchanged at close (DBQ-014). No TP-extension line exists in any 9 Oct log file. SELL 107 sold the full 4,621,072.09 SHIB [PE+AI].
+
+**R3-3. The wallet record alone proves which exit path sold.** Trade 107 has `signal_id` NULL and reason `PROFIT_LOCK_EXIT`. The signal path would have recorded the signal and `POSITION_PROFIT_LOCK` instead (`WalletAutoExecutionService.java:435-456` vs `:533-551`). Codex's search of every 9 Oct log file found no signal-path lock line for position 64 [PE].
+
+**R3-4. Self-correction: not every rejected price is in the database.**
+- A price that fails the arrival check is only logged, as `[FIX-153][PRICE_NOT_CANONICAL]`. It gets no `market_price_event` row (`MarketPriceEventService.java:31-32, 40-57`) [PE]. The check rejects:
+  - STALE_PRICE: older than 15 s;
+  - FUTURE_TIMESTAMP: more than 2 s ahead;
+  - INVALID_PRICE or MISSING_TIMESTAMP.
+- So the database query I proposed in round 2 would have missed these. Only the log or the candle highs can settle it.
+
+**R3-5. The running code matches the current source.**
+- Codex's captured `git diff` of `LivePositionProtectionService` shows only the FIX-153 freshness wrapper (`round02-codex.stderr.txt:16471-16494`). The TP, lock and exit-policy branches are unchanged. The output is cut off after that first section, so later changes aren't visible [PE].
+- Every exit-path log line matches the current source's format. That corroborates the code version but is not a binary hash [PE+AI].
+
+**R3-6. Replay gap (N3) re-checked in code.**
+- Exact Replay skips the signal-path exits entirely (`ShadowProductionReplayService.java:183-186`).
+- Fallback Replay applies continuation and the higher-timeframe hold (`:570-649`), which Production's signal path does not [PE].
+
+**R3-7. "12:38" can only mean 00:38 KSA.**
+- This investigation itself ran 01:09–02:00 KSA on 10 Oct (`PROGRESS.log`; Codex's DBQ-004 rerun shows MySQL `NOW()` = 01:22:22). So 12:38 PM had not happened yet, and Codex's "if it means noon" hedge isn't needed [PE+AI].
+- The 0.00000549 candle at 21:38Z (00:38 KSA) came 39 min 16 s after the SELL [PE].
+
+**Resolved since round 2.** Codex's round 3 accepts the signal-path exit (N1), the ~19 s counterfactual (N2), the Replay gap (N3) and close-only price sampling (N4) (`round03-codex.txt:13-15, 37-39`).
+
+### Answers to the three questions (agreed by both agents, apart from Unknown 1)
+
+1. **Why profit lock instead of take-profit.**
+   - Protection never accepted a price at or above TP (0.00000543373). On the observed 0.00000001 price grid, that needed 0.00000544 [PE].
+   - One tick up to 0.00000543 armed a 50% lock at 0.000005421865. The next accepted price, 0.00000542, breached the lock but stayed above the 0.000005412705 hard floor [PE].
+   - The exit rule then read three signals, each the newest for its timeframe [PE]:
+     - 1m WATCH (89795, 42 s old);
+     - 5m WATCH (89724, 3 m 39 s old);
+     - 1h NEUTRAL (88327, 58 m 37 s old).
+   - A NEUTRAL 1h matches neither hold rule, so the default is `PROFIT_LOCK_EXIT` (`PositionExitPolicy.java:57-92`) [PE].
+2. **Why no continuation around 00:38 KSA.**
+   - Continuation runs only on the live path, and only when a price at or above TP is accepted (`LivePositionProtectionService.java:100-107`). That never happened, and the position closed 39 minutes earlier [PE].
+   - Production's signal-path take-profit skips continuation anyway (`PaperTradingService.java:170-174`) [PE].
+3. **Why no re-check of the remaining upside.**
+   - Neither profit-lock path looks at remaining upside. The live path reads three decision labels once, at the breach. The signal path reads none (`PaperTradingService.java:176-180`) [PE].
+   - At the breach, TP was two ticks up and the hard floor one tick down [AI from PE].
+   - If only the live path had held, signal 89815 would most likely have closed the position via the signal path about 19 s later, at the same price [AI; both agents agree].
+   - The later rise is outcome only; the exit could not have known it.
+
+## EVIDENCE
+
+- **Database results:**
+  - `DBQ-002:10-11`: trades 106/107 and the exit message.
+  - `DBQ-014:6`: managed position 64.
+  - `DBQ-010:8,13,16,17` and the bounds in `DBQ-010-CODEX.sql:1`: signals 88327, 89724, 89795, 89815.
+  - `DBQ-011:6-21`: 1m candles from 20:55Z.
+  - `DBQ-009:10`: the 21:38Z candle.
+  - `round02-codex.stderr.txt:4582`: Codex's DBQ-004 rerun — paper position 35 closed 20:58:43.831Z, and MySQL `NOW()`.
+- **Runtime log** (`logs/crypto-ai-trader.2026-10-09.14.log.gz`, lines 36424, 45452-45454, 45466, 45511, 45568, 45595-45599), via Codex's captured 7-Zip output:
+  - `round02-codex.stderr.txt:16541-16558` (the 20:58:18Z runtime summary is line 16558);
+  - `round02-codex.stderr.txt:11699-11782` (search across all 9 Oct log files).
+- **Code** (all under `src/main/java/com/crypto/`):
+  - `position/service/LivePositionProtectionService.java:54-72, 95-107, 165-170, 185-231`
+  - `position/service/DynamicProfitLockService.java:100-177, 192-195`
+  - `position/service/ProfitLockPolicy.java:39-51`
+  - `position/service/PositionExitPolicy.java:52-93`
+  - `position/service/PositionContinuationPolicy.java:39-118`
+  - `service/PaperTradingService.java:122-195, 452-485`
+  - `position/service/PositionPriceAuthorityPolicy.java:23-30`
+  - `wallet/service/WalletAutoExecutionService.java:381-467, 475-562`
+  - `market/service/MarketPriceEventService.java:31-57, 82-95`
+  - `service/BinanceKlineService.java:91, 95, 101-109`
+  - `indicator/event/CandleClosedAnalysisWorker.java:167-176`
+  - `regression/service/ShadowProductionReplayService.java:183-186, 562-650`
+- **Run files:**
+  - `round03-codex.txt:13-15, 37-49`
+  - `round03-codex.stderr.txt:3858-3880`
+  - `PROGRESS.log:11-15`
+  - `DATABASE_QUERY_LOG.md:62-117` vs `:271-326`
+- **[ER], carried over from Round 1 (no new searches):**
+  - [Binance Fee Schedule](https://www.binance.com/en/fee/schedule) (no effective date shown): regular spot fee 0.100% per side. Limitations: the account tier is unknown and this is paper trading. Relevance: the +0.1848% gross gain is roughly breakeven after fees.
+  - [Binance exchangeInfo SHIBUSDT](https://api.binance.com/api/v3/exchangeInfo?symbol=SHIBUSDT): tick size 0.00000001. Limitation: a current snapshot, not the value at entry. It is superseded here by the price grid observed in project data.
+
+## OBJECTIONS
+
+- **C1. Codex's round 3 withdraws the event IDs because of a tool failure, not new evidence.** Its PowerShell ran in a restricted mode that couldn't open the `.gz` file (`round03-codex.stderr.txt:3861-3880`). The round-2 7-Zip output is still valid, and R3-1 shows the "committed" line proves the database update. Codex's rounds 2 and 3 now contradict each other on event 1085485, and Codex should say which stands [PE].
+- **C2. "TP printed between updates" and "TP received but rejected" are different questions.**
+  - Codex's round-3 unknown covers only the first, which protection can't see by design (N4).
+  - The second is a decision made by an implemented rule: the freshness/ordering check (`MarketPriceEventService.java:40-46`, `LivePositionProtectionService.java:66-68`).
+  - If it happened, Q1's cause becomes stale data, a category AGENTS.md requires us to distinguish.
+  - It is unchecked for 20:45:05–20:54:59Z, and Codex's APPROVED misses it [PE+AI].
+- **C3. "Protection re-evaluated the position repeatedly" overstates Q3.** The four non-triggering checks were lock arithmetic only. The decision labels were read once, at the breach, and no path ever evaluated the remaining upside [PE].
+- **C4. The price-grid point should stay in the answer.**
+  - I accept that the exchange's tick size at entry isn't proven by an exchange record.
+  - But every SHIB price in DBQ-002/009/010/011/014 and in the log is a multiple of 0.00000001 [PE].
+  - On that grid, the lock could arm only at +2 ticks and fire only at +1 tick. That is the direct answer to "why sell with upside left" [AI]. We disagree about relevance, not facts.
+- **C5. Evidence handling (my round-2 O5) is still open.** Query IDs DBQ-004/005/006 were reused, and their first results were overwritten (`DATABASE_QUERY_LOG.md:62-117` vs `:271-326`). Some of my round-1 citations, such as paper position 35's close reason, can no longer be re-checked [PE].
+- **C6. Statistics.** One trade with a later rise proves nothing about a better rule. Any hold or upside rule needs a multi-symbol, out-of-sample comparison, net of fees and slippage, in a Replay that first models the signal-path exits (N3) [AI].
+
+## UNKNOWNS
+
+1. **Blocking: a TP-level price during 20:45:05.997–20:54:59.999Z (23:45:06–23:54:59 KSA).** Either read-only check below closes it for me:
+   - **(a) 1m candle highs.** Expect 10 rows; check that none is missing and all are `closed=1`. If every high is at most 0.00000543, both questions in C2 are closed. Every price protection receives is at most that minute's final high.
+     ```sql
+     SELECT UNIX_TIMESTAMP(open_time) AS open_epoch, high_price, close_price, closed
+     FROM candle WHERE symbol='SHIBUSDT' AND interval_code='1m'
+       AND open_time >= FROM_UNIXTIME(1791578700) AND open_time < FROM_UNIXTIME(1791579300)
+     ORDER BY open_time;
+     ```
+   - **(b) Log search.** This needs no database password: use the absolute 7-Zip path Codex used in round 2 on `logs/crypto-ai-trader.2026-10-09.14.log.gz`. Search 20:45:05–20:58:43Z for:
+     - `PRICE_NOT_CANONICAL] symbol=SHIBUSDT`
+     - `EQUAL_TIMESTAMP_REJECTED] symbol=SHIBUSDT`
+     - `symbol=SHIBUSDT.*outcome=NON_CANONICAL`
+
+     Finding none closes the implemented-rule part. A trade printed between updates would then remain a stated market-level unknown.
+2. Non-blocking: there is no binary hash, and the captured diff is cut off.
+3. Non-blocking: no Replay was run, so I make no parity claim.
+4. Non-blocking: only five accepted SHIB prices arrived in the 34 s after arming. Whether that's thin trading or Binance's update timing is unknown; it affects only the sampling design point (N4).
+5. Non-blocking, outside Q1–Q3: the 5m wakeup route bought 1.1 s after the 1m signal's own processing declined. I have not assessed whether that is intended.
+
+## VERDICT
+
+On the core facts there is no disagreement left. Identity, the event-level timeline, all three exit rules, N1–N4 and the Replay gap are evidenced with IDs and code lines, and I have no material objection to any of them.
+
+I'm not approving yet because Unknown 1 could change Q1's cause from "TP was never observed" to "TP was observed but rejected as stale." That is exactly the gap analysis the approval bar asks for, and the check hasn't been done. A clean result from either 1(a) or 1(b) moves me to APPROVED. That would still not mean Production safety or authorise code changes.
+
+Nothing was written: no plan file and no `claude-docs/INVESTIGATION_LOG.md` update. This round is read-only, and no write or exit-plan tool is available in this session.
+
+VERDICT: INSUFFICIENT_EVIDENCE

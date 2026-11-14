@@ -1,0 +1,2325 @@
+OpenAI Codex v0.146.0-alpha.3
+--------
+workdir: C:\workspace\crypto-ai-trader-mysql
+model: gpt-5.6-terra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 01a14a94-5afb-7073-8a88-eeff821475b8
+--------
+user
+You are CODEX on TRACK of the DAILY FAILED-TRADE STUDY. Unattended. Do not ask Jean anything.
+
+HARD ISOLATION: do not read the other agent private/db folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log, or the other agent's memory files.
+
+READ: AGENTS.md, agent-docs/AGREED_KNOWLEDGE.md, agent-docs/DECISIONS.md, agent-docs/DATABASE_INVESTIGATION_RULES.md, codex-docs/, agent-docs/runs/fts-WINDOW2-20261017-180002/CHARTER.md, your private files (iteration01-codex.prompt.txt, iteration01-codex.stderr.txt, iteration01-codex.txt, iteration02-codex.prompt.txt, iteration02-codex.stderr.txt, iteration02-codex.txt, iteration03-codex.prompt.txt, iteration03-codex.stderr.txt, iteration03-codex.txt, iteration04-codex.prompt.txt, iteration04-codex.stderr.txt, iteration04-codex.txt, iteration05-codex.prompt.txt, iteration05-codex.stderr.txt, iteration05-codex.txt, iteration06-codex.prompt.txt, iteration06-codex.stderr.txt, iteration06-codex.txt, iteration07-codex.prompt.txt, iteration07-codex.stderr.txt, iteration07-codex.txt), agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX/
+
+ANALYSIS ONLY. No code/config/DB writes/git/deploy/implementation.
+
+TIME: DB timestamps are UTC. Report KSA = UTC+3. Never label raw UTC as KSA.
+
+FROZEN TRADES (mandatory, do not substitute):
+182, 172, 162, 158, 143, 137
+
+STUDY WINDOW: WINDOW2
+SNAPSHOT TIME UTC: 2026-10-17 15:00:03
+SNAPSHOT TIME KSA: 2026-10-17 18:00:02
+INTENDED WINDOW CLOCK KSA: 2026-10-17 18:00:00
+SNAPSHOT NOTE: On-schedule snapshot.
+AUTHORITATIVE ENTITY: crypto_ai.paper_position
+SELECTION: status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0 ORDER BY closed_at DESC LIMIT 6
+EXCLUDED: OPEN/incomplete rows; NULL closed_at; non-negative realized_pnl; wallet_position_test (Replay)
+
+SELECTED TRADE IDS:
+1. 182
+2. 172
+3. 162
+4. 158
+5. 143
+6. 137
+
+PROOF QUERIES: DBQ-FTS-001 .. DBQ-FTS-005
+
+DATABASE: you do not have the password. Emit:
+### DB_REQUEST
+QueryId: DBQ-CODEX-I8-001
+Purpose: ...
+SQL:
+SELECT ...
+### END_DB_REQUEST
+
+CURRENT TASK: ITERATION 8 - FINAL CLASSIFICATION
+Iteration 8 of 8. Self-review only.
+ITERATION 8: stdout MUST be the complete frozen CODEX_FAILED_TRADE_STUDY.md with summary fields, the mandatory table (one row per frozen ID), DATABASE EVIDENCE, LOG EVIDENCE, CODE EVIDENCE. Suggested fixes are candidates only. NO CHANGE is allowed.
+Label PROJECT EVIDENCE / EXTERNAL RESEARCH / AGENT INFERENCE.
+codex
+I’ll perform the final analysis-only classification from the specified Codex-side artifacts, maintaining the frozen trade set and KSA conversion rules.
+exec
+"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$paths = @('"'AGENTS.md','agent-docs/AGREED_KNOWLEDGE.md','agent-docs/DECISIONS.md','agent-docs/DATABASE_INVESTIGATION_RULES.md','agent-docs/runs/fts-WINDOW2-20261017-180002/CHARTER.md'); Get-Content -LiteralPath "'$paths -Raw' in C:\workspace\crypto-ai-trader-mysql
+ succeeded in 543ms:
+## AGENTS.md Protection
+
+This file contains permanent project instructions.
+
+Codex MUST NOT modify AGENTS.md unless the user explicitly requests
+or approves the modification.
+
+Codex may automatically maintain:
+- codex-docs/ARCHITECTURE.md
+- codex-docs/CHANGELOG_AI.md
+- codex-docs/TRADING_RULES.md
+- codex-docs/INVESTIGATION_LOG.md
+
+## Mandatory Documentation Maintenance
+
+Documentation updates are part of the implementation and are NOT optional.
+
+After every implementation, Codex MUST determine whether the change affects
+architecture, trading behavior, operational behavior, or previous technical
+decisions.
+
+### Architecture changes
+If the implementation changes any of the following:
+- component responsibilities
+- data flow
+- database/table ownership
+- event flow
+- WebSocket usage
+- service dependencies
+- application boundaries
+- ingestion architecture
+- Replay/Production architecture
+
+Codex MUST update:
+
+docs/ARCHITECTURE.md
+
+The architecture documentation must describe the FINAL implemented state,
+not only what was originally planned.
+
+### Every completed fix/change
+Codex MUST update:
+
+docs/CHANGELOG_AI.md
+
+Include:
+- date
+- problem
+- root cause
+- solution
+- files/classes changed
+- database impact
+- Production impact
+- Replay impact
+
+### Trading behavior changes
+Codex MUST update:
+
+docs/TRADING_RULES.md
+
+### Investigation findings
+Important investigation findings and rejected approaches MUST be recorded in:
+
+docs/INVESTIGATION_LOG.md
+
+## Definition of Done
+
+A task is NOT COMPLETE until all required documentation has been updated.
+
+Before finishing a task, Codex MUST explicitly check:
+"Does this change require documentation updates?"
+
+Do not wait for the user to ask for documentation updates.
+
+
+## Trade investigations
+When asked to investigate a trade:
+
+- Confirm the application, environment, symbol, and trade ID.
+- Use configured database and SSH connections without displaying secrets.
+- Use read-only, bounded queries and targeted log searches.
+- Read the actual schema before choosing tables or columns.
+- Reconstruct the timeline: candle, signal, decision, entry, protection,
+  and exit. Display timestamps in KSA (UTC+03:00), interpreting stored
+  timestamps as UTC.
+- Trace the relevant code and configuration for each decision.
+- Check data freshness, entry quality, strategy, risk/reward, fees,
+  stop-loss, and exit reason where applicable.
+- Assess the entry using only information available at that moment.
+  Use subsequent price action separately to evaluate the outcome.
+- Distinguish a valid losing trade from a logic defect, stale data,
+  execution delay, configuration issue, or missing evidence.
+- Check whether the behavior can be reproduced in Replay.
+- Support findings with record IDs, log timestamps, and code references.
+- State uncertainties; do not invent a cause.
+- Do not change code, configuration, services, or production data during
+  an investigation unless the user requests a fix.
+
+Report:
+1. What happened.
+2. Why the system entered and exited.
+3. Whether the behavior followed the intended rules.
+4. Confirmed defects and missing evidence.
+5. Recommended correction and regression checks, if needed.
+
+## Current architecture direction (pending implementation)
+
+The current priority is to remove the trader's runtime dependency on the
+collector. This is a design decision, not an implemented/deployed change.
+
+- Target runtime: trader-owned Binance kline ingestion and local
+  `crypto_ai.candle` writes with `shared-market.mode=OFF`.
+- The collector remains independent in `crypto_ai_v2`; the trader must not
+  connect to, read from, or write collector stream/cursor tables at runtime.
+- Do not run direct ingestion and the shared-market executors together.
+- Applied shared-market tables and Flyway history are historical evidence; do
+  not drop, reset, or edit them merely to enable the new path.
+- `V103__fix_149_fresh_admission_indexes` still requires
+  `crypto_ai_v2.market_data_stream_event` for a fresh Flyway install. Treat
+  trader-only bootstrap as a release blocker until a forward, tested installer
+  policy exists. Never edit an applied Flyway migration.
+
+## Local-candle implementation safety
+
+When implementing or reviewing the local-candle design:
+
+- Keep `shared-market.fix142.enabled=false`,
+  `shared-market.fix142.acknowledgment-enabled=false`, and scheduled analysis
+  disabled for the OFF-mode cutover unless a reviewed change explicitly says
+  otherwise.
+- Preserve the input -> protection -> observer -> close-dispatch transaction
+  order. Candle close analysis must not run on the Binance ingestion thread.
+- A closed candle needs durable/recoverable analysis admission; an in-memory
+  event/queue alone loses work across a crash. Recovery must distinguish fresh
+  execution-capable work from historical-only analysis.
+- Candle updates must be monotonic: a late open update cannot reopen or
+  overwrite a closed candle. Publish close work only for an atomic
+  open-to-closed transition.
+- A WebSocket reconnect can occur at a candle-close boundary and Binance may
+  not replay that final closed-kline event. Candle recovery is automatic: use
+  an exact authoritative Binance REST candle only after exchange-time
+  finality and the measured live-close grace. It may either finalise a matching
+  existing `closed=0` row or insert a wholly absent identity inside the active
+  data-quality window. A recovered open row preserves provenance; an inserted
+  gap row uses `BACKFILL` provenance. Neither path may alter a completed row,
+  create a close-transition token, dispatch analysis, create a live signal,
+  or execute a trade. The recovery must have durable retry/audit evidence,
+  bounded rate-limit handling, health visibility, and no manual repair step.
+- Automation direction: no pending candle or analysis outcome may require
+  manual approval, manual database repair, or a persisted trading fence.
+  Reconciliation must retry and resolve automatically, or age out to a durable
+  explicit outcome with a visible reason. This does not permit unverified data
+  to masquerade as valid or force an entry: a genuine strategy/risk veto or
+  unavailable authoritative data remains non-executable evidence, not a
+  silently stuck pending signal.
+- Gap backfill must be a pure insert-if-absent operation. It must never use a
+  duplicate-key update that could finalise or alter a live row which appeared
+  while the authoritative REST request was in progress. Recovery candidates
+  are bounded by the active quality window and terminal audit outcomes are not
+  retried. Each candle/work path must write one durable terminal analysis
+  outcome; transient failures remain retryable and write no terminal outcome.
+- Any future universal trading-mutation barrier is an in-memory drain
+  participant only. Outside an active drain it must not block, delay, queue,
+  or persistently fence fresh trading, signals, or protection. It may reject
+  new mutations only while draining and must then wait for admitted mutations
+  to finish before shutdown.
+- Historical-only recovery must be structurally unable to reach execution,
+  wallet, position, order, or executable-work services. Quarantined work with
+  possible financial effects may be concluded automatically only from proven
+  durable effect evidence (`EFFECT_COMMITTED` or `EFFECT_ABSENT`); unknown
+  atomicity remains a release blocker. Binance REST rate-limit/ban handling
+  must be shared by reconciliation, clock sync, bootstrap, and other REST
+  callers.
+- Enforce freshness from persisted candle close time before analysis and again
+  before execution. Historical-only signals must be explicitly marked and
+  excluded from live-latency monitoring.
+- Price protection must receive the Binance observation timestamp and validate
+  age/order inside the protection transaction. Paper-trading effects and their
+  accepted price-event state must commit atomically; any future live-exchange
+  effect needs a separate idempotent design.
+- Do not add manual approval, persisted review fences, or database locks that
+  block new analysis, signals, entries, or protection unless the user changes
+  that direction. In-process coordination and normal database constraints are
+  distinct from persisted trading fences.
+- OFF-mode health/admin endpoints must not query or write retired shared-market
+  tables. Existing `REVIEW_REQUIRED` history must not block OFF-mode work.
+- Keep production and Replay evidence aligned. Replay must fail a parity claim
+  for unresolved direct price-event evidence, while deliberate exclusions stay
+  excluded.
+
+## Delivery discipline
+
+- Treat the local-candle architecture as not deployment-ready until its
+  migration/bootstrap policy, concurrency, crash/restart, stale-input,
+  Replay-parity, and Java 21/MySQL validation gates pass.
+- Do not deploy or change production configuration/data unless the user
+  explicitly requests it.
+- Protection coverage for open positions during application replacement remains
+  an unresolved release gate. Do not represent the local-candle design as
+  deployment-ready until it is implemented or conclusively disproven.
+
+## FIX-154: pending higher-timeframe BUY validation
+
+FIX-154 is a separate, not-yet-implemented design. Do not merge it into the
+local-candle change or describe it as deployed.
+
+Purpose: a historical bearish 1h signal may block or delay a current 1m BUY
+only when its own evidence is fresh, data-quality-valid, and sufficiently
+strong. A historical `btcContextEntryAllowed=false` must remain investigatory
+evidence, not a higher-timeframe validity gate; the current 1m signal's own
+BTC protection remains unchanged.
+
+- Score usable bearish 1h evidence into `NOT_TRUSTED`, `SOFT_CONFLICT`, or
+  `HARD_BEARISH_CANDIDATE` using closed-candle local indicators.
+- A hard veto requires strong 1h evidence plus fresh, quality-valid bearish
+  5m confirmation. Stale, invalid, or unknown historical quality can never
+  hard-veto.
+- Persist `trade_signal.data_quality_valid` from
+  `MarketContextSnapshot.dataValid()` for every new signal. Historical NULL
+  means unknown/invalid; never backfill it to true.
+- A confirmed 1h recovery may release only a soft conflict and only with fresh,
+  quality-valid, non-bearish 5m evidence.
+- Preserve the legacy `5M_BEARISH_VETO` behavior: the new data-quality gate
+  applies to the new hard-veto/recovery paths, not that legacy fallback.
+- Add immutable BUY-evaluation audit evidence; maintain Replay parity and
+  prevent future-candle or wall-clock look-ahead.
+  
+# MANDATORY AGENT STARTUP CONTEXT
+
+This repository uses persistent AI engineering knowledge.
+
+No agent may begin a technical investigation, architecture analysis,
+trade investigation, solution design, or implementation without first
+loading the required project context.
+
+## Shared Context ƒ?" ALL AGENTS
+
+BOTH Codex and Claude MUST read:
+
+1. AGENTS.md
+2. agent-docs/AGREED_KNOWLEDGE.md
+3. agent-docs/DECISIONS.md
+
+These contain shared team knowledge and approved decisions.
+
+Shared agreed knowledge has priority over an individual agent's historical
+notes when they conflict, unless current implementation evidence proves the
+shared knowledge is outdated.
+
+Actual current code/runtime evidence always has the highest authority.
+
+
+## Codex Startup Context
+
+Before Codex investigates or modifies the project, Codex MUST additionally
+read the relevant files from:
+
+codex-docs/
+
+Including when relevant:
+
+- codex-docs/ARCHITECTURE.md
+- codex-docs/INVESTIGATION_LOG.md
+- codex-docs/TRADING_RULES.md
+- codex-docs/CHANGELOG_AI.md
+- codex-docs/TRADE_INVESTIGATION_AGENT.md
+
+
+## Claude Startup Context
+
+Before Claude investigates or reviews the project, Claude MUST additionally
+read the relevant files from:
+
+claude-docs/
+
+Including when relevant:
+
+- claude-docs/ARCHITECTURE.md
+- claude-docs/INVESTIGATION_LOG.md
+- claude-docs/TRADING_RULES.md
+- claude-docs/CHANGELOG_AI.md
+- claude-docs/TRADE_INVESTIGATION_AGENT.md
+
+
+## Coordinator Startup Context
+
+Before delegating work, the Coordinator MUST ensure:
+
+Codex has loaded:
+- AGENTS.md
+- agent-docs/AGREED_KNOWLEDGE.md
+- agent-docs/DECISIONS.md
+- relevant codex-docs
+
+Claude has loaded:
+- AGENTS.md
+- agent-docs/AGREED_KNOWLEDGE.md
+- agent-docs/DECISIONS.md
+- relevant claude-docs
+
+The Coordinator must include this requirement in delegated prompts.
+
+
+## Do Not Start From Zero
+
+Existing agreed knowledge should be used as established project context.
+
+Agents SHOULD NOT repeatedly rediscover established architecture without
+reason.
+
+However, persistent documentation is not unquestionable truth.
+
+If current code, database evidence, logs, tests, or runtime behavior
+contradict persistent knowledge:
+
+1. Report the contradiction.
+2. Do NOT silently accept the old documentation.
+3. Investigate the discrepancy.
+4. Have both agents review the new evidence.
+5. Update shared knowledge only through the dual-agent agreement process.
+
+# MANDATORY PRE-IMPLEMENTATION CHANGE CONTRACT
+
+This section extends the existing governance. It does not replace any earlier
+project, investigation, architecture, trading, safety, or documentation rule.
+
+For any material code change, implementation is forbidden until the team has
+produced and approved the same exact revision of:
+
+`agent-docs/FINAL_CHANGE_SPECIFICATION.md`
+
+The specification is the implementation contract and MUST contain, at minimum:
+
+1. Business objective and the exact agreed business line/flow.
+2. Confirmed root cause and evidence.
+3. In-scope and out-of-scope boundaries.
+4. Complete class/file change registry (modify/create/delete/rename/config/
+   migration/test/documentation).
+5. Class-by-class and material method-by-method current behavior -> agreed new
+   behavior, reason, inputs/outputs, side effects, error handling, concurrency,
+   transactionality, Replay impact and Production impact.
+6. Mandatory logging registry covering all materially affected areas. Logs must
+   make the business flow and decisions reconstructable without exposing
+   credentials/secrets. Include relevant correlation/trade/symbol/interval/
+   candle/test identifiers and respect the project's UTC/KSA rules.
+7. Database, configuration and trading-behavior registries, explicitly stating
+   NONE when there is no impact.
+8. Test and validation registry, including positive, negative, regression,
+   failure/recovery, concurrency where relevant, Replay, and Production-safe
+   validation.
+9. Risks, rollback plan, observability plan and documentation registry.
+10. Master implementation registry assigning an ID to every authorized change,
+    log, DB/config item, test and documentation update.
+
+No source/config/database/trading change may be implemented unless it is
+registered in the approved specification. No unrelated refactoring or cleanup
+may be hidden inside an approved fix.
+
+## Dual-agent specification approval
+
+The SAME exact specification revision must be fully reviewed and explicitly
+approved by BOTH agents:
+
+- Codex: APPROVED
+- Claude: APPROVED
+- Unresolved material disagreements: 0
+
+There is no majority vote and no fixed review-iteration limit. Any material
+revision invalidates both prior approvals and requires a complete re-review by
+both agents. Even after dual approval, implementation remains NOT AUTHORIZED
+until the user explicitly approves that exact revision.
+
+## Code implementation direction
+
+After explicit user approval:
+
+- Codex is the implementation owner.
+- Claude is the mandatory independent code reviewer.
+- Claude reviews the COMPLETE implementation, not only the latest patch.
+- Claude comments/rejects; Codex corrects or disputes with technical evidence;
+  Claude re-reviews the complete updated implementation.
+- Repeat for as many iterations as required. There is no fixed iteration cap.
+- Codex cannot self-approve its implementation and the Coordinator cannot
+  overrule a material Claude objection.
+- Any implementation-code change after Claude approval invalidates that
+  approval and requires another complete Claude review.
+- A material deviation from the approved specification stops implementation,
+  reopens dual-agent design review, creates a new specification revision, and
+  requires renewed user approval.
+
+## Post-implementation registry reconciliation
+
+Before technical acceptance, reconcile the actual implementation against the
+approved master registry. Every planned item must be accounted for and every
+actual change must map to an approved registry ID.
+
+Acceptance requires at minimum:
+
+- missing registered changes: NONE
+- unregistered implementation changes: NONE
+- unresolved material review findings: 0
+- required logging implemented and reviewed
+- required tests/validation completed with evidence
+- Replay/Production parity reviewed where applicable
+- required documentation updates completed
+- Claude final full-code review: APPROVED
+- Codex final verification of the exact Claude-approved state: PASSED
+
+# POST-CONSENSUS PERSISTENT KNOWLEDGE
+
+After an investigation reaches evidence-backed convergence, durable agreed
+facts are candidates for `agent-docs/AGREED_KNOWLEDGE.md`. Candidate text must
+be the SAME exact revision reviewed by both Codex and Claude and may be written
+there only when BOTH return AGREED. Rejected hypotheses, unresolved disputes,
+speculation, and proposed-but-not-implemented architecture must not be stored
+as confirmed current state.
+
+After an approved implementation is fully reviewed and validated, update the
+appropriate Codex and Claude project-memory documents and the shared agreed
+knowledge/decisions so future sessions do not start from zero. These updates
+must preserve history: supersede old facts/decisions rather than silently
+rewriting them.
+
+# HUMAN-READABLE AI TEAM PROGRESS
+
+For Coordinator-driven team work, maintain `agent-docs/LIVE_TEAM_STATUS.md` and the current run's `LIVE_EVENTS.log` so the user can follow the engineering process. Show actions, evidence, findings, challenges, disagreements, status changes, and next actions. Do not expose or request private chain-of-thought. When an agent is silent during a long call, a heartbeat may report elapsed time and the declared task only; never manufacture progress.
+
+# DIRECT AGENT -> COORDINATOR HANDOFF
+
+Codex or Claude may begin work directly with the user. When the work reaches a governance gate or the user asks to hand it to the Coordinator, the direct agent MUST preserve its current artifact/findings and invoke or instruct the Coordinator using the direct-handoff interface rather than proceeding alone.
+
+Required handoff metadata:
+- origin: CODEX or CLAUDE
+- type: GENERAL, INVESTIGATION, TECHNICAL_DESIGN, or CODE_REVIEW
+- exact artifact/file when one exists
+- concise current status and unresolved questions
+
+From Coordinator acceptance onward, `agent-docs/LIVE_TEAM_STATUS.md` and the run's `LIVE_EVENTS.log` are the human-readable team view. The dashboard must identify the direct-agent origin and imported context. Pre-handoff work is imported as context only and must never be fabricated as historical live events.
+
+A direct-agent handoff does not bypass independent review, dual-agent approval, the frozen specification gate, user approval, or the Codex-implements / Claude-reviews implementation loop.
+
+## AI team conversational command aliases (additive)
+
+For direct Codex or Claude sessions in this repository, load
+`agent-docs/COMMANDS.md` when the user asks `team commands`, `proceed claude`,
+`proceed claude deep`, `proceed codex`, `proceed coordinator`, or any command
+listed there. Treat these as plain-language command aliases; do not claim they
+are native slash commands unless the installed client confirms registration.
+
+- `proceed claude`: perform ONE actual Claude CLI consultation and display the
+  captured Claude response in this direct conversation; no implied approval.
+- `proceed coordinator`: invoke the existing coordinator with a real handoff
+  artifact and show the run path; its live dashboard begins at handoff.
+- Preserve all existing investigation, memory, safety, and approval gates.
+- If a command cannot execute, state why rather than fabricating a result.
+
+## Executable direct peer/team commands - consolidated latest
+
+When the user uses the commands below, execute the local script rather than merely describing what should happen. Never fabricate a peer answer.
+
+- `proceed claude`: from direct Codex, run `scripts/team-peer.ps1 -Peer CLAUDE` with the current bounded question/artifact and display Claude's actual captured output in the same Codex conversation. This is one peer consultation only.
+- `proceed claude deep`: same, with `-Deep` for maximum configured Claude effort and public research.
+- `proceed codex`: mirror one-shot Codex consultation from direct Claude.
+- `proceed codex deep`: mirror deep Codex consultation.
+- `proceed coordinator`: run `scripts/team-handoff.ps1` with the direct agent as origin and the current artifact. The formal multi-round Coordinator workflow and live dashboard start at handoff.
+- `team commands`: display `agent-docs/COMMANDS.md`.
+
+Use `scripts/team-command.ps1` as the common local dispatcher when convenient. A one-shot peer consultation is NOT dual-agent consensus, specification approval, user authorization, or permission to change code.
+
+## Frozen human-review PDFs
+
+Major approval artifacts use Markdown as the machine-readable source and a frozen PDF as the human-review artifact. Follow `agent-docs/PDF_ARTIFACT_RULES.md` and use `scripts/freeze-agent-artifact.ps1`.
+
+Required when the corresponding stage exists:
+- FINAL_TECHNICAL_REVIEW-Rxx.pdf
+- FINAL_CHANGE_SPECIFICATION-Rxx.pdf
+- IMPLEMENTATION_REPORT-Rxx.pdf
+- VALIDATION_REPORT-Rxx.pdf
+
+The PDF must identify the exact revision, SHA-256 of the source Markdown, Codex verdict, Claude verdict, and implementation-authorization state. Any material source edit invalidates the frozen revision and requires both agents to review the new revision again. PDF generation never authorizes implementation.
+
+## Evidence-driven round continuation
+
+A configured MaxRounds value is an emergency/cost ceiling only. It is never a consensus criterion. `MaxRounds=0` means no fixed coordinator round ceiling. If a positive ceiling is reached with material disagreement, status is CONSENSUS NOT ACHIEVED and implementation remains blocked. Continue only through a new/continued formal run with preserved evidence; never manufacture agreement.
+
+## Post-consensus structured knowledge harvest
+
+After formal convergence and dual approval of the exact technical review, the Coordinator must harvest a structured candidate knowledge package from the completed evidence. Candidate categories may include CONFIRMED_IMPLEMENTATION, CONFIRMED_BEHAVIOR, CONFIRMED_ARCHITECTURE, CONFIRMED_TRADING_RULE, DATABASE_ENTITY_FACTS, OPERATIONAL_LOG_FACTS, HISTORICAL_FACT, and REJECTED_ASSUMPTIONS. The SAME exact candidate text must be independently approved by Codex and Claude before it enters AGREED_KNOWLEDGE.md. Proposed future design is never recorded as implemented architecture.
+
+## Executable implementation review loop
+
+`scripts/implementation-review.ps1` is the guarded automation entry point for the approved code phase. It MUST refuse to run unless explicit `-UserAuthorized` is supplied for the exact frozen specification. Codex is implementer; Claude is mandatory independent full reviewer. Claude never edits implementation in this loop. Rejection returns to Codex correction, then Claude reviews the complete updated implementation again. A material design deviation stops the loop and requires a revised specification plus renewed dual-agent and user approval. No deployment is authorized by this script.
+
+# JEAN FORMAL REVIEW MODE (ADDITIVE)
+
+The User may act as the sole formal reviewer for a task. This mode is explicit and task-scoped.
+
+## Command: `proceed analysis from jean`
+
+Activate `JEAN_REVIEW` for the current task/revision.
+
+- Jean is the authoritative formal reviewer for this task.
+- Claude/Coordinator approval is optional unless Jean explicitly requests it.
+- Every subsequent review comment from Jean is a formal finding with ID `USR-REV-NNN`.
+- Record the exact comment, severity if stated, affected requirement/business flow, affected files/classes/methods when known, Codex response, resulting change, revision, and status.
+- Valid statuses: `OPEN`, `ADDRESSED - AWAITING JEAN`, `ACCEPTED BY JEAN`, `REJECTED BY JEAN`, `WAIVED BY JEAN`.
+- Codex may mark a finding `ADDRESSED - AWAITING JEAN`; Codex MUST NOT close, accept, reject, or waive Jean's finding.
+- Material design/code changes made because of Jean's comments remain under Jean review.
+- Jean may still request `proceed claude`, `proceed claude deep`, or `proceed coordinator`; those are advisory/formal team paths only when Jean requests them.
+- AI agents must still surface critical risks they discover; JEAN_REVIEW removes mandatory AI approval, not engineering warnings.
+
+## Command: `proceed merging from jean`
+
+This is Jean's explicit authorization to implement the exact Jean-reviewed scope into the LOCAL working tree.
+
+Before implementation, verify:
+- `JEAN_REVIEW` applies to the current task.
+- the exact reviewed revision/specification is identifiable and frozen by revision/hash when practical;
+- no `OPEN` Jean findings remain;
+- no `ADDRESSED - AWAITING JEAN` findings remain;
+- implementation scope, required logging, tests, validation and registry items are known.
+
+If any gate fails: DO NOT IMPLEMENT; report the blocker to Jean.
+
+When all gates pass:
+1. Freeze/record the exact Jean-approved revision/hash.
+2. Implement only the approved scope in the local working tree.
+3. Add all agreed logging/observability.
+4. Run required tests and validation, including Replay/Production parity where applicable.
+5. Reconcile actual changes against the approved registry/specification.
+6. Update required local documentation/registries.
+7. Produce implementation/validation evidence.
+8. Stop and report results to Jean.
+
+`proceed merging from jean` DOES NOT authorize: Git push, remote merge, deployment, Production change, database write, or unrelated refactoring.
+
+If a material deviation from Jean's approved design is required, STOP implementation and return to `JEAN_REVIEW` for Jean's decision.
+
+# ON-DEMAND ANALYSIS VISIBILITY (ADDITIVE)
+
+When Jean asks `what are they doing`, `analysis status`, `analysis status full`, or `analysis history`, use the READ-ONLY observer `scripts/team-analysis-status.ps1` with mode Quick, Full, or History. Respond immediately from persisted evidence without stopping, restarting, or spawning any agent, and without editing the live dashboard or review state. If no results exist, say so.
+
+For `analysis status full`, report distinct Codex and Claude findings, current round, agreements, disagreements, code evidence, exact database table names and SQL evidence IDs, relevant columns when supported by evidence, log files searched and log findings, Replay/test evidence, external sources, unknowns, and next actions. Explicitly distinguish tables actually queried successfully from tables merely mentioned or considered. Never fabricate query execution or log coverage.
+
+When the literal text `/commands` reaches the agent as a user message, display ALL entries in `agent-docs/COMMANDS.md` with one-line hints. If the Codex client intercepts `/commands` before the model receives it, this cannot be fixed through AGENTS.md; use `team commands` instead. Do not misrepresent these aliases as registered native slash commands.
+
+# AGREED KNOWLEDGE
+
+This document contains persistent technical knowledge explicitly agreed by
+BOTH Codex and Claude. Existing and future entries must pass the dual-agent
+knowledge gate in `agent-docs/COORDINATOR.md`.
+
+## Rules
+- Both agents must approve the same exact candidate text.
+- No majority voting.
+- Unresolved findings, rejected hypotheses and speculation do not belong here.
+- Proposed architecture is not current architecture.
+- Current implementation/runtime evidence has priority when contradictions arise.
+- Superseded knowledge is retained with traceability rather than silently erased.
+
+---
+
+# AGREED ENTRIES
+
+No agreed entries recorded yet.
+
+# APPROVED TEAM DECISIONS
+
+Persistent record of technical/design decisions that passed the applicable
+Codex + Claude review gate and user approval gate. Preserve superseded decisions
+for traceability; do not silently rewrite history.
+
+No approved decisions recorded yet.
+
+# Database investigation rules
+
+Coordinator database: `crypto_ai` on localhost:3307 as `ai_investigator`.
+Do not mix with `crypto_ai_v2`.
+
+## Credentials
+Agents never receive the database password.
+The coordinator/wrapper reads `AGENT_DB_PASSWORD` from the local environment only.
+Do not write that value into AGENTS.md, COORDINATOR.md, Cursor rules, docs, prompts, logs, or source.
+
+Other settings (defaults in parentheses):
+
+- `AGENT_DB_HOST` (localhost)
+- `AGENT_DB_PORT` (3307)
+- `AGENT_DB_NAME` (crypto_ai)
+- `AGENT_DB_USER` (ai_investigator)
+- `AGENT_MYSQL_EXE` (local mysql.exe)
+
+## Approved access path
+Agents request evidence. The coordinator executes:
+
+`scripts/agent-db-query.ps1`
+
+The MySQL account is database-level read-only. The wrapper is an additional safety layer.
+
+Allowed statement families: `SELECT`, `SHOW`, `DESCRIBE`/`DESC`, `EXPLAIN`.
+Everything else is rejected by default, including writes, DDL, grants, CALL, SET, LOAD, locks, and transaction control.
+Multiple statements are allowed only if the wrapper proves each statement independently read-only.
+
+## Audit
+Each query is stored under `agent-docs/runs/<run-id>/db/` with SQL, result, and `DATABASE_QUERY_LOG.md`.
+Never log the password.
+
+## Time
+Raw MySQL/Binance timestamps are UTC. Never describe a raw DB timestamp as KSA.
+When converting for a report:
+
+- UTC: `<raw time>`
+- KSA: `<UTC + 3h>`
+
+## Registry
+`agent-docs/DATABASE_ENTITY_REGISTRY.md` is durable entity knowledge.
+One agent's discovery is not fact. Append only through dual-agent agreement (`AGREED`/`AGREED`).
+Proposed future schema is not current schema.
+
+## Scope examples
+Harmless reads may cover `trade_signal`, trades/positions, candles, decision/analysis/market-context tables, Replay/test identifiers, and related trader entities in `crypto_ai` only.
+
+Daily failed-trade independent forensic study. ANALYSIS ONLY. No implementation.
+Both agents analyze EXACTLY the frozen paper_position IDs. Do not substitute trades.
+8 self-review iterations. No cross-review. Coordinator compares only after both freeze.STUDY WINDOW: WINDOW2
+SNAPSHOT TIME UTC: 2026-10-17 15:00:03
+SNAPSHOT TIME KSA: 2026-10-17 18:00:02
+INTENDED WINDOW CLOCK KSA: 2026-10-17 18:00:00
+SNAPSHOT NOTE: On-schedule snapshot.
+AUTHORITATIVE ENTITY: crypto_ai.paper_position
+SELECTION: status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0 ORDER BY closed_at DESC LIMIT 6
+EXCLUDED: OPEN/incomplete rows; NULL closed_at; non-negative realized_pnl; wallet_position_test (Replay)
+
+SELECTED TRADE IDS:
+1. 182
+2. 172
+3. 162
+4. 158
+5. 143
+6. 137
+
+PROOF QUERIES: DBQ-FTS-001 .. DBQ-FTS-005
+
+exec
+"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$run='"'agent-docs/runs/fts-WINDOW2-20261017-180002'; Write-Output 'CODEX_DOCS'; Get-ChildItem -LiteralPath codex-docs -File | Select-Object -ExpandProperty FullName; Write-Output 'RUN_CODEX_FILES'; Get-ChildItem -LiteralPath "'$run -Recurse -File | Where-Object { $_.FullName -match '"'CODEX|codex' } | Select-Object -ExpandProperty FullName" in C:\workspace\crypto-ai-trader-mysql
+ succeeded in 550ms:
+CODEX_DOCS
+C:\workspace\crypto-ai-trader-mysql\codex-docs\ARCHITECTURE.md
+C:\workspace\crypto-ai-trader-mysql\codex-docs\CHANGELOG_AI.md
+C:\workspace\crypto-ai-trader-mysql\codex-docs\FIX-154_IMPLEMENTATION_HANDOFF.md
+C:\workspace\crypto-ai-trader-mysql\codex-docs\FIX-154_TECHNICAL_DESIGN.md
+C:\workspace\crypto-ai-trader-mysql\codex-docs\INVESTIGATION_LOG.md
+C:\workspace\crypto-ai-trader-mysql\codex-docs\TRADE_INVESTIGATION_AGENT.md
+C:\workspace\crypto-ai-trader-mysql\codex-docs\TRADING_RULES.md
+RUN_CODEX_FILES
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration01-codex.prompt.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration01-codex.stderr.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration01-codex.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration02-codex.prompt.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration02-codex.stderr.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration02-codex.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration03-codex.prompt.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration03-codex.stderr.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration03-codex.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration04-codex.prompt.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration04-codex.stderr.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration04-codex.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration05-codex.prompt.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration05-codex.stderr.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration05-codex.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration06-codex.prompt.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration06-codex.stderr.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration06-codex.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration07-codex.prompt.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration07-codex.stderr.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration07-codex.txt
+C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration08-codex.prompt.txt
+
+exec
+"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$files = (Get-ChildItem -LiteralPath codex-docs -File).FullName + (Get-ChildItem -LiteralPath '"'agent-docs/runs/fts-WINDOW2-20261017-180002/private/CODEX' -File | Where-Object { "'$_.Name -match '"'"'^iteration0[1-7]-codex'"\\.(prompt|stderr|txt)\\.txt"'$'"' }).FullName + (Get-ChildItem -LiteralPath 'agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX' -Recurse -File).FullName; "'$files | ForEach-Object { '"'{0}"'`t{1}'"' -f (Get-Content -LiteralPath "'$_).Count, $_ }' in C:\workspace\crypto-ai-trader-mysql
+ succeeded in 1167ms:
+315`tC:\workspace\crypto-ai-trader-mysql\codex-docs\ARCHITECTURE.md
+408`tC:\workspace\crypto-ai-trader-mysql\codex-docs\CHANGELOG_AI.md
+113`tC:\workspace\crypto-ai-trader-mysql\codex-docs\FIX-154_IMPLEMENTATION_HANDOFF.md
+314`tC:\workspace\crypto-ai-trader-mysql\codex-docs\FIX-154_TECHNICAL_DESIGN.md
+217`tC:\workspace\crypto-ai-trader-mysql\codex-docs\INVESTIGATION_LOG.md
+183`tC:\workspace\crypto-ai-trader-mysql\codex-docs\TRADE_INVESTIGATION_AGENT.md
+21`tC:\workspace\crypto-ai-trader-mysql\codex-docs\TRADING_RULES.md
+44`tC:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration01-codex.prompt.txt
+5284`tC:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration01-codex.stderr.txt
+44`tC:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration02-codex.prompt.txt
+9194`tC:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration02-codex.stderr.txt
+44`tC:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration03-codex.prompt.txt
+22281`tC:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration03-codex.stderr.txt
+44`tC:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration04-codex.prompt.txt
+25488`tC:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration04-codex.stderr.txt
+44`tC:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration05-codex.prompt.txt
+26133`tC:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration05-codex.stderr.txt
+44`tC:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration06-codex.prompt.txt
+5383`tC:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration06-codex.stderr.txt
+44`tC:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration07-codex.prompt.txt
+44905`tC:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW2-20261017-180002\private\CODEX\iteration07-codex.stderr.txt
+Get-Content : Cannot bind argument to parameter 'LiteralPath' because it is null.
+At line:2 char:434
++ ... | ForEach-Object { '{0}`t{1}' -f (Get-Content -LiteralPath $_).Count, ...
++                                                                ~~
+    + CategoryInfo          : InvalidData: (:) [Get-Content], ParameterBindingValidationException
+    + FullyQualifiedErrorId : ParameterArgumentValidationErrorNullNotAllowed,Microsoft.PowerShell.Commands.GetContentC 
+   ommand
+ 
+
+exec
+"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-ChildItem -LiteralPath 'agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX' -Recurse -Force | Select-Object FullName,Length,Mode" in C:\workspace\crypto-ai-trader-mysql
+ succeeded in 552ms:
+exec
+"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-ChildItem -LiteralPath 'agent-docs/runs/fts-WINDOW2-20261017-180002/private/CODEX' -File | Sort-Object Name | Select-Object Name,Length" in C:\workspace\crypto-ai-trader-mysql
+ succeeded in 536ms:
+
+Name                          Length
+----                          ------
+iteration01-codex.prompt.txt    1667
+iteration01-codex.stderr.txt  294192
+iteration01-codex.txt           3593
+iteration02-codex.prompt.txt    1736
+iteration02-codex.stderr.txt  491902
+iteration02-codex.txt           4134
+iteration03-codex.prompt.txt    1825
+iteration03-codex.stderr.txt 1365105
+iteration03-codex.txt           4276
+iteration04-codex.prompt.txt    1902
+iteration04-codex.stderr.txt 1422093
+iteration04-codex.txt           5766
+iteration05-codex.prompt.txt    1980
+iteration05-codex.stderr.txt 1470063
+iteration05-codex.txt           4141
+iteration06-codex.prompt.txt    2071
+iteration06-codex.stderr.txt  345019
+iteration06-codex.txt           9041
+iteration07-codex.prompt.txt    2147
+iteration07-codex.stderr.txt 2442315
+iteration07-codex.txt           7065
+iteration08-codex.prompt.txt    2415
+
+
+
+exec
+"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$dir='"'agent-docs/runs/fts-WINDOW2-20261017-180002/private/CODEX'; 1..7 | ForEach-Object { "'$n='"'{0:D2}' -f "'$_; Write-Output "===== iteration$n prompt ====="; Get-Content -LiteralPath (Join-Path $dir "iteration$n-codex.prompt.txt") -Raw; Write-Output "===== iteration$n output ====="; Get-Content -LiteralPath (Join-Path $dir "iteration$n-codex.txt") -Raw }' in C:\workspace\crypto-ai-trader-mysql
+ succeeded in 570ms:
+===== iteration01 prompt =====
+You are CODEX on TRACK of the DAILY FAILED-TRADE STUDY. Unattended. Do not ask Jean anything.
+
+HARD ISOLATION: do not read the other agent private/db folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log, or the other agent's memory files.
+
+READ: AGENTS.md, agent-docs/AGREED_KNOWLEDGE.md, agent-docs/DECISIONS.md, agent-docs/DATABASE_INVESTIGATION_RULES.md, codex-docs/, agent-docs/runs/fts-WINDOW2-20261017-180002/CHARTER.md, your private files ((none yet)), agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX/
+
+ANALYSIS ONLY. No code/config/DB writes/git/deploy/implementation.
+
+TIME: DB timestamps are UTC. Report KSA = UTC+3. Never label raw UTC as KSA.
+
+FROZEN TRADES (mandatory, do not substitute):
+182, 172, 162, 158, 143, 137
+
+STUDY WINDOW: WINDOW2
+SNAPSHOT TIME UTC: 2026-10-17 15:00:03
+SNAPSHOT TIME KSA: 2026-10-17 18:00:02
+INTENDED WINDOW CLOCK KSA: 2026-10-17 18:00:00
+SNAPSHOT NOTE: On-schedule snapshot.
+AUTHORITATIVE ENTITY: crypto_ai.paper_position
+SELECTION: status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0 ORDER BY closed_at DESC LIMIT 6
+EXCLUDED: OPEN/incomplete rows; NULL closed_at; non-negative realized_pnl; wallet_position_test (Replay)
+
+SELECTED TRADE IDS:
+1. 182
+2. 172
+3. 162
+4. 158
+5. 143
+6. 137
+
+PROOF QUERIES: DBQ-FTS-001 .. DBQ-FTS-005
+
+DATABASE: you do not have the password. Emit:
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001
+Purpose: ...
+SQL:
+SELECT ...
+### END_DB_REQUEST
+
+CURRENT TASK: ITERATION 1 - TRADE RECONSTRUCTION
+Iteration 1 of 8. Self-review only.
+Output FINDINGS, EVIDENCE, UNKNOWNS, and DB_REQUEST blocks as needed.
+Label PROJECT EVIDENCE / EXTERNAL RESEARCH / AGENT INFERENCE.
+===== iteration01 output =====
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen scope is exactly `crypto_ai.paper_position` IDs `182, 172, 162, 158, 143, 137`, selected at the stated on-schedule WINDOW2 snapshot. I did not substitute or expand the population.
+
+- **PROJECT EVIDENCE:** No Codex-private DB result files exist for this run. Therefore no per-trade symbol, timestamps, entry/exit reason, signal linkage, price-event evidence, or P&L component has been independently confirmed yet.
+
+- **PROJECT EVIDENCE:** `paper_position` is designed to hold the entry signal, optional exit signal, entry/exit prices, SL/TP, close reason, realized P&L, and lifecycle timestamps. [PaperPosition.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:10)
+
+- **PROJECT EVIDENCE:** The implementation records fixed stop-loss exits with `status=STOPPED`; several other exit paths use `status=CLOSED`. [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:183) [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:178)
+
+- **AGENT INFERENCE:** Because this mandated study selects only `status=CLOSED`, it may exclude losses closed through the fixed stop-loss path. This is a scope limitation, not a reason to alter the frozen population. Actual status/close-reason distribution requires DB evidence.
+
+- **PROJECT EVIDENCE:** Net P&L cannot be inferred from `paper_position.realized_pnl` alone: the wallet execution model separately persists fees, execution timestamps, and realized P&L. [WalletTrade.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletTrade.java:40)
+
+- **PROJECT EVIDENCE:** Protection analysis must use accepted persisted price-event evidence where available; candle OHLC must not be substituted for missing intrabar protection evidence.
+
+## EVIDENCE
+
+- Charter: `agent-docs/runs/fts-WINDOW2-20261017-180002/CHARTER.md`
+- Required project context and Codex trade-investigation guidance were read.
+- Private evidence directory inspected: `agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX/` ƒ?" empty.
+- **EXTERNAL RESEARCH:** None. This iteration requires project and database evidence only.
+
+## UNKNOWNS
+
+For each frozen trade, the following remain unverified:
+
+- symbol; raw UTC/KSA entry and exit timestamps;
+- entry/exit signal IDs and decisions;
+- close reason and whether protection, signal exit, or another path closed it;
+- wallet BUY/SELL executions, quantities, fees, and net P&L;
+- contemporaneous candle/indicator/data-quality context;
+- accepted price-event trigger evidence;
+- processing/work timing, runtime mode/version, logs, and Replay comparability.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Establish the actual `crypto_ai` schema and available columns before issuing any data query for the six frozen positions. This is bounded metadata-only evidence.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'wallet_managed_position',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'candle',
+      'technical_indicator',
+      'position_management_event'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation changes were made.
+
+===== iteration02 prompt =====
+You are CODEX on TRACK of the DAILY FAILED-TRADE STUDY. Unattended. Do not ask Jean anything.
+
+HARD ISOLATION: do not read the other agent private/db folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log, or the other agent's memory files.
+
+READ: AGENTS.md, agent-docs/AGREED_KNOWLEDGE.md, agent-docs/DECISIONS.md, agent-docs/DATABASE_INVESTIGATION_RULES.md, codex-docs/, agent-docs/runs/fts-WINDOW2-20261017-180002/CHARTER.md, your private files (iteration01-codex.prompt.txt, iteration01-codex.stderr.txt, iteration01-codex.txt), agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX/
+
+ANALYSIS ONLY. No code/config/DB writes/git/deploy/implementation.
+
+TIME: DB timestamps are UTC. Report KSA = UTC+3. Never label raw UTC as KSA.
+
+FROZEN TRADES (mandatory, do not substitute):
+182, 172, 162, 158, 143, 137
+
+STUDY WINDOW: WINDOW2
+SNAPSHOT TIME UTC: 2026-10-17 15:00:03
+SNAPSHOT TIME KSA: 2026-10-17 18:00:02
+INTENDED WINDOW CLOCK KSA: 2026-10-17 18:00:00
+SNAPSHOT NOTE: On-schedule snapshot.
+AUTHORITATIVE ENTITY: crypto_ai.paper_position
+SELECTION: status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0 ORDER BY closed_at DESC LIMIT 6
+EXCLUDED: OPEN/incomplete rows; NULL closed_at; non-negative realized_pnl; wallet_position_test (Replay)
+
+SELECTED TRADE IDS:
+1. 182
+2. 172
+3. 162
+4. 158
+5. 143
+6. 137
+
+PROOF QUERIES: DBQ-FTS-001 .. DBQ-FTS-005
+
+DATABASE: you do not have the password. Emit:
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-001
+Purpose: ...
+SQL:
+SELECT ...
+### END_DB_REQUEST
+
+CURRENT TASK: ITERATION 2 - DATABASE FORENSICS
+Iteration 2 of 8. Self-review only.
+Output FINDINGS, EVIDENCE, UNKNOWNS, and DB_REQUEST blocks as needed.
+Label PROJECT EVIDENCE / EXTERNAL RESEARCH / AGENT INFERENCE.
+===== iteration02 output =====
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The permitted Codex database-evidence directory is empty. No trade-specific database result has been supplied for this iteration, so no claim about the six tradesƒ?T symbols, prices, exit reasons, or P&L components is confirmed.
+
+- **PROJECT EVIDENCE:** `paper_position` contains the required lifecycle fields: entry/exit prices, SL/TP, realized P&L, entry/exit signal IDs, close reason, and UTC `opened_at`/`closed_at`. `wallet_managed_position.entry_signal_id` provides a possible structural linkage to the paper positionƒ?Ts entry signal; actual referential integrity and matching rows require database evidence.
+
+- **PROJECT EVIDENCE:** `LivePositionProtectionService.closePaper` calculates paper-position terminal P&L as price difference A- remaining quantity, preserving any earlier partial-harvest P&L. It does not deduct fees. `wallet_trade` separately records fees and realized P&L. Therefore `paper_position.realized_pnl` alone is not sufficient to establish fee-adjusted net P&L.
+
+- **PROJECT EVIDENCE:** Fixed stop-loss protection closes a paper position with `status=STOPPED`, whereas take-profit, profit-lock, and normal signal/protection exits close with `status=CLOSED`. The frozen selection deliberately includes only the latter status; this is a study-scope boundary, not a demonstrated defect.
+
+- **AGENT INFERENCE:** The supplied snapshot timestamps conflict by one second: `2026-10-17 15:00:03 UTC` converts to `2026-10-17 18:00:03 KSA`, not `18:00:02 KSA`. I will treat the UTC value as the authoritative arithmetic basis unless frozen query evidence states otherwise.
+
+- **EXTERNAL RESEARCH:** None.
+
+## EVIDENCE
+
+- [PaperPosition.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java)
+- [WalletManagedPosition.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletManagedPosition.java)
+- [WalletTrade.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletTrade.java)
+- [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java)
+- Codex-private DB directory: `agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX/` ƒ?" empty.
+
+## UNKNOWNS
+
+- Current database schema and foreign keys.
+- The actual six `paper_position` records and whether they still match the frozen snapshot selection.
+- Signal, managed-position, wallet-execution, price-event, and fee evidence for every frozen trade.
+- Fee-adjusted P&L reconciliation and exit-trigger chronology.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Verify the actual `crypto_ai` schema, key columns, and foreign-key evidence before trade-level forensic queries.
+
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    c.extra,
+    k.referenced_table_name,
+    k.referenced_column_name
+FROM information_schema.columns c
+LEFT JOIN information_schema.key_column_usage k
+    ON k.table_schema = c.table_schema
+   AND k.table_name = c.table_name
+   AND k.column_name = c.column_name
+   AND k.referenced_table_name IS NOT NULL
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'wallet_managed_position',
+      'wallet_trade',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'position_management_event'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-002  
+Purpose: After DBQ-CODEX-I2-001 confirms the columns, retrieve the bounded authoritative lifecycle records for only the six frozen IDs. Raw timestamps returned by this query are UTC.
+
+SQL:
+```sql
+SELECT
+    id,
+    symbol,
+    side,
+    status,
+    quantity,
+    entry_price,
+    stop_loss,
+    take_profit,
+    exit_price,
+    realized_pnl,
+    signal_id,
+    exit_signal_id,
+    close_reason,
+    opened_at,
+    closed_at
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+```
+
+### END_DB_REQUEST
+
+===== iteration03 prompt =====
+You are CODEX on TRACK of the DAILY FAILED-TRADE STUDY. Unattended. Do not ask Jean anything.
+
+HARD ISOLATION: do not read the other agent private/db folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log, or the other agent's memory files.
+
+READ: AGENTS.md, agent-docs/AGREED_KNOWLEDGE.md, agent-docs/DECISIONS.md, agent-docs/DATABASE_INVESTIGATION_RULES.md, codex-docs/, agent-docs/runs/fts-WINDOW2-20261017-180002/CHARTER.md, your private files (iteration01-codex.prompt.txt, iteration01-codex.stderr.txt, iteration01-codex.txt, iteration02-codex.prompt.txt, iteration02-codex.stderr.txt, iteration02-codex.txt), agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX/
+
+ANALYSIS ONLY. No code/config/DB writes/git/deploy/implementation.
+
+TIME: DB timestamps are UTC. Report KSA = UTC+3. Never label raw UTC as KSA.
+
+FROZEN TRADES (mandatory, do not substitute):
+182, 172, 162, 158, 143, 137
+
+STUDY WINDOW: WINDOW2
+SNAPSHOT TIME UTC: 2026-10-17 15:00:03
+SNAPSHOT TIME KSA: 2026-10-17 18:00:02
+INTENDED WINDOW CLOCK KSA: 2026-10-17 18:00:00
+SNAPSHOT NOTE: On-schedule snapshot.
+AUTHORITATIVE ENTITY: crypto_ai.paper_position
+SELECTION: status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0 ORDER BY closed_at DESC LIMIT 6
+EXCLUDED: OPEN/incomplete rows; NULL closed_at; non-negative realized_pnl; wallet_position_test (Replay)
+
+SELECTED TRADE IDS:
+1. 182
+2. 172
+3. 162
+4. 158
+5. 143
+6. 137
+
+PROOF QUERIES: DBQ-FTS-001 .. DBQ-FTS-005
+
+DATABASE: you do not have the password. Emit:
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-001
+Purpose: ...
+SQL:
+SELECT ...
+### END_DB_REQUEST
+
+CURRENT TASK: ITERATION 3 - LOG AND TIMING FORENSICS
+Iteration 3 of 8. Self-review only.
+Output FINDINGS, EVIDENCE, UNKNOWNS, and DB_REQUEST blocks as needed.
+Label PROJECT EVIDENCE / EXTERNAL RESEARCH / AGENT INFERENCE.
+===== iteration03 output =====
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No Codex-side DB results exist yet. Therefore no entry/exit, execution, or protection latency can be measured for frozen positions `182, 172, 162, 158, 143, 137`.
+
+- **PROJECT EVIDENCE:** The available runtime logs contain enough fields to reconstruct close-candle analysis timing when signal identity is known:
+  - worker start/end include event, symbol, interval, candle times, outcome, and `elapsedMs`;
+  - saved-signal logs include signal ID plus live-close-to-generation/insertion milliseconds;
+  - signal-processing logs include signal ID, attempt, claim/completion/expiry.
+  [CandleClosedAnalysisWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java:79) [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:60)
+
+- **PROJECT EVIDENCE:** Protection timing must be reconstructed from durable `market_price_event` records, not candles. The code logs the committed event ID, symbol, UTC/KSA observation time, and outcome; it also preserves non-canonical and unresolved-evidence paths. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:94)
+
+- **PROJECT EVIDENCE:** Position-ID log correlation is incomplete by design: special protection paths log `positionId`, but ordinary stop-loss/profit-lock logs shown in the source use only symbol/price. Database linkage from `paper_position` to signals and managed position/executions is required before searching symbol/time-local log windows. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:168)
+
+- **PROJECT EVIDENCE:** I searched all 11 uncompressed runtime `.log` files for explicit frozen position-ID patterns; there were zero matches. This does not establish that the trades have no logs, because archived `.gz` logs require a positionƒ?Ts symbol/time to search reliably, and the sandbox could not decode them successfully.
+
+- **AGENT INFERENCE:** No latency defect, delayed protection, or execution-delay conclusion is justified for any frozen trade at this stage.
+
+- **PROJECT EVIDENCE:** The supplied snapshot metadata has a one-second arithmetic inconsistency: `2026-10-17 15:00:03 UTC` converts to `2026-10-17 18:00:03 KSA`, while the frozen text states `18:00:02 KSA`. I will preserve both labels until database evidence establishes the operative snapshot boundary.
+
+## EVIDENCE
+
+- Frozen scope retained exactly: `182, 172, 162, 158, 143, 137`.
+- Codex-private evidence directory: `agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX/` ƒ?" empty.
+- Local runtime log inventory: 42 `crypto-ai-trader` files, approximately 75.8 MB total; only the 11 uncompressed files were conclusively searched.
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+For every frozen trade: symbol, UTC/KSA entry and close time, linked signal/work IDs, observed-price event IDs, claim/completion times, execution timestamps, close reason, and whether archived logs cover the relevant window.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Establish the actual timing/correlation columns before issuing a bounded, trade-specific latency query for only the six frozen positions. Raw returned timestamps are UTC.
+
+SQL:
+
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_managed_position',
+      'wallet_trade',
+      'market_price_event',
+      'position_management_event',
+      'candle'
+  )
+  AND (
+      column_name IN (
+          'id', 'symbol', 'signal_id', 'exit_signal_id',
+          'entry_signal_id', 'position_id', 'managed_position_id'
+      )
+      OR column_name REGEXP
+          '(^|_)(opened|closed|generated|created|updated|claimed|completed|executed|observed|processed|received|started|finished|candle_open|candle_close)(_at|_time|_utc)?$'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST
+
+===== iteration04 prompt =====
+You are CODEX on TRACK of the DAILY FAILED-TRADE STUDY. Unattended. Do not ask Jean anything.
+
+HARD ISOLATION: do not read the other agent private/db folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log, or the other agent's memory files.
+
+READ: AGENTS.md, agent-docs/AGREED_KNOWLEDGE.md, agent-docs/DECISIONS.md, agent-docs/DATABASE_INVESTIGATION_RULES.md, codex-docs/, agent-docs/runs/fts-WINDOW2-20261017-180002/CHARTER.md, your private files (iteration01-codex.prompt.txt, iteration01-codex.stderr.txt, iteration01-codex.txt, iteration02-codex.prompt.txt, iteration02-codex.stderr.txt, iteration02-codex.txt, iteration03-codex.prompt.txt, iteration03-codex.stderr.txt, iteration03-codex.txt), agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX/
+
+ANALYSIS ONLY. No code/config/DB writes/git/deploy/implementation.
+
+TIME: DB timestamps are UTC. Report KSA = UTC+3. Never label raw UTC as KSA.
+
+FROZEN TRADES (mandatory, do not substitute):
+182, 172, 162, 158, 143, 137
+
+STUDY WINDOW: WINDOW2
+SNAPSHOT TIME UTC: 2026-10-17 15:00:03
+SNAPSHOT TIME KSA: 2026-10-17 18:00:02
+INTENDED WINDOW CLOCK KSA: 2026-10-17 18:00:00
+SNAPSHOT NOTE: On-schedule snapshot.
+AUTHORITATIVE ENTITY: crypto_ai.paper_position
+SELECTION: status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0 ORDER BY closed_at DESC LIMIT 6
+EXCLUDED: OPEN/incomplete rows; NULL closed_at; non-negative realized_pnl; wallet_position_test (Replay)
+
+SELECTED TRADE IDS:
+1. 182
+2. 172
+3. 162
+4. 158
+5. 143
+6. 137
+
+PROOF QUERIES: DBQ-FTS-001 .. DBQ-FTS-005
+
+DATABASE: you do not have the password. Emit:
+### DB_REQUEST
+QueryId: DBQ-CODEX-I4-001
+Purpose: ...
+SQL:
+SELECT ...
+### END_DB_REQUEST
+
+CURRENT TASK: ITERATION 4 - CODE / TRADE ROUTE
+Iteration 4 of 8. Self-review only.
+Output FINDINGS, EVIDENCE, UNKNOWNS, and DB_REQUEST blocks as needed.
+Label PROJECT EVIDENCE / EXTERNAL RESEARCH / AGENT INFERENCE.
+===== iteration04 output =====
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen scope remains exactly paper-position IDs `182, 172, 162, 158, 143, 137`. The Codex DB evidence directory is empty, so no trade-specific entry, exit, signal, price-event, or P&L conclusion is established.
+
+- **PROJECT EVIDENCE:** Current entry route is: persisted signal ƒ+' durable processing claim/freshness check ƒ+' execution-intelligence/HTF validation ƒ+' fresh canonical execution price and revalidation ƒ+' wallet BUY ƒ+' `paper_position` creation. A 5m signal may wake a deferred opportunity, but the actual executable signal remains the latest 1m signal. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:292) [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:97)
+
+- **PROJECT EVIDENCE:** Fixed stop-loss exits are persisted as `paper_position.status=STOPPED`; the frozen selection admits only `status=CLOSED`. Thus this study deliberately excludes losses closed through the ordinary fixed-stop route. This is a population limitation, not a defect. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:173) [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:182)
+
+- **PROJECT EVIDENCE:** A `CLOSED` trade can be caused by take-profit, profit-lock, hard-profit-floor, validated signal SELL, or higher-timeframe exitƒ?"not only a discretionary SELL. `production_exit_audit.close_trigger` is the most direct durable discriminator and separately retains the contextual source signal. [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:29)
+
+- **PROJECT EVIDENCE:** Live-price protection validates the observation and records `APPLIED` only after the protection callback completes; its evidence must come from `market_price_event`, never candle OHLC substitution. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:54) [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:82)
+
+- **PROJECT EVIDENCE:** The live protection route selects the latest 1m/5m/1h signals by generation time but does not itself apply explicit freshness checks before `PositionExitPolicy` evaluates normal exits or profit-lock breaches. This must be tested per frozen trade by comparing the chosen signal times with the accepted price-event observation/exit time; source alone does not show it affected any of the six trades. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:95) [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:20)
+
+- **PROJECT EVIDENCE:** `paper_position.realized_pnl` is gross lifecycle P&L and may include partial-harvest P&L. Wallet executions separately retain quantity, cost basis, execution price, fees, and realized P&L. The current paper wallet writes zero fees, but reconciliation still requires both ledgers. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:495) [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:533)
+
+- **PROJECT EVIDENCE:** Project documentation conflicts on FIX-154 status: parts of Architecture label it pending, while the changelog, implementation handoff, and current source show an implemented local-worktree policy. Current source is stronger evidence for code availability, but neither proves the runtime version or Flyway state for these six trades.
+
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- Every frozen tradeƒ?Ts symbol, UTC/KSA entry and exit times, close trigger, source signal, accepted price-event ID, and wallet/managed-position linkage.
+- Whether any exit used stale 1m/5m/1h context.
+- Whether `production_exit_audit` exists and covers the six positions.
+- Runtime version, applied Flyway state, and configuration active when these trades ran.
+- Fee-adjusted P&L and any partial-harvest contribution.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Read the actual schema and key relationships required to map the six frozen paper positions to their entry/exit signals, managed wallet positions, executions, exit audit, processing work, and accepted price evidence. No trade data is requested until this metadata is returned.
+
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    c.extra,
+    k.referenced_table_name,
+    k.referenced_column_name
+FROM information_schema.columns c
+LEFT JOIN information_schema.key_column_usage k
+    ON k.table_schema = c.table_schema
+   AND k.table_name = c.table_name
+   AND k.column_name = c.column_name
+   AND k.referenced_table_name IS NOT NULL
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_managed_position',
+      'wallet_trade',
+      'production_exit_audit',
+      'market_price_event',
+      'position_management_event',
+      'position_analysis',
+      'signal_processing_work'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation changes were made.
+
+===== iteration05 prompt =====
+You are CODEX on TRACK of the DAILY FAILED-TRADE STUDY. Unattended. Do not ask Jean anything.
+
+HARD ISOLATION: do not read the other agent private/db folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log, or the other agent's memory files.
+
+READ: AGENTS.md, agent-docs/AGREED_KNOWLEDGE.md, agent-docs/DECISIONS.md, agent-docs/DATABASE_INVESTIGATION_RULES.md, codex-docs/, agent-docs/runs/fts-WINDOW2-20261017-180002/CHARTER.md, your private files (iteration01-codex.prompt.txt, iteration01-codex.stderr.txt, iteration01-codex.txt, iteration02-codex.prompt.txt, iteration02-codex.stderr.txt, iteration02-codex.txt, iteration03-codex.prompt.txt, iteration03-codex.stderr.txt, iteration03-codex.txt, iteration04-codex.prompt.txt, iteration04-codex.stderr.txt, iteration04-codex.txt), agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX/
+
+ANALYSIS ONLY. No code/config/DB writes/git/deploy/implementation.
+
+TIME: DB timestamps are UTC. Report KSA = UTC+3. Never label raw UTC as KSA.
+
+FROZEN TRADES (mandatory, do not substitute):
+182, 172, 162, 158, 143, 137
+
+STUDY WINDOW: WINDOW2
+SNAPSHOT TIME UTC: 2026-10-17 15:00:03
+SNAPSHOT TIME KSA: 2026-10-17 18:00:02
+INTENDED WINDOW CLOCK KSA: 2026-10-17 18:00:00
+SNAPSHOT NOTE: On-schedule snapshot.
+AUTHORITATIVE ENTITY: crypto_ai.paper_position
+SELECTION: status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0 ORDER BY closed_at DESC LIMIT 6
+EXCLUDED: OPEN/incomplete rows; NULL closed_at; non-negative realized_pnl; wallet_position_test (Replay)
+
+SELECTED TRADE IDS:
+1. 182
+2. 172
+3. 162
+4. 158
+5. 143
+6. 137
+
+PROOF QUERIES: DBQ-FTS-001 .. DBQ-FTS-005
+
+DATABASE: you do not have the password. Emit:
+### DB_REQUEST
+QueryId: DBQ-CODEX-I5-001
+Purpose: ...
+SQL:
+SELECT ...
+### END_DB_REQUEST
+
+CURRENT TASK: ITERATION 5 - ENTRY QUALITY
+Iteration 5 of 8. Self-review only.
+Output FINDINGS, EVIDENCE, UNKNOWNS, and DB_REQUEST blocks as needed.
+Label PROJECT EVIDENCE / EXTERNAL RESEARCH / AGENT INFERENCE.
+===== iteration05 output =====
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Entry quality is **unverifiable for each frozen trade** (`182, 172, 162, 158, 143, 137`): the permitted Codex DB-evidence directory remains empty. No trade-specific signal, execution-price, or context record is available.
+
+- **PROJECT EVIDENCE:** Current source blocks initial entries with Entry Quality below `50/100`; scores of `50ƒ?"69`, `70ƒ?"84`, and `85+` cap initial exposure at 25%, 40%, and 50% respectively. It evaluates the actual execution-time price, not merely the signal price. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:865) [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1150)
+
+- **PROJECT EVIDENCE:** The model considers 30-minute price expansion, ATR extension, opportunity age, execution-price reward/risk, recent rejection near a prior high, volatility regime, and stop-exposed liquidity. A fresh price at/below stop or at/above target rejects the BUY before wallet execution.
+
+- **PROJECT EVIDENCE:** Normal direct BUYs require a bullish 1m signal with final entry permission, immediate ATR permission, minimum score, and non-blocked strategy/BTC/derivatives/strong-target-wall conditions. Fresh 5m and 1h context is then validated at the signal time. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:2139) [TradeExecutionValidationService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:62)
+
+- **PROJECT EVIDENCE:** The wallet BUY retains immutable decision price, execution price, execution-price observation timestamp, and execution message. `wallet_managed_position.entry_quality_score` is not reliable as an immutable initial-entry record by itself: every later BUY/add writes it again. [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:129)
+
+- **AGENT INFERENCE:** No frozen trade may be classified as supported, weak, late/chased, or rule-violating until its exact linked entry signal and actual BUY execution are retrieved. A later losing outcome is not entry-quality evidence.
+
+- **EXTERNAL RESEARCH:** None.
+
+## EVIDENCE
+
+- Frozen population unchanged: `182, 172, 162, 158, 143, 137`.
+- Codex-only DB directory inspected: empty.
+- Current source establishes the evaluation logic, but not the deployed version, configuration, or data available at these six entries.
+
+## UNKNOWNS
+
+- Each tradeƒ?Ts symbol, entry signal ID, signal-time price, actual execution price, and execution-price observation time.
+- Entry Quality score/classification and its underlying expansion, ATR, reward/risk, opportunity-anchor, rejection-zone, liquidity, and regime inputs.
+- Whether the execution path was direct BUY, setup wake-up, retracement, accumulated evidence, or another reduced-entry route.
+- Signal/work freshness, 5m/1h context, `data_quality_valid`, BTC/derivatives/liquidity state, and historical configuration.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Confirm the actual schema before bounded entry-quality reads for only the six frozen positions. This identifies the authoritative linkage and whether immutable execution-price evidence, mutable managed-position score, opportunity evidence, and processing records exist.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'execution_opportunity',
+      'signal_processing_work',
+      'buy_htf_assessment_audit'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation changes were made.
+
+===== iteration06 prompt =====
+You are CODEX on TRACK of the DAILY FAILED-TRADE STUDY. Unattended. Do not ask Jean anything.
+
+HARD ISOLATION: do not read the other agent private/db folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log, or the other agent's memory files.
+
+READ: AGENTS.md, agent-docs/AGREED_KNOWLEDGE.md, agent-docs/DECISIONS.md, agent-docs/DATABASE_INVESTIGATION_RULES.md, codex-docs/, agent-docs/runs/fts-WINDOW2-20261017-180002/CHARTER.md, your private files (iteration01-codex.prompt.txt, iteration01-codex.stderr.txt, iteration01-codex.txt, iteration02-codex.prompt.txt, iteration02-codex.stderr.txt, iteration02-codex.txt, iteration03-codex.prompt.txt, iteration03-codex.stderr.txt, iteration03-codex.txt, iteration04-codex.prompt.txt, iteration04-codex.stderr.txt, iteration04-codex.txt, iteration05-codex.prompt.txt, iteration05-codex.stderr.txt, iteration05-codex.txt), agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX/
+
+ANALYSIS ONLY. No code/config/DB writes/git/deploy/implementation.
+
+TIME: DB timestamps are UTC. Report KSA = UTC+3. Never label raw UTC as KSA.
+
+FROZEN TRADES (mandatory, do not substitute):
+182, 172, 162, 158, 143, 137
+
+STUDY WINDOW: WINDOW2
+SNAPSHOT TIME UTC: 2026-10-17 15:00:03
+SNAPSHOT TIME KSA: 2026-10-17 18:00:02
+INTENDED WINDOW CLOCK KSA: 2026-10-17 18:00:00
+SNAPSHOT NOTE: On-schedule snapshot.
+AUTHORITATIVE ENTITY: crypto_ai.paper_position
+SELECTION: status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0 ORDER BY closed_at DESC LIMIT 6
+EXCLUDED: OPEN/incomplete rows; NULL closed_at; non-negative realized_pnl; wallet_position_test (Replay)
+
+SELECTED TRADE IDS:
+1. 182
+2. 172
+3. 162
+4. 158
+5. 143
+6. 137
+
+PROOF QUERIES: DBQ-FTS-001 .. DBQ-FTS-005
+
+DATABASE: you do not have the password. Emit:
+### DB_REQUEST
+QueryId: DBQ-CODEX-I6-001
+Purpose: ...
+SQL:
+SELECT ...
+### END_DB_REQUEST
+
+CURRENT TASK: ITERATION 6 - ROOT CAUSE + RESEARCH
+Iteration 6 of 8. Self-review only.
+Output FINDINGS, EVIDENCE, UNKNOWNS, and DB_REQUEST blocks as needed.
+Label PROJECT EVIDENCE / EXTERNAL RESEARCH / AGENT INFERENCE.
+===== iteration06 output =====
+## FINDINGS
+
+- **PROJECT EVIDENCE ƒ?" trade-level root cause:** `INSUFFICIENT_EVIDENCE` for every frozen trade: **182, 172, 162, 158, 143, 137**. The permitted Codex DB-evidence directory contains no results for DBQ-FTS-001..005 or prior Codex requests. Thus no symbol, entry/exit UTC time, trigger, price event, or linked signal is proven for any of the six.
+
+- **PROJECT EVIDENCE ƒ?" confirmed cross-cutting defect:** live protection validates the price observationƒ?Ts age and ordering, but then discards `observedAt` before choosing the 1m/5m/1h context. It fetches each intervalƒ?Ts latest signal without an `at-or-before observedAt` condition and without a maximum-age test. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:54) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:95)
+
+  `PositionExitPolicy` describes a ƒ?ofresh 1h SELLƒ?? but receives only decisions, not timestamps, so it cannot enforce freshness itself. This can make a staleƒ?"or, under delayed processing, later-generatedƒ?"signal affect `HTF_SELL_CONFIRMED`, `SELL_CONFIRMED`, or profit-lock exit/hold decisions. [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:20)
+
+- **PROJECT EVIDENCE ƒ?" scope of the defect:** this is not evidence that it caused a loss in any frozen trade. Causality requires the tradeƒ?Ts `production_exit_audit.close_trigger`, accepted price event, and 1m/5m/1h signal ages at the actual observation time.
+
+- **PROJECT EVIDENCE ƒ?" test gap:** the current exit-policy tests construct signals without `generatedAt`, exercising decision combinations only; they do not cover stale-context or observation-order rejection. [PositionExitPolicyTest.java](/C:/workspace/crypto-ai-trader-mysql/src/test/java/com/crypto/position/service/PositionExitPolicyTest.java:16)
+
+- **PROJECT EVIDENCE ƒ?" entry route:** initial BUY execution does have a separate durable processing freshness check after locks, then resolves and revalidates at a canonical price before creating `paper_position`. [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:89) [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:342) That does not remediate stale signal selection in the live exit route.
+
+- **EXTERNAL RESEARCH:** Binance documents kline event/start/close timestamps as UTC and supplies `x` as the closed-candle flag; REST klines are identified by open time and include close time. This supports using persisted accepted price events for protection reconstruction and not substituting candle OHLC for intrabar path/order. It does not identify a cause for these six trades. [Binance WebSocket kline stream](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams), [Binance kline REST data](https://developers.binance.com/docs/derivatives/coin-margined-futures/market-data/rest-api/Kline-Candlestick-Data)
+
+- **AGENT INFERENCE:** If any selected trade closed with `PROFIT_LOCK_*`, `HTF_SELL_CONFIRMED`, or `SELL_CONFIRMED`, the stale-context defect is a material causal candidate. If it closed with `TAKE_PROFIT` or `STOP_LOSS`, it is not the direct trigger, though it could still affect prior management decisions.
+
+## UNKNOWNS
+
+- Actual close trigger and audit record for each frozen position.
+- Whether each loss was a valid strategy loss, a protection-policy effect, or an execution/accounting issue.
+- The accepted `market_price_event` that produced each exit.
+- Signal age and whether any selected context was generated after the accepted observation.
+- Fee-adjusted reconciliation and any partial-harvest contribution.
+- Runtime version/configuration and Replay comparability.
+
+The frozen snapshotƒ?Ts supplied UTC/KSA labels also differ by one second: `2026-10-17 15:00:03 UTC` converts to `18:00:03 KSA`, while the frozen label states `18:00:02 KSA`. No trade timestamp has been inferred from that discrepancy.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Verify actual schema before root-cause reads for the frozen positions.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'production_exit_audit',
+      'trade_signal',
+      'market_price_event'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-002  
+Purpose: After DBQ-CODEX-I6-001 confirms the columns, identify each frozen tradeƒ?Ts entry, terminal trigger, source context, and latest 1m/5m/1h signals available by recorded close time. All returned timestamps are UTC.
+
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.status,
+    p.entry_price,
+    p.exit_price,
+    p.stop_loss,
+    p.take_profit,
+    p.realized_pnl,
+    p.close_reason,
+    p.opened_at,
+    p.closed_at,
+
+    a.id AS exit_audit_id,
+    a.close_trigger,
+    a.source_signal_id,
+    a.source_signal_decision,
+    a.exit_price_usdt AS audited_exit_price,
+    a.close_explanation,
+    a.audited_at,
+
+    entry_signal.id AS entry_signal_id,
+    entry_signal.interval AS entry_interval,
+    entry_signal.generated_at AS entry_signal_generated_at,
+    entry_signal.decision AS entry_signal_decision,
+    entry_signal.latest_price AS entry_signal_price,
+
+    audit_signal.id AS audit_source_signal_id,
+    audit_signal.interval AS audit_source_interval,
+    audit_signal.generated_at AS audit_source_generated_at,
+    audit_signal.decision AS audit_source_decision,
+    TIMESTAMPDIFF(SECOND, audit_signal.generated_at, p.closed_at)
+        AS audit_source_signal_age_seconds_at_recorded_close,
+
+    one_minute.id AS latest_1m_signal_id_at_close,
+    one_minute.generated_at AS latest_1m_generated_at,
+    one_minute.decision AS latest_1m_decision,
+    TIMESTAMPDIFF(SECOND, one_minute.generated_at, p.closed_at)
+        AS latest_1m_age_seconds_at_recorded_close,
+
+    five_minute.id AS latest_5m_signal_id_at_close,
+    five_minute.generated_at AS latest_5m_generated_at,
+    five_minute.decision AS latest_5m_decision,
+    TIMESTAMPDIFF(SECOND, five_minute.generated_at, p.closed_at)
+        AS latest_5m_age_seconds_at_recorded_close,
+
+    one_hour.id AS latest_1h_signal_id_at_close,
+    one_hour.generated_at AS latest_1h_generated_at,
+    one_hour.decision AS latest_1h_decision,
+    TIMESTAMPDIFF(SECOND, one_hour.generated_at, p.closed_at)
+        AS latest_1h_age_seconds_at_recorded_close
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.production_exit_audit a
+    ON a.paper_position_id = p.id
+LEFT JOIN crypto_ai.trade_signal entry_signal
+    ON entry_signal.id = p.signal_id
+LEFT JOIN crypto_ai.trade_signal audit_signal
+    ON audit_signal.id = a.source_signal_id
+LEFT JOIN crypto_ai.trade_signal one_minute
+    ON one_minute.id = (
+        SELECT s.id
+        FROM crypto_ai.trade_signal s
+        WHERE s.symbol = p.symbol
+          AND s.interval = '1m'
+          AND s.generated_at <= p.closed_at
+        ORDER BY s.generated_at DESC, s.id DESC
+        LIMIT 1
+    )
+LEFT JOIN crypto_ai.trade_signal five_minute
+    ON five_minute.id = (
+        SELECT s.id
+        FROM crypto_ai.trade_signal s
+        WHERE s.symbol = p.symbol
+          AND s.interval = '5m'
+          AND s.generated_at <= p.closed_at
+        ORDER BY s.generated_at DESC, s.id DESC
+        LIMIT 1
+    )
+LEFT JOIN crypto_ai.trade_signal one_hour
+    ON one_hour.id = (
+        SELECT s.id
+        FROM crypto_ai.trade_signal s
+        WHERE s.symbol = p.symbol
+          AND s.interval = '1h'
+          AND s.generated_at <= p.closed_at
+        ORDER BY s.generated_at DESC, s.id DESC
+        LIMIT 1
+    )
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-003  
+Purpose: After schema confirmation, retrieve bounded accepted price-event evidence around each recorded close. These rows require correlation with the audit trigger; they do not independently prove a position mutation. Returned timestamps are UTC.
+
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.closed_at,
+    m.id AS market_price_event_id,
+    m.observed_at,
+    m.price,
+    m.source,
+    m.delivery_status,
+    m.outcome_reason
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.market_price_event m
+    ON m.symbol = p.symbol
+   AND m.observed_at BETWEEN DATE_SUB(p.closed_at, INTERVAL 3 MINUTE)
+                         AND DATE_ADD(p.closed_at, INTERVAL 1 MINUTE)
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+  AND m.delivery_status IN ('LEGACY', 'APPLIED')
+ORDER BY p.id, m.observed_at, m.id;
+```
+
+### END_DB_REQUEST
+
+===== iteration07 prompt =====
+You are CODEX on TRACK of the DAILY FAILED-TRADE STUDY. Unattended. Do not ask Jean anything.
+
+HARD ISOLATION: do not read the other agent private/db folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log, or the other agent's memory files.
+
+READ: AGENTS.md, agent-docs/AGREED_KNOWLEDGE.md, agent-docs/DECISIONS.md, agent-docs/DATABASE_INVESTIGATION_RULES.md, codex-docs/, agent-docs/runs/fts-WINDOW2-20261017-180002/CHARTER.md, your private files (iteration01-codex.prompt.txt, iteration01-codex.stderr.txt, iteration01-codex.txt, iteration02-codex.prompt.txt, iteration02-codex.stderr.txt, iteration02-codex.txt, iteration03-codex.prompt.txt, iteration03-codex.stderr.txt, iteration03-codex.txt, iteration04-codex.prompt.txt, iteration04-codex.stderr.txt, iteration04-codex.txt, iteration05-codex.prompt.txt, iteration05-codex.stderr.txt, iteration05-codex.txt, iteration06-codex.prompt.txt, iteration06-codex.stderr.txt, iteration06-codex.txt), agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX/
+
+ANALYSIS ONLY. No code/config/DB writes/git/deploy/implementation.
+
+TIME: DB timestamps are UTC. Report KSA = UTC+3. Never label raw UTC as KSA.
+
+FROZEN TRADES (mandatory, do not substitute):
+182, 172, 162, 158, 143, 137
+
+STUDY WINDOW: WINDOW2
+SNAPSHOT TIME UTC: 2026-10-17 15:00:03
+SNAPSHOT TIME KSA: 2026-10-17 18:00:02
+INTENDED WINDOW CLOCK KSA: 2026-10-17 18:00:00
+SNAPSHOT NOTE: On-schedule snapshot.
+AUTHORITATIVE ENTITY: crypto_ai.paper_position
+SELECTION: status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0 ORDER BY closed_at DESC LIMIT 6
+EXCLUDED: OPEN/incomplete rows; NULL closed_at; non-negative realized_pnl; wallet_position_test (Replay)
+
+SELECTED TRADE IDS:
+1. 182
+2. 172
+3. 162
+4. 158
+5. 143
+6. 137
+
+PROOF QUERIES: DBQ-FTS-001 .. DBQ-FTS-005
+
+DATABASE: you do not have the password. Emit:
+### DB_REQUEST
+QueryId: DBQ-CODEX-I7-001
+Purpose: ...
+SQL:
+SELECT ...
+### END_DB_REQUEST
+
+CURRENT TASK: ITERATION 7 - SELF-CHALLENGE
+Iteration 7 of 8. Self-review only.
+Output FINDINGS, EVIDENCE, UNKNOWNS, and DB_REQUEST blocks as needed.
+Label PROJECT EVIDENCE / EXTERNAL RESEARCH / AGENT INFERENCE.
+===== iteration07 output =====
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Trade-specific attribution remains **insufficiently evidenced** for frozen positions **182, 172, 162, 158, 143, 137**. The permitted `db/CODEX` directory is empty; no symbol, entry/exit, trigger, price-event, or signal record has been supplied.
+
+- **PROJECT EVIDENCE ƒ?" self-challenge upheld:** Current source has a real exit-context time-boundary weakness. The direct price-event path validates `observedAt`, then calls an overload that selects each intervalƒ?Ts newest signal without an `at-or-before observedAt` predicate or maximum-age check. That affects TP continuation, profit-lock, and normal signal exits. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:54) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:95)
+
+- **PROJECT EVIDENCE ƒ?" refinement:** This is stronger than merely a policy-test gap, but it is not proof of a future-data leak in any frozen trade. If processing was immediate, the selected signals may still have been valid. A causal claim requires the accepted eventƒ?Ts `observed_at`, the exit auditƒ?Ts source signal, and the contemporaneous 1m/5m/1h records.
+
+- **PROJECT EVIDENCE:** The repository already has an at-or-before generated-time query, but the normal/profit-lock production path does not use it. Near-TP protection is separately bounded only against `Instant.now()`, not the Binance observation timestamp, and still has no age limit. [TradeSignalRepository.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/TradeSignalRepository.java:23) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:336)
+
+- **PROJECT EVIDENCE ƒ?" correction to Iteration 6:** `paper_position.closed_at` is not a safe substitute for the actual protection observation time. Signals generated between `observed_at` and close commit could appear valid in a close-time-only reconstruction while being unavailable when the market observation occurred.
+
+- **PROJECT EVIDENCE:** `production_exit_audit` identifies the terminal trigger and one source signal, but does not persist the `market_price_event` ID or all three interval signals. An `APPLIED` price event proves callback completion, not by itself that it caused the close. [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:20) [ProductionExitAuditService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:25)
+
+- **PROJECT EVIDENCE:** The frozen population intentionally excludes `status=STOPPED`; fixed stop-loss losses therefore fall outside this six-trade study. No conclusion about all daily failed trades is justified from this subset.
+
+- **AGENT INFERENCE:** The time-boundary defect is a material causal candidate only where a selected tradeƒ?Ts trigger is `HTF_SELL_CONFIRMED`, `SELL_CONFIRMED`, `PROFIT_LOCK_*`, or a continuation-dependent `TAKE_PROFIT`. It is not the direct close trigger for a mechanically reached fixed stop.
+
+## EVIDENCE
+
+- Required shared/Codex context, charter, all six prior Codex iterations, and permitted Codex DB directory were read.
+- No new external research was used.
+- **PROJECT EVIDENCE:** The snapshot metadata has a one-second label conflict: `2026-10-17 15:00:03 UTC` converts to `2026-10-17 18:00:03 KSA`, while the supplied snapshot label is `18:00:02 KSA`. Frozen IDs remain unchanged; no timestamp has been inferred from this discrepancy.
+
+## UNKNOWNS
+
+- Actual symbol, entry/close timeline, trigger, signal linkage, accepted event, and fee-adjusted result for every frozen trade.
+- Whether the current source revision and configuration were deployed when these positions closed.
+- Whether any event processed after its `observed_at` selected a later or stale 1m/5m/1h signal.
+- Whether Replay can reproduce a given trade; it cannot be claimed from source alone.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Confirm actual schema and linkage columns before trade-level causality queries.
+
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    k.referenced_table_name,
+    k.referenced_column_name
+FROM information_schema.columns c
+LEFT JOIN information_schema.key_column_usage k
+    ON k.table_schema = c.table_schema
+   AND k.table_name = c.table_name
+   AND k.column_name = c.column_name
+   AND k.referenced_table_name IS NOT NULL
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'production_exit_audit',
+      'market_price_event',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'position_management_event',
+      'position_analysis'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-002  
+Purpose: After DBQ-CODEX-I7-001 confirms columns, retrieve the authoritative position and terminal-audit records for only the frozen IDs. Returned timestamps are UTC.
+
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.status,
+    p.quantity,
+    p.entry_price,
+    p.stop_loss,
+    p.take_profit,
+    p.exit_price,
+    p.realized_pnl,
+    p.signal_id AS entry_signal_id,
+    p.exit_signal_id,
+    p.close_reason,
+    p.opened_at,
+    p.closed_at,
+    a.id AS exit_audit_id,
+    a.wallet_position_id,
+    a.close_trigger,
+    a.source_signal_id,
+    a.source_signal_decision,
+    a.source_signal_original_decision,
+    a.exit_price_usdt AS audited_exit_price,
+    a.close_explanation,
+    a.audited_at
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.production_exit_audit a
+    ON a.paper_position_id = p.id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-003  
+Purpose: After DBQ-CODEX-I7-001 confirms columns, return bounded accepted protection-event candidates near each frozen close. These are correlation candidates only, not proof of causation. Returned timestamps are UTC.
+
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.exit_price,
+    p.closed_at,
+    m.id AS market_price_event_id,
+    m.observed_at,
+    m.price,
+    m.source,
+    m.delivery_status,
+    m.outcome_reason
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.market_price_event m
+    ON m.symbol = p.symbol
+   AND m.observed_at BETWEEN DATE_SUB(p.closed_at, INTERVAL 5 MINUTE)
+                         AND DATE_ADD(p.closed_at, INTERVAL 10 SECOND)
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+  AND m.delivery_status IN ('LEGACY', 'APPLIED')
+ORDER BY p.id, m.observed_at, m.id;
+```
+
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation changes were made.
+
+
+exec
+"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$dir='"'agent-docs/runs/fts-WINDOW2-20261017-180002/private/CODEX'; Get-Content -LiteralPath (Join-Path "'$dir '"'iteration04-codex.txt') -Raw; Write-Output \""'`n===== ITERATION05 ====="; Get-Content -LiteralPath (Join-Path $dir '"'iteration05-codex.txt') -Raw" in C:\workspace\crypto-ai-trader-mysql
+ succeeded in 540ms:
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen scope remains exactly paper-position IDs `182, 172, 162, 158, 143, 137`. The Codex DB evidence directory is empty, so no trade-specific entry, exit, signal, price-event, or P&L conclusion is established.
+
+- **PROJECT EVIDENCE:** Current entry route is: persisted signal ƒ+' durable processing claim/freshness check ƒ+' execution-intelligence/HTF validation ƒ+' fresh canonical execution price and revalidation ƒ+' wallet BUY ƒ+' `paper_position` creation. A 5m signal may wake a deferred opportunity, but the actual executable signal remains the latest 1m signal. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:292) [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:97)
+
+- **PROJECT EVIDENCE:** Fixed stop-loss exits are persisted as `paper_position.status=STOPPED`; the frozen selection admits only `status=CLOSED`. Thus this study deliberately excludes losses closed through the ordinary fixed-stop route. This is a population limitation, not a defect. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:173) [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:182)
+
+- **PROJECT EVIDENCE:** A `CLOSED` trade can be caused by take-profit, profit-lock, hard-profit-floor, validated signal SELL, or higher-timeframe exitƒ?"not only a discretionary SELL. `production_exit_audit.close_trigger` is the most direct durable discriminator and separately retains the contextual source signal. [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:29)
+
+- **PROJECT EVIDENCE:** Live-price protection validates the observation and records `APPLIED` only after the protection callback completes; its evidence must come from `market_price_event`, never candle OHLC substitution. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:54) [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:82)
+
+- **PROJECT EVIDENCE:** The live protection route selects the latest 1m/5m/1h signals by generation time but does not itself apply explicit freshness checks before `PositionExitPolicy` evaluates normal exits or profit-lock breaches. This must be tested per frozen trade by comparing the chosen signal times with the accepted price-event observation/exit time; source alone does not show it affected any of the six trades. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:95) [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:20)
+
+- **PROJECT EVIDENCE:** `paper_position.realized_pnl` is gross lifecycle P&L and may include partial-harvest P&L. Wallet executions separately retain quantity, cost basis, execution price, fees, and realized P&L. The current paper wallet writes zero fees, but reconciliation still requires both ledgers. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:495) [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:533)
+
+- **PROJECT EVIDENCE:** Project documentation conflicts on FIX-154 status: parts of Architecture label it pending, while the changelog, implementation handoff, and current source show an implemented local-worktree policy. Current source is stronger evidence for code availability, but neither proves the runtime version or Flyway state for these six trades.
+
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- Every frozen tradeƒ?Ts symbol, UTC/KSA entry and exit times, close trigger, source signal, accepted price-event ID, and wallet/managed-position linkage.
+- Whether any exit used stale 1m/5m/1h context.
+- Whether `production_exit_audit` exists and covers the six positions.
+- Runtime version, applied Flyway state, and configuration active when these trades ran.
+- Fee-adjusted P&L and any partial-harvest contribution.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Read the actual schema and key relationships required to map the six frozen paper positions to their entry/exit signals, managed wallet positions, executions, exit audit, processing work, and accepted price evidence. No trade data is requested until this metadata is returned.
+
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    c.extra,
+    k.referenced_table_name,
+    k.referenced_column_name
+FROM information_schema.columns c
+LEFT JOIN information_schema.key_column_usage k
+    ON k.table_schema = c.table_schema
+   AND k.table_name = c.table_name
+   AND k.column_name = c.column_name
+   AND k.referenced_table_name IS NOT NULL
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_managed_position',
+      'wallet_trade',
+      'production_exit_audit',
+      'market_price_event',
+      'position_management_event',
+      'position_analysis',
+      'signal_processing_work'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation changes were made.
+
+
+===== ITERATION05 =====
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Entry quality is **unverifiable for each frozen trade** (`182, 172, 162, 158, 143, 137`): the permitted Codex DB-evidence directory remains empty. No trade-specific signal, execution-price, or context record is available.
+
+- **PROJECT EVIDENCE:** Current source blocks initial entries with Entry Quality below `50/100`; scores of `50ƒ?"69`, `70ƒ?"84`, and `85+` cap initial exposure at 25%, 40%, and 50% respectively. It evaluates the actual execution-time price, not merely the signal price. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:865) [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1150)
+
+- **PROJECT EVIDENCE:** The model considers 30-minute price expansion, ATR extension, opportunity age, execution-price reward/risk, recent rejection near a prior high, volatility regime, and stop-exposed liquidity. A fresh price at/below stop or at/above target rejects the BUY before wallet execution.
+
+- **PROJECT EVIDENCE:** Normal direct BUYs require a bullish 1m signal with final entry permission, immediate ATR permission, minimum score, and non-blocked strategy/BTC/derivatives/strong-target-wall conditions. Fresh 5m and 1h context is then validated at the signal time. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:2139) [TradeExecutionValidationService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:62)
+
+- **PROJECT EVIDENCE:** The wallet BUY retains immutable decision price, execution price, execution-price observation timestamp, and execution message. `wallet_managed_position.entry_quality_score` is not reliable as an immutable initial-entry record by itself: every later BUY/add writes it again. [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:129)
+
+- **AGENT INFERENCE:** No frozen trade may be classified as supported, weak, late/chased, or rule-violating until its exact linked entry signal and actual BUY execution are retrieved. A later losing outcome is not entry-quality evidence.
+
+- **EXTERNAL RESEARCH:** None.
+
+## EVIDENCE
+
+- Frozen population unchanged: `182, 172, 162, 158, 143, 137`.
+- Codex-only DB directory inspected: empty.
+- Current source establishes the evaluation logic, but not the deployed version, configuration, or data available at these six entries.
+
+## UNKNOWNS
+
+- Each tradeƒ?Ts symbol, entry signal ID, signal-time price, actual execution price, and execution-price observation time.
+- Entry Quality score/classification and its underlying expansion, ATR, reward/risk, opportunity-anchor, rejection-zone, liquidity, and regime inputs.
+- Whether the execution path was direct BUY, setup wake-up, retracement, accumulated evidence, or another reduced-entry route.
+- Signal/work freshness, 5m/1h context, `data_quality_valid`, BTC/derivatives/liquidity state, and historical configuration.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Confirm the actual schema before bounded entry-quality reads for only the six frozen positions. This identifies the authoritative linkage and whether immutable execution-price evidence, mutable managed-position score, opportunity evidence, and processing records exist.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'execution_opportunity',
+      'signal_processing_work',
+      'buy_htf_assessment_audit'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation changes were made.
+
+
+exec
+"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$codexDocs = Get-ChildItem -LiteralPath codex-docs -File; $private = Get-ChildItem -LiteralPath '"'agent-docs/runs/fts-WINDOW2-20261017-180002/private/CODEX' -File | Where-Object { "'$_.Name -match '"'"'^iteration0[1-7]-codex'"\\.(prompt|stderr|txt)\\.txt"'$'"' }; "'$codexDocs + $private | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw | Out-Null }; '"'Read completed for all specified Codex docs and Iterations 01-07 private prompt/stderr/output artifacts. db/CODEX was inspected and contains no files.'" in C:\workspace\crypto-ai-trader-mysql
+ succeeded in 566ms:
+Read completed for all specified Codex docs and Iterations 01-07 private prompt/stderr/output artifacts. db/CODEX was inspected and contains no files.
+
+exec
+"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n -C 3 "processPriceEvent|observedAt|findFirstBySymbolAndIntervalOrderByGeneratedAtDesc|findTopBySymbolAndIntervalOrderByGeneratedAtDesc|PositionExitPolicy|PROFIT_LOCK|HTF_SELL_CONFIRMED|SELL_CONFIRMED|atOrBefore|findLatest" src/main/java/com/crypto/position/service/LivePositionProtectionService.java src/main/java/com/crypto/position/service/PositionExitPolicy.java src/main/java/com/crypto/repository/TradeSignalRepository.java src/main/java/com/crypto/audit/domain/ProductionExitAudit.java src/main/java/com/crypto/audit/service/ProductionExitAuditService.java' in C:\workspace\crypto-ai-trader-mysql
+2026-10-17T15:57:25.095649Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 1.6 seconds
+Output:
+rg : The term 'rg' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the 
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:2 char:1
++ rg -n -C 3 "processPriceEvent|observedAt|findFirstBySymbolAndInterval ...
++ ~~
+    + CategoryInfo          : ObjectNotFound: (rg:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+
+ exited 1 in 1615ms:
+rg : The term 'rg' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the 
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:2 char:1
++ rg -n -C 3 "processPriceEvent|observedAt|findFirstBySymbolAndInterval ...
++ ~~
+    + CategoryInfo          : ObjectNotFound: (rg:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+
+exec
+"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$paths=@('"'src/main/java/com/crypto/position/service/LivePositionProtectionService.java','src/main/java/com/crypto/position/service/PositionExitPolicy.java','src/main/java/com/crypto/repository/TradeSignalRepository.java','src/main/java/com/crypto/audit/domain/ProductionExitAudit.java','src/main/java/com/crypto/audit/service/ProductionExitAuditService.java'); Select-String -LiteralPath "'$paths -Pattern '"'observedAt|PositionExitPolicy|PROFIT_LOCK|HTF_SELL_CONFIRMED|SELL_CONFIRMED|atOrBefore|findLatest|findFirstBySymbolAndIntervalOrderByGeneratedAtDesc|findTopBySymbolAndIntervalOrderByGeneratedAtDesc' -Context 3,3" in C:\workspace\crypto-ai-trader-mysql
+ succeeded in 570ms:
+
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:40:    private final 
+PaperPositionRepository paperPositionRepository;
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:41:    private final 
+DynamicProfitLockService dynamicProfitLockService;
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:42:    private final 
+PositionContinuationPolicy continuationPolicy;
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:43:    private final PositionExitPolicy 
+exitPolicy;
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:44:    private final 
+TradeSignalRepository tradeSignalRepository;
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:45:    private final 
+WalletAutoExecutionService walletAutoExecutionService;
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:46:    private final 
+ProductionExitAuditService productionExitAuditService;
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:51:    
+@org.springframework.beans.factory.annotation.Autowired private com.crypto.market.service.MarketPriceEventService 
+priceEvents;
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:52:    
+@org.springframework.beans.factory.annotation.Autowired(required=false) private 
+com.crypto.local.ExchangeClockSynchronizer exchangeClock;
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:53:    
+@Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:54:    public void onPrice(String 
+symbol,BigDecimal price,Instant observedAt,long eventId){
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:55:        
+price=com.crypto.market.service.MarketPriceEventService.normalizePrice(price);
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:56:        
+if(walletCoordination!=null)walletCoordination.symbol(symbol);
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:57:        // Acquire the existing 
+managed-position lock BEFORE freshness, including waits on it.
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:63:            throw failure;
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:64:        }
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:65:        Instant 
+localNow=Instant.now();
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:66:        String 
+rejection=priceEvents.invalidReason(price,observedAt,exchangeClock==null?localNow:exchangeClock.correctJvm(localNow));
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:67:        if(rejection==null && 
+priceEvents.laterApplied(symbol,observedAt))rejection="OUT_OF_ORDER";
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:68:        
+if(rejection!=null){priceEvents.finish(eventId,symbol,observedAt,price,"NON_CANONICAL",rejection);return;}
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:69:        onPrice(symbol,price);
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:70:        // No-position and all 
+successful no-op exits reach this statement; exceptions do not.
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:71:        
+priceEvents.finish(eventId,symbol,observedAt,price,"APPLIED","PROTECTION_CALLBACK_COMPLETED");
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:72:    }
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:73:
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:74:    @Transactional
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:92:        }
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:93:        if (managed == null || 
+managed.getQuantity() == null || managed.getQuantity().signum() <= 0) return;
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:94:
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:95:        TradeSignal one = 
+tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "1m").orElse(null);
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:96:        TradeSignal five = 
+tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "5m").orElse(null);
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:97:        TradeSignal hour = 
+tradeSignalRepository.findTopBySymbolAndIntervalOrderByGeneratedAtDesc(symbol, "1h").orElse(null);
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:98:
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:99:        // Reaching TP is a 
+management checkpoint, not an unconditional full exit.
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:100:        if 
+(managed.getTakeProfitUsdt() != null && price.compareTo(managed.getTakeProfitUsdt()) >= 0) {
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:192:            String reason = 
+lock.explanation();
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:193:            
+log.info("[FIX-118][PRODUCTION][REBASE_HARD_FLOOR] positionId={}, symbol={}, price={}, floor={}, target={}",
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:194:                    
+lock.walletPositionId(), symbol, price, lock.hardProfitFloor(), managed.getTakeProfitUsdt());
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:195:            if 
+(walletAutoExecutionService.executeMechanicalExit(symbol, price, "PROFIT_LOCK_HARD_EXIT", reason)) {
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:196:                closePaper(symbol, 
+price, PositionStatus.CLOSED, "PROFIT_LOCK_HARD_EXIT", reason, one);
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:197:            }
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:198:            return;
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:199:        }
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:210:            BigDecimal 
+hardProfitFloor = managed.getAverageEntryPriceUsdt().multiply(BigDecimal.valueOf(1.0005), MC);
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:211:            if 
+(price.compareTo(hardProfitFloor) < 0) {
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:212:                String reason = 
+lock.explanation() + " Hard protected-profit floor " + hardProfitFloor + " was breached.";
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:213:                if 
+(walletAutoExecutionService.executeMechanicalExit(symbol, price, "PROFIT_LOCK_HARD_EXIT", reason)) {
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:214:                    
+closePaper(symbol, price, PositionStatus.CLOSED, "PROFIT_LOCK_HARD_EXIT", reason, one);
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:215:                }
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:216:                return;
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:217:            }
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:218:
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:219:            
+PositionExitPolicy.Evaluation lockDecision = exitPolicy.evaluateProfitLockBreach(one, five, hour);
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:220:            if 
+(lockDecision.exit()) {
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:221:                String reason = 
+lock.explanation() + " " + lockDecision.explanation();
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:222:                if 
+(walletAutoExecutionService.executeMechanicalExit(symbol, price, lockDecision.code(), reason)) {
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:223:                    
+closePaper(symbol, price, PositionStatus.CLOSED, lockDecision.code(), reason, one);
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:224:                    log.info("Live 
+PROFIT_LOCK exit: symbol={}, price={}, lock={}, reason={}",
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:225:                            symbol, 
+price, lock.lockPrice(), lockDecision.code());
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:226:                }
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:227:                return;
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:228:            }
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:229:            log.info("Live 
+PROFIT_LOCK protected hold: symbol={}, price={}, lock={}, reason={}",
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:230:                    symbol, price, 
+lock.lockPrice(), lockDecision.explanation());
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:231:        }
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:232:
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:233:        // Normal signal exits 
+remain active even when Profit Lock is disabled. Higher-timeframe
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:234:        // failure can therefore 
+close a winner instead of waiting forever for an exact 1m SELL event.
+> src\main\java\com\crypto\position\service\LivePositionProtectionService.java:235:        
+PositionExitPolicy.Evaluation normalExit = exitPolicy.evaluateNormalExit(one, five, hour);
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:236:        if (normalExit.exit()) {
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:237:            if 
+(walletAutoExecutionService.executeMechanicalExit(symbol, price, normalExit.code(), normalExit.explanation())) {
+  src\main\java\com\crypto\position\service\LivePositionProtectionService.java:238:                closePaper(symbol, 
+price, PositionStatus.CLOSED, normalExit.code(), normalExit.explanation(), one);
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:15: *  - a Profit Lock breach is tolerated while 
+5m/1h still support the bullish thesis.
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:16: */
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:17:@Component
+> src\main\java\com\crypto\position\service\PositionExitPolicy.java:18:public class PositionExitPolicy {
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:19:
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:20:    public Evaluation 
+evaluateNormalExit(TradeSignal current, TradeSignal fiveMinute, TradeSignal oneHour) {
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:21:        SignalDecision currentDecision = 
+decision(current);
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:26:                && fiveMinute != null
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:27:                && !supportive(fiveDecision);
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:28:        if (oneHourBreakdown) {
+> src\main\java\com\crypto\position\service\PositionExitPolicy.java:29:            return 
+Evaluation.exit("HTF_SELL_CONFIRMED",
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:30:                    "1h turned " + 
+label(oneDecision)
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:31:                            + " while 5m is no 
+longer supportive (" + label(fiveDecision)
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:32:                            + "). The 
+higher-timeframe bullish thesis is broken; close the managed position.");
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:39:                && bearish(fiveDecision)
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:40:                && (oneHour == null || 
+!bullish(oneDecision));
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:41:        if (lowerFrameConfirmed) {
+> src\main\java\com\crypto\position\service\PositionExitPolicy.java:42:            return 
+Evaluation.exit("SELL_CONFIRMED",
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:43:                    "1m " + 
+label(currentDecision) + " is confirmed by bearish 5m while 1h is not bullish.");
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:44:        }
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:45:
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:56:
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:57:        // Strong HTF support: tolerate a sharp 
+1m pullback instead of throwing away the trend.
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:58:        if (bullish(oneDecision) && fiveMinute 
+!= null && supportive(fiveDecision)) {
+> src\main\java\com\crypto\position\service\PositionExitPolicy.java:59:            return 
+Evaluation.hold("PROFIT_LOCK_HOLD",
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:60:                    "Profit Lock was breached, 
+but higher-timeframe continuation remains healthy:"
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:61:                            + " 1h=" + 
+label(oneDecision) + ", 5m=" + label(fiveDecision)
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:62:                            + ", current=" + 
+label(currentDecision)
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:67:        if (oneDecision == SignalDecision.WATCH
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:68:                && fiveMinute != null && 
+supportive(fiveDecision)
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:69:                && !bearish(currentDecision)) {
+> src\main\java\com\crypto\position\service\PositionExitPolicy.java:70:            return 
+Evaluation.hold("PROFIT_LOCK_HOLD",
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:71:                    "Profit Lock was breached 
+during a supported consolidation:"
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:72:                            + " 1h=WATCH, 5m=" 
++ label(fiveDecision)
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:73:                            + ", current=" + 
+label(currentDecision)
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:75:        }
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:76:
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:77:        if (bearish(oneDecision)) {
+> src\main\java\com\crypto\position\service\PositionExitPolicy.java:78:            return 
+Evaluation.exit("PROFIT_LOCK_HTF_EXIT",
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:79:                    "Profit Lock was breached 
+and 1h is " + label(oneDecision)
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:80:                            + "; 
+higher-timeframe support has failed.");
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:81:        }
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:82:
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:83:        if (bearish(currentDecision) && 
+bearish(fiveDecision)) {
+> src\main\java\com\crypto\position\service\PositionExitPolicy.java:84:            return 
+Evaluation.exit("PROFIT_LOCK_BEARISH_CONFIRMATION",
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:85:                    "Profit Lock was breached 
+with bearish 1m and 5m confirmation.");
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:86:        }
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:87:
+> src\main\java\com\crypto\position\service\PositionExitPolicy.java:88:        return 
+Evaluation.exit("PROFIT_LOCK_EXIT",
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:89:                "Profit Lock was breached 
+without enough higher-timeframe bullish support to justify a protected hold:"
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:90:                        + " current=" + 
+label(currentDecision)
+  src\main\java\com\crypto\position\service\PositionExitPolicy.java:91:                        + ", 5m=" + 
+label(fiveDecision)
+  src\main\java\com\crypto\repository\TradeSignalRepository.java:20:    );
+  src\main\java\com\crypto\repository\TradeSignalRepository.java:21:
+  src\main\java\com\crypto\repository\TradeSignalRepository.java:22:    Optional<TradeSignal> 
+findTopBySymbolOrderByGeneratedAtDesc(String symbol);
+> src\main\java\com\crypto\repository\TradeSignalRepository.java:23:    Optional<TradeSignal> 
+findTopBySymbolAndIntervalOrderByGeneratedAtDesc(String symbol, String interval);
+  src\main\java\com\crypto\repository\TradeSignalRepository.java:24:    Optional<TradeSignal> 
+findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc(
+  src\main\java\com\crypto\repository\TradeSignalRepository.java:25:            String symbol, String interval, 
+Instant generatedAt
+  src\main\java\com\crypto\repository\TradeSignalRepository.java:26:    );
+
+
+
+codex
+# CODEX_FAILED_TRADE_STUDY.md
+
+## Summary
+
+- Study window: `WINDOW2`
+- Authoritative entity: `crypto_ai.paper_position`
+- Frozen trade IDs: `182, 172, 162, 158, 143, 137`
+- Frozen selection: `status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0`, descending close time, limit 6.
+- Snapshot: UTC `2026-10-17 15:00:03`; supplied KSA label `2026-10-17 18:00:02`.
+- Time note: UTC `15:00:03` mathematically converts to KSA `18:00:03`; the supplied one-second KSA discrepancy does not alter the frozen IDs.
+- Final classification: **INSUFFICIENT_EVIDENCE for all six trades.**
+- Changes made: **NONE** — analysis only.
+
+| Paper position ID | Frozen-population fact | Trade-level classification | What is not proven |
+|---:|---|---|---|
+| 182 | CLOSED with negative `realized_pnl` at the frozen snapshot | **INSUFFICIENT_EVIDENCE** | Symbol, entry/exit times, trigger, price event, source signals, fee-adjusted P&L, and causality |
+| 172 | CLOSED with negative `realized_pnl` at the frozen snapshot | **INSUFFICIENT_EVIDENCE** | Same |
+| 162 | CLOSED with negative `realized_pnl` at the frozen snapshot | **INSUFFICIENT_EVIDENCE** | Same |
+| 158 | CLOSED with negative `realized_pnl` at the frozen snapshot | **INSUFFICIENT_EVIDENCE** | Same |
+| 143 | CLOSED with negative `realized_pnl` at the frozen snapshot | **INSUFFICIENT_EVIDENCE** | Same |
+| 137 | CLOSED with negative `realized_pnl` at the frozen snapshot | **INSUFFICIENT_EVIDENCE** | Same |
+
+No selected trade can be called a valid strategy loss, stale-data loss, late-entry loss, protection defect, execution-delay defect, or accounting defect from the evidence supplied to the Codex track.
+
+## Database Evidence
+
+**PROJECT EVIDENCE:** `agent-docs/runs/fts-WINDOW2-20261017-180002/db/CODEX/` is empty. No results for `DBQ-FTS-001` through `DBQ-FTS-005`, nor any Codex-specific DB result, are available.
+
+Consequently, none of the following is evidenced for an individual frozen trade:
+
+- `paper_position` lifecycle fields beyond the frozen selection predicate;
+- linked entry/exit signals;
+- `production_exit_audit.close_trigger`;
+- accepted `market_price_event` and its UTC `observed_at`;
+- managed-wallet position, executions, fees, or partial-harvest history;
+- candle/context quality and signal age at the actual observation time.
+
+`paper_position.closed_at` must not substitute for the protection observation time: signals generated after the accepted observation but before close commit could otherwise look contemporaneous.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I8-001  
+Purpose: Obtain bounded schema evidence before requesting the six-trade timeline, terminal audit, price-event, and wallet reconciliation. No write or unbounded data read is requested.
+
+SQL:
+
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    k.referenced_table_name,
+    k.referenced_column_name
+FROM information_schema.columns c
+LEFT JOIN information_schema.key_column_usage k
+    ON k.table_schema = c.table_schema
+   AND k.table_name = c.table_name
+   AND k.column_name = c.column_name
+   AND k.referenced_table_name IS NOT NULL
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'production_exit_audit',
+      'market_price_event',
+      'trade_signal',
+      'wallet_managed_position',
+      'wallet_trade',
+      'position_management_event'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+
+### END_DB_REQUEST
+
+## Log Evidence
+
+**PROJECT EVIDENCE:** Earlier Codex-side inspection found no explicit frozen position-ID matches in the searched uncompressed runtime logs. This is not proof that trade logs do not exist.
+
+A reliable targeted search needs the database-derived symbol, UTC entry/close range, signal IDs, and event IDs. Archived logs were not sufficient to establish trade attribution without those anchors.
+
+**PROJECT EVIDENCE:** Current logging supports reconstruction once linked records exist: candle-analysis worker timing, signal processing claim/completion, saved-signal timing, and price-event completion are logged. Ordinary protection paths may log symbol and price without a paper-position ID, making DB correlation essential.
+
+## Code Evidence
+
+**PROJECT EVIDENCE:** The current direct protection route validates the incoming price event’s `observedAt` for freshness/order, then invokes an overload that selects the newest 1m, 5m, and 1h signals without an `at-or-before observedAt` restriction or explicit context-age limit. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:54) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:95)
+
+**PROJECT EVIDENCE:** The repository already exposes an at-or-before generated-time query, but this protection path uses the unconstrained latest-signal query. [TradeSignalRepository.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/TradeSignalRepository.java:23)
+
+**PROJECT EVIDENCE:** Those contexts influence `HTF_SELL_CONFIRMED`, `SELL_CONFIRMED`, and profit-lock exit/hold decisions. [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:20)
+
+**AGENT INFERENCE:** This is a real cross-cutting temporal-boundary weakness and a possible causal candidate only if a frozen trade’s audit shows a context-dependent exit. It is not evidence that it caused any of these six losses.
+
+**PROJECT EVIDENCE:** Fixed stop-loss closures are stored as `STOPPED`; the frozen `CLOSED` selection intentionally excludes them. This is a population limitation, not a demonstrated defect.
+
+## External Research
+
+**EXTERNAL RESEARCH:** Prior iteration research only confirmed generic Binance kline timestamp/closed-event semantics. It does not establish entry quality, exit cause, latency, or a defect for any frozen trade.
+
+## Final Assessment and Candidate Follow-up
+
+- Trade-specific root cause: **not established** for IDs `182, 172, 162, 158, 143, 137`.
+- Confirmed source-level concern: exit-context selection is not bounded to the accepted price-event observation time.
+- Suggested fix candidates only, not authorized changes:
+  1. Select 1m/5m/1h exit context at or before the accepted `observedAt` and enforce interval-specific freshness.
+  2. Persist or durably correlate the closing price-event ID and all selected context signal IDs in exit audit evidence.
+  3. Add tests for delayed processing, future-generated context exclusion, stale context, and Replay parity.
+
+No code, configuration, database, Git, deployment, or documentation change was made.
+tokens used
+41,838

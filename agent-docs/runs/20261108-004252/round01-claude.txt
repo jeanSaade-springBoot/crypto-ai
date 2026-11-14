@@ -1,0 +1,119 @@
+# FIX-156 Replay-only parity: Round 1 independent review (Claude, read-only)
+
+I changed nothing: no source, configuration, database or git state, and no plan file. The Write tool isn't available in this session. I did no external research, so every claim below is labelled PROJECT EVIDENCE or AGENT INFERENCE.
+
+**Short answer:** FIX-156 can't be finished safely from the current scope yet. The main BUY path still reads wallet settings, ~120 Replay SQL calls bypass the new guard, and the specification it must be reconciled against is not in the repository.
+
+## FINDINGS
+
+**F1. The authoritative design is missing from the repository (PROJECT EVIDENCE).**
+- No file named `FIX-156-RPR-0.9.12*` exists in the repository.
+- The preparation document says it lives at `C:\Users\jeane\Downloads\FIX-156-RPR-0.9.12-DRAFT.md` (`FIX-156_IMPLEMENTATION_PREPARATION.md:313`).
+- `FINAL_CHANGE_SPECIFICATION.md` is still RPR-0.4 (`:427`), and the preparation document says P01–P07 are still `Pending` (`:53-59`).
+- So the hash `ddfd5f64…` and rows D01–D56 / S01–S14 can't be checked from the repository. "Reconcile against the approved registry" has nothing in the repository to reconcile against.
+
+**F2. Jean's closure record contradicts the code (PROJECT EVIDENCE).**
+- `JEAN_REVIEW_FIX-156.md:139-143` records USR-REV-001 and USR-REV-002 as closed. But the requirement at `:88-90` ("cease … shared `validateBuy`") is not met:
+  - `ShadowProductionReplayService.java:257` calls `executionIntelligenceService.evaluateBuy(...)`.
+  - That reaches `validationService.validateBuy` (`ExecutionIntelligenceService.java:653`).
+  - That uses the injected `WalletSettingsRepository` (`TradeExecutionValidationService.java:12,52,62`).
+- `OneCandleContinuationGraceReplayObserver.java:48,195` still reads `wallet_settings` row 1.
+- I don't reopen Jean's findings; only Jean can. But the work those findings asked for is still open.
+
+**F3. The SQL guard is opt-in and covers almost nothing (PROJECT EVIDENCE).**
+- There are 7 `ReplayAccessPolicy.` calls in total (`ReplayFix122EvaluationStore`, `ReplayPolicyProfileStore`).
+- There are 123 raw `jdbcTemplate.` calls in `com.crypto.regression`:
+  - `RegressionTestService`: 81
+  - `ShadowProductionReplayService`: 21
+  - `RegressionTestWorker`: 16
+  - observers: 5
+- AGENT INFERENCE: "every Replay SQL operation uses the guard" is false by about two orders of magnitude.
+
+**F4. The operation policy is still keyed on table name, not on the actual statement (PROJECT EVIDENCE).**
+- `ReplayAccessPolicy.require(table, operation)` (`:58-69`) checks a category the caller declares itself. It never sees the SQL text.
+- A caller could declare `FIX122_SCOPED_PURGE` and then run an unqualified `DELETE`.
+- The exact O-8 statement shapes are held only by convention in `ReplayFix122EvaluationStore.java:27-46` plus one test.
+- `REPLAY_UPDATE` and `REPLAY_DELETE` are allowed on profile and certificate tables that are meant to be immutable (`:62`).
+- `ReplayPolicyProfileStore.require` reads `replay_policy_profile_detail` through a JOIN without declaring that table (`:20-29`).
+
+**F5. The O-8 bypass still exists through a Production class (PROJECT EVIDENCE).**
+- `StopLossEvidenceStore` (in `com.crypto.execution.service`) still inserts and reads `fix122_evaluation` directly (`:52,58,63`) and reads `wallet_trade` (`:39`).
+- The Replay store is a duplicate, not the only route in.
+- AGENT INFERENCE: fixing this inside `StopLossEvidenceStore` would change a Production file, which breaks Jean's "Production files unchanged vs `930ab3d9`" rule. Replay must stop reaching it instead.
+
+**F6. Replay is still a wallet simulator (PROJECT EVIDENCE).** This conflicts with R156-07, RET-01 and RET-02.
+- `INITIAL_CAPITAL` cash and the daily budget come from `minimumUsdtReserve`, `baseTradeAmountUsdt` and `maximumDailyNewPositions` (`ShadowProductionReplayService.java:78-84`).
+- Replay still writes `wallet_position_test` (`:410,435,562,693,789`).
+- The frozen profile itself carries wallet-shaped inputs (`ReplayPolicyProfile.java:17-19`, V111 `:9-11`), although D35 classes wallet-driven gates as `WALLET_DRIVEN_NOT_COMPARABLE`.
+
+**F7. Every new Replay run will now refuse (PROJECT EVIDENCE).**
+- `ReplayPolicyProfileStore.insert` has no production caller; the only reference besides the service is a mock in a test.
+- `replay()` throws when no profile exists (`:65`, `ReplayPolicyProfileStore.java:44-45`).
+- No R156-04 extractor exists, and the refusal is raised as `ReplayForbiddenDependencyException` rather than `RUN_REFUSED`.
+- AGENT INFERENCE: failing closed is correct, but the Replay tool is unusable until the extractor exists, and the refusal is mislabelled.
+
+**F8. A reused run ID could pick up the wrong profile (PROJECT EVIDENCE + AGENT INFERENCE).**
+- "Delete Data" resets the `analysis_test_run` AUTO_INCREMENT (`RegressionTestService.java:405-409`).
+- It does not purge `replay_*` tables (`:352-376`), and `replay_policy_profile.run_id` is the primary key (V110 `:3`).
+- A new run that gets a reused ID would load a previous run's profile without warning. This is a silent wrong-input defect. It is worse than a missing profile, because the run proceeds instead of refusing.
+
+**F9. Other open items (PROJECT EVIDENCE).**
+- Price events are still sorted by `observedAt` only, with no `id` (`ShadowProductionReplayService.java:93-95`), so R156-06 is open.
+- `Fix122DiagnosticsController.java:39` reads `fix122_replay_revision` unguarded.
+- The `fix-registry.js:4` FIX-156 entry still lists "ReplayParityComparator (planned)", which needs checking against RPR-0.9.12.
+- No ArchUnit or other static-reachability tooling is in `pom.xml`, so T156-09a has no implementation at all.
+- The existing tests (`ReplayAccessPolicyTest`, `ReplayPolicyProfileTest`, `ReplayFix122EvaluationStoreTest`) are unit tests of the policy classes. They are not T156-09, -09a or -09b.
+
+## EVIDENCE
+
+- **Governance:**
+  - `agent-docs/JEAN_REVIEW_FIX-156.md:23,67,88-92,117-129,139-143`
+  - `agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:53-59,84-117,313,414-435`
+- **Guard and profile:**
+  - `src/main/java/com/crypto/regression/replay/ReplayAccessPolicy.java:41-69`
+  - `ReplayPolicyProfile.java:10-47`
+  - `ReplayPolicyProfileStore.java:18-81`
+  - `ReplayFix122EvaluationStore.java:25-46`
+- **Replay service:** `src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:65,78-97,117,257,410-435,562,693,789`
+- **BUY path:**
+  - `src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:460,653`
+  - `src/main/java/com/crypto/service/TradeExecutionValidationService.java:12,52,62`
+- **Wallet observer:** `OneCandleContinuationGraceReplayObserver.java:48,195`
+- **Production-class bypass:** `src/main/java/com/crypto/execution/service/StopLossEvidenceStore.java:39,52,58,63`
+- **Purge:** `RegressionTestService.java:352-409`
+- **Unguarded diagnostics read:** `Fix122DiagnosticsController.java:39`
+- **Migrations:** V110 `:2-50`; V111 `:1-44`
+- **Build:** `pom.xml:20` (Java 21; no ArchUnit)
+
+## OBJECTIONS
+
+1. **No safe "finish" without the canonical contract.** Under JEAN_REVIEW, the scope must be traceable to a frozen revision. Install RPR-0.9.12 (with its hash) in the repository first; until then, completeness can't be checked against it.
+2. **The BUY mirror is the critical path and has no design.**
+   - The choice is between copying `ExecutionIntelligenceService.evaluateBuy`, `TradeExecutionValidationService.validateBuy` and the gates around them into Replay, or changing a Production class (forbidden).
+   - A copy brings a drift risk: Replay could diverge from future Production changes and still pass its own tests. That needs a Production-change parity test rule, which no registry item covers.
+3. **The guard can't be made true by adding more call-site checks.** With 123 raw calls, the only credible design is:
+   - a single Replay data-access class that owns all SQL text and maps each statement constant to one `Operation`;
+   - a static test that bans `JdbcTemplate` and repository imports in every Replay-reachable class outside that layer.
+   Anything less is honor-system again.
+4. **F8 must be fixed before any profile is written.** One option is to purge `replay_*` in Delete Data. Another is to key profiles on a unique run identifier (for example a UUID or hash) rather than the reusable auto-increment ID.
+5. **The wallet-shaped profile fields contradict D35 and RET-01.** Either the sizing primitives are removed, or the specification has to say why reserve, base amount and daily cap are "policy" rather than wallet state.
+6. **Removing wallet simulation, `*_test` writes and the fallback exit path changes what Replay outputs.** Historical runs then can't be compared with new ones. That needs an explicit output-version marker, which no registry item covers.
+
+## UNKNOWNS
+
+- The text of RPR-0.9.12 (D02–D29, S01–S14, Section 3.3.1) and whether it allows the wallet-shaped profile fields.
+- Whether V111 applied cleanly. The status report says it was "applied locally" on 2026-10-17; I ran no queries.
+- Whether any test currently passes on Java 21. No build was run.
+- The state of the E03–E10 evidence, and whether a qualified fixture dataset exists at all.
+- Whether `replayScope.fix122Enabled(true)` (`:117`) matches Production's effective FIX-122 behaviour for every historical window.
+
+## Recommended remaining-scope sequence (for Jean; not authorization)
+
+1. Install RPR-0.9.12 in the repository with its hash. Produce a row-by-row reconciliation (D01–D56, S01–S14, R156-01..15) against the code above.
+2. Fix the run-ID / profile collision and write the profile extractor (R156-04). Have the refusal emit `RUN_REFUSED`.
+3. Build a single Replay data-access layer with statement-bound operations, plus static tests for T156-09a and T156-09b.
+4. Design the Replay-local BUY and sizing mirror (removing the wallet simulation), plus a drift-control rule. Submit it to Jean as a revised design item before coding.
+5. Replace the `StopLossEvidenceStore` and observer reach-through, and carry the price-event id.
+6. Then the comparator, trace and output, and the T156-01..16 tests, all published as `not measured` until E03–E10 are complete.
+
+VERDICT: REJECTED

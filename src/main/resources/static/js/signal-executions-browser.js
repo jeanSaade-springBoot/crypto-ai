@@ -7,10 +7,11 @@ const utcDate=v=>window.CryptoTime?.parseUtc(v)||(v?new Date(v):null);
 const ksa=v=>{const d=utcDate(v);if(!d||Number.isNaN(d.getTime()))return '—';return new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(d);};
 const num=v=>v===null||v===undefined||v===''?null:Number(v);
 const price=v=>{const n=num(v);return Number.isFinite(n)?n.toLocaleString(undefined,{maximumSignificantDigits:10}):'—';};
-const typeLabel=r=>({BLOCKED_BUY:'BLOCKED BUY',BLOCKED_SELL:'BLOCKED SELL',DONE:'BUY / SELL DONE',OPEN_BUY:'BUY OPEN'})[r.rowKind]||r.rowKind||'SIGNAL';
+// FIX-143: Distinguish signal approval from an actual wallet execution; no guessed blocker.
+const typeLabel=r=>({ALLOWED_BUY:'ALLOWED BUY — NOT EXECUTED',BLOCKED_BUY:'BLOCKED BUY',BLOCKED_SELL:'BLOCKED SELL',DONE:'BUY / SELL DONE',OPEN_BUY:'BUY OPEN'})[r.rowKind]||r.rowKind||'SIGNAL';
 const decisionText=r=>`${r.originalDecision||'—'} → ${r.decision||'—'}`;
-const stateText=r=>r.rowKind==='DONE'?(r.executionStatus||'EXECUTED'):r.rowKind==='OPEN_BUY'?'OPEN':r.finalEntryAllowed?'ALLOWED':'BLOCKED';
-const reason=r=>r.rowKind==='DONE'?(r.realizedPnlPercent!=null?`P/L ${Number(r.realizedPnlPercent).toFixed(3)}%`:(r.executionReason||'Completed trade')):r.rowKind==='OPEN_BUY'?(r.allocatedPositionPercent!=null?`${r.allocatedPositionPercent}% allocated`:'Open position'):(r.primaryBlockingStage||(!r.finalEntryAllowed?'FINAL DECISION':'—'));
+const stateText=r=>r.rowKind==='ALLOWED_BUY'?'ALLOWED / NOT EXECUTED':r.rowKind==='DONE'?(r.executionStatus||'EXECUTED'):r.rowKind==='OPEN_BUY'?'OPEN':r.finalEntryAllowed?'ALLOWED':'BLOCKED';
+const reason=r=>r.rowKind==='ALLOWED_BUY'?(r.executionReason||'No executed wallet BUY linked to this signal'):r.rowKind==='DONE'?(r.realizedPnlPercent!=null?`P/L ${Number(r.realizedPnlPercent).toFixed(3)}%`:(r.executionReason||'Completed trade')):r.rowKind==='OPEN_BUY'?(r.allocatedPositionPercent!=null?`${r.allocatedPositionPercent}% allocated`:'Open position'):(r.primaryBlockingStage||(!r.finalEntryAllowed?'FINAL DECISION':'—'));
 const quality=r=>r.rowKind==='DONE'?'good':r.rowKind==='OPEN_BUY'?'pending':r.finalEntryAllowed?'good':'early';
 const field=(label,value)=>`<div class="activity-analysis-field"><small>${esc(label)}</small><strong>${esc(value??'—')}</strong></div>`;
 const path=v=>{if(v==null||v==='')return 'No persisted decision path.';try{return JSON.stringify(typeof v==='string'?JSON.parse(v):v,null,2);}catch(_){return String(v);}};

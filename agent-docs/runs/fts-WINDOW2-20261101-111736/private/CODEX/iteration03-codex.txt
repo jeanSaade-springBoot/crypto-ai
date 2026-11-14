@@ -1,0 +1,68 @@
+## FINDINGS
+
+- **[PROJECT EVIDENCE]** This pass analyzed only frozen `paper_position` IDs **182, 172, 162, 158, 143, 137**. No trade-specific DB evidence was available in the permitted `db/CODEX` folder, so no latency, logging failure, or execution defect can be attributed to any of them yet.
+
+- **[PROJECT EVIDENCE]** The live protection path is timing-auditable in principle:
+  - `MarketPriceEventService` records a `PENDING` price observation with `observed_at`; a successful protection callback finishes it as `APPLIED`.
+  - `LivePositionProtectionService` validates stale/out-of-order input after obtaining the position lock, executes TP/SL/profit-lock/normal-exit policy, then closes `paper_position` only after mechanical wallet exit succeeds.
+  - `APPLIED` proves the protection callback committed, but can still be a no-op when no open position exists. It does not alone prove a trade exit.
+
+- **[PROJECT EVIDENCE]** For a real mechanical close, the relevant timing evidence must be reconciled across:
+  `market_price_event.observed_at` → `market_price_event.created_at` → `paper_position.closed_at` → `production_exit_audit.audited_at`.
+  Dynamic profit-lock threshold/continuation context needs the matching runtime log or durable managed-position/event evidence; it is not fully reconstructable from `paper_position` alone.
+
+- **[PROJECT EVIDENCE]** The retained plain application log ends at:
+  - UTC: `2026-10-19 14:32:36.2366671`
+  - KSA: `2026-10-19 17:32:36.2366671`
+  
+  It contains no direct searchable reference to the frozen paper-position IDs. This does not prove the archive lacks relevant logs, only that the locally retained plain log cannot establish a trade-level correlation.
+
+- **[AGENT INFERENCE]** A price-event-to-close delay cannot be called an execution delay until the exact triggering event is identified. Price equality alone is insufficient for profit-lock exits because the dynamic lock level is not persisted on `paper_position`.
+
+## EVIDENCE
+
+- `LivePositionProtectionService.java:53-71, 173-239, 391-411` — lock-before-freshness, price-event completion, mechanical exit policy order, and `paper_position` closure.
+- `MarketPriceEventService.java:50-95, 109-115` — `PENDING`, `APPLIED`/`NON_CANONICAL`, and stale pending-event resolution semantics.
+- `ProductionExitAudit.java` and `V61__create_production_exit_audit.sql` — immutable exit-audit fields and one-audit-per-paper-position design.
+- `PaperPosition.java`, `V11__extend_paper_position_lifecycle.sql`, `V86__fix_127_signal_processing.sql` — position lifecycle and durable signal-processing work fields.
+- No external research used.
+
+## UNKNOWNS
+
+- Symbol, entry/exit timestamps, signal IDs, exit reason, and P&L for each frozen trade.
+- Whether each exit was stop-loss, take-profit, profit-lock, normal signal exit, or another path.
+- Exact triggering price-event ID and its observed/committed timing.
+- Signal-generation and work-claim latency before each entry.
+- Whether matching archived runtime logs exist outside the retained local log.
+- Runtime version/configuration active for the six trades.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Read the actual `crypto_ai` schema before requesting frozen-trade timing and log-correlation evidence.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'production_exit_audit',
+      'wallet_trade',
+      'wallet_managed_position',
+      'position_management_event'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation changes were made.

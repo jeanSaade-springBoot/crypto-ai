@@ -1,0 +1,212 @@
+# CLAUDE: FTS WINDOW1, Iteration 5 (entry quality, self-review)
+
+I scored each of the six entries using only what was known at the decision moment. The outcome is shown separately. Two new problems turned up:
+- **Trade 143's entry depended on a 2 ms race.** The route that let it in only worked because a newer 5m signal had been generated 2 ms too late to be seen.
+- **Trade 182 may have filled at a price the market no longer showed.** This is unverified; DBQ-CLAUDE-I5-001 checks it.
+
+Across the six, the main entry-quality problem is that the trades were set up to lose money before fees were even counted.
+
+**Status.** This was read-only work: the I4 results (DBQ-CLAUDE-I4-001 to 005), my earlier database results, and the entry code. I did not open the other agent's folders, LIVE_TEAM_STATUS.md or LIVE_EVENTS.log. Database times are UTC; every KSA time below is UTC+3.
+
+**Limitations:**
+- **Output not saved.** Plan mode is active and I have no file-write tool, so this was not written to `private/CLAUDE/iteration05-claude.txt`.
+- **No production logs.** I still have no SSH access.
+
+---
+
+## FINDINGS
+
+**F-I5-01: Trade 143's entry route depended on a 2 ms race between the 1m and 5m signals.** [PROJECT EVIDENCE: I4-002, I1-012, I2-005, code]
+- **How the 5m signal is chosen.** The route (`setupTimeframeAtrAuthoritySignal`, `ExecutionIntelligenceService.java:1485`) takes the latest 5m signal through `latestAtOrBefore`. That function filters on `generatedAt <= current.generatedAt` (`:2455-2461`, `:2606-2608`), not on candle close time.
+- **What happened at entry:**
+
+| Signal | Interval / candle (UTC) | Generated (UTC) | Decision | ATR position % |
+|---|---|---|---|---|
+| 159408 (entry) | 1m, 22:39 | 22:40:01.633945 | WATCH | 0 (WAIT_FOR_RETRACEMENT) |
+| 159407 | 5m, 22:35–22:39:59 (already closed) | 22:40:01.635944 (**+2 ms**) | **WATCH** | 60 |
+| 159285 (used) | 5m, 22:30–22:34:59 | 22:35:01.553 | BUY | 100 |
+
+- The opportunity row (36524) records `five_minute_decision=BUY`, so the older 159285 was the 5m authority.
+- **Had 159407 been visible, this route could not have fired.** It needs a BUY or STRONG_BUY 5m signal (`:1486`; `isBullish` at `:2634-2636`), and 159407 was a WATCH. Whether another route would have admitted the trade is unknown.
+- **Price gap.** The 5m BUY was decided on a candle that closed at 3.986. The entry filled at 4.033, which is 1.18% higher. By then the next 5m candle had closed at 4.032 with a WATCH verdict.
+- **Contrast with 137.** At the same kind of 5m boundary, 137 did see its fresh 5m signal (audit 1938: 5m age 1 s). Which 5m signal the system sees therefore depends on which analysis finishes first.
+- **Classification.** [AGENT INFERENCE] Confirmed design defect: timing nondeterminism at 5m boundaries. The data-visibility rule uses analysis wall-clock time rather than closed-candle identity. Replay (`replayScope.latestAtOrBefore`) uses the same rule on stored `generated_at` values, so it will reproduce this outcome but not the race itself. DBQ-CLAUDE-I5-002 measures how often this happens.
+
+**F-I5-02: F-I4-05 is confirmed. Six of the seven evidence signals behind 143 came from before the previous position closed, and one was itself not allowed to enter.** [PROJECT EVIDENCE: I4-002, I2-003, I2-005]
+- **Where the evidence walk stopped.** The 30-minute window walked back to the STRONG_SELL 159257 at 22:34 UTC (01:34 KSA, 12 Oct) and stopped there (`:2274`).
+- **What it counted:**
+  - 159281 BUY at 22:35 UTC, with `final_entry_allowed=0` and confidence 49.
+  - WATCH signals 159321, 159337, 159361 and 159383, all generated during position 142's life.
+  - 159408, the only signal after the exit.
+- **Position 142's life.** Paper 142 / wallet 171 opened at 22:36:04 UTC on signal 159321 and exited by PROFIT_LOCK_EXIT at 3.996 at 22:39:42 UTC.
+- **Opportunity 36524 was created fresh** at 22:40:01.634 UTC, already carrying evidence_count=7. The rule that "pre-exit evidence is consumed" was not enforced.
+- **The whipsaw.** Price went 4.046 high → 3.996 exit → 4.033 re-entry, all within about 60 s.
+- **Impact.** Not decisive for 143, because the route does not use evidence count. It is a confirmed mismatch between the code and its own stated rule.
+- **System-wide (I4-004).**
+  - 31 re-entries within 5 minutes of a non-stop exit: 14 wins (45%), net −1.07 USDT.
+  - 6 re-entries after a stop-loss exit: 2 wins, net −0.48 USDT.
+  - [AGENT INFERENCE] Quick re-entries lose money in aggregate. Sample is small.
+
+**F-I5-03: Decision-time entry scorecard.** [PROJECT EVIDENCE: I1-004, I1-012, I2-005; fee figures are EXTERNAL RESEARCH]
+
+| PP | Signal (score / confidence) | Route margin | R:R | Target vs ~0.20% round-trip fee | Overextended | Coherence at decision time | Grade |
+|---|---|---|---|---|---|---|---|
+| 182 ACE | BUY 75/68 | entryQuality **50 = minimum 50** (`TradeExecutionValidationService.java:49,266`) | 0.48 | +0.241% (≈ fees) | yes, 2.15 ATR | TREND_FOLLOWING inside a WEAK_DOWNTREND regime; zero-volume 1m candles at 09:51 and 09:53; bought the 1m high 0.1884 | **POOR** |
+| 172 SHIB | BUY 77/67 | 5m BUY fresh (61 s) | 0.74 stored; ≈1:1 in ticks | +0.372% stored; really +3 ticks = +0.55% | no | ATR (6.8e-9) smaller than one price step (1e-8); price flat at 5.47–5.49 for 25 min | **MARGINAL**: signal coherent, but the instrument can't express the plan |
+| 162 DOGE | WATCH 76/75 | ACCUMULATED_EVIDENCE (1 BUY, 9 WATCH) | 0.44 | +0.219% (≈ fees) | yes, 2.82 ATR | BREAKOUT entry at the top of the 04:01 candle (+0.14% candle, filled at 0.08705, high 0.08709) | **POOR** (chase) |
+| 158 XRP | WATCH **64**/73 (lowest score) | 5m BUY 165415 woke a 53-min-old opportunity | **0.33** | **+0.164% (below fees)** | no | Direction signals coherent (WEAK_UPTREND, fresh 5m BUY) | **POOR**: losing net of fees even if TP was hit |
+| 143 EGLD | WATCH 73/78 | 5m authority was stale by the race (F-I5-01) | 1.50 | +0.811% | **yes, 4.35 ATR; RSI 84** | Signal said WAIT_FOR_RETRACEMENT at 0%; re-entered 22 s after a profit-lock exit, 0.93% higher | **POOR** (chase) |
+| 137 EGLD | STRONG_BUY 91/81 | entryQuality 58 (minimum 50) | 0.64 | +0.322% | no | RANGE_MEAN_REVERSION buy at 3.999, about 57% up a 3.991–4.005 range; TP 4.0119 sits above the range high, so the mean-reversion trade needed a breakout | **MARGINAL–POOR** (thesis contradiction) |
+
+- **Data freshness was valid for all six.** The earlier results stand: LIVE, `data_quality_valid=1`, RUNTIME candles, fill tick within 15 s.
+- **The one exception is 143.** Its 5m context was "fresh" under the 20-minute generation-age rule (`FIVE_MINUTE_MAX_AGE`, `:66`) while being one candle behind the closed market.
+
+**F-I5-04: Outcome compared with the entry grade.** [PROJECT EVIDENCE: F-I2-05; kept separate from the decision-time grading]
+
+| PP | Grade | Best move after entry (MFE) | Result |
+|---|---|---|---|
+| 182 | POOR | 0.00% | −0.21%: the poor entry was punished at once |
+| 162 | POOR | +0.07% | −0.34% |
+| 158 | POOR | +0.06% | −0.13% |
+| 172 | MARGINAL | +0.18% (one price step) | −0.18% |
+| 137 | MARGINAL–POOR | +0.15% | −0.30% |
+| 143 | POOR | **+1.69%** | −0.15% |
+
+- 143 shows a poor entry can still produce a favourable move. That trade was lost in the exit design (F-I2-06), not at entry.
+- [AGENT INFERENCE] Five of six entries never reached half their target. That fits the scorecard: thin targets, chasing, and weak signal agreement across timeframes.
+
+**F-I5-05: Trade 182's fill price may not match the market at fill time (unverified anomaly).** [PROJECT EVIDENCE: I1-003, I1-012, I1-009, code]
+- **The fill.** Paper entry was 0.1884, and the managed position's highest price was also 0.1884. The wallet BUY was at 09:57:04.232 UTC (12:57:04 KSA).
+- **The market.** The 09:57 1m candle (row created 09:57:02.468) ranged only 0.1881–0.1882. 0.1884 was the close of the 09:56 candle.
+- **How the price is chosen.** `ExecutionPriceAuthorityService.resolve` (`:46-48`) picks the latest `market_price_event` at or before `Instant.now()` that is no more than 15 s old.
+- **Likely explanation.** [AGENT INFERENCE] The fill used a tick from 09:56:5x, even though a 09:57 tick existed or was about to be stored. Two possible reasons:
+  - (a) the roughly 150 ms host-versus-Binance clock offset (F-I2-09) made the newest tick look "future-dated";
+  - (b) the newest tick was not yet APPLIED.
+- **Cost.** About 2 price steps (≈0.106%) against the buyer, which is half of the trade's total loss.
+- **Classification.** Not confirmed; DBQ-CLAUDE-I5-001 settles it. This does not contradict F-I4-04: entries do use a fresh tick, but which tick counts as "freshest" is in question.
+
+**F-I5-06: No entry gate rejects trades that are uneconomic before fees.** [PROJECT EVIDENCE: code + F-I2-03; AGENT INFERENCE]
+- No route checks reward-to-risk ≥ 1, or that the target distance is larger than round-trip cost.
+- Fees are not recorded (`fee_usdt=0`), so the system cannot see this cost in its own P&L.
+- With 4 of 6 frozen targets at or below roughly 0.2%, this is the main entry-quality root cause.
+- This is a design gap, not a code defect against any stated rule. The only ≥1:1 comment (`PaperTradingService.java:533-536`) covers a route that did not fire here.
+
+---
+
+## EVIDENCE INDEX
+- **Database results:**
+  - I4-002: 143 evidence window
+  - I4-003: opportunity rows, cut off at 20 rows, so 36524 is not shown; it comes from I2-005
+  - I4-004: re-entry outcomes
+  - I4-005: 162 fill equals the latest tick
+  - I1-004: entry signals
+  - I1-012: candles and higher-timeframe audit
+  - I2-003: positions 142/171
+  - I2-005: opportunities
+  - I1-003 / I1-007: entry prices
+- **Code:**
+  - `ExecutionIntelligenceService.java:66, 1472-1514, 2455-2462, 2606-2609, 2634-2636`
+  - `TradeExecutionValidationService.java:49, 263-297`
+  - `PaperTradingService.java:340-367`
+  - `ExecutionPriceAuthorityService.java:25-49`
+- **I4 closures:**
+  - U-19 resolved: 162's signal-path fill of 0.08675 equals both `latest_price` and the tick at 04:26:00.083 UTC, so there is no cost and Replay parity is not affected for price.
+  - U-18 resolved: the candle lookup is index-backed (`idx_candle_dashboard_closed_time`: symbol, interval_code, closed, open_time). The cause of the ~2 s portfolio work remains unexplained by indexing.
+- **External research:**
+  - Binance regular-tier spot fee is 0.1% maker/taker, or 0.075% when paid in BNB ([Finhay 2026](https://www.finhay.com.vn/en/phi-giao-dich-binance)).
+  - An undated report of 0% maker fees and a 20% taker discount is unverified ([Traders Union](https://tradersunion.com/news/brokers-news/show/2241303-binance-revises-trading-fee-structure/)).
+  - Paper fills behave like taker orders, so round-trip cost is about 0.15–0.20%. U-12 is narrowed, not closed.
+
+## UNKNOWNS
+| ID | Status |
+|---|---|
+| U-08 | Open: the 143 tick gap needs production logs |
+| U-12 | Narrowed: 0.15–0.20% taker round trip; the live tier is unverified |
+| U-14 | Open: cause of the downtime |
+| U-16 | Open: price-event `maxAge`/`futureSkew` |
+| U-17 | Partly answered: not decisive for 143; re-entries are net negative (n=37) |
+| U-18 | Index is fine; the cause of the ~2 s is still unknown |
+| U-19 | **Resolved** (no cost) |
+| U-20 (new) | How often the 5m-boundary race (F-I5-01) occurs, and which other route, if any, would have admitted 143 |
+| U-21 (new) | Whether 182 filled on a pre-minute tick, and why (F-I5-05) |
+| U-22 (new) | Entry outcomes by route and by overextension, system-wide |
+
+---
+
+## DB REQUESTS (read-only, bounded `SELECT`, `crypto_ai`)
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: Check whether each BUY filled on the newest tick (F-I5-05, U-21). Reads the schema first.
+SQL:
+SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME='wallet_trade' ORDER BY ORDINAL_POSITION;
+SELECT * FROM wallet_trade WHERE id IN (451,426,403,392,358,344) ORDER BY id LIMIT 6;
+SELECT symbol, id, observed_at, price, delivery_status, outcome_reason, created_at FROM market_price_event
+WHERE (symbol='ACEUSDT'  AND observed_at BETWEEN '2026-10-12 09:56:50' AND '2026-10-12 09:57:07')
+   OR (symbol='SHIBUSDT' AND observed_at BETWEEN '2026-10-12 06:35:50' AND '2026-10-12 06:36:06')
+   OR (symbol='DOGEUSDT' AND observed_at BETWEEN '2026-10-12 04:01:52' AND '2026-10-12 04:02:07')
+   OR (symbol='XRPUSDT'  AND observed_at BETWEEN '2026-10-12 02:34:52' AND '2026-10-12 02:35:06')
+   OR (symbol='EGLDUSDT' AND observed_at BETWEEN '2026-10-11 22:39:52' AND '2026-10-11 22:40:06')
+   OR (symbol='EGLDUSDT' AND observed_at BETWEEN '2026-10-11 20:54:52' AND '2026-10-11 20:55:06')
+ORDER BY symbol, observed_at LIMIT 150;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: How often the 5m-boundary race happens: the 5m signal for the just-closed 5m candle being generated after the 1m signal at the same boundary (F-I5-01, U-20). First query: 159407's commit time. Second: the race rate across all boundary 1m signals on 11–12 Oct. Third: the race among executed entries.
+SQL:
+SELECT id, interval_code, candle_open_time, generated_at, created_at, decision, final_entry_allowed, atr_entry_type, atr_recommended_position_percent FROM trade_signal WHERE id IN (159407,159408,159285,156721,156723) ORDER BY id;
+SELECT COUNT(*) n, SUM(f.generated_at > s.generated_at) five_after_one, SUM(f.generated_at <= s.generated_at) five_before_one
+FROM trade_signal s JOIN trade_signal f ON f.symbol=s.symbol AND f.interval_code='5m' AND f.candle_open_time = s.candle_open_time - INTERVAL 4 MINUTE
+WHERE s.interval_code='1m' AND MINUTE(s.candle_open_time) % 5 = 4
+  AND s.generated_at >= '2026-10-11 00:00:00' AND s.generated_at < '2026-10-13 00:00:00';
+SELECT pp.id, pp.symbol, pp.realized_pnl, s.generated_at s1m, f.id f5m_id, f.generated_at f5m_gen, f.decision f5m_decision
+FROM paper_position pp JOIN trade_signal s ON s.id=pp.signal_id AND s.interval_code='1m' AND MINUTE(s.candle_open_time) % 5 = 4
+LEFT JOIN trade_signal f ON f.symbol=s.symbol AND f.interval_code='5m' AND f.candle_open_time = s.candle_open_time - INTERVAL 4 MINUTE
+WHERE pp.closed_at IS NOT NULL ORDER BY pp.id LIMIT 60;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: System-wide entry outcomes by execution route, by overextension and by regime/strategy (U-22). Tests whether the frozen-set entry patterns generalise.
+SQL:
+SELECT eo.execution_source, eo.decision_code, COUNT(*) n, SUM(pp.realized_pnl>0) wins, ROUND(SUM(pp.realized_pnl),6) pnl
+FROM paper_position pp JOIN execution_opportunity eo ON eo.latest_signal_id=pp.signal_id AND eo.status='EXECUTED'
+WHERE pp.closed_at IS NOT NULL GROUP BY eo.execution_source, eo.decision_code ORDER BY n DESC LIMIT 30;
+SELECT ts.atr_overextended, ts.decision, ts.market_regime, ts.selected_strategy, COUNT(*) n, SUM(pp.realized_pnl>0) wins, ROUND(SUM(pp.realized_pnl),6) pnl,
+       ROUND(AVG((ts.take_profit-ts.latest_price)/ts.latest_price*100),4) avg_tp_pct
+FROM paper_position pp JOIN trade_signal ts ON ts.id=pp.signal_id
+WHERE pp.closed_at IS NOT NULL GROUP BY ts.atr_overextended, ts.decision, ts.market_regime, ts.selected_strategy ORDER BY n DESC LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: How many closed trades had a target at or below a 0.20% round trip, and how they turned out (F-I5-06).
+SQL:
+SELECT CASE WHEN (ts.take_profit-ts.latest_price)/ts.latest_price*100 <= 0.15 THEN 'TP<=0.15'
+            WHEN (ts.take_profit-ts.latest_price)/ts.latest_price*100 <= 0.20 THEN 'TP<=0.20'
+            WHEN (ts.take_profit-ts.latest_price)/ts.latest_price*100 <= 0.30 THEN 'TP<=0.30' ELSE 'TP>0.30' END tp_bucket,
+       COUNT(*) n, SUM(pp.realized_pnl>0) wins, ROUND(SUM(pp.realized_pnl),6) gross_pnl,
+       ROUND(SUM(pp.quantity*pp.entry_price*0.002),6) est_fee_0_20pct
+FROM paper_position pp JOIN trade_signal ts ON ts.id=pp.signal_id
+WHERE pp.closed_at IS NOT NULL GROUP BY tp_bucket ORDER BY tp_bucket LIMIT 10;
+### END_DB_REQUEST
+
+---
+
+**Self-review:**
+- The entry grades use only what was known at the decision moment, and outcomes are kept in a separate table.
+- F-I5-01 rests on code lines plus three record IDs. The question of whether another route would have admitted 143 is left open, not assumed.
+- F-I5-05 is labelled as an unverified anomaly, not a defect.
+- The fee rate is labelled as external and partly conflicting.
+- No trades were substituted. Every KSA time is UTC+3.
+
+**Iteration 6 plan:** fold in the I5 results. Then draft corrections and regression checks, analysis only:
+- F-I5-01: visibility based on closed-candle identity.
+- F-I4-05 / F-I5-02: enforcing the evidence boundary.
+- F-I5-06: an economic-viability entry gate.
+- F-I5-05: if confirmed, the tick-selection fix.
+
+Sources:
+- [Finhay – Binance trading fees 2026](https://www.finhay.com.vn/en/phi-giao-dich-binance)
+- [Traders Union – Binance revises fee structure](https://tradersunion.com/news/brokers-news/show/2241303-binance-revises-trading-fee-structure/)

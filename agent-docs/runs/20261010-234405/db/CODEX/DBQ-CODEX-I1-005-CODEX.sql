@@ -1,0 +1,1 @@
+SHOW COLUMNS FROM position_management_event

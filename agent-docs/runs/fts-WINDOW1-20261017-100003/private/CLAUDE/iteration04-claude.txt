@@ -1,0 +1,233 @@
+# FTS WINDOW1: Claude, Iteration 4, code and trade route (self-review only)
+
+I made no code, config, DB, git or deploy changes. I did not read `private/CODEX/`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or Codex memory. Plan mode is active, but this session has no plan-file write tool and no exit-plan tool, so this message is the iteration output.
+
+**Inputs used:**
+- My database results I3-001 to I3-006, plus I1-006 and I2-005.
+- Code reads:
+  - `LivePositionProtectionService`
+  - `PositionExitPolicy`
+  - `BinanceKlineService:81-111`
+  - `MarketPriceEventService:36-98`
+  - `TradeExecutionValidationService:62-379`
+  - `ExecutionIntelligenceService:590-709, 2455-2462`
+  - `ShadowProductionReplayService:593-641`
+  - `WalletAutoExecutionService`
+  - `V107__fix_154…sql`
+- External: two public Binance `aggTrades` lookups from data-api.binance.vision.
+
+---
+
+## FINDING 0: time labels (status update)
+
+**PROJECT EVIDENCE (I3-004):**
+- Every relevant column in `candle`, `market_price_event`, `paper_position`, `wallet_trade`, `wallet_managed_position`, `position_management_event`, `production_exit_audit` and `execution_opportunity` is a `TIMESTAMP`. So is every `trade_signal` time column except two.
+- The two exceptions are `trade_signal.btc_context_evaluated_at` and `btc_signal_generated_at`, which are `DATETIME`. **U-22 is resolved.**
+
+**EXTERNAL RESEARCH:** the Binance trade at epoch 1791747815020 (19:43:35.020 UTC, price 4.027) matches the DB event shown as `22:43:35.021`. This independently confirms that the wrapper displays `TIMESTAMP` values in KSA.
+
+**Consequence:** this run's prompt says "DB timestamps are UTC", which is true of what is stored but not of what the wrapper displays. I keep reporting this contradiction. All times below are written **KSA (UTC)**.
+
+---
+
+## EVIDENCE: route map per trade (PROJECT EVIDENCE)
+
+| Trade | Entry route (wallet_trade) | Authority path in code | 5m used / 1h used | Exit code | Exit authority path |
+|---|---|---|---|---|---|
+| 137 | IMMEDIATE_VALIDATION / `BALANCED_NEUTRAL_5M_WATCH_1H` 25% | `EIS:652-709` → `TEVS.validateBuy:62` → `:263-284` (FIX-11G) | 5m NEUTRAL (20:45–20:50 candle, see U-26) / 1h WATCH | SELL_CONFIRMED | `LPPS.onPrice:235` → `PositionExitPolicy:35-43` |
+| 143 | SETUP_TIMEFRAME_ATR 25% | `EIS:628-640`; 5m from `latestAtOrBefore:2455` (capped at the 1m's `generatedAt`) | 5m BUY 159285 (superseded) / 1h NEUTRAL | PROFIT_LOCK_HARD_EXIT | `LPPS:207-216` |
+| 158 | SETUP_CONFIRMATION_WAKEUP 25% | `EIS:~420-443`; the 5m trigger 165415 is newer than 1m WATCH 165412 | 5m BUY 165415 | SELL_CONFIRMED | `LPPS:235` |
+| 162 | ACCUMULATED_EVIDENCE 15% | `EIS:2057`; `TEVS.validateBuyContext:128` | 5m WATCH 167616 / 1h WATCH | SIGNAL_SELL at signal `latest_price` | Signal path: `validateSell:165` passed (not a boundary minute) |
+| 172 | IMMEDIATE_VALIDATION / `BALANCED_STRONG` 75%, capped to 25% by Entry Quality | `TEVS.balancedBuy:306-308` | **5m BUY 171559 with `final_entry_allowed=0`, confidence 49** / 1h NEUTRAL | HTF_SELL_CONFIRMED | `LPPS:235` → `PEP:25-32` |
+| 182 | IMMEDIATE_VALIDATION / `BALANCED_NEUTRAL_5M_WATCH_1H`, 15% after the cap | `TEVS:263-284` | **5m 176655 decision NEUTRAL, `original_decision` STRONG_SELL** / 1h WATCH | SELL_CONFIRMED | `LPPS:235` |
+
+(EIS = `ExecutionIntelligenceService`, TEVS = `TradeExecutionValidationService`, LPPS = `LivePositionProtectionService`, PEP = `PositionExitPolicy`.)
+
+---
+
+## FINDINGS
+
+### F-22: trade 143's loss below the floor was a sub-second liquidity sweep that no kline-driven protection could have stopped above the floor (EXTERNAL RESEARCH + PROJECT EVIDENCE; strengthens F-17)
+
+EGLDUSDT `aggTrades` from Binance (epoch ms converted to UTC, KSA = UTC+3):
+- **Last trade before the drop:** 19:43:26.041 UTC (22:43:26.041 KSA) at 4.100.
+- **No trades at all** until 19:43:34.341 UTC. The 8-second gap in `market_price_event` (I3-005) was genuine market inactivity, not lost messages. Other symbols kept streaming in that window (BTC 3 events, ICP 5).
+- **The sweep:** 19:43:34.816 UTC, all within one millisecond, from 4.094 down to 4.073. This crossed the lock level of 4.0758.
+- **Below the floor** (4.0350): 4.026 at 34.993. The time from lock to floor was **177 ms**.
+- **Next kline push:** E = 19:43:35.021 UTC, close 4.027. The wallet SELL ran at 22:43:35.046 KSA, 25 ms after that push.
+
+**AGENT INFERENCE:**
+- Both levels were crossed between two consecutive kline pushes.
+- Even a trade-level feed with about 150 ms of network delay would have exited near 4.03.
+- Only a resting exchange-side stop order could have protected the lock level, and that is out of scope for paper trading.
+- **There is no protection defect.** The loss comes from the target extensions (F-12) meeting a liquidity air-pocket.
+
+### F-23: correction of my own F-19. The exits of 137 and 158 were triggered by price ticks; the JVM clock runs behind Binance (PROJECT EVIDENCE + EXTERNAL RESEARCH + AGENT INFERENCE)
+
+How the timestamps are produced:
+- `observed_at` is Binance event time `E` (`BinanceKlineService.java:94`).
+- `executed_at` is the uncorrected JVM `Instant.now()` (`WalletAutoExecutionService.java:178/263/357/451/548/661`).
+- The live exit runs **only** inside `LivePositionProtectionService.onPrice`, which is called for each 1m kline event (`BinanceKlineService.java:108`).
+
+Trade 137:
+- EGLD trades occurred at 18:00:00.029 UTC and **18:00:07.638 UTC** (3.987).
+- The next push after the exit signals had committed (21:00:04.327 KSA) was E = 18:00:09.033 UTC (21:00:09.033 KSA) at 3.987.
+- The SELL is stamped 21:00:08.935 KSA, which is **−98 ms** relative to that push. Trade 158 shows the same pattern at **−102 ms**.
+
+Across the five tick-driven exits, the gap from tick to execution ranges from −102 to +57 ms. That is only consistent with the JVM clock trailing Binance by about 0.1–0.2 s, plus network delay.
+
+**Corrections:**
+- My iteration-3 statement "something other than a price tick triggered this exit" is **withdrawn**. Both exits were triggered by ticks, and the P&L is unaffected.
+- **New audit gap:** audit times mix the uncorrected JVM clock (`executed_at`, `generated_at`, `closed_at`) with exchange time (`observed_at`). Freshness checks do use the corrected clock (`MarketPriceEventService:39`). Proof requested in I4-003.
+
+### F-24: the exit authorities are asymmetric, and Replay probably differs in exit timing (PROJECT EVIDENCE + AGENT INFERENCE)
+
+1. **The live normal exit has no time cap.** It reads the newest 1m/5m/1h by `generatedAt` with no cap and no freshness check (`LPPS:95-97`). BUY and `validateSell` instead use the at-or-before cap on the 1m's `generatedAt` (`TEVS:367-378`).
+   - At a 5m boundary, the 1m SELL of 137, 158 and 182 saw the superseded 5m in `validateSell`.
+   - The **mechanical** path then closed on the next tick using the new 5m.
+2. **The live normal exit waits for a trade.** It is only evaluated on a tick, never when a signal is committed:
+   - 137: exit 4.6 s after the signals committed;
+   - 172: 5m NEUTRAL committed at 07:15:05.866 and the exit ran at 07:15:43.492, a **37.6 s** wait. SHIB's 07:14 candle had 0 trades (I3-001).
+3. **Replay evaluates `evaluateNormalExit` when the signal arrives** (`ShadowProductionReplayService:629-633`). So Replay can exit earlier, at the signal price rather than the next tick.
+
+**Impact on these 6 trades:** none on P&L (137: 3.988 vs 3.987; 172: 5.48 vs 5.48).
+
+**Status:** this is a parity and observability risk on illiquid symbols, not a cause of these losses.
+
+### F-25: the 5m confirmation reads the decision label only and ignores the 5m's own entry veto (PROJECT EVIDENCE; candidate design gap, trade 172)
+
+- 5m 171559 (SHIB, 06:30–06:35 candle) had `decision=BUY`, `final_entry_allowed=0` and confidence 49, the cap for a blocked entry (I2-005).
+- `balancedBuy` (`TEVS:306`) counted it as "5m is bullish" and granted `BALANCED_STRONG` 75%.
+- Neither `TEVS` nor `HigherTimeframeBuyAssessmentService` reads `finalEntryAllowed` (grep: no matches).
+- **Result:** a 5m that its own decision chain had blocked (consistent with `RANGE_ENTRY_LOCATION`, I2) became the confirmation authority one minute later.
+- **Confirmation needed:** `primary_blocking_stage` of 171559 (I4-002).
+
+### F-26: a STRONG_SELL 5m that was downgraded to NEUTRAL enabled the FIX-11G entry (PROJECT EVIDENCE; candidate design gap, trade 182)
+
+- 5m 176655 had `decision=NEUTRAL` with `original_decision=STRONG_SELL` and score 25.
+- The validation code `BALANCED_NEUTRAL_5M_WATCH_1H` (`TEVS:263-284`) proves it was treated as non-bearish NEUTRAL.
+- A raw STRONG_SELL 5m therefore unlocked a 25% exploratory BUY, which became 15% after the cap, in a WEAK_DOWNTREND.
+- **Still unknown:** why it was downgraded (I4-002), and how often this happens across the system (I4-002, second query).
+
+### F-27: the boundary race in numbers (PROJECT EVIDENCE, I3-003; refines F-18)
+
+- **70** executed 1m BUYs at a 5m boundary (10-10 to 10-12).
+- In **50**, the newer 5m was already committed before the fill.
+- In **17** of those, the newer 5m was **not bullish**.
+
+The 17 by route:
+
+| Route | Count | Wallet trade IDs |
+|---|---|---|
+| IMMEDIATE_VALIDATION | 9 | 112, 118, 214, 237, 248, 305, 335, 348, 421 |
+| CONFIRMATION_ADD | 4 | 191, 215, 222, 241 |
+| SETUP_TIMEFRAME_ATR | 2 | 255, 358 (= trade 143) |
+| SCOUT_ENTRY | 1 | 396 |
+| ACCUMULATED_EVIDENCE | 1 | 405 |
+
+The remaining bullish cases are mostly SETUP_CONFIRMATION_WAKEUP, where the newer 5m *is* the trigger. That is by design.
+
+**AGENT INFERENCE:** only SETUP_TIMEFRAME_ATR strictly requires a bullish 5m, so 255 and 358 would certainly have been blocked. For the other routes, a WATCH or NEUTRAL 5m may still pass at a reduced size (`BALANCED_EARLY` or FIX-11G). The impact is pending I4-001.
+
+### F-28: FIX-154 code is in the working tree, which contradicts AGENTS.md (PROJECT EVIDENCE)
+
+- AGENTS.md says FIX-154 is "not-yet-implemented".
+- But `HigherTimeframeBuyAssessmentService`, `Fix154Metrics`, `BuyHtfAssessmentAuditStore`, `V107__fix_154…` and `V109__fix_154…` exist, and `validateBuy` calls `htfAssessment.assess` (`TEVS:93`).
+- **Unknown:** whether this code was running when the trades happened (10-11 and 10-12). That determines which BUY code governed all six entries (I4-004).
+- I'm reporting this contradiction; I did not edit any document.
+
+### F-29: system health observations (PROJECT EVIDENCE, I3-006 and I3-003)
+
+- **1m analysis latency on 10-12** averaged 5.45 s (max **74.2 s**, close to the 90 s freshness limit). On 10-11 it averaged 0.68 s (max 12.0 s).
+- The frozen trades on 10-12 had 1.5–2.8 s, so they were not affected.
+- **No boundary BUY appears after 10-12 10:10:07 KSA**, even though the query window runs to 10-17 10:00 KSA. Trading activity after 10-12 is unexplained (I4-005).
+
+---
+
+## Interim classification of each trade (AGENT INFERENCE)
+
+| Trade | Classification | Supporting findings |
+|---|---|---|
+| 137 | Valid losing trade. Low-quality reversal entry, R/R 0.64. Exit followed the rule. | — |
+| 143 | Candidate defect at entry: superseded 5m in a 2 ms boundary race. The exit is a valid gap-through. | F-11, F-18, F-22, F-27 |
+| 158 | Valid route by design. The target was below the fees, R/R 0.33. | F-10 |
+| 162 | Valid losing trade. Late chase, R/R 0.44. | — |
+| 172 | Candidate gap: a 5m with a blocked entry was used as confirmation. Tick-size geometry also broken. | F-13, F-25 |
+| 182 | Candidate gap: a downgraded STRONG_SELL 5m was used as NEUTRAL. Counter-trend entry. | F-26 |
+
+---
+
+## UNKNOWNS
+
+- **U-18 (still open):** gzipped logs cannot be read with my tools. Log evidence is **MISSING**.
+- **U-21:** the actual Replay run for 143 and 158. Out of scope.
+- **U-23:** proof that the JVM clock is offset from Binance (I4-003).
+- **U-24:** the decision impact of the 17 non-bullish boundary BUYs (I4-001).
+- **U-25:** blocking stages of 171559 and 176655, and how common F-25 and F-26 are system-wide (I4-002).
+- **U-26:** the original decision of the 5m that 137 used (I4-002).
+- **U-27:** whether FIX-154 was deployed on 10-11 and 10-12 (I4-004).
+- **U-28:** trading activity after 10-12 10:10 KSA, and the window of the 74 s latency (I4-005).
+
+---
+
+## DB REQUESTS
+
+Time literals below are read in the wrapper session, which uses +03:00 and matches the displayed values.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: For the 17 boundary BUYs whose newer 5m was not bullish, show the 5m actually used (the superseded one), the newer 5m, and the realized outcome (F-27, U-24).
+SQL:
+SELECT w.id AS wallet_trade_id, w.symbol, w.execution_reason, o.id AS sig1m, o.decision AS d1m, pu.id AS used5m, pu.decision AS used5m_decision, pu.original_decision AS used5m_orig, f.id AS newer5m, f.decision AS newer5m_decision, f.original_decision AS newer5m_orig, p.id AS paper_id, p.status, p.close_reason, p.realized_pnl, w.executed_at FROM crypto_ai.wallet_trade w JOIN crypto_ai.trade_signal o ON o.id=w.signal_id AND o.interval_code='1m' JOIN crypto_ai.trade_signal f ON f.symbol=o.symbol AND f.interval_code='5m' AND f.candle_open_time=o.candle_open_time - INTERVAL 4 MINUTE LEFT JOIN crypto_ai.trade_signal pu ON pu.symbol=o.symbol AND pu.interval_code='5m' AND pu.candle_open_time=o.candle_open_time - INTERVAL 9 MINUTE LEFT JOIN crypto_ai.paper_position p ON p.signal_id=o.id WHERE w.side='BUY' AND w.id IN (112,118,191,214,215,222,237,241,248,255,305,335,348,358,396,405,421) ORDER BY w.executed_at LIMIT 50;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: The blocking stage and original decision of each entry's 5m context signal, and how often system-wide a BUY used a 5m that was bullish but blocked, or bearish but downgraded (F-25, F-26, U-25, U-26).
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, decision, original_decision, final_entry_allowed, primary_blocking_stage, confidence_score, total_score, generated_at, created_at FROM crypto_ai.trade_signal WHERE id IN (176655,171559,159285,165415,167616) OR (symbol='EGLDUSDT' AND interval_code='5m' AND candle_open_time IN ('2026-10-11 20:45:00','2026-10-11 20:50:00')) ORDER BY symbol, candle_open_time;
+SELECT CASE WHEN f.decision IN ('BUY','STRONG_BUY') AND f.final_entry_allowed=0 THEN 'BULLISH_5M_ENTRY_BLOCKED' WHEN f.decision IN ('NEUTRAL','WATCH') AND f.original_decision IN ('SELL','STRONG_SELL') THEN 'BEARISH_5M_DOWNGRADED' ELSE 'OTHER' END AS ctx_class, COUNT(*) AS buys, SUM(p.realized_pnl < 0) AS losers, ROUND(SUM(p.realized_pnl),6) AS pnl_sum FROM crypto_ai.wallet_trade w JOIN crypto_ai.trade_signal o ON o.id=w.signal_id AND o.interval_code='1m' JOIN crypto_ai.trade_signal f ON f.id=(SELECT f2.id FROM crypto_ai.trade_signal f2 WHERE f2.symbol=o.symbol AND f2.interval_code='5m' AND f2.generated_at<=o.generated_at ORDER BY f2.generated_at DESC LIMIT 1) LEFT JOIN crypto_ai.paper_position p ON p.signal_id=o.id WHERE w.side='BUY' AND w.executed_at BETWEEN '2026-10-10 00:00:00' AND '2026-10-17 10:00:00' GROUP BY ctx_class ORDER BY ctx_class;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: Clock-offset proof. Compare the DB insert time with the Binance event time for each exit-triggering tick, and with the wallet SELL time (F-23, U-23).
+SQL:
+SELECT id, symbol, observed_at, source_received_at, created_at, TIMESTAMPDIFF(MICROSECOND, observed_at, created_at)/1000 AS insert_minus_event_ms, price, delivery_status, outcome_reason FROM crypto_ai.market_price_event WHERE (symbol='EGLDUSDT' AND observed_at BETWEEN '2026-10-11 21:00:00' AND '2026-10-11 21:00:10') OR (symbol='XRPUSDT' AND observed_at BETWEEN '2026-10-12 03:30:03' AND '2026-10-12 03:30:05') OR (symbol='EGLDUSDT' AND observed_at BETWEEN '2026-10-11 22:43:34' AND '2026-10-11 22:43:36') OR (symbol='SHIBUSDT' AND observed_at BETWEEN '2026-10-12 07:15:05' AND '2026-10-12 07:15:44') OR (symbol='ACEUSDT' AND observed_at BETWEEN '2026-10-12 10:05:05' AND '2026-10-12 10:05:19') ORDER BY symbol, observed_at LIMIT 100;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: The FIX-154 schema and runtime state at trade time (F-28, U-27). Two separate statements, so that if the audit table is missing only the second one fails.
+SQL:
+SELECT installed_rank, version, description, installed_on, success FROM crypto_ai.flyway_schema_history ORDER BY installed_rank DESC LIMIT 15;
+SELECT id, reference_signal_id, evaluation_path, evaluated_at, five_minute_signal_id, five_minute_raw_decision, five_minute_effective_decision, one_hour_signal_id, one_hour_raw_decision, one_hour_effective_decision, assessment_band, max_initial_percent, legacy_veto_result, final_result FROM crypto_ai.buy_htf_assessment_audit WHERE reference_signal_id IN (156723,159408,165412,167668,171589,176710) ORDER BY reference_signal_id, evaluated_at LIMIT 50;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-005
+Purpose: Trading and analysis activity after 10-12, and the hourly 1m latency on 10-12, to find the 74 s window (F-29, U-28).
+SQL:
+SELECT DATE(executed_at) AS d, side, COUNT(*) AS n FROM crypto_ai.wallet_trade WHERE executed_at >= '2026-10-12 00:00:00' GROUP BY DATE(executed_at), side ORDER BY d, side;
+SELECT HOUR(generated_at) AS h, COUNT(*) AS n, ROUND(AVG(TIMESTAMPDIFF(MICROSECOND, candle_open_time + INTERVAL 1 MINUTE, generated_at))/1e6,3) AS avg_gen_s, ROUND(MAX(TIMESTAMPDIFF(MICROSECOND, candle_open_time + INTERVAL 1 MINUTE, generated_at))/1e6,3) AS max_gen_s FROM crypto_ai.trade_signal WHERE interval_code='1m' AND generated_at BETWEEN '2026-10-12 00:00:00' AND '2026-10-13 00:00:00' GROUP BY HOUR(generated_at) ORDER BY h;
+### END_DB_REQUEST
+
+---
+
+## Self-review for iteration 4
+
+- **I corrected my own F-19 (now F-23)** using code (`observedAt = E`, `executedAt = Instant.now()`) and Binance trade data. The proof query is filed.
+- **F-17 is strengthened** by external trade data (F-22). I explicitly do not claim a protection defect.
+- **F-25 and F-26 are new candidate gaps** based on persisted signal fields and validation codes. They stay candidates until I4-002 gives the blocking stage and the system-wide rate.
+- **F-24 is classed as a parity and observability risk**, with no P&L impact on the frozen six.
+- **The FIX-154 contradiction (F-28) is reported, not resolved.** Deployment state is unknown.
+- **Entry assessment used only information available at decision time.** Outcomes after exit are kept separate.
+
+**Iteration 5 plan:**
+- Combine I4-001 to I4-005.
+- Trace why `AnalysisService` / `FinalDecisionService` downgrades a 5m STRONG_SELL to NEUTRAL.
+- Check whether `HigherTimeframeBuyAssessmentService` uses `decision` or `original_decision` in the legacy `5M_BEARISH_VETO`.
+
+**Sources (external research):**
+- [Binance public aggTrades, EGLDUSDT 19:43:26–19:43:36 UTC, 2026-10-11](https://data-api.binance.vision/api/v3/aggTrades?symbol=EGLDUSDT&startTime=1791747806000&endTime=1791747816000&limit=1000)
+- [Binance public aggTrades, EGLDUSDT 17:59:59–18:00:11 UTC, 2026-10-11](https://data-api.binance.vision/api/v3/aggTrades?symbol=EGLDUSDT&startTime=1791741599000&endTime=1791741611000&limit=1000)

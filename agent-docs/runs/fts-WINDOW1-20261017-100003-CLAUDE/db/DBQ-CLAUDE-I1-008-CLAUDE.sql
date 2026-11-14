@@ -1,0 +1,2 @@
+SELECT MAX(opened_at) AS last_open, MAX(closed_at) AS last_close, SUM(opened_at > '2026-10-12 10:05:20') AS opened_after_182, SUM(status='OPEN') AS open_now FROM crypto_ai.paper_position;
+SELECT id, symbol, status, close_reason, realized_pnl, opened_at, closed_at FROM crypto_ai.paper_position WHERE status='STOPPED' AND closed_at BETWEEN '2026-10-11 20:00:00' AND '2026-10-17 07:00:04' ORDER BY closed_at DESC LIMIT 50;

@@ -1,0 +1,15 @@
+Field	Type	Null	Key	Default	Extra
+confluence_entry_allowed	tinyint(1)	NO		1	
+final_entry_allowed	tinyint(1)	NO		1	
+atr_immediate_entry_allowed	tinyint(1)	NO		1	
+btc_context_entry_allowed	tinyint(1)	NO		1	
+liquidity_entry_allowed	tinyint(1)	NO		1	
+order_book_veto_allowed	tinyint(1)	NO		0	
+strategy_entry_allowed	tinyint(1)	NO		1	
+derivatives_entry_allowed	tinyint(1)	NO		1	
+id	interval_code	generated_at	decision	original_decision	atr_immediate_entry_allowed	final_entry_allowed	atr_recommended_position_percent
+159285	5m	2026-10-11 22:35:01.552862	BUY	BUY	1	1	100
+159407	5m	2026-10-11 22:40:01.635944	WATCH	WATCH	0	1	60
+159408	1m	2026-10-11 22:40:01.633945	WATCH	WATCH	0	1	0
+165412	1m	2026-10-12 02:35:01.469482	WATCH	WATCH	1	1	100
+165415	5m	2026-10-12 02:35:01.490485	BUY	BUY	1	1	100

@@ -1,0 +1,203 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** All six frozen losses—`182, 172, 162, 158, 143, 137`—have an **UNVERIFIABLE** entry-quality classification. The permitted `db/CODEX/` folder is empty; no position, signal, wallet, opportunity, or proof-query result exists here.
+
+- **PROJECT EVIDENCE:** Current execution resolves a fresh canonical price after the signal/HTF gates, then revalidates entry quality at that actual price. A BUY is rejected if that price is at/below stop or at/above target. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:340) [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1150)
+
+- **PROJECT EVIDENCE:** Entry quality starts at 100 and penalizes expansion from the reference low, ATR extension, opportunity age, weak reward/risk, recent rejection zone, high volatility, and stop-exposed liquidity. `<50` blocks a chase; `50–54` is late entry and normally limited to 25%; `55–69`, `70–84`, and `85+` are progressively better tiers with caps. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:865)
+
+- **PROJECT EVIDENCE:** A normal entry also requires the 1m signal’s hard risk gates, valid risk plan, ATR permission, applicable 5m/1h confirmation, and final-entry authority. BTC, strategy, derivatives, and strong target-wall vetoes are checked before entry-quality sizing. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:466)
+
+- **PROJECT EVIDENCE:** The managed wallet position persists the final `entry_quality_score`, entry stage, decision snapshot, and entry-risk geometry. The paper position itself links only to its entry signal; it does not persist the quality calculation. [WalletManagedPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletManagedPosition.java:70)
+
+- **AGENT INFERENCE — source-review concern, not trade attribution:** The nominal entry-quality evidence window is 30 minutes, but `recentSignals(...)` fetches only the latest 20 rows before filtering by the signal’s reference time. With one 1m signal per minute, this cannot cover the full stated 30-minute window; with delayed processing, future rows further reduce usable historical rows. This may understate prior lows/rejections and distort entry quality. No claim is made that it affected any frozen trade. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:47) [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:2601)
+
+- **EXTERNAL RESEARCH:** None.
+
+## EVIDENCE
+
+- The frozen selection and scope are retained exactly; no substitute trade or Replay row was used.
+- No permitted DB artifacts exist for `DBQ-FTS-001..005`.
+- Supplied snapshot metadata is internally inconsistent: `2026-10-25 15:00:04 UTC` converts to `2026-10-25 18:00:04 KSA`, not the supplied `18:00:02 KSA`. This has no demonstrated trade impact.
+
+## UNKNOWNS
+
+For each frozen position: entry signal, decision/execution price gap, execution-price observation time, actual entry-quality score, expansion, ATR extension, risk/reward, rejection-zone evidence, opportunity anchor/best price, 5m/1h context, sizing, active runtime version, and whether the current source governed the trade.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Confirm actual production-schema columns needed to reconstruct entry quality for exactly the frozen paper positions.  
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_managed_position',
+      'wallet_trade',
+      'execution_opportunity',
+      'signal_processing_work',
+      'buy_htf_assessment_audit',
+      'candle'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-002  
+Purpose: After DBQ-CODEX-I5-001 confirms the mapped columns, obtain the authoritative entry linkage, persisted entry-quality score, and decision-versus-execution-price evidence for only the six frozen positions.  
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.signal_id,
+    p.entry_price,
+    p.stop_loss,
+    p.take_profit,
+    p.opened_at,
+    p.closed_at,
+    p.realized_pnl,
+    s.id AS entry_signal_id,
+    s.interval_code,
+    s.candle_open_time,
+    s.generated_at,
+    s.decision,
+    s.original_decision,
+    s.final_entry_allowed,
+    s.latest_price AS decision_price,
+    s.stop_loss AS signal_stop_loss,
+    s.take_profit AS signal_take_profit,
+    s.risk_reward_ratio,
+    s.atr_at_signal,
+    s.atr_entry_type,
+    s.atr_immediate_entry_allowed,
+    s.atr_recommended_position_percent,
+    s.total_score,
+    s.confidence_score,
+    s.trend_score,
+    s.volume_score,
+    s.momentum_score,
+    s.market_regime,
+    s.selected_strategy,
+    s.btc_context_status,
+    s.btc_context_entry_allowed,
+    s.derivatives_entry_allowed,
+    s.liquidity_status,
+    s.liquidity_entry_allowed,
+    s.data_quality_valid,
+    wmp.id AS managed_position_id,
+    wmp.entry_quality_score,
+    wmp.entry_stage,
+    wmp.allocated_position_percent,
+    wmp.entry_analysis_snapshot_json,
+    wt.id AS wallet_buy_trade_id,
+    wt.price_usdt AS execution_price,
+    wt.decision_price_usdt,
+    wt.execution_price_observed_at,
+    wt.quantity AS executed_quantity,
+    wt.executed_at,
+    wt.execution_type,
+    wt.execution_reason,
+    wt.execution_message
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.trade_signal s
+  ON s.id = p.signal_id
+LEFT JOIN crypto_ai.wallet_managed_position wmp
+  ON wmp.entry_signal_id = p.signal_id
+LEFT JOIN crypto_ai.wallet_trade wt
+  ON wt.signal_id = p.signal_id
+ AND wt.side = 'BUY'
+ AND wt.status = 'EXECUTED'
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137), wt.executed_at, wt.id;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-003  
+Purpose: Reconstruct only contemporaneous 1m evidence plus selected 5m/1h context for the six entries; excludes future signals.  
+SQL:
+```sql
+WITH frozen AS (
+    SELECT
+        p.id AS paper_position_id,
+        p.symbol,
+        p.signal_id,
+        s.generated_at AS reference_generated_at
+    FROM crypto_ai.paper_position p
+    JOIN crypto_ai.trade_signal s
+      ON s.id = p.signal_id
+    WHERE p.id IN (182, 172, 162, 158, 143, 137)
+),
+context_ranked AS (
+    SELECT
+        f.paper_position_id,
+        ts.id,
+        ts.interval_code,
+        ts.generated_at,
+        ts.candle_open_time,
+        ts.decision,
+        ts.confidence_score,
+        ts.total_score,
+        ts.data_quality_valid,
+        ROW_NUMBER() OVER (
+            PARTITION BY f.paper_position_id, ts.interval_code
+            ORDER BY ts.generated_at DESC, ts.id DESC
+        ) AS rn
+    FROM frozen f
+    JOIN crypto_ai.trade_signal ts
+      ON ts.symbol = f.symbol
+     AND ts.interval_code IN ('5m', '1h')
+     AND ts.generated_at <= f.reference_generated_at
+)
+SELECT
+    f.paper_position_id,
+    'CONTEXT' AS evidence_type,
+    cr.id AS signal_id,
+    cr.interval_code,
+    cr.generated_at,
+    cr.candle_open_time,
+    cr.decision,
+    cr.confidence_score,
+    cr.total_score,
+    cr.data_quality_valid
+FROM frozen f
+JOIN context_ranked cr
+  ON cr.paper_position_id = f.paper_position_id
+ AND cr.rn = 1
+
+UNION ALL
+
+SELECT
+    f.paper_position_id,
+    'ONE_MINUTE_WINDOW' AS evidence_type,
+    ts.id AS signal_id,
+    ts.interval_code,
+    ts.generated_at,
+    ts.candle_open_time,
+    ts.decision,
+    ts.confidence_score,
+    ts.total_score,
+    ts.data_quality_valid
+FROM frozen f
+JOIN crypto_ai.trade_signal ts
+  ON ts.symbol = f.symbol
+ AND ts.interval_code = '1m'
+ AND ts.generated_at >= f.reference_generated_at - INTERVAL 30 MINUTE
+ AND ts.generated_at <= f.reference_generated_at
+ORDER BY paper_position_id, evidence_type, generated_at, signal_id;
+```
+### END_DB_REQUEST

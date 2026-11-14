@@ -1,0 +1,2 @@
+SELECT installed_rank, version, description, installed_on, success FROM crypto_ai.flyway_schema_history WHERE installed_on >= '2026-10-05' ORDER BY installed_rank LIMIT 50;
+SELECT table_name, create_time FROM information_schema.tables WHERE table_schema = 'crypto_ai' AND (table_name LIKE '%htf%' OR table_name LIKE '%buy_eval%' OR table_name LIKE '%assessment%') LIMIT 20;

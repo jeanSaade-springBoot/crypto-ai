@@ -1,0 +1,136 @@
+## FINDINGS — Iteration 7 self-challenge
+
+1. **No trade-level conclusion is currently supportable.** The permitted Codex DB evidence contains only `DBQ-CODEX-I1-001`, a schema extract—not rows for positions 182, 172, 162, 158, 143, or 137. I cannot classify any as a valid loss, strategy defect, execution defect, or protection failure.
+
+2. **The frozen-selection evidence is not available in the permitted Codex evidence directory.** The six IDs remain mandatory scope, but their claimed “latest six closed negative positions” status is not independently verified here. No substitution is made.
+
+3. **Snapshot metadata has a one-second UTC/KSA inconsistency.**  
+   - Given UTC: `2026-10-12 15:00:04`  
+   - Correct KSA conversion: `2026-10-12 18:00:04`  
+   - Stated KSA: `2026-10-12 18:00:03`  
+   This must be normalized before a frozen-evidence report cites the snapshot time.
+
+4. **Do not attribute a symbol-level price event to a position without corroboration.** The actual schema confirms `market_price_event` has no `paper_position_id` or `wallet_position_id`; it is symbol/time evidence only. A claimed stop/profit-lock trigger needs the position-linked `production_exit_audit` and/or `position_management_event`, then compatible timing and price evidence.
+
+5. **Do not treat current managed-position fields as historical exit state.** `wallet_managed_position` is mutable (`updated_at`, high-water and profit-lock fields). It can support reconstruction only when joined through durable exit evidence and reconciled with timestamped management events.
+
+6. **Paper-position P&L must be reconciled, not assumed.** `paper_position.realized_pnl` alone does not establish quantity, fee, partial-exit, or price consistency. The available schema supports reconciliation against `wallet_trade`, but no such rows have been supplied.
+
+7. **Current documentation/source behavior cannot prove the runtime rule set for any frozen trade.** Configuration/version history and actual runtime mode are absent. In particular, FIX-154 documentation spans design and later implementation notes; it must not be projected backwards onto an entry without contemporaneous records.
+
+## EVIDENCE
+
+**PROJECT EVIDENCE**
+
+- `DBQ-CODEX-I1-001` successfully established the relevant physical schema in `crypto_ai`:
+  - `paper_position` has entry/exit prices, SL/TP, P&L, reasons, signal IDs, and UTC lifecycle timestamps.
+  - `production_exit_audit.paper_position_id` is unique, providing a direct possible position-to-exit-audit link.
+  - `position_management_event` links to `wallet_position_id`, not directly to paper position.
+  - `market_price_event` is keyed by symbol/time and has `delivery_status`, `ordering_slot`, and `outcome_reason`, but no position link.
+  - `wallet_trade` includes quantities, price, fees, cost basis, realized P&L, execution reason, and UTC execution time.
+- Project investigation guidance requires accepted `LEGACY`/`APPLIED` price evidence for protection analysis and forbids substituting candle OHLC for absent intra-candle price evidence.
+- No position rows, wallet trades, exit audits, management events, price events, proof-query outputs, logs, configuration history, or Replay outputs are present in the permitted Codex DB evidence.
+
+**EXTERNAL RESEARCH**
+
+- None. External material cannot establish facts about these local trades.
+
+**AGENT INFERENCE**
+
+- The evidence model can distinguish a documented mechanical close from an unproven symbol-level price coincidence, but only after the missing position-linked records are obtained.
+- The KSA snapshot shown in the prompt is arithmetically inconsistent with its UTC value by one second.
+
+## UNKNOWNS
+
+- Whether the six IDs were exactly the selection query’s result at the frozen snapshot.
+- Symbol, entry/exit UTC and KSA times, loss amounts, exit causes, and entry rationale for every frozen ID.
+- Whether each entry was fresh, data-quality-valid, correctly linked to its signal, and allowed by the then-active configuration.
+- Whether a first accepted price observation crossed a contemporaneous stop/profit-lock/TP threshold.
+- Whether paper-position, wallet-trade, and exit-audit values reconcile.
+- Runtime mode/version, Replay comparability, and relevant logs.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Independently verify the exact frozen selection as-of the stated UTC snapshot and retrieve the minimum position-linked exit evidence required to avoid falsely attributing symbol-level price events to any of the six frozen positions. Returned timestamps are UTC.
+
+SQL:
+```sql
+WITH eligible AS (
+    SELECT
+        p.id,
+        p.symbol,
+        p.status,
+        p.closed_at,
+        p.realized_pnl
+    FROM crypto_ai.paper_position p
+    WHERE p.status = 'CLOSED'
+      AND p.closed_at IS NOT NULL
+      AND p.realized_pnl < 0
+      AND p.closed_at <= TIMESTAMP('2026-10-12 15:00:04')
+)
+SELECT
+    id,
+    symbol,
+    status,
+    closed_at,
+    realized_pnl
+FROM eligible
+ORDER BY closed_at DESC
+LIMIT 6;
+
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.side,
+    p.status,
+    p.quantity,
+    p.entry_price,
+    p.stop_loss,
+    p.take_profit,
+    p.exit_price,
+    p.realized_pnl,
+    p.close_reason,
+    p.signal_id,
+    p.exit_signal_id,
+    p.opened_at,
+    p.closed_at,
+    pea.id AS production_exit_audit_id,
+    pea.wallet_position_id,
+    pea.close_trigger,
+    pea.source_signal_id,
+    pea.source_signal_decision,
+    pea.source_signal_original_decision,
+    pea.position_analysis_id,
+    pea.position_recommendation,
+    pea.entry_price_usdt AS audited_entry_price,
+    pea.exit_price_usdt AS audited_exit_price,
+    pea.stop_loss_usdt AS audited_stop_loss,
+    pea.take_profit_usdt AS audited_take_profit,
+    pea.close_explanation,
+    pea.audited_at
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.production_exit_audit pea
+    ON pea.paper_position_id = p.id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.closed_at DESC, p.id DESC;
+
+SELECT
+    pea.paper_position_id,
+    pme.id AS management_event_id,
+    pme.wallet_position_id,
+    pme.symbol,
+    pme.event_type,
+    pme.old_value_usdt,
+    pme.new_value_usdt,
+    pme.market_price_usdt,
+    pme.reason,
+    pme.occurred_at
+FROM crypto_ai.production_exit_audit pea
+JOIN crypto_ai.position_management_event pme
+    ON pme.wallet_position_id = pea.wallet_position_id
+WHERE pea.paper_position_id IN (182, 172, 162, 158, 143, 137)
+ORDER BY pea.paper_position_id, pme.occurred_at, pme.id;
+```
+### END_DB_REQUEST
+
+No documentation update is required: this was analysis only.

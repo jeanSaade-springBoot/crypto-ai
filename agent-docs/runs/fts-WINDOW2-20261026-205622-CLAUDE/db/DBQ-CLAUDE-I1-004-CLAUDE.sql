@@ -1,0 +1,5 @@
+DESCRIBE crypto_ai.trade_signal;
+DESCRIBE crypto_ai.wallet_managed_position;
+DESCRIBE crypto_ai.position_management_event;
+DESCRIBE crypto_ai.market_price_event;
+DESCRIBE crypto_ai.signal_processing_work;

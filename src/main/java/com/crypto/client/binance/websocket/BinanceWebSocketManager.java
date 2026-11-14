@@ -38,6 +38,7 @@ public class BinanceWebSocketManager {
     private final BinanceKlineService service;
     private final Connector connector;
     private final CandleGapDiagnostics gaps;
+    @Autowired(required=false) private com.crypto.local.LocalCandleReconciliationService reconciliation;
     private final java.util.function.LongSupplier nanos;
     private final ArrayBlockingQueue<CompletableFuture<Void>> requests = new ArrayBlockingQueue<>(32);
     private final ThreadPoolExecutor connectWorker = worker("fix131-connect", 1);
@@ -194,6 +195,10 @@ public class BinanceWebSocketManager {
                             interruptionStart = 0;
                             try { if (gaps != null) gaps.subscribed(a.url, Instant.now()); }
                             catch (RuntimeException ex) { log.warn("[FIX-131][SUBSCRIPTION_DIAGNOSTIC_FAILED] generation={}", h.generation, ex); }
+                            // Request only; all local queries and REST recovery run on
+                            // the dedicated reconciliation executor, never this actor.
+                            try { if(reconciliation!=null) reconciliation.requestAfterReconnect(h.generation); }
+                            catch(RuntimeException ex) { log.warn("[FIX-153][RECONCILIATION_REQUEST_FAILED] generation={}",h.generation,ex); }
                             finish(null);
                         }
                     }

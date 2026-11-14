@@ -1,0 +1,1 @@
+SELECT @@session.time_zone AS session_tz, @@global.time_zone AS global_tz, @@system_time_zone AS system_tz, NOW(6) AS now_session, UTC_TIMESTAMP(6) AS now_utc, (SELECT UNIX_TIMESTAMP(execution_price_observed_at) FROM crypto_ai.wallet_trade WHERE id = 344) AS wt344_epoch, (SELECT UNIX_TIMESTAMP(observed_at) FROM crypto_ai.market_price_event WHERE id = 1789409) AS mpe1789409_epoch;

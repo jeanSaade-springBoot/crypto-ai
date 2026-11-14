@@ -1,0 +1,72 @@
+## FINDINGS — Iteration 1
+
+- **PROJECT EVIDENCE:** The frozen study population is exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutions made.
+- **PROJECT EVIDENCE:** The authoritative entity is `crypto_ai.paper_position`; the required selection excludes Replay (`wallet_position_test`) and incomplete/non-loss rows.
+- **PROJECT EVIDENCE:** No database-result files exist in the permitted Codex evidence directory. Therefore, no trade-specific entry, protection, exit, P&L, symbol, or timestamp claim can yet be made.
+- **PROJECT EVIDENCE:** Source indicates `paper_position` holds the entry/exit signal references, entry/exit prices, stop, target, realized P&L, reasons, and lifecycle timestamps. This is only a source-model indication; actual database schema must be confirmed first.
+- **PROJECT EVIDENCE:** `wallet_trade` has signal linkage but no direct `paper_position_id` in the source model. Any future ledger pairing must be demonstrated using durable evidence, not assumed from symbol/time proximity.
+- **AGENT INFERENCE:** Reconstruction is currently blocked solely by absent read-only database evidence, not by a conclusion about any of the six losses.
+
+## EVIDENCE
+
+- [CHARTER.md](C:\workspace\crypto-ai-trader-mysql\agent-docs\runs\fts-WINDOW1-20261016-124815\CHARTER.md)
+- [PaperPosition.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\domain\PaperPosition.java)
+- [WalletTrade.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\wallet\domain\WalletTrade.java)
+- [WalletManagedPosition.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\wallet\domain\WalletManagedPosition.java)
+- [DATABASE_INVESTIGATION_RULES.md](C:\workspace\crypto-ai-trader-mysql\agent-docs\DATABASE_INVESTIGATION_RULES.md)
+
+## UNKNOWNS
+
+For each frozen trade: symbol, side, entry/exit times and prices, stop/target, exit reason, entry/exit signals, wallet execution legs, managed-position state, accepted protection events, candle context, processing-work history, active configuration/version, and Replay reproducibility.
+
+All raw DB times must be treated as UTC and only reported as KSA after `+03:00` conversion.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Confirm the actual current schema, columns, and foreign-key relationships before requesting the six frozen trade records and related execution/protection evidence.  
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    c.extra
+FROM information_schema.columns c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'signal_processing_work'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+
+SELECT
+    k.table_name,
+    k.column_name,
+    k.constraint_name,
+    k.referenced_table_name,
+    k.referenced_column_name
+FROM information_schema.key_column_usage k
+WHERE k.table_schema = 'crypto_ai'
+  AND k.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'signal_processing_work'
+  )
+  AND (
+      k.referenced_table_name IS NOT NULL
+      OR k.constraint_name = 'PRIMARY'
+  )
+ORDER BY k.table_name, k.constraint_name, k.ordinal_position;
+```
+### END_DB_REQUEST

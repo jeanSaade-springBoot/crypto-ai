@@ -1,0 +1,3 @@
+SELECT TABLE_SCHEMA, TABLE_NAME, CREATE_TIME, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA='crypto_ai' AND (TABLE_NAME LIKE 'buy_htf%' OR TABLE_NAME LIKE '%htf_assessment%' OR TABLE_NAME LIKE 'flyway%');
+SELECT installed_rank, version, description, installed_on, success FROM crypto_ai.flyway_schema_history WHERE CAST(version AS UNSIGNED) >= 100 ORDER BY installed_rank;
+SELECT COUNT(*) AS n, SUM(data_quality_valid IS NULL) AS dq_null FROM crypto_ai.trade_signal WHERE id IN (156723,159408,165412,167668,171589,176710);

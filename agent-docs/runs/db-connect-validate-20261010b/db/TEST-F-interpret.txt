@@ -1,0 +1,3 @@
+- Authenticated database: `crypto_ai`
+- Authenticated DB user: `ai_investigator@localhost`
+- `trade_signal` row count: `90,139`

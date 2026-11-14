@@ -1,0 +1,1 @@
+SELECT id, symbol, side, execution_reason, signal_id, position_analysis_id, executed_at, notes, LEFT(execution_message, 3000) AS execution_message FROM crypto_ai.wallet_trade WHERE id IN (344, 357, 358, 392, 403, 426, 451) ORDER BY id;

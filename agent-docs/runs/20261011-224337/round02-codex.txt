@@ -1,0 +1,67 @@
+## FINDINGS
+
+- [PROJECT EVIDENCE] Current Replay cannot substantiate 98–99% non-wallet trade-output parity. It still uses wallet settings, cash, daily budget, wallet sizing, and a run-wide price-mode flag.
+
+- [PROJECT EVIDENCE] The spec’s D01 is incorrect against the current Java: Production passes all bearish intervals to `validateSell`, but that method rejects non-1m signals. D01 should be closed as equivalent, with a fixture—not implemented as a Replay change.
+
+- [PROJECT EVIDENCE] The current fallback is effectively unreachable for an opened Replay position: without a price event, Replay cannot resolve an entry price; with one, `exactPriceReplay=true`, bypassing the fallback. Thus reachable Replay omits Production’s signal-path position management, TP/SL/profit-lock/hard-floor checks.
+
+- [PROJECT EVIDENCE] The spec’s no-account-read rule conflicts with continuing to use shared BUY evaluation: `ExecutionIntelligenceService` calls `TradeExecutionValidationService`, which reads `wallet_settings` without a Replay branch.
+
+- [PROJECT EVIDENCE] No FIX-156 qualifier, profile, certificate, per-span price coverage, forbidden-dependency exception, or earned `ANALYSIS_PARITY` implementation exists in current Java.
+
+## EVIDENCE
+
+- [PROJECT EVIDENCE] Replay directly reads `wallet_settings`, models capital/budget, and invokes wallet sizing in [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:75), [line 318](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:318), and [line 999](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:999).
+
+- [PROJECT EVIDENCE] Shared BUY evaluation reaches account configuration: [ExecutionIntelligenceService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:653) calls `validateBuy`; that service reads `wallet_settings` at [TradeExecutionValidationService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:66) and [line 400](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:400).
+
+- [PROJECT EVIDENCE] D01’s actual behavior is 1m-only in both paths: [TradeExecutionValidationService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:350) rejects every non-1m normal execution signal.
+
+- [PROJECT EVIDENCE] An entry needs an already-consumed fresh price event: [ExecutionPriceAuthorityService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionPriceAuthorityService.java:37). The Replay scope receives that price only from the event loop at [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:126). The fallback only runs when no events exist, at [line 183](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:183).
+
+- [PROJECT EVIDENCE] In the reachable exact-price path, Replay evaluates only a bearish 1m SELL signal at [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:232). Production first runs advisory position management and then signal-price protection checks at [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:115) and [line 170](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:170).
+
+- [PROJECT EVIDENCE] The price-event projection discards durable event id and delivery status despite SQL ordering by `(observed_at,id)`: [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118), [line 173](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:173).
+
+- [PROJECT EVIDENCE] Current pass/fail considers one accepted price event sufficient: [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:322). It also generates output before price evidence is checked at [line 174](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:174).
+
+- [PROJECT EVIDENCE] The controller-visible chart queries Production `wallet_trade`: [RegressionTestService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:512), [line 549](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:549).
+
+- [PROJECT EVIDENCE] Replay scope is a plain `ThreadLocal`; the worker uses an unspecified `@Async` executor: [ExecutionReplayScope.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionReplayScope.java:31), [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:99).
+
+## OBJECTIONS
+
+- [PROJECT EVIDENCE] The draft simultaneously forbids account-table reads, forbids Production changes, and keeps shared BUY validation in the Replay path. It must instead require a fully Replay-local/version-matched BUY-validation mirror, or classify all affected decisions non-comparable. Allowing the current shared account read is incompatible with the stated boundary.
+
+- [PROJECT EVIDENCE] `ANALYSIS_PARITY` explicitly disclaims lifecycle claims, while the acceptance rule requires lifecycle parity. The specification must define whether lifecycle is only a separately reported metric or introduce a compatible non-wallet lifecycle label.
+
+- [PROJECT EVIDENCE] `POSITION_STOP_LOSS` can be executed before normal Production processing, but is absent from the per-exit-class and critical-safety lists: [PositionManagementService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionManagementService.java:129).
+
+- [AGENT INFERENCE] A raw 98–99% percentage would be misleading unless denominator coverage, minimum comparable cases, the lower-confidence-bound method, and a pre-committed final evaluation window are frozen before measurement.
+
+- [PROJECT EVIDENCE] The working tree is materially dirty, so it does not establish identity with the archived packages cited by the draft. Freeze the exact source/configuration/migration/worktree baseline before re-verifying the registers.
+
+## UNKNOWNS
+
+- [PROJECT EVIDENCE] No database, production system, or runtime was accessed. E01–E10 measurements—especially per-span price coverage, historical configuration availability, signal availability delay, and evidence-exclusion rates—remain absent.
+
+- [PROJECT EVIDENCE] The `StopLossEvidenceService` wrappers invoked around the otherwise 5m-only wake-up methods have not been proven side-effect-free for non-5m signals; D08 remains open pending that trace.
+
+- [AGENT INFERENCE] It is unknown whether enough qualified, historically reconstructable decisions exist to support a statistically meaningful 98–99% lifecycle result after the required exclusions.
+
+VERDICT: INSUFFICIENT_EVIDENCE
+
+## REMAINING WORK
+
+1. [PROJECT EVIDENCE] Revise and freeze the specification: correct D01; resolve shared BUY-validation/account-read conflict; add `POSITION_STOP_LOSS`; clarify lifecycle labeling; add the pre-entry signal-price/profit-lock suppression fixture; and close D08 wrapper effects.
+
+2. [PROJECT EVIDENCE] Produce E01–E10 read-only evidence, including canonical per-span and final-tail price coverage, accepted-event ordering proof, immutable entry fixtures, historical configuration evidence, signal availability timing, and reconstructability/exclusion rates.
+
+3. [PROJECT EVIDENCE] Pre-register acceptance: separate signal, BUY-decision, and lifecycle coverage/denominators; minimum counts; confidence-bound method; tolerances; final evaluation window; and zero unexplained critical-exit mismatches.
+
+4. [PROJECT EVIDENCE] After the required approvals only, build Replay-output-table-only isolation: immutable Replay profile, local non-wallet policy mirrors, fail-closed dependency/HTTP guard, as-of qualification before output, id-preserving price evidence, per-span refusals, final-tail processing, and censored end-of-window lifecycle handling.
+
+5. [PROJECT EVIDENCE] Replace run-wide price pass/fallback labels with decision/span evidence certificates; remove baseline observer/fallback execution; prevent `/runs/**` from reading account tables; and use staging with atomic promotion plus a bounded named Replay executor.
+
+6. [PROJECT EVIDENCE] Validate with fixture parity, cancellation/crash/restart, async propagation, migration preflight, MySQL/Java 21 tests, resource-isolation load tests, and first-divergence reports before issuing any parity label.

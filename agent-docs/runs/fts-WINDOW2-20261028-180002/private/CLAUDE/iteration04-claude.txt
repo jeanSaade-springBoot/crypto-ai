@@ -1,0 +1,201 @@
+# CLAUDE: FTS WINDOW2, Iteration 4 of 8 (code and trade route)
+
+**Run:** `fts-WINDOW2-20261028-180002`. This was analysis only and I reviewed only my own work.
+
+**What I read:** CHARTER, my iteration 2 and 3 outputs, my DBQ-CLAUDE-I3-001..006 results, and the production source along the entry and exit route.
+
+**Isolation:** I did not open `private/CODEX`, `db/CODEX`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or any Codex memory.
+
+**Writes:** none. The session is read-only, so this response is the iteration artifact.
+
+**Times:** I convert from epochs. Each is shown as UTC and then KSA (UTC+3).
+
+---
+
+## Ingesting the I3 results
+
+| Result | What it shows | Effect on iteration 3 |
+|---|---|---|
+| **I3-002** | During EGLD's 19:43:05–19:43:19 UTC silence (22:43:05–22:43:19 KSA), EGLD had **0 events**. BTC had 7, ETH 6, SOL 5, XRP 5, and 16 other symbols had ticks in the same seconds. | **The stream and consumer did not stall** (T5). The silence was EGLD-specific. |
+| **I3-003** | No tick arrived between "rule became true" and the exit tick that was used. 137: :01.023 ticked at the signal price, so the exit took the :09.033 tick. 172: last tick before was 04:15:03.47, then 04:15:43.46. 182: 07:05:02.43, then 07:05:18.45. | **U-I3-2 closed.** The exit fired on the first canonical tick after the signal existed. The delay came from tick sparsity, not processing. |
+| **I3-004** | Lock activation evidence: the 19:40:23.027 UTC tick at 4.056 crossed the 70% activation level 4.0552 (the 1m-TP geometry). | **T4 confirmed.** |
+| **I3-005** | 20 wallet assets. Snapshot captured_at lands within 0.5 s of each wallet SELL (for example 1791788720.48 against the wallet SELL at …718.50). | **T6 supported:** snapshotting runs inside the exit transaction. |
+| **I3-006** | 1m analysis latency was stable across all 16 hours: about 1.3 s on an ordinary minute and about 3.4 s at 5m boundaries, with a maximum of 14.75 s. | T7 "overnight degradation" is **withdrawn**. The earlier per-trade samples were not representative. |
+| **I3-001** | `observed_at − created_at` is negative by about 150 ms in the 137, 158 and 162 windows. | Binance `E` runs about 150 ms ahead of the DB clock there. That is well inside the 2 s future-skew limit (`MarketPriceEventService.java:32,43`), so it is not a rejection cause. |
+
+---
+
+## FINDINGS
+
+### R1. Entry route: R:R floors differ by route, and the four routes these trades used have none (PROJECT EVIDENCE)
+
+The R:R gates in `ExecutionIntelligenceService.java`:
+
+| Route | R:R gate | Location |
+|---|---|---|
+| SCOUT_ENTRY | ≥ 1.25 | `:1055` |
+| Progressive adds | ≥ 1.15 / 1.20 | `:1098`, `:1128` |
+| Breakout retracement | ≥ 1.15 | `:212`, `:1539` |
+| Retracement | ≥ `RETRACEMENT_MIN_CURRENT_RR` | `:1631` |
+| DEFERRED_CONTINUATION | ≥ 1.0 | `:1756-1764` |
+| HTF_TRANSITION / exceptional probe | only > 0 | `:1397`, `:1455` |
+| **IMMEDIATE_VALIDATION** (137, 172, 182) | **none** | `:651-694` |
+| **SETUP_TIMEFRAME_ATR** (143) | **none** | `:628-641` |
+| **SETUP_CONFIRMATION_WAKEUP** (158), **ACCUMULATED_EVIDENCE** (162) | **none** | |
+
+These four routes only call `applyInitialEntryQualityGuard` (`:1171-1211`). That guard checks the score alone (`CHASE_ENTRY_CUTOFF = 50`, `:229`).
+
+The score starts at 100 (`:976`), and R:R below 1 subtracts only 30 (`:991`). So **an R:R below 1 with no other penalty scores 70, which is GOOD_ENTRY and allows 40%**. The inverted R:R from F1 (0.35–0.74 on five of six trades) can never block an entry by itself.
+
+**AGENT INFERENCE:**
+- This is a policy inconsistency rather than a coding error. The engine requires at least 1:1 to *chase a continuation* (`:1762`, "will not chase … with less than 1:1"), yet allows R:R of 0.35 on the primary direct route.
+- Combined with F1 (the `AtrRiskService.java:34-45` stop is floored at 0.50% while the TP is a bare 3×ATR), this is the **main systemic mechanism behind the losses in five of six trades**.
+- DBQ-CLAUDE-I4-001 and I4-003 test it.
+
+### R2. Confluence turns bearish signals NEUTRAL but lets conflicting BUYs through (PROJECT EVIDENCE)
+
+This closes U-I3-4 at code level. `AnalysisService.java:303-377` stores `originalDecision = baseDecision` and `decision = FinalDecisionService` output after `MultiTimeframeConfluenceService.evaluate`.
+
+`MultiTimeframeConfluenceService.java`:
+
+- **TREND_FOLLOWING, BUY against a higher-timeframe SELL:** `preserve(CONFLICT, BUY, entryAllowed=true)`, with only reduced confidence (`:124-127`). The BUY is vetoed only by STRONG_SELL or a low-trend SELL (`:120`, `:146-150`).
+- **TREND_FOLLOWING, SELL against any bullish higher timeframe:** turned into **NEUTRAL** (`:132-138`).
+- **BREAKOUT, SELL with no bearish higher timeframe:** NEUTRAL (`:209-211`).
+- **DEFENSIVE, SELL with any bullish higher timeframe:** NEUTRAL (`:231-233`).
+
+Effect on the route:
+- **Entry:** 182 and 172 entered as `confluence_status=CONFLICT` BUYs (iteration-2 F7). That is allowed by design.
+- **Exit:** `PositionExitPolicy` reads the 5m `decision` (I3 T3). A 5m bearish reading is suppressed whenever 1h is bullish, which delays confirmed exits (182: 5m rows 176655 and 176792 were STRONG_SELL turned NEUTRAL).
+
+**AGENT INFERENCE:** the asymmetry is coded and consistent. It favours holding and entering long. On these six trades it cost at most about 1 tick (I3 T3), so it is not the loss driver. DBQ-CLAUDE-I4-002 confirms which branch neutralised 176655 and 176792.
+
+### R3. One combined WebSocket session processes every symbol serially, including exit transactions (PROJECT EVIDENCE + AGENT INFERENCE)
+
+**The route** (traced in code):
+1. `BinanceWebSocketHandler.handleTextMessage` (`:42-67`)
+2. `BinanceKlineService.processKline` (`:55-137`), which takes `observedAt` from Binance `E` (`:94`)
+3. `KlineTransactionCoordinator.process` (`:36-92`), which runs in order:
+   - INPUT transaction: candle upsert plus `recordPending`
+   - PROTECTION transaction: `onPrice`, which may run `executeMechanicalExit`
+   - OBSERVER transaction
+   - CLOSE_DISPATCH transaction
+
+All of these are synchronous on the session's callback thread. The manager connects a single URL (`BinanceWebSocketManager.java:255-261`).
+
+**Inference:** a 1–3 s exit transaction (I3 T6, I3-005) delays the processing of every other symbol's message. It does not drop any. This explains the 1.7–1.9 s observe-to-persist outliers. It does **not** explain EGLD's 14 s silence, because other symbols kept persisting.
+
+### R4. Classifying the EGLD silence (PROJECT EVIDENCE + AGENT INFERENCE)
+
+An observation is discarded without a database row only if it is FUTURE (more than 2 s ahead) or STALE (more than 15 s old), at `MarketPriceEventService.java:40-58`. Equal-timestamp duplicates *are* persisted as NON_CANONICAL (`:66-72`), and I2-005 shows none.
+
+In the 143 window, latency was 3–104 ms with no measurable offset. FUTURE and STALE are therefore implausible.
+
+**Inference:** Binance most likely sent no EGLD 1m kline update during 19:43:05–19:43:19 and 19:43:27–19:43:35 UTC (22:43:05–22:43:35 KSA). The only way to prove this is the `[FIX-153][PRICE_NOT_CANONICAL]` log line, but no 2026-10-11 log exists (I3 T8). This stays **unproven**. Either way, trade 143 stays a valid gap loss.
+
+### R5. Exit and re-entry route (PROJECT EVIDENCE, carried and confirmed)
+
+- **Exit route:** `onPrice` → lock/TP/SL checks → `PositionExitPolicy.evaluateNormalExit` (exit lookup with no age bound, `:95-97`) → `executeMechanicalExit`, all in the one PROTECTION transaction.
+- **Re-entry:** nothing on the entry route consults the last exit time. Grep for cooldown or re-entry found only replay/monitor code, which allowed the 22 s re-entry of 142 → 143.
+- **Replay:** `ExecutionIntelligenceService`, `MultiTimeframeConfluenceService` and `AtrRiskService` are shared by Replay (`ExecutionIntelligenceService.java:1042` registry note; replay scope at `MultiTimeframeConfluenceService.java:105-108`). R1, R2 and R5 should therefore reproduce in Replay.
+- **Replay's limit:** Replay can only reproduce exit *timing* if the APPLIED tick set is used, as FIX-052/`find()` does. That set is complete: all events in the six windows are APPLIED (I2-005).
+
+### Per-trade route summary (PROJECT EVIDENCE; opens shown UTC → KSA)
+
+| ID | Open | Entry route | Signal R:R | Exit trigger | Classification |
+|---|---|---|---|---|---|
+| 137 EGLD | 10-11 17:55:04 → 20:55:04 | IMMEDIATE_VALIDATION, STRONG_BUY | 0.64 | SELL_CONFIRMED (5m SELL) | Valid under the rules; R1 exposure |
+| 143 EGLD | 19:40:04 → 22:40:04 | SETUP_TIMEFRAME_ATR on a 1m WATCH, RSI 84 | 3.13 (5m) | Lock breached by a price gap | Valid gap loss; weak entry; no cooldown |
+| 158 XRP | 23:35:04 → 10-12 02:35:04 | SETUP_CONFIRMATION_WAKEUP | 0.35 | SELL_CONFIRMED | Valid under the rules; R1 exposure |
+| 162 DOGE | 10-12 01:02:06 → 04:02:06 | ACCUMULATED_EVIDENCE | 0.44 | SIGNAL_SELL (1m STRONG_SELL) | Valid under the rules; R1 exposure |
+| 172 SHIB | 03:36:05 → 06:36:05 | IMMEDIATE_VALIDATION, CONFLICT BUY | 0.74 | HTF_SELL_CONFIRMED | Valid under the rules; R1, R2 and F3 (tick quantisation) |
+| 182 ACE | 06:57:06 → 09:57:06 | IMMEDIATE_VALIDATION, CONFLICT BUY in a WEAK_DOWNTREND | 0.48 | SELL_CONFIRMED | Valid under the rules; R1 and R2 |
+
+---
+
+## EVIDENCE INDEX
+
+| ID | Source |
+|---|---|
+| C-R1 | `ExecutionIntelligenceService.java:212,229,628-694,976-1022,1055,1098,1128,1171-1211,1397,1455,1539,1631,1756-1764`; `AtrRiskService.java:27-75` |
+| C-R2 | `AnalysisService.java:303-377,406-411`; `MultiTimeframeConfluenceService.java:61-238` |
+| C-R3 | `BinanceWebSocketHandler.java:42-67`; `BinanceKlineService.java:55-137`; `KlineTransactionCoordinator.java:24-92`; `BinanceWebSocketManager.java:255-261` |
+| C-R4 | `MarketPriceEventService.java:31-73` |
+| DB | DBQ-CLAUDE-I3-001..006 results (above); I2-005 (all events from the `BINANCE_KLINE_DIRECT_FIX153` source, so the current FIX-153 route was live on 10-11/12) |
+
+---
+
+## UNKNOWNS
+
+- **U-I4-1:** the entry-quality score and R:R penalty actually applied to each of the six entries (I4-001).
+- **U-I4-2:** which confluence branch neutralised 176655 and 176792 (I4-002).
+- **U-I4-3:** whether entries with R:R below 1 underperform system-wide (I4-003). This is the evidence needed before calling R1 a policy defect.
+- **U-I3-1:** the EGLD silence cause. Unprovable without a 10-11 log.
+- **U-New3:** whether the 0.50% stop floor without a matching TP floor is intended policy. Next iteration: claude-docs CHANGELOG/TRADING_RULES.
+- **U8:** the exact deployed build. The FIX-153 source tag shows the route family, not the commit.
+
+---
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: Entry quality, allocation and plan for the six managed positions (R1 / U-I4-1)
+SQL:
+SELECT id, entry_signal_id, symbol, entry_decision, entry_stage, entry_quality_score, allocated_position_percent,
+       average_entry_price_usdt, stop_loss_usdt, take_profit_usdt, UNIX_TIMESTAMP(opened_at) AS opened_epoch
+FROM wallet_managed_position
+WHERE id IN (166,172,187,191,201,211)
+ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: Confluence branch that changed SELL/STRONG_SELL into NEUTRAL on 5m exit-context signals (R2 / U-I4-2)
+SQL:
+SELECT id, symbol, interval_code, decision, original_decision, selected_strategy, market_regime,
+       confluence_status, confluence_entry_allowed, confluence_higher_interval, confluence_higher_decision,
+       confluence_higher_trend_score, UNIX_TIMESTAMP(generated_at) AS gen_epoch, LEFT(confluence_explanation, 400) AS expl
+FROM trade_signal
+WHERE id IN (176655,176792,176934,172588,166821,156852)
+ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: System-wide outcome by entry-signal R:R bucket across all closed paper positions (R1 systemic test, U-I4-3)
+SQL:
+SELECT CASE WHEN s.risk_reward_ratio IS NULL THEN 'NULL'
+            WHEN s.risk_reward_ratio < 0.5 THEN 'a <0.5'
+            WHEN s.risk_reward_ratio < 1.0 THEN 'b 0.5-1.0'
+            WHEN s.risk_reward_ratio < 1.5 THEN 'c 1.0-1.5'
+            ELSE 'd >=1.5' END AS rr_bucket,
+       COUNT(*) AS n, SUM(p.realized_pnl > 0) AS wins, SUM(p.realized_pnl < 0) AS losses,
+       ROUND(SUM(p.realized_pnl), 6) AS pnl_sum, ROUND(AVG(p.realized_pnl), 6) AS pnl_avg
+FROM paper_position p
+LEFT JOIN trade_signal s ON s.id = p.signal_id
+WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL
+GROUP BY rr_bucket
+ORDER BY rr_bucket
+LIMIT 10;
+### END_DB_REQUEST
+
+---
+
+## SELF-REVIEW (iteration 4)
+
+- **Coverage:** all six frozen trades have their entry route, exit trigger and code path mapped. None was substituted.
+- **Corrections:**
+  - T7's "overnight latency degradation" is withdrawn (I3-006).
+  - T5 is narrowed: there was no stream or consumer stall (I3-002, R3), so the silence is EGLD-only.
+  - U-I3-2 is closed (I3-003).
+- **Defects:** **none confirmed.** Every trade followed the coded route.
+- **Candidate policy gaps** (recommendations only, no implementation):
+  - R1: inconsistent R:R floor across entry routes. This is the strongest candidate, pending I4-003.
+  - R2: asymmetric confluence. Low P&L impact here.
+  - R3: exit transaction serialises the single combined stream.
+  - R5: no re-entry cooldown.
+- **Labelling and uncertainty:** each claim is tagged. R4 and R3's "1–3 s blocks other symbols" are inference. No log line was searched this iteration.
+- **Next iteration:**
+  - Ingest I4-001..003.
+  - Trace the origin of the 0.50% floor and the missing TP floor in claude-docs (U-New3).
+  - Assess Replay feasibility for 182 and 158 against R1 (what an R:R ≥ 1 gate would have done), as an analysis-only counterfactual.

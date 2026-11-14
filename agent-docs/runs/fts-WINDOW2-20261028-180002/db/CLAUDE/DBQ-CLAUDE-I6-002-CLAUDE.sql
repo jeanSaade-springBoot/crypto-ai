@@ -1,0 +1,9 @@
+SELECT id, symbol, decision, latest_price, atr_at_signal, UNIX_TIMESTAMP(generated_at) AS gen_epoch
+FROM trade_signal
+WHERE interval_code='1m' AND (
+      (symbol='ACEUSDT'  AND generated_at BETWEEN FROM_UNIXTIME(1791786421) AND FROM_UNIXTIME(1791788222))
+   OR (symbol='XRPUSDT'  AND generated_at BETWEEN FROM_UNIXTIME(1791759901) AND FROM_UNIXTIME(1791761702))
+   OR (symbol='EGLDUSDT' AND generated_at BETWEEN FROM_UNIXTIME(1791739501) AND FROM_UNIXTIME(1791741302))
+   OR (symbol='EGLDUSDT' AND generated_at BETWEEN FROM_UNIXTIME(1791745801) AND FROM_UNIXTIME(1791747602)))
+ORDER BY symbol, generated_at
+LIMIT 160;

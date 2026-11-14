@@ -1,0 +1,69 @@
+## Iteration 2 — Database Forensics
+
+### Findings
+
+- **PROJECT EVIDENCE:** No Codex database-result artifacts exist under the permitted `db/CODEX/` path; `DBQ-FTS-001..005` results are unavailable to this track.
+- **PROJECT EVIDENCE:** The frozen scope remains exactly `crypto_ai.paper_position` IDs `182, 172, 162, 158, 143, 137`. No substitutions made.
+- **PROJECT EVIDENCE:** Source identifies `paper_position` as the lifecycle record, linked to entry `signal_id` and optional `exit_signal_id`. It records entry/exit prices, SL/TP, realized P&L, close reason, entry/exit rationale, and UTC open/close times.
+- **PROJECT EVIDENCE:** For mechanical exits, `LivePositionProtectionService` executes the wallet exit first, then persists the matching paper-position closure and a `production_exit_audit` record.
+- **AGENT INFERENCE:** No trade-specific cause, entry-quality assessment, exit validation, or defect conclusion is supportable until actual rows are supplied.
+
+### Evidence
+
+- **PROJECT EVIDENCE:** `wallet_managed_position.entry_signal_id` can provide the managed lifecycle and persisted entry-quality/risk geometry.
+- **PROJECT EVIDENCE:** `wallet_trade` holds execution timestamps, decision/observed price, fees, realized P&L, execution type/reason/message.
+- **PROJECT EVIDENCE:** `production_exit_audit` can link a closed paper position to the close trigger, source signal, position analysis, realized exit price, SL/TP geometry, and explanation.
+- **EXTERNAL RESEARCH:** None.
+
+### Time handling
+
+- **PROJECT EVIDENCE:** Supplied snapshot UTC: `2026-10-25 15:00:04`.
+- **AGENT INFERENCE:** Applying UTC+03:00 yields KSA `2026-10-25 18:00:04`, which conflicts by two seconds with the supplied snapshot KSA `18:00:02`. This is retained as a metadata discrepancy; no raw database timestamps were available to convert.
+
+### Unknowns
+
+For each frozen trade: actual lifecycle timestamps, symbol, price geometry, entry and exit signals, fees, wallet execution linkage, close trigger, protection evidence, data freshness, strategy/risk context, and whether the loss followed intended rules.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Read the actual schema before selecting linked forensic columns and joins for the six frozen positions.  
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_managed_position',
+      'wallet_trade',
+      'production_exit_audit',
+      'position_analysis',
+      'position_management_event',
+      'signal_processing_work',
+      'market_price_event',
+      'candle'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-002  
+Purpose: Obtain the authoritative lifecycle records for only the six frozen paper-position IDs.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST

@@ -1,0 +1,1 @@
+SELECT wallet_position_id, symbol, event_type, old_value_usdt, new_value_usdt, market_price_usdt, occurred_at FROM position_management_event WHERE symbol IN ('AEROUSDT','UNIUSDT') AND occurred_at BETWEEN '2026-10-10 17:44:00' AND '2026-10-10 18:16:00' ORDER BY occurred_at LIMIT 50

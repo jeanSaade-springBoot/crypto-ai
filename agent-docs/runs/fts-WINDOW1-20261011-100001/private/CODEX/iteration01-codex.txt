@@ -1,0 +1,48 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen study set is exactly `paper_position` IDs **104, 101, 96, 91, 82, 78**. No substitutions made.
+- **PROJECT EVIDENCE:** The CODEX-private DB evidence directory is currently empty, so no trade lifecycle, entry, exit, or P&L facts can yet be reconstructed.
+- **PROJECT EVIDENCE:** The supplied snapshot timestamps conflict by two seconds: `2026-10-11 07:00:03 UTC` converts to `2026-10-11 10:00:03 KSA`, while the charter labels the snapshot KSA time as `10:00:01`. The intended window clock remains `10:00:00 KSA`. This does not change the frozen IDs, but it must be preserved as timestamp-metadata uncertainty.
+- **EXTERNAL RESEARCH:** None.
+- **AGENT INFERENCE:** None yet; evidence is insufficient to classify any loss as valid strategy behavior, defect, stale data, execution issue, or protection issue.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `AGENTS.md`, shared knowledge, decisions, database rules, charter, and all CODEX investigation/architecture/trading documentation were read.
+- **PROJECT EVIDENCE:** Trade-investigation guidance requires actual schema inspection before selecting trade columns and reconstructing candle → signal → entry → protection → exit.
+- **PROJECT EVIDENCE:** Existing documentation establishes likely related domains (`paper_position`, `wallet_trade`, `trade_signal`, `signal_processing_work`, `managed_position`, `market_price_event`, `candle`) but does not prove their current schema or historical linkage for these six positions.
+
+## UNKNOWNS
+
+- Symbols, entry/exit times, exit reasons, quantities, prices, fees, and realized P&L for every frozen trade.
+- Whether each position maps directly to a wallet trade, entry signal, managed position, and accepted price-event evidence.
+- Contemporaneous candle/data-quality and higher-timeframe context.
+- Whether protection triggered at the first qualifying accepted observation.
+- Whether any trade is reproducible in Replay; no Replay action was run.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual `crypto_ai` schema for the authoritative position table and the bounded set of likely reconstruction entities before requesting trade-specific evidence.  
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    ordinal_position,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'trade_signal',
+      'signal_processing_work',
+      'managed_position',
+      'market_price_event',
+      'candle'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

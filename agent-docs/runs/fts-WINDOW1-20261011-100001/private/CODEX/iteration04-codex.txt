@@ -1,0 +1,72 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen scope remains exactly paper positions `104, 101, 96, 91, 82, 78`. No individual DB evidence is available in the CODEX-private evidence directory, so no loss is attributed to a specific route.
+
+- **PROJECT EVIDENCE:** Live executable flow is:
+  `closed quality-valid candle → indicator → persisted LIVE signal + processing work → post-lock freshness gate → execution intelligence/HTF validation → fresh canonical price → wallet BUY → paper_position`.
+
+- **PROJECT EVIDENCE:** A normal stop-loss close is written with status `STOPPED`; the frozen selection requires `status=CLOSED`. Therefore, assuming the supplied selection is correct, this study excludes ordinary stop-loss-position records and focuses on other terminal-close routes (for example confirmed SELL, profit-lock, TP, manual, or higher-timeframe exits).
+
+- **PROJECT EVIDENCE:** Direct price protection has priority over signal-based exits: take-profit handling, stop-loss, profit-lock protection, then confirmed multi-timeframe exits, then near-TP partial harvest. Accepted direct observations must be fresh, ordered, and durably marked `APPLIED`.
+
+- **PROJECT EVIDENCE:** Signal-route exits use a signal price only when its candle observation is not before the position opening time. Automatic processing also rejects a candle that is no longer latest/fresh; the 1m processing grace is 90 seconds.
+
+- **AGENT INFERENCE:** Each frozen loss requires wallet-ledger and exit-audit corroboration. In the signal-close path, `paper_position` is closed before `executeSignalLinkedExit(...)` is invoked; that wallet method has no success return and may return without an effect when no open managed position, no quantity, or an idempotent prior sell exists. This is not evidence that any frozen trade is inconsistent, but it makes wallet-trade, managed-position, and exit-audit records mandatory before treating a paper loss as a confirmed executed loss.
+
+- **PROJECT EVIDENCE:** The snapshot metadata discrepancy remains: `2026-10-11 07:00:03 UTC` converts to `10:00:03 KSA`, not the supplied `10:00:01 KSA`. It does not change the frozen IDs.
+
+## EVIDENCE
+
+- `CandleClosedAnalysisWorker` validates data quality, persists/records a live signal, then invokes paper-trade processing only for fresh live work.
+- `SignalProcessingCoordinator` acquires ownership and position locks, then checks persisted-candle freshness before business execution.
+- `PaperTradingService` resolves a fresh canonical execution price before initial BUY creation and records entry linkage in `paper_position.signal_id`.
+- `LivePositionProtectionService` performs wallet mechanical exit first and closes the paper position only when that wallet call succeeds.
+- `PaperTradingService.completeClose` records `exit_signal_id`, reason, exit price, P&L, and `closed_at`; it then attempts a signal-linked wallet exit and writes `production_exit_audit`.
+- `ProductionExitAuditService` preserves the actual close trigger separately from the contextual source signal.
+
+**EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- The actual symbols, entry/exit UTC timestamps, close reasons, price/P&L, and linked entry/exit signals for all six positions.
+- Whether each position has a corresponding `production_exit_audit`, wallet SELL, and closed managed-position record.
+- Whether exits were direct-price protection, signal processing, profit lock, normal HTF exit, or manual closure.
+- Per-trade candle quality, signal freshness, accepted price-event evidence, and execution timing.
+- Whether position and wallet P&L agree, including any partial near-TP realization.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Obtain the authoritative frozen-position rows and the actual route-table schemas needed to reconstruct paper, wallet, audit, signal/work, and price-event linkage without assuming deployed columns.  
+SQL:
+
+```sql
+SELECT p.*
+FROM crypto_ai.paper_position AS p
+WHERE p.id IN (104, 101, 96, 91, 82, 78)
+ORDER BY FIELD(p.id, 104, 101, 96, 91, 82, 78);
+
+SELECT
+    table_name,
+    column_name,
+    ordinal_position,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'production_exit_audit',
+      'wallet_trade',
+      'wallet_managed_position',
+      'position_analysis',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'candle'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST

@@ -1,0 +1,1 @@
+SELECT signal_id, symbol, interval_code, candle_open_time, origin, status, attempts, next_attempt_at, updated_at, completed_at, paper_position_id, failure_stage FROM signal_processing_work WHERE signal_id IN (156723,156850,156852,159285,159407,159408,165412,165415,166819,166821,167668,168277,171589,172587,172588,176710,176927,176934) ORDER BY symbol, signal_id

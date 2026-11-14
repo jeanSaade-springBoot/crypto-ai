@@ -1,0 +1,265 @@
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+symbol	varchar(30)	NO	MUL	NULL	
+interval_code	varchar(10)	NO		NULL	
+candle_open_time	timestamp(6)	YES		NULL	
+decision	varchar(30)	NO	MUL	NULL	
+original_decision	varchar(30)	NO		NULL	
+confluence_status	varchar(30)	NO		NULL	
+confluence_entry_allowed	tinyint(1)	NO		1	
+confluence_higher_interval	varchar(10)	YES		NULL	
+confluence_higher_decision	varchar(30)	YES		NULL	
+confluence_higher_trend_score	int	YES		NULL	
+confluence_explanation	varchar(1500)	YES		NULL	
+confluence_evaluated_at	timestamp(6)	YES		NULL	
+confluence_higher_signal_generated_at	timestamp(6)	YES		NULL	
+total_score	int	NO		NULL	
+confidence_score	int	NO		0	
+raw_confidence_score	int	YES		NULL	
+effective_confidence_score	int	YES		NULL	
+primary_blocking_stage	varchar(80)	YES		NULL	
+final_entry_allowed	tinyint(1)	NO		1	
+decision_path	json	YES		NULL	
+final_decision_explanation	varchar(2000)	YES		NULL	
+trend_score	int	NO		NULL	
+volume_score	int	NO		NULL	
+momentum_score	int	NO		NULL	
+sentiment_score	int	NO		NULL	
+fundamental_score	int	NO		NULL	
+latest_price	decimal(30,12)	NO		NULL	
+stop_loss	decimal(30,12)	YES		NULL	
+take_profit	decimal(30,12)	YES		NULL	
+explanation	text	YES		NULL	
+generated_at	timestamp(6)	NO	MUL	NULL	
+created_at	timestamp(6)	NO	MUL	CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+ema_cross_score	int	NO		0	
+price_ema200_score	int	NO		0	
+ema_alignment_score	int	NO		0	
+sma20_score	int	NO		0	
+trend_direction_score	int	NO		0	
+trend_structure_score	int	NO		0	
+trend_strength_score	int	NO		0	
+trend_price_location_score	int	NO		0	
+rsi_score	int	NO		0	
+macd_score	int	NO		0	
+bollinger_score	int	NO		0	
+relative_volume_score	int	NO		0	
+volume_sma20_score	int	NO		0	
+raw_score	int	NO		0	
+maximum_available_score	int	NO		0	
+sentiment_breakdown	json	YES		NULL	
+analysis_breakdown	json	YES		NULL	
+atr_at_signal	decimal(30,12)	YES		NULL	
+atr_percent	decimal(20,8)	YES		NULL	
+risk_reward_ratio	decimal(20,8)	YES		NULL	
+candle_range_atr_multiple	decimal(20,8)	YES		NULL	
+volatility_level	varchar(20)	YES		NULL	
+atr_overextended	tinyint(1)	NO		0	
+atr_entry_type	varchar(40)	YES		NULL	
+atr_recommended_position_percent	int	NO		100	
+atr_immediate_entry_allowed	tinyint(1)	NO		1	
+atr_retracement_entry_price	decimal(30,12)	YES		NULL	
+atr_explanation	varchar(1000)	YES		NULL	
+btc_relationship_type	varchar(30)	NO		UNAVAILABLE	
+btc_context_status	varchar(30)	NO		UNAVAILABLE	
+btc_context_entry_allowed	tinyint(1)	NO		1	
+btc_context_interval	varchar(10)	YES		NULL	
+btc_context_decision	varchar(30)	YES		NULL	
+btc_context_trend_score	int	YES		NULL	
+btc_correlation	decimal(12,8)	YES		NULL	
+btc_beta	decimal(12,8)	YES		NULL	
+btc_relationship_sample_size	int	NO		0	
+btc_influence_factor	decimal(8,6)	YES		NULL	
+btc_relationship_stable	tinyint(1)	NO		0	
+btc_context_explanation	varchar(1500)	YES		NULL	
+btc_context_evaluated_at	datetime(6)	YES		NULL	
+btc_signal_generated_at	datetime(6)	YES		NULL	
+btc_context_candle_close_time	timestamp(6)	YES		NULL	
+btc_context_age_seconds	bigint	YES		NULL	
+btc_context_freshness_threshold_seconds	bigint	YES		NULL	
+liquidity_status	varchar(30)	NO		UNAVAILABLE	
+liquidity_entry_allowed	tinyint(1)	NO		1	
+order_book_imbalance	decimal(12,8)	YES		NULL	
+order_book_bid_depth	decimal(30,8)	YES		NULL	
+order_book_ask_depth	decimal(30,8)	YES		NULL	
+order_book_spread_percent	decimal(20,10)	YES		NULL	
+nearest_bid_wall_price	decimal(30,12)	YES		NULL	
+nearest_bid_wall_size	decimal(30,8)	YES		NULL	
+nearest_ask_wall_price	decimal(30,12)	YES		NULL	
+nearest_ask_wall_size	decimal(30,8)	YES		NULL	
+order_book_target_blocked	tinyint(1)	NO		0	
+order_book_stop_exposed	tinyint(1)	NO		0	
+order_book_observations	int	NO		0	
+order_book_window_seconds	bigint	NO		0	
+order_book_wall_persistence_seconds	bigint	NO		0	
+order_book_influence_factor	decimal(8,6)	YES		NULL	
+order_book_veto_allowed	tinyint(1)	NO		0	
+liquidity_explanation	varchar(2000)	YES		NULL	
+liquidity_evaluated_at	timestamp(6)	YES		NULL	
+market_regime	varchar(40)	NO		UNKNOWN	
+detected_regime	varchar(40)	YES		NULL	
+candidate_regime	varchar(40)	YES		NULL	
+confirmed_regime	varchar(40)	YES		NULL	
+regime_candidate_count	int	NO		0	
+entry_authority	varchar(40)	YES		NULL	
+entry_authority_max_position_percent	int	YES		NULL	
+entry_authority_explanation	varchar(1500)	YES		NULL	
+market_regime_confidence	int	NO		0	
+selected_strategy	varchar(40)	NO		DEFENSIVE	
+strategy_version	varchar(30)	NO		1.0	
+strategy_entry_allowed	tinyint(1)	NO		1	
+strategy_explanation	varchar(1500)	YES		NULL	
+strategy_breakdown	json	YES		NULL	
+market_context_snapshot	json	YES		NULL	
+strategy_trend_maximum	int	NO		25	
+strategy_volume_maximum	int	NO		20	
+strategy_momentum_maximum	int	NO		15	
+strategy_sentiment_maximum	int	NO		15	
+strategy_fundamental_maximum	int	NO		10	
+derivatives_status	varchar(40)	NO		UNAVAILABLE	
+derivatives_entry_allowed	tinyint(1)	NO		1	
+funding_rate	decimal(20,12)	YES		NULL	
+funding_percentile	decimal(8,2)	YES		NULL	
+open_interest	decimal(30,8)	YES		NULL	
+open_interest_value	decimal(30,8)	YES		NULL	
+open_interest_change_percent	decimal(20,8)	YES		NULL	
+derivatives_price_change_percent	decimal(20,8)	YES		NULL	
+funding_sample_size	int	NO		0	
+derivatives_period	varchar(10)	YES		NULL	
+derivatives_confidence_adjustment	int	NO		0	
+derivatives_explanation	varchar(2000)	YES		NULL	
+derivatives_evaluated_at	timestamp(6)	YES		NULL	
+sentiment_available	tinyint(1)	NO		0	
+fundamental_available	tinyint(1)	NO		0	
+excluded_categories	json	YES		NULL	
+signal_mode	varchar(24)	YES		NULL	
+data_quality_valid	tinyint(1)	YES		NULL	
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+signal_id	bigint	YES	MUL	NULL	
+position_analysis_id	bigint	YES	MUL	NULL	
+execution_key	varchar(100)	YES	UNI	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+side	varchar(10)	NO		NULL	
+quantity	decimal(30,12)	NO		NULL	
+price_usdt	decimal(30,12)	NO		NULL	
+decision_price_usdt	decimal(30,12)	YES		NULL	
+execution_price_observed_at	timestamp(6)	YES		NULL	
+gross_amount_usdt	decimal(30,12)	NO		NULL	
+fee_usdt	decimal(30,12)	NO		0.000000000000	
+net_amount_usdt	decimal(30,12)	NO		NULL	
+cost_basis_usdt	decimal(30,12)	YES		NULL	
+realized_pnl_usdt	decimal(30,12)	YES		NULL	
+realized_pnl_percent	decimal(20,8)	YES		NULL	
+execution_type	varchar(20)	NO		MANUAL	
+execution_reason	varchar(40)	YES	MUL	NULL	
+status	varchar(20)	NO		EXECUTED	
+executed_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+notes	varchar(500)	YES		NULL	
+execution_message	mediumtext	YES		NULL	
+created_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+entry_signal_id	bigint	YES	MUL	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+quantity	decimal(30,12)	NO		0.000000000000	
+average_entry_price_usdt	decimal(30,12)	NO		0.000000000000	
+total_cost_usdt	decimal(30,12)	NO		0.000000000000	
+entry_confidence	int	YES		NULL	
+entry_total_score	int	YES		NULL	
+entry_trend_score	int	YES		NULL	
+entry_structure_score	int	YES		NULL	
+entry_momentum_score	int	YES		NULL	
+entry_volume_score	int	YES		NULL	
+entry_sentiment_score	int	YES		NULL	
+entry_fundamental_score	int	YES		NULL	
+entry_decision	varchar(30)	YES		NULL	
+entry_decision_path_json	json	YES		NULL	
+entry_analysis_snapshot_json	json	YES		NULL	
+stop_loss_usdt	decimal(30,12)	YES		NULL	
+take_profit_usdt	decimal(30,12)	YES		NULL	
+status	varchar(20)	NO		OPEN	
+opened_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+updated_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+highest_price_usdt	decimal(30,12)	YES		NULL	
+profit_lock_active	tinyint(1)	NO		0	
+profit_lock_price_usdt	decimal(30,12)	YES		NULL	
+profit_lock_progress_percent	decimal(12,6)	YES		NULL	
+profit_lock_activated_at	timestamp(6)	YES		NULL	
+profit_lock_state	varchar(40)	NO		INACTIVE	
+profit_lock_rebase_started_at	timestamp(6)	YES		NULL	
+entry_stage	varchar(30)	NO		NONE	
+allocated_position_percent	int	NO		0	
+entry_quality_score	int	NO		0	
+last_scale_in_at	timestamp(6)	YES		NULL	
+near_tp_state	varchar(40)	NO		INACTIVE	
+near_tp_best_price	decimal(30,12)	YES		NULL	
+near_tp_bearish_streak	int	NO		0	
+near_tp_last_1m_signal_id	bigint	YES		NULL	
+near_tp_harvest_used	tinyint(1)	NO		0	
+near_tp_harvested_quantity	decimal(30,12)	YES		NULL	
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+paper_position_id	bigint	YES	UNI	NULL	
+wallet_position_id	bigint	YES	MUL	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+close_trigger	varchar(40)	NO		NULL	
+source_signal_id	bigint	YES	MUL	NULL	
+source_signal_decision	varchar(30)	YES		NULL	
+source_signal_original_decision	varchar(30)	YES		NULL	
+position_analysis_id	bigint	YES		NULL	
+position_recommendation	varchar(20)	YES		NULL	
+entry_price_usdt	decimal(30,12)	YES		NULL	
+exit_price_usdt	decimal(30,12)	NO		NULL	
+stop_loss_usdt	decimal(30,12)	YES		NULL	
+take_profit_usdt	decimal(30,12)	YES		NULL	
+close_explanation	varchar(2000)	YES		NULL	
+audited_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+wallet_position_id	bigint	NO	MUL	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+event_type	varchar(40)	NO		NULL	
+old_value_usdt	decimal(30,12)	YES		NULL	
+new_value_usdt	decimal(30,12)	YES		NULL	
+market_price_usdt	decimal(30,12)	YES		NULL	
+reason	varchar(2000)	YES		NULL	
+occurred_at	timestamp(6)	NO		NULL	
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+symbol	varchar(30)	NO	MUL	NULL	
+direction	varchar(10)	NO		NULL	
+status	varchar(30)	NO		NULL	
+started_at	timestamp(6)	NO		NULL	
+last_evidence_at	timestamp(6)	NO		NULL	
+anchor_entry_price	decimal(30,12)	YES		NULL	
+best_entry_price	decimal(30,12)	YES		NULL	
+latest_signal_id	bigint	YES	MUL	NULL	
+evidence_count	int	NO		0	
+buy_count	int	NO		0	
+watch_count	int	NO		0	
+neutral_count	int	NO		0	
+bearish_count	int	NO		0	
+evidence_score	int	NO		0	
+opportunity_health	int	NO		50	
+health_momentum	int	NO		0	
+evidence_momentum	int	NO		0	
+last_bearish_at	timestamp(6)	YES		NULL	
+average_signal_score	int	NO		0	
+average_confidence	int	NO		0	
+peak_score	int	NO		0	
+peak_confidence	int	NO		0	
+peak_decision	varchar(30)	YES		NULL	
+peak_regime	varchar(40)	YES		NULL	
+peak_btc_status	varchar(30)	YES		NULL	
+peak_liquidity_status	varchar(30)	YES		NULL	
+peak_observed_at	timestamp(6)	YES		NULL	
+five_minute_decision	varchar(30)	YES		NULL	
+one_hour_decision	varchar(30)	YES		NULL	
+execution_source	varchar(40)	YES		NULL	
+recommended_position_percent	int	NO		0	
+decision_code	varchar(80)	YES		NULL	
+decision_explanation	varchar(2000)	YES		NULL	
+executed_at	timestamp(6)	YES		NULL	
+created_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+updated_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)

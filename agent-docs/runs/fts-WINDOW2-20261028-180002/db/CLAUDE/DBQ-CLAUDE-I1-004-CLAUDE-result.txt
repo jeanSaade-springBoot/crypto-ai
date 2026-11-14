@@ -1,0 +1,3 @@
+status	n	neg	first_closed_utc	last_closed_utc	closed_after_trade182
+CLOSED	118	26	2026-10-03 20:07:37.472891	2026-10-15 03:00:13.694045	7
+STOPPED	75	75	2026-10-06 01:32:59.108909	2026-10-15 03:15:19.448904	5

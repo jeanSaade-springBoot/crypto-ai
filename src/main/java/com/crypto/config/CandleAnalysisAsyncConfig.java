@@ -17,14 +17,13 @@ import java.util.concurrent.ThreadPoolExecutor;
  * When that work took longer than the incoming market-data cadence, the websocket consumer
  * could not keep up and the recovery scheduler became the de-facto analysis clock.
  *
- * CandleAnalysisDispatcher supplies FIFO ordering per symbol+interval while this pool supplies
+ * CandleAnalysisDispatcher supplies serial bounded admission per symbol+interval while this pool supplies
  * parallelism across independent streams. The pool sizes are configuration-driven because the
  * correct concurrency depends on VPS CPU/DB capacity; changing them must never change trading
  * decisions, only how quickly independent market streams can be analyzed.
  *
- * CallerRunsPolicy is intentional: if both the pool and queue are saturated, temporary
- * back-pressure is safer than silently dropping a closed-candle event. FIX-043's chronological
- * recovery remains the second safety net for any incomplete analysis row.
+ * FIX-153: saturation rejects admission; the dispatcher releases its reservation and the
+ * local detector can retry. Analysis must never execute on a Binance ingestion thread.
  *
  * IMPORTANT: this class must never contain BUY/SELL scoring, execution thresholds,
  * SETUP_CONFIRMATION_WAKEUP, ACCUMULATED_EVIDENCE or exit logic.
@@ -45,7 +44,7 @@ public class CandleAnalysisAsyncConfig {
         executor.setMaxPoolSize(safeMaxSize);
         executor.setQueueCapacity(Math.max(1, queueCapacity));
         executor.setThreadNamePrefix("candle-analysis-");
-        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
         executor.initialize();

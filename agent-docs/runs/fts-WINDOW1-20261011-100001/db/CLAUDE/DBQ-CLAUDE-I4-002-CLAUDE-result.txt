@@ -1,0 +1,10 @@
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+symbol	varchar(30)	NO	MUL	NULL	
+interval_code	varchar(10)	NO		NULL	
+candle_open_time	timestamp(6)	NO		NULL	
+outcome	varchar(48)	NO		NULL	
+reason_code	varchar(96)	NO		NULL	
+signal_id	bigint	YES	MUL	NULL	
+origin	varchar(32)	NO		NULL	
+created_at	timestamp(6)	NO	MUL	NULL

@@ -1,0 +1,9 @@
+exit_code=0
+duration_ms=419
+row_count=1
+--- stdout ---
+position_id	signal_id	symbol	opened_stored	opened_ksa_assuming_utc	closed_stored	closed_ksa_assuming_utc	session_time_zone	global_time_zone	mysql_now_session	mysql_utc_now
+35	89469	SHIBUSDT	2026-10-09 23:45:06.682175	2026-10-10 02:45:06.682175	2026-10-09 23:58:43.830735	2026-10-10 02:58:43.830735	SYSTEM	SYSTEM	2026-10-10 01:22:22	2026-10-09 22:22:22
+
+--- stderr ---
+

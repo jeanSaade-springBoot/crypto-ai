@@ -1,0 +1,179 @@
+# Round 2 cross-examination: RPR-0.4-DRAFT (`agent-docs/FINAL_CHANGE_SPECIFICATION.md`)
+
+**Method.** Read-only. No files were modified.
+- Loaded AGENTS.md, AGREED_KNOWLEDGE.md and DECISIONS.md (both still have no entries), `claude-docs/ARCHITECTURE.md`, and CODEX_LATEST.md. CODEX_LATEST covers an unrelated SHIB trade.
+- Re-checked every material Round-1 claim from both agents against the working tree.
+- No database, logs, Production access, build or test run.
+- "Production" means the working-tree code; what is deployed is unknown.
+
+Labels: **[PE]** project evidence · **[ER]** external research · **[AI]** agent inference.
+
+## FINDINGS
+
+### A. Codex's claims hold up
+**[PE]** Every Codex evidence citation checks out:
+- the fixed 10,000 USDT capital;
+- Replay reading `wallet_settings`;
+- live minimum-notional calls;
+- `EXACT_PRICE_REPLAY` granted when any price event exists;
+- one symbol per run;
+- historical derivatives always UNAVAILABLE when enabled;
+- `find()` ordering by `observed_at, id` into a `PriceEvent` with no ID;
+- the FIX-11K/11Q observers running inside the main Replay loop and exposed by the controller;
+- the registry granularity falling short of AGENTS.md:337.
+
+One citation slip: the exact-price label is decided at `ShadowProductionReplayService.java:95/388`, not 89/387.
+
+### B. Codex claims I challenge
+**B1. Dropping the event ID does not lose tie order, and it is not the ordering defect.**
+- **[PE]** Replay re-sorts the SQL-ordered list by `observedAt` using `Stream.sorted`. **[AI]** That sort is stable for ordered streams, so the SQL `id` order survives on ties.
+- **[PE]** Within one symbol, FIX-153 events cannot tie:
+  - canonical rows take `ordering_slot=1` under the unique key `uk_fix153_price_receipt(symbol, observed_at, ordering_slot)`;
+  - protection marks any event older than an already-APPLIED one as `OUT_OF_ORDER`.
+  - So APPLIED rows per symbol are unique and rise in `observed_at`, which matches Production's commit order.
+- **[AI]** The ID only matters for LEGACY rows with a NULL slot, since MySQL unique keys allow repeated NULLs, and for merging symbols under RPR-04. The real ordering defect is D1 below.
+
+**B2. "Unrecorded prices could make the certificate falsely positive" has the wrong mechanism for FIX-153-era data.**
+- **[PE]** In OFF mode, the recorded kline path is the only caller of protection.
+  - `finish(APPLIED)` commits in the same transaction as the protection effects, and `executeMechanicalExit` joins that transaction.
+  - Invalid, rejected and unapplied observations are all excluded.
+  - So a price Production never marked APPLIED is a price Production never acted on, and leaving it out cannot make Replay's logic diverge.
+- **[AI]** A gap in APPLIED rows, such as during a WebSocket outage, is a period when Production was also unprotected.
+  - Parity means reproducing that gap. Refusing on gaps produces false refusals, and filling them would break parity.
+  - Coverage still needs defining, but as **applied-set completeness + evidence era + Production order**, not market coverage.
+  - The real false-positive risks are D1, D2 and D5, plus my F4 look-ahead inputs.
+
+**B3. Refusing parity on missing derivatives is correct, but it makes the default mode unreachable.** **[PE]**
+- Derivatives with veto are on by default, and `evaluateHistorical` always returns UNAVAILABLE.
+- The two UNAVAILABLE cases also score differently: −10 when the live call fails, 0 for the historical stub.
+
+### C. Codex points I adopt (I missed these in Round 1)
+- **Pre-write refusal contradiction [PE + AI].** §5 says to refuse "before generated signals or shadow wallet state are written". But §5.5 bounds coverage by the first open and terminal close, which are only known after execution. The worker also writes `analysis_test_signal` and `trade_signal_test` during signal generation. The revision must choose one of:
+  - qualify the whole consumed window up front, or
+  - run an in-memory dry run and persist only after it qualifies.
+- **Removal scope [PE].** §6.6 calls the removals "candidates", but RPR-09 executes them. Each RM item needs a fixed decision for every API, UI, table and archive path.
+- **Certificate oracle [PE].** This matches my M4.
+
+### D. New evidence from this round (both agents missed it)
+**D1. Replay reverses Production's order at every candle close.** **[PE]**; how often it happens is **[AI]**.
+- In Production, one kline message runs input → protection → observer → close-publish. A candle's signal cannot exist until the closing price from that message has gone through protection.
+- Replay stamps each signal at `openTime + interval` and only consumes price events with `observedAt ≤ generatedAt`. `observedAt` is Binance's event time `E`.
+- So whenever the closing message's `E` is later than the boundary, Replay processes the boundary signal first, then protects at the close price:
+  - it runs SELL validation or a progressive add before protection;
+  - protection then sees the new 1m signal already set as `latest1m`, while Production still sees the previous one;
+  - Replay fills use the last price at or before the boundary, while Production fills at processing time.
+- This contradicts Replay's own documented intent ("newly closed 1m signal is intentionally not visible yet") and the spec's §6.5 tie order. Ordering needs to follow which message closed the candle, not a timestamp comparison.
+
+**D2. Production's signal path has two exit routes that exact-price Replay lacks.** **[PE]**
+- **Label-free profit-lock exit.** When labels favour holding, the live path logs a "protected hold" and the lock stays ACTIVE. At the next candle close, `triggered = active && price ≤ lock`, and `PaperTradingService` closes with `PROFIT_LOCK` without checking any labels. Production overrides the live hold; Replay keeps holding. This is a routine scenario, not an edge case.
+- **Advisory stop-loss.** `PositionManagementService.analyze` runs first and can apply a wallet `POSITION_STOP_LOSS` at the signal price. Replay never calls it.
+
+**D3. Multi-symbol RPR-04 needs changes to the shared `ExecutionReplayScope` that are not registered.** **[PE + AI]**
+- Its per-thread state holds a single `opportunity` and a single `latestPrice`.
+- The spec gives no rule for ordering competing claims on global limits across symbols.
+
+**D4. Replay analyses `closed=0` candle rows.** **[PE]**
+- `candles()` filters neither on `closed` nor on provenance.
+- The snapshot takes the latest closed candle at or before the open time, without checking it is the right candle.
+- The result is a signal built from the previous candle but stamped at the later boundary. Production never dispatches such a row.
+
+**D5. Price-evidence meaning depends on the era, and the spec treats all eras alike.** **[PE]**
+- On the shared-market (FIX-150) path, protection runs and its outcome goes to `shared_market_event_delivery`. The code I read does not update `market_price_event` there.
+- Collector-era rows can be `HISTORICAL_ONLY`.
+- In OFF mode, `assertReplayEvidence` returns before its collector-era check.
+- Qualifying those windows would mean reading retired shared-market tables, which AGENTS.md:185 restricts in OFF mode.
+
+**D6. Shared signal generation already branches on Replay flags, against §6.2.** **[PE]**
+- `buildSignal` branches on `historicalReplay`/`regressionReplay` for market context, derivatives and order book.
+- Complying means changing Production `AnalysisService`, which is not registered.
+
+### E. Corrections to my own Round 1
+| # | Round-1 claim | Correction |
+|---|---|---|
+| E1 | F3(f): the budget is fixed at "the first wallet change of the day". | It is fixed at the first wallet BUY attempt of the UTC day; exits never create that row. The divergence from Replay still holds. [PE] |
+| E2 | The observer's unsynchronised `HashMap` is a risk; N8 asked for a two-concurrent-runs test. | `start()` is `synchronized` and refuses a new run while any run is PENDING or RUNNING. Downgraded to minor. The test should check that guard, including the gap between cancel and worker exit. [PE] |
+| E3 | M5: coverage "needs a candle-based rule". | Only for labelling SIMULATION runs. For parity, use the B2 criterion. [PE + AI] |
+| E4 | M6: the default mode "can never succeed". | True for periods when Production had derivatives enabled. That is the repository default; the deployed value is unknown. [PE] |
+| E5 | F3(a) omitted the advisory stop-loss. | Added as D2. [PE] |
+
+## EVIDENCE (file paths and lines)
+Paths are under `src/main/java/com/crypto/` unless noted.
+
+| Claim | Evidence |
+|---|---|
+| D1 boundary reversal | `service/BinanceKlineService.java:94, 101-111`; `regression/service/RegressionTestWorker.java:557-560, 584, 616`; `service/AnalysisService.java:150, 183-190`; `regression/service/ShadowProductionReplayService.java:122-128, 163-170, 310-311, 392-398`; `position/service/LivePositionProtectionService.java:95-97`; `execution/service/ExecutionPriceAuthorityService.java:25, 37-48`; `service/PaperTradingService.java:342-343` |
+| D2 signal-path exits | `service/PaperTradingService.java:115-121, 170-203, 217`; `position/service/DynamicProfitLockService.java:46-51, 118-128, 152-162`; `position/service/ProfitLockPolicy.java:51`; `position/service/LivePositionProtectionService.java:207-231`; `position/service/PositionManagementService.java:73-76, 129-144, 168-172`; `regression/service/ShadowProductionReplayService.java:183, 232-255, 342-366` |
+| B1 tie order | `market/service/MarketPriceEventService.java:62, 66-72, 118-129, 173`; `db/migration/V106__fix_153_local_candle_evidence.sql:5-7`; `position/service/LivePositionProtectionService.java:54-72`; `regression/service/ShadowProductionReplayService.java:89-95` |
+| B2 / D5 evidence meaning | `position/service/LivePositionProtectionService.java:66-71`; `wallet/service/WalletAutoExecutionService.java:474-475`; `market/service/MarketPriceEventService.java:40-58, 82-98, 103-116, 151-156`; `shared/SharedMarketConsumer.java:512-516, 726-729`; in OFF mode the only protection caller is `service/BinanceKlineService.java:108` |
+| D3 multi-symbol | `execution/service/ExecutionReplayScope.java:31, 73-77, 179-189` |
+| D4 candle identity | `regression/service/RegressionTestWorker.java:129-131, 475-480, 509-512, 551-556`; `indicator/service/TechnicalIndicatorService.java:118-127, 186-200`; `indicator/event/CandleClosedAnalysisWorker.java:119-137` |
+| D6 Replay branches | `service/AnalysisService.java:220-221, 278-279, 331-345`; `service/SentimentService.java:195-198`; `service/OrderBookLiquidityService.java:154-160` vs `186-219` |
+| B3 derivatives | `service/DerivativesPositioningService.java:38-50` vs `98-104`; `src/main/resources/application.yml:396, 405` |
+| C pre-write | `regression/service/RegressionTestWorker.java:636-686`; spec `:93-94, 107-110` |
+| E corrections | `wallet/service/WalletAutoExecutionService.java:91, 102, 689-715`; `regression/service/RegressionTestService.java:178-201`; `regression/service/OneCandleContinuationGraceReplayObserver.java:48-51, 195` |
+| Re-verified | `execution/service/StopLossEvidenceService.java:32, 41`; `regression/dto/RegressionTestRunRequest.java:5-14`; `regression/controller/RegressionTestController.java:76-77, 120-123`; `service/TradeExecutionValidationService.java:66, 96-97, 400-405`; `ReplayParityValidator` (no Java callers); `indicator/event/CandleAnalysisDispatcher.java:74-81`; `market/service/OrderBookSnapshotService.java:62-65`; `src/main/resources/db/migration/V109__fix_154_forward_replay_and_audit_columns.sql:1-3` |
+| Spec / governance | Spec `:26-33, 75-77, 93-119, 165-168, 172-199, 203-236, 270-272, 283-285, 303-304`; `AGENTS.md:185-189, 204, 337-353`; template `:40-144` |
+
+**External research.** [ER] Binance Developers, "WebSocket Streams" (Spot), https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams.
+- Date: none shown; searched 2026-10-10.
+- Findings: kline updates arrive every 2000 ms for intervals other than 1s, and each payload carries `E`, `T` and `x`.
+- Limitations: the page does not say how far a closing message's `E` trails `T`, and its example shows an open candle.
+- Relevance: how often D1 happens needs project data; the docs can't settle it.
+- This says nothing about trading performance.
+
+## OBJECTIONS
+These are the material objections to RPR-0.4 after cross-examination. None is resolved.
+
+1. **Contract granularity** (Codex and my M1) [PE]. There is no file/class/method registry, no migration numbers, no configuration keys and no per-artifact IDs.
+2. **Production impact is misstated** (M2, D6) [PE]. These all change Production classes, so "Trading behaviour: NONE" and "no rollback" are false:
+   - RPR-03 and RPR-03a;
+   - §5.1, which touches `TradeExecutionValidationService`;
+   - §6.2, which touches the `AnalysisService` branches;
+   - RPR-06 capture;
+   - RPR-RM-04.
+3. **The real divergences are not registered** (M3, D1, D2, E1) [PE]. Without the following, RPR-T-03 and RPR-T-04 cannot pass:
+   - closing-message lineage ordering;
+   - the label-free profit-lock exit;
+   - the advisory stop-loss;
+   - profit-lock suppression of SELLs and adds;
+   - analysis and fill clocks;
+   - candles Production skipped or ran HISTORICAL_ONLY;
+   - same-boundary timeframe visibility;
+   - daily-budget timing.
+4. **Evidence qualification is defined the wrong way** (B2, D4, D5, F4) [PE + AI]. Parity needs:
+   - applied-set completeness;
+   - an era rule: FIX-153 OFF mode only, unless a reviewed archival exception is agreed;
+   - candle identity and provenance as of each decision;
+   - sentiment, configuration and version as of each decision.
+
+   Gaps belong in SIMULATION diagnostics. RPR-T-02 must not refuse because of deliberately excluded rows (AGENTS.md:187-189).
+5. **Pre-write refusal contradiction** (Codex) [PE]. The spec needs to pick an approach (see C).
+6. **No defined oracle** (Codex, M4) [AI].
+   - Decision-level parity should compare against Production's stored per-candle outcomes.
+   - Lifecycle parity should be defined separately.
+   - The spec must say how divergence caused by scheduling is classified.
+7. **The default mode is unreachable** (E4, B3) [PE]. Either register forward capture as a Production change, or don't make parity the default yet.
+8. **Multi-symbol design gap** (D3) [PE + AI].
+9. **Base revision and a governance contradiction** (M7) [PE]. Three sources disagree, and per AGENTS.md this must be reported and investigated:
+   - V109 says V107 (FIX-154) "was already applied on the trader database";
+   - AGENTS.md:204 calls FIX-154 not yet implemented;
+   - `TradeExecutionValidationService` already contains FIX-154 code.
+10. **Removal scope** (Codex) [PE].
+
+Non-material: my Round-1 N1–N7 and N9 still stand; N8 is reframed per E2.
+
+## UNKNOWNS
+1. **[AI]** How often a closing message's `E` lands after the boundary, which sets how often D1 occurs. A bounded read-only query would answer it: the millisecond-of-minute distribution of APPLIED 1m events priced at that candle's close.
+2. **[PE]** The deployed derivatives, sentiment and `trading.fix122.enabled` values, and whether FIX-153/154 are deployed.
+3. **[PE]** Whether LEGACY rows had atomic applied semantics, and whether any purge outside `src/main` deletes price events. There is none inside `src/main`.
+4. **[PE]** Whether `market_price_event` is reconciled elsewhere on the FIX-150 path; I read only the cited excerpts.
+5. **[PE]** Nothing was compiled or run.
+
+## VERDICT
+Codex and I both reject RPR-0.4. This round adds two Replay/Production divergences proven in code (D1, D2) and corrects how both of us framed price coverage (B2, E3). This review does not authorise any change.
+
+VERDICT: REJECTED
+
+Sources:
+- [Binance Spot — WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)
+- [Binance Spot — WebSocket Streams (legacy docs)](https://developers.binance.com/legacy-docs/binance-spot-api-docs/web-socket-streams)

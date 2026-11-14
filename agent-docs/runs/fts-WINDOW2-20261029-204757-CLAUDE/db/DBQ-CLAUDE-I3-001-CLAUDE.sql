@@ -1,0 +1,1 @@
+SELECT @@global.time_zone AS global_tz, @@session.time_zone AS session_tz, @@system_time_zone AS system_tz, NOW(6) AS now_session, UTC_TIMESTAMP(6) AS now_utc, s.generated_at AS gen_display, UNIX_TIMESTAMP(s.generated_at) AS gen_epoch, s.btc_context_evaluated_at AS btc_eval_datetime_col, s.btc_signal_generated_at AS btc_sig_datetime_col FROM trade_signal s WHERE s.id = 159408

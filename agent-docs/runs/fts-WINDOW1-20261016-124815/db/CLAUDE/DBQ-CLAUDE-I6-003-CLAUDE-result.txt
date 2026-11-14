@@ -1,0 +1,4 @@
+bear_bucket	trades	losses	pnl_usdt	study_ids
+a_6+	29	16	-1.170770	137,162,182
+b_3-5	34	19	-0.666241	143
+c_0-2	127	65	-2.319355	158,172

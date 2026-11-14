@@ -1,0 +1,3 @@
+SELECT table_name FROM information_schema.tables WHERE table_schema = 'crypto_ai' AND (table_name LIKE 'wallet_snapshot%' OR table_name LIKE '%daily_statistics%') LIMIT 10;
+SELECT id, captured_at, portfolio_value_usdt FROM crypto_ai.wallet_snapshot WHERE captured_at BETWEEN '2026-10-11 21:00:08' AND '2026-10-11 21:00:13' OR captured_at BETWEEN '2026-10-11 22:43:35' AND '2026-10-11 22:43:37' OR captured_at BETWEEN '2026-10-12 03:30:04' AND '2026-10-12 03:30:07' OR captured_at BETWEEN '2026-10-12 10:05:18' AND '2026-10-12 10:05:21' ORDER BY captured_at LIMIT 40;
+SELECT COUNT(*) AS wallet_assets FROM crypto_ai.wallet_asset;

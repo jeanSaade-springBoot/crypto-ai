@@ -1,0 +1,4 @@
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	candle	NULL	ref	uk_candle_symbol_interval_open_time,idx_candle_symbol_interval_time,idx_candle_closed,idx_candle_dashboard_closed_time	uk_candle_symbol_interval_open_time	164	const,const	11348	50.00	Using where; Using filesort
+assets	nonzero_assets
+20	1

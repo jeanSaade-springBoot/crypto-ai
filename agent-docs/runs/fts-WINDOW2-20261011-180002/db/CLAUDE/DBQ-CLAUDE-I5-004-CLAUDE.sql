@@ -1,0 +1,1 @@
+SELECT id, candle_open_time, generated_at, decision, total_score, confidence_score, latest_price, data_quality_valid FROM trade_signal WHERE symbol='XLMUSDT' AND interval_code='1m' AND generated_at BETWEEN '2026-10-10 17:35:00' AND '2026-10-10 18:03:03' ORDER BY generated_at LIMIT 40;

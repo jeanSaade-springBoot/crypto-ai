@@ -1,0 +1,166 @@
+# Iteration 2 of 8: database forensics (Claude, self-review only)
+
+All six frozen trades now have a reconstructed timeline from my 11 iteration-1 query results plus code tracing. Every exit followed the coded rules. The losses come mainly from three entry-side mechanisms, which apply across trades:
+
+- **Risk/reward:** a risk/reward that is structurally below 1 is allowed through with no gate.
+- **Fees:** take-profit targets are about the size of the round-trip fee.
+- **Masked bearish signals:** bearish 5m signals are rewritten as NEUTRAL, so the 5m BUY veto can't see them.
+
+Nothing was changed: no code, config, database writes, git or deploy. I didn't read the Codex folders, LIVE_TEAM_STATUS or LIVE_EVENTS.
+
+Timestamps are written as raw UTC → KSA (UTC+3). The execution time I use is `wallet_trade.executed_at`. `paper_position.opened_at/closed_at` lag it by about 2 s (for example, trade 182's sell executed at 10:05:18.50 but the position shows closed at 10:05:20.49). I'm correcting the iteration-1 F1 times to the wallet times.
+
+## FINDINGS
+
+**F9. Risk/reward is below 1 by construction whenever ATR is under about 0.167% of price, and nothing blocks it** (PROJECT EVIDENCE)
+- How the levels are computed (`AtrRiskService.java:34-45`):
+  - stop distance = max(2×ATR, 0.5% of price);
+  - target distance = 3×ATR, with no floor.
+  - Settings come from `application.yml:137-143`; the stored values match these defaults exactly.
+- What was recorded (DBQ-CLAUDE-I1-002, `risk_reward_ratio`):
+
+  | Trade | R:R |
+  |---|---|
+  | 137 | 0.644 |
+  | 158 | 0.327 |
+  | 162 | 0.438 |
+  | 172 | 0.744 |
+  | 182 | 0.482 |
+  | 143 | 1.50 (the only one where 2×ATR beat the 0.5% floor) |
+
+- Worked example, trade 158: target = 1.4109 + 3×0.00076962 = 1.413209 ✓. Stop = 1.4109 × 0.995 = 1.403846 ✓.
+- `riskRewardRatio` is only read by the dashboard and inspector (`DashboardApiController:1203,1312,1373`, `TradeInspectorService:1099`). No decision code reads it.
+- The explanation text "Stop uses 2.0 ATR" is wrong whenever the 0.5% floor applies.
+
+**F10. Target distances are about the same as the round-trip fee** (AGENT INFERENCE + EXTERNAL RESEARCH, not re-verified in this iteration)
+- Target distance as % of entry: 137 0.32%, 158 0.16%, 162 0.22%, 172 0.37%, 182 0.24%.
+- Binance's standard spot taker fee is 0.1% per side, so about 0.2% round trip.
+- All wallet rows record `fee_usdt = 0` (DBQ-CLAUDE-I1-003).
+- So even a take-profit hit would have netted roughly zero after fees on 158, 162 and 182.
+- Estimated losses after fees (0.1% on each side's notional): the six total about −0.53 USDT, against −0.273 recorded.
+
+**F11. The 5m BUY veto can't see 5m bearishness that confluence has rewritten as NEUTRAL** (PROJECT EVIDENCE for the data and code; the per-signal branch needs DBQ-CLAUDE-I2-001)
+- `HigherTimeframeBuyAssessmentService.java:20-24` vetoes on `getDecision()`, which is the final decision after confluence.
+- `MultiTimeframeConfluenceService.java:136-138` rewrites a bearish signal to NEUTRAL whenever a higher-timeframe context counts as "bullish".
+- A context counts as bullish when its decision is BUY/STRONG_BUY **or** its trend score is ≥15 (`:337-338`). So a 1h WATCH with trend 16 counts.
+- **Trade 182 (ACEUSDT), DBQ-CLAUDE-I1-007:**
+  - 11 consecutive 5m bars, from the 09:00 candle to the 09:50 candle (12:00–12:50 KSA), had `original_decision` SELL or STRONG_SELL. All were published as NEUTRAL (175399 … 176655).
+  - The 1h context during that time was 175258, WATCH with trend 16/25.
+  - Entry was at 09:57:04 → 12:57:04 KSA, with 5m showing "NEUTRAL".
+  - As soon as the 1h became NEUTRAL (176791, 10:00:06 → 13:00:06 KSA), the next 5m was published as STRONG_SELL (176934, 10:05:03.9 → 13:05:03 KSA). That closed the trade at 10:05:18.5 → 13:05:18 KSA.
+- The same masking shows up on 1m signals before 162 and throughout 158 (`original_decision`=SELL, `decision`=NEUTRAL).
+- Classification: a candidate logic defect, in that the veto is blind to suppressed bearish evidence. FIX-154's "preserve legacy 5M_BEARISH_VETO" rule may make this behaviour intended, so I'm not calling it confirmed.
+
+**F12. FIX-154 is deployed, which contradicts AGENTS.md and claude-docs** (PROJECT EVIDENCE, DBQ-CLAUDE-I1-010)
+- `flyway_schema_history` shows V107 (`fix 154 trusted higher timeframe buy`) and V108 applied on 2026-10-10 00:15:21, and V109 on 2026-10-10 01:52:45. The time zone of `installed_on` is UNKNOWN.
+- All seven entry and exit signals have `signal_mode=LIVE` and `data_quality_valid=1` (DBQ-CLAUDE-I1-011).
+- So FIX-154 logic was live for every frozen trade. This must be reported, and resolved through the dual-agent process.
+
+**F13. Trade 143: the loss came from one tick jumping straight through the profit-lock floor** (PROJECT EVIDENCE, DBQ-CLAUDE-I1-004/006/009)
+- Entry was at 22:40:03.1 → 10-12 01:40:03 KSA, at 4.033. The decision price was 4.032, so one tick of slippage.
+- The profit lock activated at 22:40:23 → 01:40:23 KSA. The take-profit was extended twice: 4.0647 → 4.0805 → 4.1043.
+- The high was 4.101, with the lock at 4.07579.
+- Price events went from 4.100 at 22:43:27.04 straight to **4.027 at 22:43:35.02** (→ 01:43:35 KSA), with nothing in between. That one tick was below the lock (4.0758), below the hard floor (4.03502 = entry × 1.0005), and below entry.
+- The fill was at that tick price, 4.027. The exit code behaved as written.
+- The loss is inherent to a model that fills at the next tick and never holds a resting stop order. It is not a logic defect.
+
+**F14. Trade 143's entry was over-extended and may have used a stale 5m signal** (PROJECT EVIDENCE for the data; the staleness is a hypothesis)
+- Context at entry:
+  - RSI 84.3, 4.35 ATR above SMA20, `atr_overextended=1`;
+  - the 1m entry type was WAIT_FOR_RETRACEMENT (recommended 0%);
+  - it was overridden by SETUP_TIMEFRAME_ATR on a "fresh 5m BUY".
+- The re-entry came 21 s after the previous EGLD position (wallet position 171) took a profit-lock exit at 22:39:41.
+- The 5m BUY (159285) is from the 22:30 candle. The 22:35-candle 5m signal (159407, **WATCH**) was saved at 22:40:01.6359, 2 ms *after* the 1m signal (159408, 22:40:01.6339) and about 1.5 s before execution (22:40:03.1).
+- Whether the execution check reused the older 5m BUY needs `buy_htf_assessment_audit` (DBQ-CLAUDE-I2-002).
+
+**F15. Trade 172: ATR was smaller than one price tick** (PROJECT EVIDENCE + EXTERNAL RESEARCH for the tick size)
+- ATR14 was 6.8e-9; the SHIBUSDT tick is 1e-8.
+- The target was about 2 ticks away and the stop about 2.7 ticks. The loss was exactly one tick (0.18%).
+- Exit timeline:
+  - the 1h signal turned SELL at 07:00:06 (172201, 06:00 candle);
+  - it held while 5m stayed WATCH, which counts as supportive (`PositionExitPolicy:25-27`);
+  - 5m turned NEUTRAL at 07:15:04.6 (172588);
+  - the exit fired on the next price event at 07:15:43.46 → 10:15:43 KSA.
+- The exit followed the rule. The trade was a valid loser on a setup that couldn't work at this price precision.
+
+**F16. Per-trade classification** (AGENT INFERENCE from the evidence above)
+
+| ID | Entry (exec UTC → KSA) | Entry concern | Exit trigger (evidence) | Classification |
+|---|---|---|---|---|
+| 182 | 09:57:04 → 12:57:04 | TREND_FOLLOWING BUY in a WEAK_DOWNTREND regime; bounce after seven 1m STRONG_SELLs; 5m bearish masked (F11); R:R 0.48 | 1m SELL 176927 + 5m STRONG_SELL 176934; exec 10:05:18 → 13:05:18 | Entry quality + candidate F11 defect; exit valid |
+| 172 | 06:36:02.9 → 09:36:02 | ATR below one tick (F15) | HTF_SELL_CONFIRMED: 1h 172201 SELL + 5m 172588 NEUTRAL; exec 07:15:43 → 10:15:43 | Valid loser; structural sizing issue |
+| 162 | 04:02:04 → 07:02:04 | 1m decision was WATCH (approved via ACCUMULATED_EVIDENCE); LATE_ENTRY 50; above upper Bollinger, 2.82 ATR from SMA20; R:R 0.44 | Signal path: 1m STRONG_SELL 168277 (5m 168251 SELL); exec 04:26:04 → 07:26:04 | Entry quality (F9/F10); exit valid |
+| 158 | 02:35:02.99 → 05:35:02 | 1m WATCH 64 with SETUP_CONFIRMATION_WAKEUP on 5m BUY 165415, which went NEUTRAL the next bar; R:R 0.33; target 0.16% | 1m STRONG_SELL 166819 + 5m SELL 166821; exec 03:30:04.2 → 06:30:04 | Entry quality (F9/F10); exit valid |
+| 143 | 22:40:03.1 → 01:40:03 | Over-extended chase re-entry; possible stale 5m (F14) | PROFIT_LOCK_HARD_EXIT on a gap tick (F13); exec 22:43:35.05 → 01:43:35 | Entry quality + gap fill; staleness unconfirmed |
+| 137 | 20:55:03 → 23:55:03 | One-bar STRONG_BUY on an RVOL 8.26 spike after eight 1m STRONG_SELLs; passed via the range-location "transition exception"; R:R 0.64 | 1m STRONG_SELL 156850 + 5m SELL 156852; exec 21:00:08.9 → 10-12 00:00:08 | Entry quality (F9); exit valid |
+
+**F17. Iteration-1 hypothesis F4 (stale or pre-entry signals driving exits): not supported for these trades** (PROJECT EVIDENCE)
+- Every exit's 1m and 5m signals were saved after entry and within about 40 s of the close (DBQ-CLAUDE-I1-005 and -007).
+- The 1h signal used for 172 is the closed 06:00 candle, 15 minutes old.
+- The code gap still exists, but it didn't cause these six losses.
+
+**F18. Wrong explanation label** (PROJECT EVIDENCE, low severity)
+- Trade 182 shows "Price is slightly above EMA200" when price was 0.08% *below* EMA200.
+- The label comes from the grouped `priceLocation` score, which also includes SMA20, not from EMA200 alone (`AnalysisService.java:1124-1129`). It's misleading explanation text, not a decision change.
+
+**F19. Clock note** (PROJECT EVIDENCE, informational)
+- On some `market_price_event` rows the Binance `observed_at` is about 130–160 ms after the local `created_at` (for example event 1761095 and the 158 rows).
+- It doesn't affect these exits.
+
+## EVIDENCE
+- Database results: DBQ-FTS-001…005; DBQ-CLAUDE-I1-001 to -011 (in `db/CLAUDE/`).
+- Record IDs: wallet_trade 344/346, 358/359, 392/401, 403/407, 426/429, 451/454; exit audit 137/141/159/163/172/181; position events 51/52; price events 1789382, 1789409.
+- Code:
+  - `AtrRiskService.java:34-45`
+  - `application.yml:137-143`
+  - `HigherTimeframeBuyAssessmentService.java:20-24,50`
+  - `MultiTimeframeConfluenceService.java:61-64,115-143,337-353`
+  - `PositionExitPolicy.java:20-50`
+  - `AnalysisService.java:1124-1129`
+  - V107/V109 migration files
+
+## UNKNOWNS
+- U8: Which confluence branch and strategy neutralized each masked 5m signal (DBQ-CLAUDE-I2-001).
+- U9: The 5m and 1h signal IDs the BUY assessment actually used at execution, especially for 143 (DBQ-CLAUDE-I2-002).
+- U10: Whether R:R below 1 is common across all closed trades and how it relates to outcome (DBQ-CLAUDE-I2-003).
+- U11: Production environment overrides for the ATR settings. The stored values match the defaults, but this isn't proven.
+- U12: Whether the 8 s gap in 143's price events was a real flash move or missing data (DBQ-CLAUDE-I2-004).
+- U7 (carried over): Replay reproduction. Not run, and won't be without agreement.
+
+## DB REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-001
+Purpose: Confluence context of the masked 5m signals (original SELL → published NEUTRAL) for trade 182, plus the reference entry-time signals for all trades
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, decision, original_decision, trend_score, confidence_score, selected_strategy, market_regime, confluence_status, confluence_higher_interval, confluence_higher_decision, generated_at FROM trade_signal WHERE id IN (175399,175522,175647,175772,175899,176025,176156,176278,176403,176529,176655,176792,176934,175258,176791,159285,159407,165415,167746,156721,171559,172064) ORDER BY symbol, generated_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-002
+Purpose: FIX-154 BUY-assessment audit for each frozen entry (which 5m/1h signals were used, band, code)
+SQL:
+SELECT * FROM buy_htf_assessment_audit WHERE reference_signal_id IN (156723,159408,165412,167668,171589,176710) ORDER BY reference_signal_id, id LIMIT 100
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-003
+Purpose: Pattern check — entry risk/reward bucket against outcome across all closed paper positions
+SQL:
+SELECT CASE WHEN s.risk_reward_ratio < 1 THEN 'RR<1' ELSE 'RR>=1' END AS rr_bucket, p.status, COUNT(*) AS n, SUM(CASE WHEN p.realized_pnl > 0 THEN 1 ELSE 0 END) AS winners, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum, ROUND(AVG(s.atr_percent), 4) AS avg_atr_pct FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id WHERE p.closed_at IS NOT NULL GROUP BY rr_bucket, p.status ORDER BY rr_bucket, p.status
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-004
+Purpose: Check the 143 gap — EGLDUSDT 1m candle for 22:43 and the price events between 22:43:27 and 22:43:35
+SQL:
+SELECT open_time, close_time, open_price, high_price, low_price, close_price, volume, closed FROM candle WHERE symbol = 'EGLDUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-11 22:41:00' AND '2026-10-11 22:44:00' ORDER BY open_time
+### END_DB_REQUEST
+
+(If the `candle` column names differ, a schema lookup of `crypto_ai.candle` comes first.)
+
+## Self-review
+- **Unsupported claims:** none that I know of. The fee rate and SHIB tick size are external facts I didn't re-verify. F11 is labelled a candidate, not a confirmed defect.
+- **Correction:** iteration-1 F1 used `paper_position` times. Execution is about 2 s earlier, per `wallet_trade`.
+- **Contradiction to escalate:** F12 (FIX-154 is applied in production, while AGENTS.md says it isn't implemented).
+- **Plan for iteration 3:** use I2-001 and I2-002 to confirm or reject F11 and F14; use I2-003 to measure how widespread F9 is; then start a Replay-feasibility assessment, as analysis only.

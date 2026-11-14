@@ -1,0 +1,78 @@
+## Iteration 4 — Code / Trade Route
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+- The frozen cohort remains exactly: `182, 172, 162, 158, 143, 137`. I made no substitutions and no DB, code, config, or service changes.
+
+- `paper_position` is the durable position record: it links to the entry `signal`, optional `exitSignal`, records TP/SL, close reason, exit reason, and UTC open/close timestamps. [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:12)
+
+- Normal entry route is:
+
+  `AnalysisService` persists a signal and registers durable processing work → `SignalProcessingCoordinator` claims it, locks position state, checks freshness, and invokes paper trading → `PaperTradingService` obtains an execution-time canonical price, executes wallet BUY, then creates `paper_position`. [AnalysisService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:104) · [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:39) · [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:296)
+
+- The BUY route persists the generating market-context quality on each new `trade_signal`; higher-timeframe BUY validation then requires fresh 5m/1h context and applies the FIX-154 hard/soft/untrusted policy. [AnalysisService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:406) · [TradeExecutionValidationService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:62)
+
+- Protection is independently driven by observed price, not delayed candle analysis. For canonical direct observations, `APPLIED` means the protection callback completed; it can still be a no-op if no open managed position existed. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:46)
+
+- Live protection evaluates exits in this order: TP/continuation, absolute stop loss, profit-lock safety floor, profit-lock breach policy, normal multi-timeframe SELL policy, then near-TP logic. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:95)
+
+- A live mechanical exit writes the wallet exit first and only then closes the matching `paper_position`; this route is materially stronger evidence of a committed paper-wallet exit. [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:475) · [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:392)
+
+- Conversely, the signal-driven close route persists `paper_position` before attempting the wallet exit and catches wallet exceptions. Therefore, a closed `paper_position` alone does **not** prove the corresponding wallet SELL committed for a signal-path exit. This is a code-route evidence limitation, not a confirmed defect in any frozen trade. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487)
+
+- Both paper-position and wallet exit calculations use price-minus-entry times quantity, preserving any prior near-TP partial realization; the paper wallet writes zero fees. A negative `paper_position.realized_pnl` is therefore not, by itself, a fee-inclusive execution reconciliation. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487) · [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:475)
+
+**AGENT INFERENCE**
+
+- For each of IDs 182, 172, 162, 158, 143, and 137, the decisive classification requires the actual `close_reason`, `exit_reason`, `exit_signal_id`, wallet execution rows, and—where protection is alleged—the accepted price-event evidence. The source route cannot establish which route any one trade took.
+
+- Snapshot metadata has a three-second internal discrepancy: `2026-10-28 15:00:05 UTC` converts to `2026-10-28 18:00:05 KSA`, not the supplied `18:00:02 KSA`. It does not change the frozen selection because its SQL has no snapshot-time predicate.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+### EVIDENCE
+
+- The specified Iteration 1–3 Codex artifact files were not present at their stated run-root paths in this workspace.
+- `agent-docs/runs/fts-WINDOW2-20261028-180002/db/CODEX/` contained no available Codex DB evidence files.
+- No proof-query output (`DBQ-FTS-001` through `DBQ-FTS-005`) was available in the permitted Codex evidence location.
+
+### UNKNOWNS
+
+- Symbol, entry/exit UTC and KSA times, price, quantity, realized P&L, and exit cause for every frozen ID.
+- Whether each loss was a valid strategy loss, a stale/late entry, protection behavior, execution mismatch, or accounting discrepancy.
+- Whether a matching wallet trade committed for any signal-path paper-position close.
+- Whether accepted `market_price_event` evidence exists for any claimed stop-loss, TP, or profit-lock exit.
+- Replay reproducibility; no Replay execution was started.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Schema-first verification of the exact durable entities required to reconstruct the six frozen `paper_position` trade routes, before selecting columns or issuing trade-specific queries.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'production_exit_audit',
+      'market_price_event',
+      'signal_processing_work',
+      'candle'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

@@ -1,0 +1,96 @@
+## Iteration 7 — Self-challenge
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+- Frozen scope remains exactly: `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutions.
+- `db/CODEX/` still has no result files. Therefore no durable DB evidence supports any final per-trade classification.
+
+- Trade **182** has stronger log linkage than “possible,” though it remains unconfirmed by the authoritative row:
+  - Signal `164053` for `ICPUSDT` was processed at UTC `2026-10-11 22:41:03.002` / KSA `2026-10-12 01:41:03.002`.
+  - The entry route allowed `BREAKOUT_CONTINUATION_ENTRY` at UTC `22:41:03.047` and passed its price recheck at `22:41:03.060`.
+  - Its symbol transaction completed `COMMITTED` at UTC `22:41:04.863`; the same flow logged `paperPositionOpened=true`.
+  - At UTC `22:41:05.405`, the next ICP protection evaluation explicitly identifies `positionId=182`, entry `3.493`, target `3.537460443272`, and an inactive profit lock.
+  - This makes the `164053` → position 182 association strongly supported by runtime ordering, but not DB-proven.
+
+- The stop sequence for **182** is similarly well-supported, but not a durable financial reconciliation:
+  - Event `1837489` was reported `APPLIED` for `ICPUSDT`, observed UTC `2026-10-11 22:49:33.460` / KSA `2026-10-12 01:49:33.460`.
+  - The application logged `Live STOP_LOSS executed` at UTC `22:49:36.971` / KSA `01:49:36.971`, with price `3.465000000000` versus stop `3.465026371152`.
+  - The symbol transaction then reported `COMMITTED` after `2,438 ms`; event `1837489` was reported `APPLIED` at UTC `22:49:36.974`.
+  - The runtime evidence supports a completed stop-loss path. It does **not** prove the final `paper_position` row, P&L, wallet execution, or whether the recorded price was worsened by the delay.
+
+- The prior conclusion that the ~3.514-second observation-to-completion interval is not yet a demonstrated defect remains correct. The first observed event was already in the stop path, but the event’s stored price and intervening executable-price path are unavailable. Causation cannot be inferred.
+
+- A material **selection-consistency challenge** remains:
+  - The charter fixes the selection predicate as `paper_position.status=CLOSED`.
+  - Current source sets a mechanical stop-loss close to `PositionStatus.STOPPED`; the enum distinguishes `CLOSED` and `STOPPED`.
+  - Git blame dates that `STOPPED` stop-loss assignment to 2026-08-13, before the 2026-10-11 runtime event.
+  - No source path was found that converts an already `STOPPED` paper position to `CLOSED`; manual close also rejects non-`OPEN` rows.
+  - Thus, if the logged stop is position 182 and the running binary followed this source lineage, **182 should not satisfy the supplied `status=CLOSED` predicate**. This is an unresolved evidence contradiction—not a confirmed selection error—until the exact row and executed selection proof are supplied.
+
+- Trades **172, 162, 158, 143, and 137** remain unclassified. No position-specific logs or DB records were available.
+
+**AGENT INFERENCE**
+
+- Trade 182 is best described as a **probable valid mechanical stop-loss**, not a confirmed protection failure. The conclusion remains provisional because the authoritative position, wallet, audit, and price-event records are absent.
+- It would be circular to treat the charter’s selection predicate as proof that 182 could not have been stopped; the exact row is the evidence needed to resolve that contradiction.
+- No inference about the other five losses is justified.
+
+**EXTERNAL RESEARCH**
+
+- None in this iteration.
+
+### EVIDENCE
+
+- Runtime log evidence: `iteration03-codex.stderr.txt`, archived-log excerpts for signal `164053`, position `182`, and event `1837489`.
+- Current/source-history evidence:
+  - `LivePositionProtectionService.java:173–180` performs mechanical stop-loss handling and passes `PositionStatus.STOPPED`.
+  - `LivePositionProtectionService.java` closes the paper position with exit price, P&L, status, reason, and `closedAt`.
+  - `PositionStatus.java` defines distinct `OPEN`, `CLOSED`, `STOPPED`, and `CANCELLED`.
+  - Git blame attributes the `STOPPED` stop-loss route to commit `79420d2c`, dated 2026-08-13 KSA.
+
+### UNKNOWNS
+
+- Actual `paper_position` status and lifecycle values for all six frozen IDs.
+- Whether DB evidence confirms `182`’s `STOPPED` status, stop reason, exit price, closed time, quantity, and realized P&L.
+- The durable links from 182 to signal `164053`, event `1837489`, wallet records, managed position, and exit audit.
+- Event `1837489`’s stored price and any later price event that could quantify delay-related paper slippage.
+- The actual historic executable revision/configuration and exact output of proof queries `DBQ-FTS-001` through `DBQ-FTS-005`.
+- The supplied snapshot UTC/KSA values remain mutually inconsistent; frozen IDs remain usable, but the snapshot clock cannot be treated as one converted instant.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Resolve the `CLOSED` versus `STOPPED` selection contradiction and establish the six authoritative lifecycle records before any further causal classification or table joins.
+
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key
+FROM information_schema.columns AS c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'market_price_event',
+      'wallet_trade',
+      'wallet_managed_position',
+      'production_exit_audit',
+      'position_management_event'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+
+SELECT p.*
+FROM crypto_ai.paper_position AS p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST
+
+No code, configuration, database, deployment, or git state was changed.

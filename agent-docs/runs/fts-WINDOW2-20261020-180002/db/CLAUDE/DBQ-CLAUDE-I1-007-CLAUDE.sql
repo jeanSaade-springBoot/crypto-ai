@@ -1,0 +1,1 @@
+SELECT signal_id, symbol, interval_code, candle_open_time, origin, status, attempts, updated_at, UNIX_TIMESTAMP(updated_at) AS upd_epoch, completed_at, paper_position_id, failure_stage, source_event_id FROM crypto_ai.signal_processing_work WHERE signal_id IN (156723,159408,165412,165415,167668,171589,176710,168277) ORDER BY signal_id;

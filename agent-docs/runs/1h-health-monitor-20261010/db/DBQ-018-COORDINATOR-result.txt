@@ -1,0 +1,2 @@
+stale_vs_session_now	stale_vs_utc_now	last_disp	session_now	utc_now
+102	-77	2026-10-10 17:00:13.298087	2026-10-10 18:42:30	2026-10-10 15:42:30

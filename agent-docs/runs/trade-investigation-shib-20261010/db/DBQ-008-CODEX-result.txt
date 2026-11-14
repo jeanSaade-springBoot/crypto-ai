@@ -1,0 +1,10 @@
+exit_code=0
+duration_ms=106
+row_count=2
+--- stdout ---
+interval_code	candles	first_open_utc	last_open_utc	peak_high	trough_low
+1m	71	2026-10-09 23:45:00.000000	2026-10-10 00:56:00.000000	0.000005500000	0.000005410000
+5m	14	2026-10-09 23:45:00.000000	2026-10-10 00:50:00.000000	0.000005500000	0.000005410000
+
+--- stderr ---
+

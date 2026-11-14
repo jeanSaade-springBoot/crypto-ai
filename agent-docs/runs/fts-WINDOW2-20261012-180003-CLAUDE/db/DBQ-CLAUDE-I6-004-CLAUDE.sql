@@ -1,0 +1,1 @@
+SELECT p.close_reason, p.status, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS winners, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum, ROUND(AVG(TIMESTAMPDIFF(SECOND, p.opened_at, p.closed_at)), 0) AS avg_hold_s FROM paper_position p WHERE p.closed_at IS NOT NULL GROUP BY p.close_reason, p.status ORDER BY pnl_sum

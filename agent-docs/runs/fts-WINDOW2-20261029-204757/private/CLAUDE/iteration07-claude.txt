@@ -1,0 +1,204 @@
+# Claude: Daily Failed-Trade Study, WINDOW2, Iteration 7 (Self-Challenge)
+
+**Scope:** run `fts-WINDOW2-20261029-204757`, frozen trades 182, 172, 162, 158, 143 and 137, unchanged with nothing substituted.
+
+This iteration was analysis only. I changed no code, config, database or git state. Plan mode is on, but this session has no Write or ExitPlanMode tool, so everything is in this response.
+
+**Inputs:**
+- My iteration 1–6 outputs.
+- `db/CLAUDE/` results up to I6-004.
+- Code reads of `ExecutionIntelligenceService` (EIS), `AnalysisService` and `RegressionTestWorker`.
+
+I did not read the Codex folders, LIVE_TEAM_STATUS or LIVE_EVENTS.
+
+**Time:** the database stores UTC. The result files display KSA, because the session time zone is Arab Standard Time (I4-F01). I re-checked this from the stored epoch: 1791747601.634 is 2026-10-11 19:40:01.634 UTC, which is 22:40:01.634 KSA. **My iteration 1 "KSA" column was converted twice and is void.** For example, trade 182 opened at 09:57:06 KSA (06:57:06 UTC), not 12:57.
+
+---
+
+## Summary
+
+- **I7-F01: my iteration 6 main root cause is refuted by the population data.** Trades planned with reward/risk below 0.75 had the **lowest** loss rate (37%) and made a net **profit** in fee-free paper trading. The 0.50% stop floor explains the reward/risk *numbers* exactly, but it did not cause the losses. I have moved it from "root cause" to "a risk to profit once real fees apply".
+- **I7-F02:** I can now partly explain why higher Entry Quality scores lost more often (I6-F02). Average score and average ATR% both rise with the reward/risk band. A low-ATR trade loses 30 points for low reward/risk, so the score penalises the group that performed best.
+- **I7-F03:** sorting by entry route shows losses spread across almost every route. Two routes are net positive: CONSOLIDATED_BUY (one trade) and DEFERRED_CONTINUATION, which roughly breaks even (−0.016). No route-specific rule from iteration 6 explains the population results.
+- **I7-F04:** the code now confirms the timing-jitter mechanism (I6-F04): Replay stamps signals exactly at candle close, while Production uses the clock time at analysis. Whether Replay would actually have blocked trade 162 is still unproven, because no Replay coverage of that moment has been shown.
+- **I7-F05: final classification.** Trade 143 has the **only confirmed logic defect** (Defect A). The other five are valid losing trades under the coded rules, each with design observations. Trade 162 also carries a code-confirmed parity risk.
+- **I7-F06:** the six frozen losses total −0.273 USDT. All 75 stop-loss losses together total −15.886 USDT, about 58 times as much. The main source of losses is outside the frozen sample.
+
+---
+
+## FINDINGS
+
+### I7-F01: Low planned reward/risk did not cause losses in paper trading (SELF-CORRECTION; PROJECT EVIDENCE: DBQ-CLAUDE-I6-001, I6-004)
+
+**What still holds (I6-004):** the mechanism is exact. For each of 137, 158, 162, 172 and 182, the stop is 0.5000% below entry and the stored `risk_reward_ratio` equals 6 × ATR% to four decimals. Trade 143 is the exception: its stop came from 2 × ATR (0.5406%) and its reward/risk was 1.5000.
+
+**What is refuted (I6-001, all 193 closed or stopped positions):**
+
+| Reward/risk band | Trades | Losses | Loss rate | Stop-outs | Net P&L (USDT) | Avg ATR% | Avg Entry Quality |
+|---|---|---|---|---|---|---|---|
+| below 0.75 | 54 | 20 | **37%** | 7 (13%) | **+0.234** | 0.08–0.09 | 50–53 |
+| 0.75 to 1 | 15 | 8 | 53% | 5 (33%) | −0.354 | 0.14 | 53–57 |
+| 1 to 1.5 | 61 | 31 | 51% | 26 (43%) | +0.079 | 0.20–0.21 | 67–71 |
+| 1.5 and above | 63 | 42 | **67%** | 37 (59%) | **−4.130** | 0.33–0.34 | 75–76 |
+
+AGENT INFERENCE, based on the arithmetic of the configured stop rule:
+- When ATR is low, the 0.50% floor puts the stop many ATRs away. For trade 182 it was about 6 ATR; a normal stop is 2 ATR. So these trades rarely hit their stop and usually exit on a sell signal or a profit lock.
+- In fee-free paper trading, the floor therefore helps.
+- My iteration 6 claim (I6-F01) that this was "ROOT CAUSE rank 1" was wrong. The break-even table there assumed outcomes split only between target and stop, but most of these trades exited on signals instead.
+
+**What remains (AGENT INFERENCE, not yet measured):**
+- With a fee of 0.10% per side (secondary sources, I6), a round trip costs 0.2% of trade size.
+- At 15–25 USDT per trade (I2), that is roughly 0.03–0.05 USDT per trade. Across 54 trades that would likely erase the +0.234 USDT surplus.
+- So low reward/risk is a **risk to profit under real fees**, not the reason these paper trades lost. DBQ-CLAUDE-I7-001 measures it.
+
+### I7-F02: The Entry Quality inversion is largely explained by ATR% and reward/risk (PROJECT EVIDENCE: I6-001; mechanism from I5-F02)
+
+- Average Entry Quality rises with the reward/risk band, from 50–53 up to 75–76, and ATR% rises with it.
+- The flat −30 points for reward/risk below 1 lands on the low-ATR group, which had the fewest stop-outs.
+- So the score's apparent inverse relationship (I6-F02) is mostly this confounding, not proof that the score is worthless.
+- **Consequence:** in this period the reward/risk part of the score actually worked against good outcomes.
+- **Not yet proven:** how the score performs *within* a reward/risk band (DBQ-CLAUDE-I7-002). The groups are small.
+
+### I7-F03: Losses are spread across the entry routes (PROJECT EVIDENCE: DBQ-CLAUDE-I6-002)
+
+| Route | Trades | Loss rate | Net P&L (USDT) | Frozen trades |
+|---|---|---|---|---|
+| IMMEDIATE_VALIDATION | 46 | 52% | −1.349 | 137, 172, 182 |
+| SETUP_CONFIRMATION_WAKEUP | 36 | 61% | −0.432 | 158 |
+| ACCUMULATED_EVIDENCE | 35 | 40% | −0.118 | 162 |
+| SETUP_TIMEFRAME_ATR | 22 | 41% | −0.375 | 143 |
+| CONFIRMATION_ADD | 33 | 61% | −0.307 | — |
+| TREND_ADD | 11 | 64% | −1.495 | — |
+
+- The counts add up to 193, matching I5-005.
+- Every route with more than five trades is net negative.
+- So iteration 6 root causes 3 to 7 (the 5m final-label check, the FIX-11G inversion, the range-guard bypass, the FIX-119 escape, and counter-trend reversals) remain **observations about individual trades**. None is shown to drive losses across the population. Among the routes these trades used, IMMEDIATE_VALIDATION lost the most money.
+
+### I7-F04: The parity jitter mechanism is confirmed in code; the Replay outcome is not (PROJECT EVIDENCE)
+
+**Code:**
+- **Production:** `AnalysisService.analyze` calls `buildSignal(snapshot, Instant.now(), …)` (`AnalysisService.java:150`), so a signal's time is when the analysis ran.
+- **Replay:** `RegressionTestWorker.java:584` sets `evaluationTime = candle.openTime + interval`, which is exactly the candle close. That value is passed through `analyzeForRegression` (`:616`, `AnalysisService.java:190`).
+- **Opportunity start:** `startedAt = signal.generatedAt` (`EIS:2541`).
+- **Age penalty:** age is measured from `startedAt` to the current signal's `generatedAt` and rounded down with `toMinutes()` (`EIS:948-951`). The penalty starts at more than 20 minutes (`EIS:987-989`).
+- So I6-F04's direction (Production can only be more lenient than Replay) is now **code-confirmed**. My iteration 6 label of "inference" is upgraded.
+
+**For trade 162:**
+- Production measured the age as 20 min 59.976 s, which rounds down to 20, so no penalty applied.
+- With the same start candle, Replay would measure exactly 21 minutes and apply −5. That gives an Entry Quality of 45, below the floor of 50, so it would block.
+- **Not proven:** that Replay would form the opportunity from the same start candle, since opportunity state depends on earlier history. I6-003 shows `fix122_evaluation` has **0** Replay rows, and `execution_opportunity_test` has no start-time column. So there is no record to compare against. DBQ-CLAUDE-I7-003 checks whether any Replay run covered this moment at all.
+
+### I7-F05: Final per-trade classification (after self-challenge)
+
+| ID | Symbol | Entry → exit (KSA) | Exit reason | P&L (USDT) | Classification |
+|---|---|---|---|---|---|
+| 137 | EGLD | 10-11 20:55:04 → 21:00:12 | SELL_CONFIRMED | −0.075 | Valid loss under coded rules. Design observations: single-candle reversal accepted through the FIX-11G authority; the range guard blocked one bar earlier and passed a higher price one bar later (I6-F05). |
+| 143 | EGLD | 10-11 22:40:04 → 22:43:36 | PROFIT_LOCK_HARD_EXIT | −0.037 | **Logic defect at entry (Defect A)**: an outdated 5m signal was reused. Defect B (no evidence boundary after a profit-lock exit) exists but did not decide this trade (I6-F03). The exit was valid. |
+| 158 | XRP | 10-12 02:35:04 → 03:30:06 | SELL_CONFIRMED | −0.032 | Valid loss. The target was 0.164%, below a real round-trip fee (relevant to live trading only). |
+| 162 | DOGE | 10-12 04:02:06 → 04:26:04 | STRONG_SELL | −0.052 | Valid under Production rules, plus a **code-confirmed parity risk** (I7-F04). Replay outcome unproven. |
+| 172 | SHIB | 10-12 06:36:05 → 07:15:45 | HTF_SELL_CONFIRMED | −0.046 | Valid loss. Design observations: a strategy relabel bypassed the range guard, and the 5m check reads only the final label. |
+| 182 | ACE | 10-12 09:57:06 → 10:05:20 | SELL_CONFIRMED | −0.032 | Valid loss. Weakest entry: Entry Quality 50 (38 before the clamp), counter-trend, never above entry. |
+
+No stale-data or execution-delay cause was found in any of the six (I3/I4, unchanged).
+
+### I7-F06: The frozen scope covers a small share of actual losses (PROJECT EVIDENCE)
+
+- The six frozen losses total −0.273 USDT.
+- All 75 `STOPPED` positions are losses, totalling −15.886 USDT. Most of that (−14.573) comes from the two bands with reward/risk of 1 or more.
+- Net P&L across all 193 positions is −4.171 USDT.
+- The charter's `status=CLOSED` filter excludes this group. I note it for the coordinator and have **not** substituted any trades.
+
+---
+
+## Revised root-cause ranking
+
+| Rank | Item | Type | Trades | Strength |
+|---|---|---|---|---|
+| 1 | Defect A: 5m setup reused or outdated (I3-F02) | **Logic defect** | 143 | Confirmed and decisive |
+| 2 | Wall-clock versus candle-close age rounding (I7-F04) | **Parity defect** (mechanism confirmed) | 162 | Code-confirmed; Replay outcome unproven |
+| 3 | Per-trade design observations (I3-F05, I4-F05/F06, I6-F05) | Design | 137, 162, 172, 182 | Code and data per trade; **not population-validated** (I7-F03) |
+| 4 | Reward/risk part of Entry Quality works against outcomes (I7-F02) | Design | All | Population, confounded |
+| 5 | 0.50% stop floor with a 3-ATR target (I6-F01, demoted) | Configuration | 137, 158, 162, 172, 182 | Mechanism exact; **not a paper loss cause**; a risk under real fees |
+| — | Defect B: no evidence boundary after a profit-lock exit | Intent mismatch | 143 | Confirmed, not decisive |
+
+## EVIDENCE index
+
+- **Time basis:** I3-001 / I4-F01, with the epoch re-checked above.
+- **Stored signal plans:** I6-004.
+- **Population by reward/risk band:** I6-001.
+- **Population by entry route:** I6-002.
+- **Replay schema, and zero Replay rows in `fix122_evaluation`:** I6-003.
+- **Code:**
+  - `ExecutionIntelligenceService.java:948-951`, `:987-989` and `:2541`
+  - `AnalysisService.java:150`, `:172` and `:190`
+  - `RegressionTestWorker.java:584` and `:616`
+
+## UNKNOWNS
+
+- **U7-01:** whether real fees turn the reward/risk below 0.75 group from profit to loss. Needs trade-size data (I7-001).
+- **U7-02:** whether Entry Quality predicts outcomes *within* a reward/risk band (I7-002).
+- **U7-03:** whether any Replay run covered trade 162's opportunity, or TAO opportunity 35305 / paper position 127 (I7-003).
+- **U7-04:** why the I5-004 result file was empty. Still unresolved.
+- **Logs:** none searched in any iteration; there is no log access (I3-F07).
+- **Open contradictions, still awaiting dual-agent review:**
+  - FIX-154 is active in Production, contrary to AGENTS.md and claude-docs (I4-F08).
+  - `DATABASE_INVESTIGATION_RULES.md:35` says timestamps are UTC, but the result files display KSA (I4-F01).
+
+## EXTERNAL RESEARCH
+
+Nothing new this iteration. The 0.10% per-side Binance spot fee (I6) is still from **secondary** sources only.
+
+## Recommended corrections (for a future spec only; NOT authorised)
+
+1. Defect A: check how old the 5m setup is, and where it came from, before a SETUP_TIMEFRAME_ATR approval.
+2. Calculate opportunity age from candle close times in both Production and Replay.
+3. Before changing the stop floor or adding a reward/risk gate, model the effect with fees on the I6-001 population. A gate that blocks low reward/risk could remove the best-performing group in paper trading.
+
+**Regression checks:**
+- Replay the trade 143 scenario and expect a rejection.
+- Test an age of 20 min 59.976 s, which should count as 21 minutes.
+- Run a Replay pass over 2026-10-12 00:35–01:05 UTC (03:35–04:05 KSA) for DOGE.
+
+---
+
+## DB_REQUEST blocks
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-001
+Purpose: Trade size and fee impact by reward/risk band (U7-01). First reads the paper_position columns (schema check), then computes size assuming entry_price × quantity. If those columns are absent, run part A only.
+SQL:
+SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'paper_position' ORDER BY ordinal_position;
+SELECT CASE WHEN s.risk_reward_ratio < 0.75 THEN 'a<0.75' WHEN s.risk_reward_ratio < 1 THEN 'b0.75-1' WHEN s.risk_reward_ratio < 1.5 THEN 'c1-1.5' ELSE 'd>=1.5' END AS rr_band, COUNT(*) AS n, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum, ROUND(SUM(p.entry_price * p.quantity), 4) AS notional_sum, ROUND(SUM(p.realized_pnl) - 0.002 * SUM(p.entry_price * p.quantity), 6) AS pnl_after_0p2pct_roundtrip FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL GROUP BY rr_band ORDER BY rr_band
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-002
+Purpose: Entry Quality predictiveness within each reward/risk band (U7-02, I7-F02).
+SQL:
+SELECT CASE WHEN s.risk_reward_ratio < 1 THEN 'rr<1' ELSE 'rr>=1' END AS rr_band, CASE WHEN m.entry_quality_score < 55 THEN 'eq50-54' WHEN m.entry_quality_score < 70 THEN 'eq55-69' ELSE 'eq70+' END AS eq_band, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losses, SUM(p.status = 'STOPPED') AS stopped, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id JOIN wallet_managed_position m ON m.entry_signal_id = p.signal_id WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL GROUP BY rr_band, eq_band ORDER BY rr_band, eq_band
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-003
+Purpose: Replay coverage for trade 162's opportunity moment (DOGE, 2026-10-12 00:35–01:05 UTC = 03:35–04:05 KSA) (U7-03). The literals are KSA because the session time zone is +03:00 for TIMESTAMP columns (I4-F01). The UNIX_TIMESTAMP columns let you verify that.
+SQL:
+SELECT o.test_run_id, o.id, o.symbol, o.replay_stage, o.source_signal_id, o.generated_at, UNIX_TIMESTAMP(o.generated_at) AS gen_epoch, o.decision_code, o.evidence_count, o.evidence_score FROM execution_opportunity_test o WHERE o.symbol = 'DOGEUSDT' AND o.generated_at BETWEEN '2026-10-12 03:35:00' AND '2026-10-12 04:05:00' ORDER BY o.test_run_id, o.generated_at LIMIT 100;
+SELECT w.test_run_id, w.id, w.symbol, w.entry_time, UNIX_TIMESTAMP(w.entry_time) AS entry_epoch, w.exit_reason, w.realized_pnl_usdt FROM wallet_position_test w WHERE w.symbol = 'DOGEUSDT' AND w.entry_time BETWEEN '2026-10-12 03:35:00' AND '2026-10-12 04:30:00' ORDER BY w.test_run_id, w.entry_time LIMIT 100
+### END_DB_REQUEST
+
+---
+
+## Self-review (iteration 7)
+
+- **Frozen set:** unchanged, with no substitutions.
+- **Labels:**
+  - **PROJECT EVIDENCE:** I6-001 to I6-004, plus the code lines cited.
+  - **AGENT INFERENCE:** the fee estimate, the floor-protects-in-paper explanation, and the Replay outcome for 162.
+  - **EXTERNAL RESEARCH:** none new.
+- **Corrections made this iteration:**
+  - I6-F01 is demoted from rank 1 to rank 5.
+  - The I6 break-even table is withdrawn as a model of outcomes.
+  - I6-F02 is reinterpreted as confounded by ATR%.
+  - I6-F04's mechanism is upgraded to code-confirmed.
+  - The iteration 1 "KSA" column is declared void (it was converted twice).
+- **Plan for iteration 8:** use the I7 results to settle U7-01 to U7-03, then freeze the final classification.

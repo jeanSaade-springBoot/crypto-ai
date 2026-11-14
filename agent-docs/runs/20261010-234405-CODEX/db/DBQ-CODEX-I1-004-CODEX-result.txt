@@ -1,0 +1,17 @@
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+paper_position_id	bigint	YES	UNI	NULL	
+wallet_position_id	bigint	YES	MUL	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+close_trigger	varchar(40)	NO		NULL	
+source_signal_id	bigint	YES	MUL	NULL	
+source_signal_decision	varchar(30)	YES		NULL	
+source_signal_original_decision	varchar(30)	YES		NULL	
+position_analysis_id	bigint	YES		NULL	
+position_recommendation	varchar(20)	YES		NULL	
+entry_price_usdt	decimal(30,12)	YES		NULL	
+exit_price_usdt	decimal(30,12)	NO		NULL	
+stop_loss_usdt	decimal(30,12)	YES		NULL	
+take_profit_usdt	decimal(30,12)	YES		NULL	
+close_explanation	varchar(2000)	YES		NULL	
+audited_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED

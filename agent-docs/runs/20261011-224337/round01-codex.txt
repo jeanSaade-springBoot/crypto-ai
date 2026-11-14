@@ -1,0 +1,54 @@
+## FINDINGS
+
+- [PROJECT EVIDENCE] Current Replay cannot support a 98–99% non-wallet parity claim: it still reads Production account configuration, simulates cash/sizing, accepts run-wide price “parity,” and does not calculate decision-level agreement.
+- [AGENT INFERENCE] No percentage can be credibly reported until comparable-case coverage, exclusions, and lower confidence bounds are measured and frozen.
+
+## EVIDENCE
+
+- [PROJECT EVIDENCE] Replay reads `wallet_settings`, maintains cash/daily budget, and invokes wallet sizing: [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:75), [line 318](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:318), [line 726](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:726).
+
+- [PROJECT EVIDENCE] Shared BUY validation also reads `wallet_settings` during Replay; this direct dependency must be eliminated or replaced by a Replay-local mirror/profile: [TradeExecutionValidationService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:66), [line 400](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:400).
+
+- [PROJECT EVIDENCE] The run chart queries Production `wallet_trade`: [RegressionTestService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:512), [line 549](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:549).
+
+- [PROJECT EVIDENCE] Evidence is checked after generated Replay output starts being written, and a single accepted price event passes the current price criterion: [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:174), [line 195](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:195), [line 322](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:322).
+
+- [PROJECT EVIDENCE] Replay candle loading has an unfiltered query path, so open candles can enter the timeline: [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:509), [line 550](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:550).
+
+- [PROJECT EVIDENCE] Price evidence drops event id, status, and ordering slot; it cannot audit equal-timestamp ordering: [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118), [line 173](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:173).
+
+- [PROJECT EVIDENCE] Replay consumes price events only before signals and then marks an open position from the final signal price; it does not drain the final canonical price-event tail: [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:126), [line 370](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:370).
+
+- [PROJECT EVIDENCE] The parity comparator exists but the worker’s pass/fail result is cadence/count based, not field-level comparison: [ReplayParityValidator.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ReplayParityValidator.java:17), [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:308).
+
+## OBJECTIONS
+
+- [AGENT INFERENCE] The three permitted result labels need clarification: `ANALYSIS_PARITY` explicitly disclaims lifecycle claims, while the acceptance section requires lifecycle parity. Define whether lifecycle is a separately reported metric or add a compatible non-wallet lifecycle result label.
+
+- [PROJECT EVIDENCE] The current `ThreadLocal` scope has no forbidden-dependency enforcement or async propagation contract, while the worker uses an unspecified `@Async` executor: [ExecutionReplayScope.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionReplayScope.java:31), [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:99).
+
+- [PROJECT EVIDENCE] The worktree is dirty and does not establish identity with the two archived source packages named by the specification. Freeze the exact source/configuration/migration/worktree hashes before approval.
+
+## UNKNOWNS
+
+- [PROJECT EVIDENCE] No E01–E10 evidence package is present in the inspected source paths; no database or Production system was accessed.
+
+- [AGENT INFERENCE] Price-span eligibility, historical configuration availability, signal persistence/availability delays, and the share of rows excluded for unavailable derivatives, liquidity, sentiment, or non-reconstructable timing remain unknown.
+
+VERDICT: INSUFFICIENT_EVIDENCE
+
+## REMAINING WORK
+
+1. [PROJECT EVIDENCE] Complete E01–E10 read-only evidence: dependency graph, decision-order matrix, per-span price coverage including final tails, policy/config history, entry fixtures, signal availability, reconstructability, and a pre-registered 98–99% measurement design.
+
+2. [PROJECT EVIDENCE] Replace Replay wallet/account dependencies with immutable Replay-owned profile and fixed-notional state; explicitly cover `ShadowProductionReplayService`, `TradeExecutionValidationService`, observers, chart endpoints, and every transitive service path.
+
+3. [PROJECT EVIDENCE] Add fail-closed qualification before any business output: exact closed-candle identity, as-of 210-candle quality, signal availability/timing, accepted price-event identity/order, and per-span coverage/refusal.
+
+4. [PROJECT EVIDENCE] Remove baseline fallback/experimental execution: signal-price fallback, FIX-11K/FIX-11Q invocation, run-wide `EXACT_PRICE_REPLAY` labels, and wallet-style cash/sizing simulation. Preserve old rows only as legacy display evidence.
+
+5. [PROJECT EVIDENCE] Implement Replay-local, fixture-verified non-wallet policy mirrors for signal-path precedence, profit-lock suppression, position-management effects, final-tail processing, censored end-of-window positions, and fixed-notional exclusion of quantity/wallet outcomes.
+
+6. [PROJECT EVIDENCE] Replace cadence-based pass/fail with separate signal and lifecycle comparison metrics, explicit exclusions, first-divergence reporting, per-class critical-exit gates, frozen tolerances, minimum coverage/count, and lower confidence bounds.
+
+7. [PROJECT EVIDENCE] Add Replay-only staging/certificates, atomic promotion, bounded named executor, cancellation/crash cleanup, no-account/HTTP guard, migration/preflight, load-isolation proof, and the required Java 21/MySQL/Replay validation suite before any parity label is issued.

@@ -1,0 +1,236 @@
+# Iteration 6 of 8: root cause and research (Claude, self-review only)
+
+The data now separates the six losses into three groups:
+- **Two entries a code defect let through:**
+  - **182:** a 5m STRONG_SELL was relabelled NEUTRAL, so the 5m bearish veto never saw it.
+  - **143:** a 5m BUY that a newer bar had already replaced still authorised the entry.
+- **Two entries decided by millisecond timing:**
+  - **158:** which signal was stamped first, by 21 ms, decided the entry route.
+  - **162:** the score's age penalty was missed by 24 ms.
+- **Two valid losses under the coded rules:** 137 and 172.
+
+Underneath all six, the system has no gross edge (−0.023 USDT per trade across 186 closed trades). Its Entry Quality (EQ) score does the opposite of its job: the higher the score, the lower the win rate. Once fees are counted, every target-distance group loses money.
+
+All six stored EQ scores now come out exactly when I recompute them from the code.
+
+Nothing was changed: no code, config, database writes, git or deploy. I didn't read the Codex folders, LIVE_TEAM_STATUS, LIVE_EVENTS or the other agent's memory. Plan mode was on, but the plan-file write was refused ("Write is disabled") and there is no ExitPlanMode tool. This response is the whole deliverable.
+
+**Time basis (F38, carried over):** query results show KSA, so true UTC = displayed time − 3 h. Times below are shown as UTC → KSA.
+
+## FINDINGS
+
+**F48. U23 is resolved: all six EQ scores recompute exactly from `ExecutionIntelligenceService.java:865-1017`.** (PROJECT EVIDENCE: code with I5-001/002/005 and I1-001)
+
+| Trade | Reference price (source) | Price penalty | ATR-extension penalty | Opportunity age | R:R | Rejection zone | Result |
+|---|---|---|---|---|---|---|---|
+| 137 | 3.992 rolling low | 0.18% → 0 | 1.63 → 0 | 1 min → 0 | 0.64 → −30 | high 4.005 at 17:40:01 UTC → 20:40 KSA, 0.15% away → −12 | **58** ✓ |
+| 143 (stored) | 3.972 rolling low | 1.54% → −10 | 5.60 (1m ATR) → −20 | 0 | 1.5 → 0 | none | **70** ✓ |
+| 143 (decision) | 3.972 | 1.51% → −10 | 6.61 (5m ATR 0.009073) → −30 | 0 | 0 | none | **60** ✓ |
+| 158 | 1.4082, the opportunity best price | 0.18% → 0 | 3.38 → −10 | **53 min → −10** | 0.33 → −30 | only 1 rejection, so none | **50** ✓ |
+| 162 | 0.08675 rolling low | 0.35% → 0 | 4.72 → −20 | **20 m 59.976 s, counted as 20 → 0** | 0.44 → −30 | none | **50** ✓ |
+| 172 | 5.47e-6 rolling low | 0.37% → 0 | 2.94 → −10 (this is **2 ticks**) | 14 min → 0 | 0.74 → −30 | none | **60** ✓ |
+| 182 | 0.1875 rolling low | 0.48% → 0 | 5.95 → −20 | 1 min → 0 | 0.48 → −30 | high 0.1890, 0.32% away → −12, **floored to 50** (`:1000-1001`) | **50** ✓ |
+
+- **Correction to F40:** 158 does not use the rejection floor. Its 50 comes from ATR extension, opportunity age and R:R.
+- **R:R:** the R:R < 1 penalty (−30) is present in five of the six.
+- **182's 50 comes from the floor:** without the clamp at `:1000-1001`, 182 would have scored 38 and been blocked. A separate "lowest-score" clamp therefore admitted it.
+
+**F49. The EQ score is anti-predictive, and its largest component is the reason.** (PROJECT EVIDENCE: I5-004, I2-003; mechanism is AGENT INFERENCE)
+
+| EQ band | Trades | Win rate | P&L per trade | Net of 10 bps per side |
+|---|---|---|---|---|
+| 50 | 56 | **57%** | +0.0020 | −0.040 |
+| 51–59 | 21 | 57% | −0.0000 | −0.046 |
+| 60–69 | 36 | 42% | −0.028 | −0.085 |
+| 70+ | 73 | **37%** | −0.046 | −0.137 |
+
+- **Win rate doesn't depend on size, and it falls steadily as EQ rises.**
+- **Why:** the score always takes 30 points off when R:R is below 1 (`:991`). In this system, R:R < 1 simply means a low ATR where the 0.5% stop floor applies (F9). Those trades have *close* targets that are hit more often: 57% winners versus 40% (F30). So the score penalises the trades that win most often.
+- **Two confounds:**
+  - EQ 70+ allows larger sizes (up to 40%), which inflates its P&L per trade.
+  - The stored EQ is the score at the fill (F42).
+- **Classification:** a **calibration defect** in the EQ model. It is not a defect against the coded rules.
+
+**F50. Three of six entries were decided by millisecond `generated_at` timing, not by market evidence.** (PROJECT EVIDENCE for the timings and code; counterfactuals are AGENT INFERENCE except 143)
+
+- **143:** the 5m signal 159407 (WATCH) was stamped 2 ms after the 1m signal. So the route kept the replaced 5m BUY 159285 (F35).
+  - Had 159407 been chosen, `setupTimeframeAtrAuthoritySignal` would have returned null at `:1486` (`!isBullish(WATCH)`), so this route would not have fired. That much is code-confirmed.
+- **158:** the 1m signal was stamped 21 ms before the 5m. That let the wake-up path find a current 1m and execute (F35, `:420-428`).
+- **162:** opportunity age is computed as `Duration.toMinutes()` from the opportunity start to the signal's `generated_at` (`:948-951`).
+  - The age was 20 min 59.976 s, which rounds down to 20 and is under the "more than 20" threshold, so the −5 penalty was not applied.
+  - With the penalty, EQ would have been 45 (CHASE_ENTRY), under the `< 50` block in `applyInitialEntryQualityGuard` (F39).
+  - The 162 counterfactual is AGENT INFERENCE: I have not traced that guard's application on the ACCUMULATED_EVIDENCE route line by line in this iteration.
+- **Pattern:** decision boundaries are keyed on the *processing* timestamp, not on candle time.
+  - At the 5m boundaries, the 1m signal is stamped first 86% of the time (F46).
+  - FIX-141 already fixed this class of problem for BTC context by selecting on candle time (F35).
+- **Classification:** **systematic design defect candidate (timing nondeterminism).**
+
+**F51. Trade 182 has a confirmed causal defect chain: confluence masking hid a 5m STRONG_SELL from the bearish veto.** (PROJECT EVIDENCE + code counterfactual)
+
+- **The veto check:** `HigherTimeframeBuyAssessmentService.java:20-24` vetoes when `decision(fiveMinute)` is bearish, and `decision()` returns `getDecision()` (`:50`).
+- **What the 5m signal held:** 176655 had `original_decision=STRONG_SELL` but `decision=NEUTRAL`, after confluence with the 1h WATCH (trend 16, F11/F24).
+- **Counterfactual:** reading the raw decision would have returned `5M_BEARISH_VETO`, and the direct BUY (audit 2425) would have been rejected.
+- **What allowed it next:** FIX-11G's threshold of EQ ≥ 50 (`TradeExecutionValidationService.java:266`) accepted the floored 50 (F48).
+- **Caveat:** FIX-154 requires preserving "legacy 5M_BEARISH_VETO behaviour", so whether the veto should see the raw decision is a **design decision**, not something I can establish here.
+- **Classification:** confirmed mechanism, with intended behaviour disputed. **Logic-defect candidate.**
+
+**F52. Trade 143 has a confirmed causal chain: the route is built to override the 1m "wait" verdict, then uses a 5m signal that has already been replaced.** (PROJECT EVIDENCE)
+
+- **The route only exists to override the 1m:** `setupTimeframeAtrAuthoritySignal` starts with `if (current.isAtrImmediateEntryAllowed()) return null;` (`:1473`). It fires *only* when the 1m ATR plan says do not enter now.
+- **Every input was older than it looked:**
+  - the 5m plan was assessed at 3.986, but entry was at 4.033 (+1.18%, 5.2× the 5m ATR);
+  - the newer 5m signal said WATCH (F43, F50);
+  - the same 5m BUY had already been consumed by the previous EGLD entry.
+- **How the loss was realised:** a single tick jumped from 4.100 to 4.027, straight through the profit-lock floor, and the exit filled at that tick price (F13).
+- **How often the replaced-5m selection occurs (U27, I5-006):** 6 of 23 SETUP_TIMEFRAME_ATR buys (26%) used a 5m signal older than the latest closed one.
+  - Those 6 trades: 4 winners, net −0.020. The route overall: −0.035 per trade.
+  - So the mechanism is **systematic**, but there is no evidence yet that it drives losses in aggregate (n=6).
+- **Classification:** route-design defect candidate. Causal for 143.
+
+**F53. Size-0 sizing inversion: F41 measured (U24).** (PROJECT EVIDENCE: I5-005)
+
+- **When the ATR plan says "do not enter now":** 10 trades executed while the 1m `atr_recommended_position_percent` was 0. They won 3 times, lost −0.734 in total, and averaged **−0.073 per trade**, which is 3.7× the baseline loss per trade (−0.020).
+  - Seven of the ten were `WAIT_FOR_RETRACEMENT` (3 winners).
+  - Three were **`NO_ENTRY`, with 0 winners**. A signal the ATR plan classifies as *no entry* reached execution. That needs its own route check (I6-002).
+- **158:** signal 165412 was STANDARD_ENTRY at 100%, so wallet 25% = 100% × 25%. U24 is closed.
+- **172:** `atr_at_signal` = 6.806e-9, under the 1e-8 tick (F15/F45 confirmed).
+- **REDUCED_POSITION (60%)** is the only ATR type with positive P&L: +0.189 over 31 trades.
+
+**F54. Fees (U26): every target-distance bucket is net-negative, and the gross loss sits in the *wide*-target trades.** (PROJECT EVIDENCE: I5-003; 10 bps per side is EXTERNAL RESEARCH)
+
+| Target distance | Trades | Win rate | Gross | Net of 10 bps per side |
+|---|---|---|---|---|
+| < 0.20% | 16 | 63% | +0.026 | −0.724 |
+| 0.20–0.40% | 38 | 61% | +0.022 | −1.658 |
+| ≥ 0.40% | 132 | 40% | **−4.283** | −13.891 |
+
+- **Fees roughly quadruple the paper loss:** gross −4.235 becomes net about −16.27. The paper wallet records a fee of 0.
+- **Correction to F44:** small targets break even *before* fees. The gross loss comes from the ≥ 0.40% group, which includes 143.
+- **Two separate problems:** fees make the tight-target trades (158, 162, 182) negative even when they win, and the wide-target trades lose before fees.
+
+**F55. Root-cause verdict per trade** (AGENT INFERENCE from F1–F54)
+
+| Trade | Main cause | Contributing causes | Exit | Verdict |
+|---|---|---|---|---|
+| 182 | Masked 5m STRONG_SELL bypassed the veto (F51) | EQ floor at 50 (F48); FIX-11G threshold of 50; trend-following BUY in WEAK_DOWNTREND | SELL_CONFIRMED, valid | **Defect candidate (logic)** |
+| 143 | Replaced 5m BUY reused by a route that overrides the 1m WAIT verdict (F50/F52) | 2 ms race; no consumed-BUY or price-drift check; gap-tick fill (F13) | Profit-lock hard exit on a gap tick, as coded | **Defect candidate (route design + timing)** |
+| 162 | WATCH-only accumulated evidence; FIX-041 exemption (F34) | EQ age penalty missed by 24 ms (F50); target barely above fees | Signal-path STRONG_SELL, valid | Valid under the coded rules; **timing-sensitive** |
+| 158 | 5m wake-up on a BUY that turned NEUTRAL the next bar | Route decided by 21 ms (F50); target 0.164% below fees; EQ 50 | SELL_CONFIRMED, valid | Valid under the coded rules; **timing-sensitive**; negative after fees |
+| 137 | Mean-reversion BUY into a recently rejected high after eight STRONG_SELLs | FIX-11G threshold of 50; R:R 0.64 | SELL_CONFIRMED, valid | **Valid losing trade** |
+| 172 | ATR under one price tick, so the ATR plan and EQ are tick artefacts | Confluence conflict with 1h | HTF_SELL_CONFIRMED, valid | **Valid losing trade** (model can't work at this price precision) |
+
+- **Exits:** none of the six had a defective exit (F17, F36).
+- **Data:** freshness and data quality were valid for all of them (F12).
+
+**F56. Replay reproducibility (U7, analysis only; Replay not run).** (PROJECT EVIDENCE: code; reproduction is AGENT INFERENCE)
+
+- **Should reproduce deterministically from stored signals:**
+  - F51 masking, because it is a pure function of the stored decisions;
+  - the F48 EQ scores, because they read persisted signals and opportunities (comments at `:884-897`);
+  - the 162 age truncation, because it uses stored `generated_at`.
+- **Reproduces only over *stored* production signals:** F50's races, through `ExecutionReplayScope.latestAtOrBefore` (`:106-120`). Replay that *regenerates* signals assigns new `generated_at` values, so 143's and 158's routes may diverge. That is a Replay-parity gap for any fix that is validated by regeneration.
+- **143's exit:** reproduces only if Replay feeds the stored price events. Fills come from ticks.
+
+## RESEARCH
+
+These findings are EXTERNAL RESEARCH:
+
+- **Intraday technical rules in crypto:** profitability after costs is unstable and has shrunk over time.
+  - One 1-minute range-breakout study found no outperformance of buy-and-hold after costs.
+  - Studies across about 15,000 rules found breakeven costs above typical crypto fees, though mostly for daily rules.
+  - This fits F54 and the zero-gross-edge result. Note that most of these studies are on BTC and cover 2013–2021.
+- **Binance spot fees:** standard VIP 0 is about 0.1% per side, or about 0.075% paid in BNB. I didn't reach the official fee page, so the account's actual tier is still unknown (U25).
+- **Multi-timeframe practice:** the standard rule is to use higher-timeframe values only from bars closed by their close time. Sources say nothing specific about ordering at the same timestamp. That supports selecting by candle time rather than `generated_at`, which is my own inference.
+
+## EVIDENCE
+
+- **Database results:**
+  - DBQ-CLAUDE-I5-001 to -006
+  - I1-001, I1-002, I1-004
+  - I2-002, I2-003
+  - I4-007
+- **Record IDs:**
+  - signals 159285, 159407, 159408, 165412, 165415, 167668, 176655, 176710
+  - opportunities 35535, 36524, 37621, 37952, 39062, 40290
+  - wallet_trade 358, 403, 451
+  - audit 2425
+- **Code:**
+  - `ExecutionIntelligenceService.java:47, 62, 65, 229, 865-1029, 1472-1514`
+  - `HigherTimeframeBuyAssessmentService.java:15-51`
+  - `TradeExecutionValidationService.java:266`
+
+## UNKNOWNS
+
+- **U28:** the route behind the three NO_ENTRY executions (I6-002).
+- **U29:** across all trades, how often the 5m signal at entry was masked from bearish, and how those trades turned out (I6-001).
+- **U30:** the decisions of the replaced 5m signals versus the latest closed ones in the 6 SETUP_TIMEFRAME_ATR cases (I6-003).
+- **U31:** how P&L splits by exit reason across all positions (I6-004).
+- **U32:** whether the ACCUMULATED_EVIDENCE route applies the `< 50` EQ block (for the F50 counterfactual on 162). This is code to trace in iteration 7.
+- **Carried over:** U17, U19 (needs logs), U25 (fee tier).
+- **Escalations:** F38 (time-basis rule), F12 (FIX-154 is live), F51 (whether the legacy veto should see the raw decision).
+
+## DB REQUESTS
+
+All time literals are read in KSA, the session time zone (F38).
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: Prevalence and outcome of BUYs whose audited 5m signal had a bearish original_decision masked to non-bearish (F51, U29)
+SQL:
+SELECT CASE WHEN f.original_decision IN ('SELL','STRONG_SELL') AND f.decision NOT IN ('SELL','STRONG_SELL') THEN 'MASKED_BEAR_5M' ELSE 'NOT_MASKED' END AS bucket, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS winners, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum FROM paper_position p JOIN buy_htf_assessment_audit a ON a.id = (SELECT MAX(a2.id) FROM buy_htf_assessment_audit a2 WHERE a2.reference_signal_id = p.signal_id) JOIN trade_signal f ON f.id = a.five_minute_signal_id WHERE p.closed_at IS NOT NULL GROUP BY bucket ORDER BY bucket
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: Route and outcome of executions whose 1m ATR plan said NO_ENTRY or WAIT_FOR_RETRACEMENT (F53, U28)
+SQL:
+SELECT p.id, p.symbol, s.id AS signal_id, s.decision, s.atr_entry_type, s.atr_recommended_position_percent, b.execution_reason, p.realized_pnl, p.close_reason, p.opened_at FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id LEFT JOIN wallet_trade b ON b.signal_id = p.signal_id AND b.side = 'BUY' AND b.status = 'EXECUTED' WHERE p.closed_at IS NOT NULL AND s.atr_entry_type IN ('NO_ENTRY','WAIT_FOR_RETRACEMENT') ORDER BY p.opened_at LIMIT 50
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: Decisions of the 5m signal used versus the latest closed 5m in the six superseded SETUP_TIMEFRAME_ATR cases (F52, U30)
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, decision, original_decision, final_entry_allowed, atr_immediate_entry_allowed, generated_at, created_at FROM trade_signal WHERE id IN (95135,95262,95260,125306,125434,125433,142297,142423,142422,159285,159407,159408,161084,161210,161209,172833,172958,172956) ORDER BY symbol, generated_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-004
+Purpose: P&L by exit reason and holding time across all closed positions (U31)
+SQL:
+SELECT p.close_reason, p.status, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS winners, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum, ROUND(AVG(TIMESTAMPDIFF(SECOND, p.opened_at, p.closed_at)), 0) AS avg_hold_s FROM paper_position p WHERE p.closed_at IS NOT NULL GROUP BY p.close_reason, p.status ORDER BY pnl_sum
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-005
+Purpose: How often an entry's opportunity age sat within 1 s of an EQ age threshold (20/40/60 min), measuring F50's timing sensitivity
+SQL:
+SELECT o.id, o.symbol, o.started_at, s.id AS signal_id, s.generated_at, TIMESTAMPDIFF(MICROSECOND, o.started_at, s.generated_at)/1000000 AS age_s, p.realized_pnl FROM execution_opportunity o JOIN trade_signal s ON s.id = o.latest_signal_id JOIN paper_position p ON p.signal_id = s.id WHERE o.status = 'EXECUTED' AND p.closed_at IS NOT NULL AND (ABS(TIMESTAMPDIFF(MICROSECOND, o.started_at, s.generated_at)/1000000 - 1260) < 1 OR ABS(TIMESTAMPDIFF(MICROSECOND, o.started_at, s.generated_at)/1000000 - 2460) < 1 OR ABS(TIMESTAMPDIFF(MICROSECOND, o.started_at, s.generated_at)/1000000 - 3660) < 1) ORDER BY o.id LIMIT 50
+### END_DB_REQUEST
+
+## Self-review
+
+- **Corrections this iteration:**
+  - F40's breakdown for 158 is replaced by F48 (it scored 50 without the rejection floor).
+  - F44's emphasis is corrected by F54 (the gross loss is in the wide-target trades).
+  - The F43 mechanism is systematic (26% of setup-ATR buys) but has no proven aggregate harm (F52).
+- **Inferences, not proven:**
+  - the counterfactuals for 162 (U32) and 182 (they depend on design intent);
+  - the mechanism behind F49 (confounded by size and by EQ being stored at the fill);
+  - the fee rate.
+- **Plan for iteration 7:**
+  - close U28–U32;
+  - trace the ACCUMULATED_EVIDENCE EQ guard;
+  - draft the final report in AGENTS.md's five-section format, with corrective options and regression checks as recommendations only.
+
+Sources:
+- [Bakker (Erasmus thesis) – intraday BTC technical rules](https://thesis.eur.nl/pub/41546/)
+- [NCCU thesis – 1-minute range-breakout strategies](https://thesis.lib.nccu.edu.tw/detail/5ee3a21ae846b1c833ff57e17695599b/)
+- [Hudson & Urquhart, Annals of Operations Research (2019)](https://link.springer.com/article/10.1007/s10479-019-03357-1)
+- [Technical analysis in cryptocurrency markets: do transaction costs and bubbles matter?](https://faculty.up.edu.pe/es/publications/technical-analysis-in-cryptocurrency-markets-do-transaction-costs/)
+- [Neely & Weller (1999), intraday FX rules](https://text.www2.warwick.ac.uk/fac/soc/wbs/subjects/finance/research/wpaperseries/1999/99-89.pdf)
+- [Binance Square – #binancefees](https://www.binance.com/ru-KZ/square/hashtag/binancefees)
+- [Coinspot – Binance fees guide](https://coinspot.io/en/analysis/binance-fees-2025-the-ultimate-guide/)
+- [Binance.US BNB fee discount (different entity)](https://support.binance.us/en/articles/9843536-binance-us-launches-trading-fee-discount-and-vip-program-with-bnb)
+- [Backtrex – multi-timeframe backtesting guide](https://backtrex.com/en/blog/multi-timeframe-backtesting-guide)
+- [TradingView – strategy peeking into the future](https://es.tradingview.com/support/solutions/43000614705/)

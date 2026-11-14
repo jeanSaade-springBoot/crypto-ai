@@ -1,0 +1,1 @@
+SELECT id, symbol, observed_at, UNIX_TIMESTAMP(observed_at) AS epoch_s, @@session.time_zone AS session_tz FROM crypto_ai.market_price_event WHERE id IN (1789409, 1862211) LIMIT 2

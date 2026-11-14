@@ -1,0 +1,2 @@
+SELECT symbol, COUNT(*) AS events, MIN(observed_at) AS first_obs, MAX(observed_at) AS last_obs FROM crypto_ai.market_price_event WHERE observed_at BETWEEN '2026-10-11 22:43:27' AND '2026-10-11 22:43:36' GROUP BY symbol ORDER BY symbol;
+SELECT id, observed_at, price, delivery_status, outcome_reason FROM crypto_ai.market_price_event WHERE symbol='EGLDUSDT' AND observed_at BETWEEN '2026-10-11 22:43:26' AND '2026-10-11 22:43:36' ORDER BY observed_at, id;

@@ -1,0 +1,54 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen population remains exactly `paper_position` IDs `182, 172, 162, 158, 143, 137`. No substitution occurred.
+- **PROJECT EVIDENCE:** The permitted `db/CODEX` directory contains no result artifacts, and no application `.log` files are present in the permitted workspace scope. Therefore no trade-specific timing, log, or DB fact is established.
+- **PROJECT EVIDENCE:** Timing instrumentation is best-effort, not a complete ledger. `fix129_stage_timing` records only failed or ≥1-second kline stages; its bounded async writer can drop or fail persistence. Thus an absent timing row cannot prove a fast or successful path. [KlineTiming.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTiming.java:24), [KlineTimingStore.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTimingStore.java:34)
+- **PROJECT EVIDENCE:** For direct 1m observations, candle/price evidence is committed before protection; protection then completes an accepted `market_price_event` atomically as `APPLIED` or marks it non-canonical. A `PENDING` event is unresolved evidence until the bounded resolver produces a durable outcome. [KlineTransactionCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:37), [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:82)
+- **PROJECT EVIDENCE:** `SIGNAL_SAVED` records candle-close-to-generation/insertion delay, but does not prove an entry. Conversely, signal-processing `COMPLETED` explicitly does not necessarily mean a trade; the authoritative entry remains a durable `paper_position` row. [CandleClosedAnalysisWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java:220), [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:104)
+- **AGENT INFERENCE:** With no durable timing rows, position rows, price events, or runtime logs, no execution-delay or protection-delay diagnosis is defensible for any of the six losses.
+- **PROJECT EVIDENCE:** The provided snapshot labels conflict by two seconds: `2026-11-07 19:55:22 UTC` converts to `2026-11-07 22:55:22 KSA`, not the supplied `22:55:20 KSA`. The frozen selection remains unaffected.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Runtime source logging can correlate analysis by candle event/symbol/interval/open time; signal processing by signal ID; and protection by price-event ID, symbol, and observation time.
+- **PROJECT EVIDENCE:** The only available stderr artifacts show Codex client cache warnings, not trader-runtime activity; they are irrelevant to trade execution or timing.
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- For each frozen trade: symbol, open/close UTC and KSA times, entry/exit signal IDs, close reason, prices, quantity, P&L, and whether the selection predicate still holds.
+- Whether any delay occurred in ingestion, analysis, signal processing, entry, price observation, protection, or exit.
+- Whether related `market_price_event` records were `APPLIED`, `NON_CANONICAL`, `PENDING`, or `PROTECTION_NOT_APPLIED`.
+- Whether the deployed database contains the current timing table and its expected columns.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Read the actual timing/protection and trade-forensics schema before issuing bounded joins for the six frozen positions. This request establishes only schema availability; it does not infer that any timing evidence exists.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    column_default,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'wallet_managed_position',
+      'position_management_event',
+      'market_price_event',
+      'fix129_stage_timing',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

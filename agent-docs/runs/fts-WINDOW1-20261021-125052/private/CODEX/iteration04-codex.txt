@@ -1,0 +1,91 @@
+## Iteration 4 — Code / trade route
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+- Frozen scope remains exactly: `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutions.
+- No permitted DB evidence is available yet; `db/CODEX/` is empty. Therefore, source code establishes possible/current routes, not historic proof for any trade.
+
+- The current live entry route is:
+
+  `CandleClosedAnalysisWorker` → persisted live `TradeSignal` → `PaperTradingService.processSignal` → `SignalProcessingCoordinator` lock/freshness transaction → execution-policy evaluation → fresh canonical execution price → wallet BUY → `paper_position` insert.  
+  See [CandleClosedAnalysisWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java:167), [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:64), and [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:340).
+
+- A BUY is rejected when no fresh canonical price is available, when the current execution price is at/below the stop or at/above the target, or when final entry-quality revalidation vetoes it. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1150)
+
+- The prior log evidence for trade **182** names signal `164053` and entry code `BREAKOUT_CONTINUATION_ENTRY`. In current source, that route requires a recent ATR-deferred bullish 1m signal plus fresh non-bearish 5m/1h support, minimum score/confidence/evidence conditions, reward-risk of at least 1:1, and reduced sizing. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1740) This is route evidence only until DB evidence confirms that signal `164053` is linked to position 182 and records its contemporaneous inputs.
+
+- Current mechanical-protection routing is:
+
+  canonical price receipt → freshness/order validation → open managed-position lock → TP → absolute stop loss → profit-lock → normal multi-timeframe exit → near-TP protection.  
+  Stop loss has priority over all later exit policies. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:173)
+
+- For a stop loss, current code writes the wallet mechanical exit first, then closes the matching open `paper_position` by symbol, sets `close_reason=STOP_LOSS`, and records a production exit audit in the same transaction. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:175) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:391)
+
+- For direct local price events, a committed `APPLIED` outcome is written transactionally after successful protection callback completion; a failed/rolled-back effect does not become `APPLIED`. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:80) This supports—but does not by itself prove—the prior log-based inference that event `1837489` belonged to a committed protection route for trade 182.
+
+- The prior log evidence for **182 / ICPUSDT** remains consistent with the current stop-loss route: observed price `3.465000000000` was below logged stop `3.465026371152`, followed by `Live STOP_LOSS executed` and `APPLIED` event `1837489`. Historic version/configuration and DB linkage remain unproven.
+
+- Material selection-versus-route discrepancy: the charter says selected rows require `paper_position.status=CLOSED`, while the current stop-loss route writes `PaperPosition.status=STOPPED`; the enum distinguishes `CLOSED` and `STOPPED`. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:178) [PositionStatus.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PositionStatus.java:2)  
+  Thus, if the current code applied at trade 182’s exit and the prior log linkage is correct, a direct stop-loss close would not meet the stated `status=CLOSED` selection predicate. This is not yet a confirmed defect: it may reflect a historical code version, later status normalization, an incorrect/misrecorded predicate, or an unconfirmed log-to-row association.
+
+- Current normal protection selects the newest 1m/5m/1h signals without bounding them to the Binance observation timestamp. Only the near-TP route explicitly corrects future-dated signal lookup. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:95) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:336)  
+  This is a code-review observation, not a demonstrated cause of any frozen loss. Event and signal timestamps are required to determine whether it affected a trade.
+
+- Paper wallet BUY and mechanical SELL records currently use zero fees, and `paper_position` P&L is calculated from entry/exit price and quantity. Any study conclusion must therefore call it paper/gross P&L unless independent fee evidence exists. [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:163) [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:533)
+
+**AGENT INFERENCE**
+
+- Trade 182 is provisionally a mechanically executed stop loss, not a demonstrated protection failure. The observed ~3.514-second observation-to-commit interval warrants measurement, but the currently available logs show completion rather than loss of protection.
+- Trades 172, 162, 158, 143, and 137 have no position-specific code-route assignment until their authoritative rows and linked evidence are supplied.
+- No frozen trade can yet be classified as a strategy loss, stale-data loss, execution defect, or accounting discrepancy.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+### UNKNOWNS
+
+- Actual `paper_position` values, especially status, symbol, signal IDs, timestamps, stop/target, exit price, close reason, quantity, and P&L.
+- Whether position 182 actually links to signal `164053`, event `1837489`, and the logged ICPUSDT stop execution.
+- Historic deployed code/configuration and ingestion mode at each trade time.
+- The wallet, managed-position, exit-audit, price-event, and work-record linkage for all six positions.
+- Whether the current source’s unbounded normal-exit signal lookup existed at the time of any frozen trade or changed its outcome.
+- Snapshot metadata remains internally inconsistent: UTC `2026-10-22 10:28:18` converts to KSA `2026-10-22 13:28:18`, not the supplied KSA value.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Establish actual schemas and authoritative rows for the six frozen positions; validate the `CLOSED` versus `STOPPED` selection discrepancy and derive only evidence-backed joins for entry, protection, and exit.  
+SQL:
+
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'wallet_trade',
+      'wallet_managed_position',
+      'position_management_event',
+      'production_exit_audit'
+  )
+ORDER BY table_name, ordinal_position;
+
+SELECT p.*
+FROM crypto_ai.paper_position AS p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+
+### END_DB_REQUEST

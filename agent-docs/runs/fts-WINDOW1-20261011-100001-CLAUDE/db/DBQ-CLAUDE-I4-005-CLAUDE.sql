@@ -1,0 +1,1 @@
+SELECT id, symbol, status, opened_at, closed_at, close_reason, entry_price, stop_loss, take_profit, exit_price, realized_pnl FROM paper_position WHERE opened_at <= '2026-10-10 18:02:21' AND (closed_at IS NULL OR closed_at >= '2026-10-10 17:59:00') ORDER BY opened_at

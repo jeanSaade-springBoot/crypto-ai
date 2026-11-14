@@ -1,0 +1,243 @@
+# Daily failed-trade study, WINDOW1: Claude track, Iteration 6 (root cause and research, self-review)
+
+**Bottom line:** all six trades followed the code as written. None was caused by stale data or a slow fill. The losses come from weak entry design, and five of the six were small, low-edge entries. The causes, in order of weight:
+
+1. **The entries had little or no edge after fees (RC-1).** Five of six had a planned reward/risk below 1 (target smaller than stop).
+2. **Entry Quality, the system's entry-timing score, was a sizing control only (RC-2).** It allowed a stretched entry (143), a counter-trend entry (137), and one that only passed because of a minimum-score floor (182). It never blocked any of them.
+3. **Different entry routes apply different checks to the same weak setup (RC-3).** Trade 162 is the clearest case.
+
+**Iteration 5 had arithmetic errors, now corrected:**
+- **Trade 162 did not reach its score through the floor.** Its score of exactly 50 came from other penalties. The floor itself (the rejected-high penalty can't push a score below 50) remains a real issue for trade 182.
+- **The late-entry block (FIX-041) is again the leading reason the earlier DOGE BUY was skipped.** I5's arithmetic for that BUY was wrong.
+- **The "maximum 3 open positions" explanation is refuted** for both skipped BUYs.
+- **Across 92 positions, a score of 50–54 does not predict losses.** Higher scores did worse.
+- **The six frozen trades are only about 3.4% of realised losses in this period.** Stop-outs, which the selection excludes, are about 96%.
+
+I made no code, config, database, git or deployment changes. No `Write` or `ExitPlanMode` tool was available, so there is no plan file and this message is the whole Iteration 6 output.
+
+**Inputs:**
+- My results I5-001, I5-002 and I5-003, plus I2-001, I2-003, I4-001 and I4-004.
+- Code: `ExecutionIntelligenceService` lines 500-560, 640-700, 848-1030, 1136-1213, 1990-2060, 2078-2107 and 2601-2604; `PaperTradingService` lines 296-395.
+- I did **not** re-read AGENTS.md, AGREED_KNOWLEDGE, DECISIONS, DATABASE_INVESTIGATION_RULES or claude-docs this iteration. I relied on what I loaded in Iterations 1-5.
+- I did not read the other agent's files, `LIVE_*`, or the other agent's memory.
+
+**Time convention:** result files show KSA (F-23). Below, UTC = shown time − 3 h.
+
+---
+
+## How the score is built [PROJECT EVIDENCE, `ExecutionIntelligenceService:871-1003`]
+
+The I5 errors came from not checking two of these rules:
+
+- **Recent low.** The score's reference low is the lowest price among the newest 20 one-minute signals within 30 minutes. If a still-fresh opportunity (≤120 min) has a lower anchor or best price, that is used instead.
+- **Recent high, and when the rejected-high penalty can apply.**
+  - The recent high is updated only by a **strictly higher** price (line 888).
+  - If the current price is the highest in the window, the recent high's time is the current signal's own time, and the check `recentHighAt.isBefore(now)` fails (line 962).
+  - So **a trade entering at its window high can never get the rejected-high penalty.**
+- **Opportunity age** is `Duration.toMinutes()`, which drops partial minutes (line 950).
+- **Stored evidence:** when the penalty applies, `applyInitialEntryQualityGuard` adds the text "recent rejection zone near …" to the explanation (lines 1208-1210). Explanations without that text are direct evidence the penalty did not fire.
+
+## FINDINGS
+
+**F-46: Entry Quality rebuilt exactly for every trade (replaces F-38).** [PROJECT EVIDENCE: I5-001 prices, I4-004 / I2-001 ATR and reward/risk, I2-003 opportunity start times]
+
+**182 (signal 176710) = 50, held up by the floor. Proven.**
+- Reward/risk 0.482 → −30.
+- Reference low 0.1875 (signal 176528, 09:50:03 KSA / 06:50:03 UTC). Distance (0.1884 − 0.1875) / ATR 1.51214e-4 = **5.95 ATR** → −20. Running score: **50**.
+- Rejected high 0.1888 (176227, 09:38:01 KSA / 06:38:01 UTC). It lies 0.21% above the price, with 19 lower prices since. So −12 would give 38, but the floor holds it at **50**.
+- **Without the floor it scores 38 and is blocked** (`CHASE_ENTRY_BLOCKED`).
+- Opportunity age was about 1 min.
+
+**172 (signal 171589) = 60.** Proven, given an ATR of about 6.8e-9 (the I5 value).
+- Reward/risk 0.744 → −30.
+- Two ticks above the 5.47e-6 low = **2.94 ATR** → −10. Every other −10 source is ruled out:
+  - distance is only 0.37%;
+  - the regime is not HIGH_VOLATILITY or BREAKOUT.
+- **No rejected-high penalty:** the entry price equals the window maximum, and the stored explanation has no rejection text.
+
+**162 (signal 167668) = 50, NOT held up by the floor. This corrects F-39.**
+- Reward/risk 0.438 → −30.
+- Reference low 0.08675 (167436, 03:54:02 KSA / 00:54:02 UTC). (0.08705 − 0.08675) / ATR 6.3574e-5 = **4.72 ATR** → −20.
+- **Age 0:** the opportunity started 03:41:02.837 KSA and the signal was 04:02:02.813 KSA. That is 20 min 59.976 s, which `toMinutes()` truncates to 20, so the >20 age penalty did not apply. It missed by 24 ms.
+- **The rejected-high penalty was impossible:** 0.08705 was the window high. The stored explanation for row 37952 confirms this; it has no rejection text.
+- The stored 50 also shows the opportunity anchor/best price was at least 0.086669. A lower reference would push the ATR term past 6, giving 40.
+
+**137 (signal 156723) = 58.** Unchanged.
+- Reward/risk −30, rejected high −12.
+- The rejected high is 4.005 (156340, 20:40:01 KSA / 17:40:01 UTC), 0.15% away.
+- The score before the penalty was 70, so the floor was not needed.
+
+**143 (signal 159408) = 60, now uniquely determined.**
+- Distance **1.51%** (4.032 against a low of 3.972 at 22:33 KSA / 19:33 UTC) → −10. This is just over the 1.5% threshold.
+- **ATR distance above 6 even on the 5-minute ATR** → −30.
+- Reward/risk 1.5 → 0. Age 0, because the opportunity started at the signal time (row 36524).
+- No other combination of terms reaches 60. A 1.5% rise in 7 minutes, more than 6 five-minute ATRs above the low, still graded **ACCEPTABLE_ENTRY**.
+
+**158 (signal 165412): score is 50 or 60.**
+- Reward/risk 0.327 → −30. Age 53 min (row 37621) → −10.
+- **No rejected-high penalty:** only one lower price came after the 1.4115 high.
+- The execution-time recheck (FIX-056, lines 1167-1168) also applies the 50 cut-off. So the 1-minute-ATR score at execution was 50 or 60.
+
+**Skipped BUY 176692 = 50, held up by the floor.**
+- −30 (reward/risk 0.494), −20 (5.16 ATR), then the rejected high 0.1890 (0.37% away) would take it to 38. The floor holds it at 50, matching audit row 2424.
+
+**Skipped BUY 167646 = 50 (LATE_ENTRY), held up by the floor.**
+- −30 (0.388), −10 (3.21 ATR), age 19 min → 60.
+- Rejected high 0.08694 (167293, 03:48:02 KSA), 0.01% away → 48, held at **50**.
+
+**F-47: Trade 162's root cause is a mismatch between two routes. F-32 is restored and stronger.** [PROJECT EVIDENCE; the specific blocking guard is AGENT INFERENCE] Severity: high.
+- **01:01:02 UTC (04:01:02 KSA):** the direct route approved BUY 167646 under `BALANCED_EARLY` (audit 2196), with Entry Quality 50 graded LATE_ENTRY.
+  - FIX-041 (lines 672-684) blocks exactly that combination.
+  - The post-bearish guard (lines 2081-2118) would also block it if it applied, because it requires a score of 60 or more.
+  - Either way, a score-based guard blocked it.
+- **The "maximum 3 open positions" check is ruled out:** only position 160 was open (I5-002). No wallet trade exists for 167646.
+- **01:02:02 UTC:** `accumulatedDecision` (lines 1964-2067) entered the same opportunity:
+  - with the same BALANCED_EARLY authority (audit 2199) and the same LATE_ENTRY grade of 50;
+  - on a weaker 1-minute signal (WATCH, not BUY) and at a **worse price** (0.08705 vs 0.08693).
+- That route applies FIX-021's authority check and the deterioration check. It applies **neither** FIX-041 nor the post-bearish guard.
+- FIX-119 did not stop it either. FIX-119 only defers entries with no BUY in their evidence, and the "1 BUY" counted here is the blocked 167646 itself.
+- So the block on 167646 helped enable the later, worse entry, the same kind of contradiction FIX-021's own comment says it closes.
+
+**F-48: Trade 182 depends on the floor, and the floor is the defect FIX-119 describes.** [PROJECT EVIDENCE] Severity: high.
+- Without the floor at lines 1000-1002, both 176692 and 176710 score 38 and are blocked.
+- FIX-11G (`TradeExecutionValidationService:263-284`) needs only a score of 50, so a floored 50 passes.
+- This is the pattern the FIX-119 comment (lines 1232-1237) calls a defect: BTCUSDT #1701, EDUUSDT #1716, UNIUSDT #1731. But FIX-119 covers only the ACCUMULATED_EVIDENCE route.
+
+**F-49: Why 176692 was skipped. The open-position limit is refuted; the leading candidate is the execution-price recheck.** [PROJECT EVIDENCE for the refutation; the cause is AGENT INFERENCE]
+- **No position was open** at 09:56:02.946 KSA. Position 181 (PEPE) opened 4.6 s later and passed every account-level control.
+- **This also makes the daily-loss limit an unlikely cause.**
+- **At a live price one tick higher** (0.1885), the ATR distance is 6.45 → −30 → 40. The floor then does not apply (40 is below 50), so the score is 28 and the recheck (FIX-056) returns `CHASE_ENTRY_BLOCKED`. At 0.188765 or above the target is already reached and the trade is cancelled.
+- Other possibilities: no fresh price, the FIX-122 recheck, or the wallet controls declining.
+- **Each alternative logs a distinct line** (`PaperTradingService:345, 352, 391`).
+
+**F-50: Even large extension alone rarely blocks an entry.** [PROJECT EVIDENCE + arithmetic] Severity: medium, design gap.
+- More than 6 ATR above the low with a 1.5–3% rise costs −40. With reward/risk of 1.25 or more, that leaves 60 (ACCEPTABLE). This is trade 143.
+- Below 3%, a pure chase can only be blocked through the reward/risk or age terms.
+- **Combined with F-41, the score is blind to direction and only loosely tied to extension.** It works as a sizing knob, not a gate.
+
+**F-51: Across all positions, low scores do not predict losses (answers U-22).** [PROJECT EVIDENCE, I5-003: 92 positions opened from 2026-10-11 00:00 UTC, ids 102-193; 60 have a stored score]
+
+| Score | Positions | Wins | Win rate | Gross P&L (USDT) |
+|---|---|---|---|---|
+| 50 | 15 | 9 | 60% | +0.125 |
+| 51–59 | 14 | 10 | 71% | +0.322 |
+| 60–69 | 21 | 9 | 43% | −0.472 |
+| 70 and above | 10 | 3 | 30% | −1.979 |
+
+- [AGENT INFERENCE] Higher scores get a bigger size cap (40–50%), so they also take the largest stop-outs: 123 (−0.698), 168 (−0.592), 181 (−0.584).
+- The sample is small, and 32 positions have no stored score. This is a lead to investigate, not a proven result.
+
+**F-52: The frozen selection captures the least costly kind of loss.** [PROJECT EVIDENCE, I5-003] This extends F-02/F-20.
+- **37 STOPPED positions,** all stop-loss exits, lost ≈ **−7.80 USDT**.
+- **8 CLOSED positions lost ≈ −0.31.** The frozen six account for **−0.273**.
+- So the frozen six are about **3.4%** of realised losses in this population.
+- Only 3 of the 37 stop-outs had reward/risk below 1 (118, 134, 185). 14 of the 37 came through IMMEDIATE_VALIDATION.
+
+**F-53: Trades with reward/risk below 1 are a fee problem, not a stop-loss problem.** [PROJECT EVIDENCE + INFERENCE]
+- 27 positions had reward/risk below 1: 18 wins, 8 losses, 1 flat, gross **+0.276 USDT** (about +0.010 per trade).
+- Signal and profit-lock exits usually close them before the stop.
+- Notional was 15 USDT on trades 162 and 182. Applying the round-trip fee from External research, R-1 (0.2%), that is ≈0.03 USDT per trade, so the group is **probably net negative after fees**. This needs the notionals from I6-003.
+
+**F-54: Self-review of Iteration 5.** My I5 self-check "reproduces every stored score" was wrong for 162. I did not check when the rejected-high penalty can apply (line 962) or that age is truncated (line 950).
+
+### Corrections
+
+| ID | What changes |
+|---|---|
+| C-5 | 162's floor attribution in F-38/F-39 is **withdrawn** (F-46). |
+| C-6 | 182 was "either path"; it is now **proven** to depend on the floor. |
+| C-7 | I5's C-2 is reversed: 167646 scored 50 / LATE, so F-32 stands as F-47. |
+| C-8 | The "maximum 3 open positions" hypothesis is **refuted** for both skipped BUYs. |
+| C-9 | I5's C-1 is refined: 176692's 50 was held up by the floor. |
+| C-10 | The score breakdowns for 143 and 172 are now uniquely determined. |
+
+---
+
+## ROOT CAUSE SYNTHESIS
+
+Every entry is judged on information available at the time. The outcome is listed separately.
+
+| Trade | Exit (UTC / KSA) | Root cause | Classification |
+|---|---|---|---|
+| 182 ACE | SELL_CONFIRMED | **RC-1** (net reward/risk ≈0.06 after fees). **RC-2:** score 50 held up by the floor (F-48); counter-trend after 7 STRONG_SELLs (F-41). The better BUY a minute earlier was probably cancelled at execution (F-49). | Followed the rules; **design defect** (floor + FIX-11G) |
+| 172 SHIB | HTF_SELL_CONFIRMED | **RC-1** (≈0.24). **RC-3:** a 5-minute signal its own checks rejected counted as bullish (F-26). SHIB price ticks are larger than its ATR (F-16/F-43). | Valid loss with **design gaps** |
+| 162 DOGE | STRONG_SELL | **RC-3:** guards that blocked the direct route were missing on the accumulated route, and FIX-119 was bypassed because of the blocked BUY (F-47). **RC-1** (≈0.03). | **Logic defect** (routes contradict each other) |
+| 158 XRP | SELL_CONFIRMED | **RC-1:** the target was smaller than round-trip fees (reward/risk 0.33, no minimum on the wake-up route, F-31). The score was not stored (logging gap). | Followed the rules; **design gap** |
+| 143 EGLD | PROFIT_LOCK_HARD_EXIT | **RC-4:** decided on a superseded 5-minute signal (F-24); Replay would likely not have taken it (F-34). **RC-2:** a >6 ATR chase scored 60 (F-50). It passed the take-profit, then fell through the profit floor in a real crash (F-14/F-25). | **Defect** (signal selection) + exit outcome |
+| 137 EGLD | SELL_CONFIRMED | **RC-1** (≈0.17). **RC-2:** counter-trend mean reversion after 8 STRONG_SELLs; score 58 includes the rejected-high penalty. | Followed the rules; **design gap** |
+
+- **Exits:** the signal-based exits (SELL_CONFIRMED, HTF_SELL_CONFIRMED, STRONG_SELL) did their job and kept each loss small. I found no exit defect in these six except 143's exit mechanics (already in F-14/F-25).
+- **Data freshness and execution delay:** ruled out (F-22, F-29).
+
+**Replay reproducibility [AGENT INFERENCE]:**
+- **162's two-step sequence should reproduce in Replay.** Neither one-minute candle closes on a 5-minute boundary, so the F-34 gap does not apply, and both routes are shared code.
+- **176692's skip may not reproduce.** It depends on the live price at execution, which Replay supplies differently.
+- **143 most likely would not reproduce** (F-34).
+- An actual Replay run is still pending.
+
+## EXTERNAL RESEARCH
+
+- **R-1:** Binance spot VIP 0 is commonly listed at 0.10% maker / 0.10% taker, or about 0.075% with the 25% BNB discount. These are third-party sources; the official page did not come up. This supports the 0.15–0.20% round-trip figure used in F-40/F-53. Paper fills still record `fee_usdt = 0` (F-12).
+- **R-2:** Java's `Duration.toMinutes()` returns whole minutes and drops the remainder. That is standard API behaviour and explains the 24 ms age miss in F-46.
+
+## UNKNOWNS
+
+- **U-18‴:** which guard blocked 167646 (FIX-041 or the post-bearish guard), and which execution-time step cancelled 176692. The decisive evidence is in the logs. The opportunity row was overwritten.
+- **U-23:** opportunity anchor/best prices. The stored scores bound them (≥0.086669 for 162, ≥0.187493 for 182), but the exact values are unverified (I6-002).
+- **U-24:** fee-adjusted P&L of the reward/risk-below-1 group (needs notionals, I6-003).
+- **U-25:** whether high-score stop-outs (F-51) are caused by the larger size or by entry selection. Out of frozen scope; flagged only.
+- **ATR inputs:** the 1-minute ATR for 156723, 171589 and 165412, and the 5-minute ATR for 159285 and 165415, are inferred from earlier iterations (I6-001).
+
+## LOG REQUEST (for the coordinator; log times are UTC)
+
+`rg -z` over `logs/crypto-ai-trader.2026-10-12.*.log.gz`:
+- `Execution Intelligence did not open a BUY: signalId=167646` (expect `BALANCED_EARLY_LATE_ENTRY_BLOCKED` or `BALANCED_EARLY_POST_BEARISH_RECOVERY_REQUIRED`), 01:01:02–01:01:10.
+- `BUY revalidation rejected signal 176692|signal 176692 but no fresh canonical|approved signal 176692 but wallet controls declined`, 06:56:02–06:56:10.
+- `FIX-11G post-guard result: signalId=176692`.
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: Exact ATR, liquidity and regime inputs to close F-46 (U-25 ATR inputs). Filters by ID only, so the session time zone does not matter.
+SQL:
+SELECT id, symbol, interval_code, generated_at, decision, latest_price, stop_loss, take_profit, atr_at_signal, risk_reward_ratio, market_regime, liquidity_status, btc_context_status
+FROM trade_signal
+WHERE id IN (156723,159285,159407,159408,165412,165415,167646,167668,171559,171589,176692,176710)
+ORDER BY id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: Opportunity anchor/best prices, to confirm which reference price the score used (U-23, F-46).
+SQL:
+SELECT id, symbol, status, started_at, anchor_entry_price, best_entry_price, latest_signal_id, decision_code
+FROM execution_opportunity
+WHERE id IN (35535,36524,37621,37952,39062,40290)
+ORDER BY id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: Position notionals, so P&L after fees can be computed (F-53, U-24). The first statement confirms the quantity column name before it is used.
+SQL:
+SHOW COLUMNS FROM paper_position;
+SELECT p.id, p.status, p.close_reason, ROUND(p.realized_pnl,6) AS pnl, p.entry_price, p.exit_price, p.quantity,
+       ROUND(p.entry_price*p.quantity,4) AS entry_notional, s.risk_reward_ratio
+FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id
+WHERE p.id BETWEEN 102 AND 193 AND p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL
+ORDER BY p.id
+LIMIT 120
+### END_DB_REQUEST
+
+---
+
+**Self-review of Iteration 6:**
+- **Proven:** the score breakdowns for 182, 172, 162, 143 and both skipped BUYs; 182 depends on the floor; 162 does not; the open-position limit hypothesis is refuted; the score-band statistics (F-51) and the loss-share figure (F-52).
+- **Inference:** which guard blocked 167646; the cause of 176692's cancellation; the fee-adjusted result for the reward/risk-below-1 group.
+- **Planned for Iteration 7:** consolidate the regression checks for RC-1 to RC-4 and close U-18‴, U-23 and U-24 from the I6 results and logs.
+
+Sources:
+- [Finhay: Binance trading fees (2026)](https://www.finhay.com.vn/en/phi-giao-dich-binance)
+- [FAPAM: 2026 Binance exchange fees](https://virtualold.fapam.edu.br/binance-exchange-fees-s90f.html)
+- [Binance.US zero-fee announcement (separate exchange, not applicable to global)](https://blog.binance.us/zero-fee-trading/)

@@ -1,0 +1,1 @@
+SELECT id, symbol, execution_source, decision_code, recommended_position_percent, decision_explanation FROM crypto_ai.execution_opportunity WHERE id IN (36481,36524,37621,37952,39062,40290,35535) ORDER BY id LIMIT 10

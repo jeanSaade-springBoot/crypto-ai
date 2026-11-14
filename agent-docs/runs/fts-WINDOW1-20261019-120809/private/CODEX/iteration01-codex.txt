@@ -1,0 +1,58 @@
+## Iteration 1 — Trade Reconstruction
+
+### Findings
+
+**PROJECT EVIDENCE**
+
+- The frozen study cohort is exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. I have not substituted or expanded it.
+- The supplied selection was captured at actual snapshot time **2026-10-19 09:08:24 UTC / 12:08:09 KSA**, not the intended **10:00:00 KSA** window clock. Therefore it cannot prove which six rows would have been selected at the intended clock.
+- Current source maps `paper_position` to its entry signal, optional exit signal, entry/exit prices, stop/target, realized P&L, reasons, and lifecycle timestamps. [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java)
+- Current protection order is: TP handling → absolute stop loss → dynamic profit lock → normal multi-timeframe exit → near-TP protection. This is source-level behavior only; it does not prove the deployed version/configuration for any frozen trade. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java)
+- A profit-lock breach holds only with bullish 1h plus supportive 5m, or `WATCH` 1h plus supportive 5m and a non-bearish current signal; otherwise it exits. [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java)
+- Current project guidance requires accepted price-event evidence (`LEGACY`/`APPLIED`) for protection reconstruction; candle OHLC cannot replace missing intrabar evidence. [TRADE_INVESTIGATION_AGENT.md](/C:/workspace/crypto-ai-trader-mysql/codex-docs/TRADE_INVESTIGATION_AGENT.md)
+
+**AGENT INFERENCE**
+
+- No individual trade reconstruction is defensible yet: the permitted Codex DB evidence directory contains no returned query results, and actual schema must be read before requesting trade fields.
+- No conclusion is possible yet on entry validity, exit path, fees, loss size, data freshness, latency, strategy defect, or Replay reproducibility.
+
+**EXTERNAL RESEARCH**
+
+- None performed.
+
+### Unknows
+
+For every frozen position: symbol, entry/exit UTC timestamps and KSA conversions, linked signal IDs, actual close reason, price-event identity/state, wallet executions/fees, position-management events, historical configuration/version/mode, logs, and candle/indicator evidence.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual `crypto_ai` schema for the bounded entities needed to reconstruct only the six frozen `paper_position` trades before selecting any data columns.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    ordinal_position,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'wallet_managed_position',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'production_exit_audit',
+      'position_management_event',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST

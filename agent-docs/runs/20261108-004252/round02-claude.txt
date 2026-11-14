@@ -1,0 +1,93 @@
+I've checked Codex's claims against the code. Here is the Round-2 review.
+
+# FIX-156 Round 2 cross-examination (Claude, read-only)
+
+I changed nothing in source, configuration, the database, git or the runtime. I did no external research. I can't write a plan file or exit plan mode in this session, so this response is the whole review.
+
+**Bottom line:** Codex and I agree on the outcome: FIX-156 can't be finished safely from the current code. Codex found one real issue I missed (Replay writing to `shared_candle_input_audit`). I overstated one of my own findings (F5), and I'm correcting it below.
+
+## FINDINGS
+
+**C1. Codex is right about the shared audit write, which I missed (PROJECT EVIDENCE).**
+- `RegressionTestWorker.java:117` opens `CandleInputAudit` with the context `"REPLAY:"+runId` when `sharedMarketEnabled` is true.
+- Every candle read through `CandleRepository.java:35` then reaches `CandleInputAudit.capture`.
+- That method inserts into `shared_candle_input_audit` in its own `REQUIRES_NEW` transaction (`CandleInputAudit.java:28,47`). A failed insert stops the run (`:49-52`).
+- So Replay writes a shared table that is outside the single O-8 `fix122_evaluation` exception.
+- One condition (AGENT INFERENCE): this only happens with shared-market LIVE. AGENTS.md's target runtime is `shared-market.mode=OFF`, so the path may never run under the target configuration. It is still reachable in the current code, and nothing in FIX-156 blocks it. The boundary documents must either list it or remove it.
+
+**C2. Correction to my own F5 (PROJECT EVIDENCE).**
+- I said Replay reaches `StopLossEvidenceStore`'s `wallet_trade` read. That is wrong for Replay.
+- `StopLossEvidenceService.resolve` uses `replay.stopBoundary(...)` whenever `replay.active()` is true. It calls `store.latest` (the `wallet_trade` query) only in Production (`StopLossEvidenceService.java:43-45`).
+- What Replay *does* reach is `store.append(runId, …)` (`:157` → `StopLossEvidenceStore.java:51-54`). That is the active-run `fix122_evaluation` insert.
+- The insert's meaning is one of the permitted O-8 categories, but it goes through the Production class and skips `ReplayAccessPolicy` entirely.
+- `Fix122DiagnosticsController` also reads through the Production store's `replayDetails` / `productionDetails`, again skipping the guard.
+- Revised F5: the guard is bypassed for allowed O-8 operations. There is no forbidden `wallet_trade` read from Replay. The `ReplayFix122EvaluationStore` duplicate is effectively dead for the decision path.
+
+**C3. Codex's evidence is loosely worded in places (PROJECT EVIDENCE).**
+- Codex calls `ShadowProductionReplayService.java:868` a "wallet execution insert". It writes `wallet_execution_test`, which is a legacy Replay-owned table, not a Production wallet table.
+- The valid objection is that the write is unguarded and keeps the wallet-simulation model (my F6). It is not a forbidden-table write. The finding stands, but it shouldn't be read as Replay mutating Production wallet data.
+
+**C4. Codex is right that the V111 evidence tables are unused (PROJECT EVIDENCE).**
+- Grep finds `replay_run_certificate`, `replay_price_coverage`, `replay_decision_trace` and `replay_run_output` only in migrations, the allow-list constant and `ReplayAccessPolicyTest`.
+- Only `replay_policy_profile_detail` has a writer (`ReplayPolicyProfileStore.java:67-69`), and that writer itself has no caller (my F7).
+
+**C5. Codex and I both overstated the closure contradiction; both readings need care (PROJECT EVIDENCE).**
+- The record really is ordered in time. The 2026-10-16 authorization says the findings "remain OPEN" (`JEAN_REVIEW_FIX-156.md:124`). The 2026-10-17 record closes them (`:139-143`).
+- So the status report's "OPEN" (`FIX-156_IMPLEMENTATION_STATUS_REPORT.md:7`) is a stale document, not a live contradiction.
+- The real gap is the one I gave in F2: the closure criteria at `:85-92` are not met in the code. Jean closed the findings anyway.
+- The closure wording authorizes *continued development*. It does not state that the criteria were met. Neither agent should read it as technical acceptance.
+
+**C6. New finding: V111 is outside the recorded authorization boundary (PROJECT EVIDENCE + AGENT INFERENCE).**
+- The 2026-10-16 corrective authorization names only "the additive V110 migration" (`JEAN_REVIEW_FIX-156.md:129`).
+- `V111__fix_156_replay_profile_evidence.sql` exists, and the status report says it was "applied locally by the user-started application on 2026-10-17".
+- Applying a migration is explicitly not authorized (`:115`, `:126-127`). The application happened through a user-started Flyway run, not an agent action.
+- Even so, V111 is now an applied, immutable migration that was never registered in an authorized scope. Under AGENTS.md it can't be edited, so any schema correction must be a forward V112+.
+- Neither agent reported this in Round 1.
+
+**C7. Disagreement with Codex on the price-coverage objection (AGENT INFERENCE).**
+- `exactPriceReplay = !livePrices.isEmpty()` (`ShadowProductionReplayService.java:97`) is a weak label, as Codex says.
+- But a weak label isn't on its own a FIX-156 regression. It is pre-existing FIX-052 / FIX-109 behaviour.
+- The FIX-156 defect is narrower: no `replay_price_coverage` writer exists. Until one does, any parity status must be `not measured`.
+- The sort without an event `id` tiebreak (`:95`) is the concrete defect (my F9 / R156-06), because equal timestamps give nondeterministic ordering.
+
+**Still standing from Round 1:**
+- F1: RPR-0.9.12 is not in the repository.
+- F2: the BUY path goes through `evaluateBuy` → `validateBuy` → `WalletSettingsRepository`.
+- F3/F4: the guard is opt-in and accepts whatever operation category the caller declares.
+- F6: wallet simulation remains.
+- F7: no profile is ever seeded, so every run refuses.
+- F8: run-ID reuse can load a stale profile. Verified: Delete Data resets AUTO_INCREMENT (`RegressionTestService.java:409`), and the Regression service has no `DELETE FROM replay_*` statement.
+- Codex agrees with F1, F2, F3 and F7 in substance.
+
+## EVIDENCE
+
+- `RegressionTestWorker.java:117,195-201`; `CandleInputAudit.java:28,40-54`; `CandleRepository.java:35`
+- `StopLossEvidenceService.java:41-45,140-159`; `StopLossEvidenceStore.java:37-66`
+- `ShadowProductionReplayService.java:65,78-97,117,866-879`
+- `JEAN_REVIEW_FIX-156.md:85-92,115,121-129,139-143`
+- V111 `:4,19,31`; `ReplayPolicyProfileStore.java:20-29,53-69`; `RegressionTestService.java:403-409`
+
+## OBJECTIONS
+
+1. **There is no frozen contract.** RPR-0.9.12 and its hash can't be verified from the repository, and the canonical specification is RPR-0.4. Both agents hold this. It blocks registry reconciliation and any "complete package" claim.
+2. **The boundary is unenforced on three paths.** The `CandleInputAudit` write, the O-8 insert routed through a Production class, and about 120 raw `JdbcTemplate` calls all sit outside the guard. Only a single statement-owning Replay data layer plus a static test for T156-09a would prove isolation.
+3. **The BUY mirror has no design and no drift-control rule.** This is the critical-path blocker for F2.
+4. **V111 needs a governance decision.** Jean must record retroactive acceptance or a disposition before more V111-dependent code is written.
+5. **Profile collision (F8) must be resolved before the profile seeder (F7) is built.** Otherwise the first working run can silently use the wrong inputs.
+
+## UNKNOWNS
+
+- The text of RPR-0.9.12, and whether it covers V111 or allows the wallet-shaped profile fields.
+- The effective `shared-market.mode` in any environment where Replay is run. This decides whether C1 is live or latent.
+- Whether any Java 21 test passes. Nothing was executed.
+- The E03–E10 evidence state, and whether any qualified fixture exists.
+
+## Recommended next step (for Jean; not authorization)
+
+1. Place RPR-0.9.12 in `agent-docs/` and verify its hash.
+2. Get a Jean disposition on V111.
+3. Then follow my Round-1 sequence, adding two items:
+   - remove or explicitly register the `CandleInputAudit` write under Replay;
+   - route the O-8 insert through the Replay store instead of `StopLossEvidenceStore`.
+
+VERDICT: REJECTED

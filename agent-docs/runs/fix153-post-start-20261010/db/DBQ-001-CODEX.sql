@@ -1,0 +1,1 @@
+SELECT status, COALESCE(failure_reason,'NONE') AS reason, COUNT(*) AS n, MAX(updated_at) AS latest_ksa FROM local_reconciliation_audit GROUP BY status,COALESCE(failure_reason,'NONE') ORDER BY latest_ksa DESC

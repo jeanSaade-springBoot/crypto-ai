@@ -20,6 +20,8 @@ import java.time.Instant;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -34,7 +36,8 @@ class TradeExecutionValidationServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new TradeExecutionValidationService(signalRepository, settingsRepository, entryConsumptionPolicy);
+        service = new TradeExecutionValidationService(signalRepository, settingsRepository, entryConsumptionPolicy,
+                new HigherTimeframeBuyAssessmentService());
         now = Instant.parse("2026-08-08T05:00:00Z");
     }
 
@@ -117,6 +120,122 @@ class TradeExecutionValidationServiceTest {
         var result = service.validateBuy(oneMinute, 100);
         assertThat(result.allowed()).isFalse();
         assertThat(result.code()).isEqualTo("1H_BEARISH_VETO");
+    }
+
+    @Test
+    void trustedSoftBearishOneHourUsesNeutralProfileContextAndCapsDirectBuyAtTwentyFivePercent() {
+        settings("BALANCED", false);
+        TradeSignal oneMinute = signal("BTCUSDT", "1m", SignalDecision.BUY, now, 90, 25, 20, 15);
+        TradeSignal five = signal("BTCUSDT", "5m", SignalDecision.BUY, now.minusSeconds(120), 90, 25, 20, 15);
+        TradeSignal one = signal("BTCUSDT", "1h", SignalDecision.SELL, now.minusSeconds(1800), 60, 10, 8, 6);
+        one.setDataQualityValid(true);
+        latest("BTCUSDT", "5m", five);
+        latest("BTCUSDT", "1h", one);
+
+        var result = service.validateBuy(oneMinute, 100);
+
+        assertThat(result.allowed()).isTrue();
+        assertThat(result.code()).isEqualTo("BALANCED_STRONG");
+        assertThat(result.positionPercent()).isEqualTo(25);
+        assertThat(one.getDecision()).isEqualTo(SignalDecision.SELL);
+    }
+
+    @Test
+    void trustedHardBearishOneHourStillVetoesBuy() {
+        settings("BALANCED", false);
+        TradeSignal oneMinute = signal("BTCUSDT", "1m", SignalDecision.BUY, now, 90, 25, 20, 15);
+        latest("BTCUSDT", "5m", signal("BTCUSDT", "5m", SignalDecision.BUY, now.minusSeconds(120), 90, 25, 20, 15));
+        TradeSignal one = signal("BTCUSDT", "1h", SignalDecision.STRONG_SELL, now.minusSeconds(1800), 70, 25, 20, 15);
+        one.setDataQualityValid(true);
+        latest("BTCUSDT", "1h", one);
+
+        var result = service.validateBuy(oneMinute, 100);
+
+        assertThat(result.allowed()).isFalse();
+        assertThat(result.code()).isEqualTo("HTF_TRUSTED_BEARISH_VETO");
+    }
+
+    @Test
+    void softContextCapsConservativeFullAuthorityAtTwentyFivePercent() {
+        settings("CONSERVATIVE", false);
+        TradeSignal current = signal("SOLUSDT", "1m", SignalDecision.BUY, now, 90, 25, 20, 15);
+        latest("SOLUSDT", "5m", signal("SOLUSDT", "5m", SignalDecision.BUY, now.minusSeconds(60), 80, 20, 15, 12));
+        TradeSignal one = signal("SOLUSDT", "1h", SignalDecision.SELL, now.minusSeconds(1200), 55, 10, 8, 6);
+        one.setDataQualityValid(true); latest("SOLUSDT", "1h", one);
+        var result = service.validateBuy(current, 90);
+        assertThat(result.allowed()).isTrue();
+        assertThat(result.code()).isEqualTo("CONSERVATIVE_FULL");
+        assertThat(result.positionPercent()).isEqualTo(25);
+    }
+
+    @Test
+    void softContextDoesNotUnlockBalancedNeutralFiveMinuteException() {
+        settings("BALANCED", false);
+        TradeSignal current = signal("SOLUSDT", "1m", SignalDecision.BUY, now, 90, 25, 20, 15);
+        latest("SOLUSDT", "5m", signal("SOLUSDT", "5m", SignalDecision.NEUTRAL, now.minusSeconds(60), 80, 20, 15, 12));
+        TradeSignal one = signal("SOLUSDT", "1h", SignalDecision.SELL, now.minusSeconds(1200), 55, 10, 8, 6);
+        one.setDataQualityValid(true); latest("SOLUSDT", "1h", one);
+        var result = service.validateBuy(current, 90);
+        assertThat(result.allowed()).isFalse();
+        assertThat(result.code()).isEqualTo("BALANCED_CONFIRMATION_INSUFFICIENT");
+    }
+
+    @Test
+    void softContextAlsoCapsAccumulatedEvidenceAuthority() {
+        settings("BALANCED", false);
+        TradeSignal current = signal("SOLUSDT", "1m", SignalDecision.BUY, now, 90, 25, 20, 15);
+        latest("SOLUSDT", "1m", current);
+        latest("SOLUSDT", "5m", signal("SOLUSDT", "5m", SignalDecision.BUY, now.minusSeconds(60), 80, 20, 15, 12));
+        TradeSignal one = signal("SOLUSDT", "1h", SignalDecision.SELL, now.minusSeconds(1200), 55, 10, 8, 6);
+        one.setDataQualityValid(true); latest("SOLUSDT", "1h", one);
+        var result = service.validateBuyContext(current);
+        assertThat(result.allowed()).isTrue();
+        assertThat(result.positionPercent()).isEqualTo(25);
+    }
+
+    @Test
+    void auditHandoffFailureDoesNotChangeAnAllowedBuyDecision() {
+        settings("BALANCED", false);
+        TradeSignal current = signal("SOLUSDT", "1m", SignalDecision.BUY, now, 90, 25, 20, 15);
+        latest("SOLUSDT", "5m", signal("SOLUSDT", "5m", SignalDecision.BUY, now.minusSeconds(60), 80, 20, 15, 12));
+        latest("SOLUSDT", "1h", signal("SOLUSDT", "1h", SignalDecision.BUY, now.minusSeconds(1200), 80, 20, 15, 12));
+        BuyHtfAssessmentAuditStore failingAudit = mock(BuyHtfAssessmentAuditStore.class);
+        doThrow(new IllegalStateException("audit unavailable")).when(failingAudit)
+                .record(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        ReflectionTestUtils.setField(service, "htfAuditStore", failingAudit);
+
+        var result = service.validateBuy(current, 90);
+
+        assertThat(result.allowed()).isTrue();
+        assertThat(result.code()).isEqualTo("BALANCED_FULL");
+    }
+
+    @Test
+    void softContextHasProductionReplayParityAndNeverUsesFutureOneHourEvidence() {
+        settings("BALANCED", false);
+        TradeSignal current = signal("BNBUSDT", "1m", SignalDecision.BUY, now, 90, 25, 20, 15);
+        TradeSignal five = signal("BNBUSDT", "5m", SignalDecision.BUY, now.minusSeconds(60), 80, 20, 15, 12);
+        TradeSignal soft = signal("BNBUSDT", "1h", SignalDecision.SELL, now.minusSeconds(1200), 55, 10, 8, 6);
+        soft.setDataQualityValid(true);
+        TradeSignal futureHard = signal("BNBUSDT", "1h", SignalDecision.STRONG_SELL, now.plusSeconds(60), 90, 25, 20, 15);
+        futureHard.setDataQualityValid(true);
+        latest("BNBUSDT", "5m", five);
+        latest("BNBUSDT", "1h", soft);
+
+        var production = service.validateBuy(current, 90);
+
+        ExecutionReplayScope scope = new ExecutionReplayScope();
+        ReflectionTestUtils.setField(service, "replayScope", scope);
+        try (ExecutionReplayScope.Scope ignored = scope.open(154L, java.util.List.of(soft, five, current, futureHard), o -> { })) {
+            scope.reference(now);
+            var replay = service.validateBuy(current, 90);
+            assertThat(replay.allowed()).isEqualTo(production.allowed());
+            assertThat(replay.code()).isEqualTo(production.code());
+            assertThat(replay.positionPercent()).isEqualTo(production.positionPercent());
+        }
+        assertThat(production.allowed()).isTrue();
+        assertThat(production.positionPercent()).isEqualTo(25);
     }
 
     @Test

@@ -1,0 +1,279 @@
+No files were changed. The plan file couldn't be written because Write and ExitPlanMode aren't available in this session, so this message is the whole deliverable.
+
+# FTS WINDOW2 (2026-10-20), Claude, Iteration 4: code and trade route (self-review)
+
+**Context loaded:**
+- AGENTS.md, CHARTER.md, my iteration 1–3 outputs and prompts.
+- All `db/CLAUDE/` results, including the newly returned DBQ-CLAUDE-I3-001…006.
+- I did not read LIVE_TEAM_STATUS, LIVE_EVENTS, the other agent's folders or the other agent's memory.
+
+**Times:** UTC comes from `UNIX_TIMESTAMP()` epochs, and KSA = UTC + 3h. Raw displayed `TIMESTAMP` values from our investigator session are already in KSA (iteration-2 F0).
+
+**Caveat on all code citations (F24):** they refer to the local working tree, not proven production builds.
+
+---
+
+## FINDINGS
+
+### F18. Entry route for each trade, traced through the code (PROJECT EVIDENCE)
+Every trade starts in `PaperTradingService.java:296-311` (wakeup checks first, then `evaluateBuy`). From there, `ExecutionIntelligenceService.evaluateBuyInternal` (`:466-786`) picks the route.
+
+| Trade | Route | Higher-timeframe authority (code) | Size chain | Recorded code (I2-005) |
+|---|---|---|---|---|
+| **137** | Direct BUY to `validateBuy` (EIS `:652-653`) | `balancedBuy(5m NEUTRAL, 1h WATCH)` rejects. The FIX-11G fallback (`TradeExecutionValidationService.java:263-284`) then allows 25%: `finalEntryAllowed`, entry quality 58 ≥ 50, BTC NEUTRAL | 25 → quality cap 25 → 25% | `BALANCED_NEUTRAL_5M_WATCH_1H` |
+| **182** | Same as 137 | Same FIX-11G fallback, with entry quality **exactly 50**, the cutoff (`EIS:229`) | 25 → 25, × ATR 60% → **15%** (`PTS:328-333`) | `BALANCED_NEUTRAL_5M_WATCH_1H` |
+| **172** | Direct BUY | `balancedBuy(5m BUY, 1h NEUTRAL)` = BALANCED_STRONG 75 (`TEVS:306-308`) | 75 → quality 60 cap → 25% | `BALANCED_STRONG` |
+| **158** | `evaluateConfirmedSetupWakeup` (`EIS:397-457`), triggered by 5m BUY #165415 | `validateBuyContext(5m)` = BALANCED_STRONG; 1m #165412 (WATCH, immediate entry=1) was ≤45 s old | min(25, 75) → 25% | `FRESH_5M_CONFIRMATION` |
+| **162** | `accumulatedDecision` (`EIS:1996-2067`) | `validateBuyContext` = BALANCED_EARLY 50. 1 BUY + 9 WATCH gives 25 + 5 + 5 = 35. The FIX-119 late-entry deferral is skipped because buyCount=1 | 35 → quality 50 (LATE_ENTRY) cap 25, × ATR 60% → **15%** | `OPPORTUNITY_CONFIRMED` |
+| **143** | `setupTimeframeAtrAuthoritySignal` / `Decision` (`EIS:1472-1514`), reached because the 1m had `atr_immediate_entry_allowed=0` | Only check: 5m BUY with immediate entry and 1h not bearish. **No `validateBuy`/`validateBuyContext`, so no FIX-154 assessment and no BALANCED matrix** | min(30, 100) = 30 → quality 60 (5m ATR) cap 25. The 1m's ATR 0% is mapped to 100 → 25% | `REDUCED_POSITION_ALLOWED` |
+
+- **Resolves U4b fully.** The "25%" in the message is the validation or route figure; the ATR multiplier is applied later in `PaperTradingService`.
+- **143's 30 → 25 is explained.** The opportunity text says "Entry Quality 60/100 (ACCEPTABLE_ENTRY) capped … at 25%".
+
+### F19. The bearish-5m veto reads the final (downgraded) decision (PROJECT EVIDENCE; resolves U12)
+- `HigherTimeframeBuyAssessmentService.java:20-26` checks `decision(fiveMinute)`, i.e. `getDecision()`, never `getOriginalDecision()`. `balancedBuy` and the FIX-11G branch also use the effective decision.
+- In `AnalysisService.java:364-411`, `originalDecision` is the raw strategy decision. `decision` is the result after the confluence, BTC, derivatives, liquidity and final-decision steps.
+- **182:** 5m #176655 was a raw STRONG_SELL (score 25), downgraded to NEUTRAL. As NEUTRAL it passed the veto and then qualified for the FIX-11G 25% exploratory entry.
+- **Classification:**
+  - The code behaves as written. AGENTS.md says only that the legacy 5M_BEARISH_VETO behaviour must be preserved.
+  - It is a **design gap**, not a code defect. A neutralised STRONG_SELL is treated exactly like a genuinely neutral 5m.
+  - Why it was neutralised is still open (U17, I4-002).
+
+### F20. No minimum risk/reward gate on any route these trades used (PROJECT EVIDENCE; confirms U5/C1)
+- R:R thresholds exist only in the retracement routes (`EIS:1539` `BREAKOUT_RETRACEMENT_MIN_RR`, `:1631` `RETRACEMENT_MIN_CURRENT_RR`) and the deferred-continuation route.
+- The routes used here have no R:R check: direct `validateBuy`, setup wakeup, accumulated evidence and setup-timeframe ATR.
+- At execution time, `revalidateAtExecutionPrice` (`EIS:1150-1168`) rejects only a price at or below SL, or at or above TP.
+- So **R:R 0.33–0.74 entries for 137, 158, 162, 172 and 182 are allowed by design**. Combined with the 0.5% stop floor, this is the main structural reason for the losses.
+
+### F21. Trade 143: price hit the original TP twice; the continuation policy extended it instead of exiting (PROJECT EVIDENCE: I2-002, I3-001)
+
+**What happened:**
+- Original TP was 4.064697. Event 1788666 printed **4.067 at 19:40:41.030 UTC / 22:40:41.030 KSA**, 38 s after entry.
+- `LivePositionProtectionService.java:100-107` asked `PositionContinuationPolicy`, which returned PASS (STANDARD) because current=WATCH, 5m=WATCH, 1h=NEUTRAL (`PositionContinuationPolicy.java:60-62`). The TP was moved to 4.080545.
+- Event 1788822 printed 4.081 at 19:41:13.029 UTC / 22:41:13.029 KSA. Same PASS, and the TP moved to 4.104317.
+- Without the extensions, the `TAKE_PROFIT` branch (`:165-167`) would have closed at about 4.067, roughly +0.84% gross instead of −0.15%.
+
+**Internal inconsistency (AGENT INFERENCE from PROJECT EVIDENCE):**
+- The live management path reads the newest signals with no as-of bound (`:95-97`). It therefore saw 5m **WATCH #159407**.
+- That is the same signal the entry route excluded by 2 ms (iteration-2 F1). At entry it used 5m **BUY #159285**.
+- So within one position, entry authority and management authority used different 5m truths.
+
+**Exit:**
+- The hard floor (`:207-216`) fired on the gapped tick: 4.100 → 4.027, from 19:43:27.038 to 19:43:35.021 UTC.
+- I3-001 shows the low of **3.994 printed at 19:43:45.021 UTC / 22:43:45.021 KSA, 10 s after the exit**. The SL (4.0102) would first have been crossed by 4.007 at 19:43:41.047 UTC.
+- So the hard-floor exit was about 0.5% better than the stop loss. This resolves U15.
+
+**Near-TP:**
+- The state was `NEAR_TP_ARMED` with no harvest (I1-004).
+- A harvest needs bearish 1m confirmation, which could not form inside the 8 s gap.
+
+**Assessment:**
+- Entry, extension and exit each followed the current rules.
+- The outcome (a win turned into a loss) comes from extension policy plus a genuine gap, not a code fault.
+- The entry-input defect (iteration-2 F1) still stands.
+
+### F22. Replay would very likely not reproduce 143, and possibly not 158 either (PROJECT EVIDENCE for code; outcome is AGENT INFERENCE, not executed)
+
+**How Replay orders signals:**
+- Replay sets each signal's `generatedAt` to **the candle close time** (`RegressionTestWorker.java:584`).
+- At equal close times it processes **1h, then 5m, then 1m** (`:557-560`, `intervalOrder` `:787-793`).
+- `ExecutionReplayScope.recent` (`:106-116`) includes signals with `generatedAt <= ref`.
+
+**143 in Replay:**
+- The 1m (19:39 candle) and 5m (19:35 candle) both close at 19:40:00. The 5m WATCH (immediate entry=0, 60%) would be visible to the 1m.
+- `setupTimeframeAtrAuthoritySignal` would return null (`EIS:1486`, 5m not bullish).
+- The 1m then reaches `ATR_ENTRY_BLOCKED` (`:644-649`). Result: **no entry**.
+
+**158 in Replay:**
+- The 5m BUY is processed before the 23:34 1m signal exists. The wakeup's 1m lookup would find the 23:33 signal, 60 s old, which exceeds the 45 s limit (`EIS:71, 420-428`). So the wakeup returns none.
+- The later 1m WATCH then goes through `evaluateBuy`, and its route is not determined from code alone.
+
+**Why this matters:**
+- Production ordering at a shared candle boundary is a race between asynchronous analyses: 2 ms for 143, 21 ms for 158. Replay ordering is deterministic and puts higher timeframes first.
+- This makes iteration-2 F1 a **Production↔Replay parity defect** as well as an entry-input defect.
+- **Verification needed:** an approved Replay run over 2026-10-11 19:35–19:45 UTC (EGLD) and 23:30–23:40 UTC (XRP). Out of scope for analysis-only.
+
+### F23. Entry-quality recheck uses the 1m ATR even on the 5m-ATR route (PROJECT EVIDENCE; minor)
+- `assessEntryQualityAtPrice` (`EIS:857-858`) always uses `current.getAtrAtSignal()`, the 1m ATR.
+- The SETUP_TIMEFRAME_ATR route's own comment (`:631-634, 1510-1511`) says it must use the 5m ATR.
+- For 143 the recorded quality was 70 (`wallet_managed_position`) against the opportunity's 60, and there was no size effect.
+- Logged as an inconsistency candidate only.
+
+### F24. Contradiction: FIX-154 looks deployed, but the docs say "pending, not implemented" (PROJECT EVIDENCE plus open question)
+- Production `trade_signal.data_quality_valid` holds values (I1-005: 1 on all entry signals). That column is created only by `V107__fix_154_trusted_higher_timeframe_buy.sql`.
+- The local tree contains `HigherTimeframeBuyAssessmentService`, which is called from `validateBuy` and `validateBuyContext`.
+- AGENTS.md, `claude-docs/ARCHITECTURE.md:19` and `TRADING_RULES.md:124` all describe FIX-154 as not implemented.
+- I am reporting this rather than silently accepting either side. If production ran FIX-154 on 2026-10-11/12, the 137, 182, 172, 162 and 158 authorities went through `assess()`. All of their effective 5m/1h values were non-bearish, so the **routes above are unchanged either way**.
+- I4-001 settles this.
+
+### F25. Timing items from the I3 results (PROJECT EVIDENCE)
+
+**U14 / F11 resolved:**
+- 137's exit trigger was event 1761095. Binance E = 18:00:09.033 UTC, but `created_at` = 18:00:08.877 and the protection transaction started at 18:00:08.908.
+- Ingest "lag" is negative (−0.09 to −0.16 s) at 17:55, 18:00, 23:35, 00:30 and 01:02 UTC, and about 0 to +0.04 s at 19:40, 04:15 and 06:57.
+- So the host clock trailed Binance by up to about 150 ms, varying over time. It is not a different trigger.
+- All events are `BINANCE_KLINE_DIRECT_FIX153`, `APPLIED`. **Production was on the OFF-mode direct path.**
+
+**U13 resolved for 143:**
+- I3-002: every second in 19:39:58–19:44:00 UTC had events from other symbols (21 symbols in total, zero non-APPLIED).
+- So the EGLD gaps (e.g. 19:43:27 → 19:43:35) were **no EGLD push**, not an ingestion outage or a stale rejection.
+
+**U16 measured (I3-004), protection transaction duration:**
+
+| Trade | Duration |
+|---|---|
+| 137 | **3233 ms** |
+| 143 | 1206 ms |
+| 158 | 2455 ms |
+| 172 | 2020 ms |
+| 182 | 2030 ms |
+
+- These ran on `WebSocketClient-SecureIO-1` and `-2`, which means at least two sessions. Serialization is per session, not global.
+- During 143's exit second (19:43:35), another symbol's event lagged **0.774 s**, consistent with blocking within the same session.
+- The two longest (137 at 18:00, a 1h boundary; 158 at 00:30) fall on candle-close boundaries. My inference is contention with boundary analysis rather than wallet fan-out: `wallet_asset` has 20 rows, 1 non-zero (I3-006).
+- No P&L effect on any frozen trade.
+
+**Protection incidents (I3-005):** none in `fix124_protection_incident` for the study period.
+
+### F26. Live exits read the latest signals with no age limit (PROJECT EVIDENCE; latent, no impact here)
+- `LivePositionProtectionService.java:95-97` with `PositionExitPolicy.evaluateNormalExit` applies no freshness bound. By contrast, `validateSell` enforces 20 min (5m) and 3 h (1h).
+- A stale 1h SELL plus a 5m NEUTRAL could trigger `HTF_SELL_CONFIRMED` hours later.
+- All six exits here used fresh signals (172's 1h SELL was about 15.6 min old), so this did not cause any of these losses.
+
+---
+
+## Per-trade classification (end of iteration 4)
+
+| Trade | Entry assessment (information at the time) | Exit | Class |
+|---|---|---|---|
+| 137 | FIX-11G exploratory; R:R 0.64; 5m NEUTRAL (original decision still unknown) | SELL_CONFIRMED, as the rules require | Valid losing trade, weakened by F20 |
+| 143 | SETUP_TIMEFRAME_ATR built on a superseded 5m (F1); Replay would likely not enter (F22) | TP extended twice (F21), then a hard-floor exit on a genuine gap | **Logic-defect candidate (entry input plus parity)**; exit followed the rules |
+| 158 | Wakeup using the 1m WATCH plan, R:R 0.33 | SELL_CONFIRMED | Valid losing trade (F20); Replay divergence possible (F22) |
+| 162 | ACCUMULATED_EVIDENCE, LATE_ENTRY 50, R:R 0.44 | SIGNAL_SELL via `validateSell` | Valid losing trade (F20) |
+| 172 | BALANCED_STRONG; TP/SL roughly 3 ticks | HTF_SELL_CONFIRMED, −1 tick | Valid losing trade (F20, tick size) |
+| 182 | FIX-11G with a neutralised STRONG_SELL 5m (F19); quality at the cutoff; filled at the candle high | SELL_CONFIRMED | Valid on current rules; design gap F19 plus F20 |
+
+No stale data, no execution delay with a price cost, and no data-quality defect in any trade.
+
+---
+
+## EVIDENCE
+
+**DB results:**
+
+| Ref | What it showed |
+|---|---|
+| I3-001 | EGLD tick path; the 3.994 low came after the exit |
+| I3-002 | Global coverage; the 0.774 s cross-symbol lag |
+| I3-003 | Source `BINANCE_KLINE_DIRECT_FIX153`; clock skew |
+| I3-004 | Protection transaction durations and thread names |
+| I3-005 | No protection incidents |
+| I3-006 | Snapshot placement and asset count |
+| I2-002 | TP extensions 51/52 with continuation text |
+| I2-005 | Opportunity codes and sizes |
+| I1-004 | Near-TP state |
+| I1-005 | `data_quality_valid` populated |
+
+**Code:**
+- `PaperTradingService.java:296-389`
+- `ExecutionIntelligenceService.java:66, 71, 104, 229, 397-457, 466-786, 857-858, 1150-1223, 1472-1514, 1539, 1631, 1996-2067`
+- `TradeExecutionValidationService.java:62-191, 218-321`
+- `HigherTimeframeBuyAssessmentService.java:15-51`
+- `AnalysisService.java:303-411`
+- `LivePositionProtectionService.java:54-249`
+- `PositionExitPolicy.java:20-50`
+- `PositionContinuationPolicy.java:34-118`
+- `ExecutionReplayScope.java:106-145`
+- `RegressionTestWorker.java:557-560, 584, 787-793`
+- `ShadowProductionReplayService.java:118-133`
+- `V107__fix_154_trusted_higher_timeframe_buy.sql`
+
+**EXTERNAL RESEARCH:** none new this iteration.
+
+---
+
+## UNKNOWNS
+- **U17:** why 5m #176655 (182) was downgraded from STRONG_SELL to NEUTRAL, and what 137's 5m #156721 original decision was (I4-002).
+- **U18 (F24):** whether FIX-154 (V107/V109) is applied in production, and when (I4-001).
+- **U19 (F21):** which 1m signal was "current" at each TP extension (identical scores 19/9/16 both times) (I4-004).
+- **U20:** loss rate by route and by R:R bucket, to judge whether FIX-11G and the absence of an R:R gate are systemic (I4-003).
+- **U8/F22:** Replay parity for 143 and 158. This is code inference only and needs an approved Replay run.
+- **Logs:** still no production log access. The F18 routes could be confirmed through log lines `FIX-11G transitional BUY authority granted` and `FIX-11G post-guard result` (signalId 156723, 176710).
+- **Method correction:** I2-007 used `UTC_TIMESTAMP() - 14 DAY` against session-displayed `TIMESTAMP` values, which shifts the window by 3 h. The effect was negligible, and the requests below use epoch arithmetic instead.
+
+---
+
+## DB_REQUESTS
+All are read-only and bounded.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: Settle F24, whether FIX-154 and later migrations are applied in production and when, and whether FIX-154 audit rows exist for the frozen entry authorities.
+SQL:
+SELECT version, description, success, UNIX_TIMESTAMP(installed_on) AS installed_epoch FROM crypto_ai.flyway_schema_history WHERE version IN ('103','104','105','106','107','108','109','110','111') ORDER BY installed_rank;
+SELECT id, reference_signal_id, evaluation_path, UNIX_TIMESTAMP(evaluated_at) AS eval_epoch, replay_mode, five_minute_signal_id, five_minute_raw_decision, five_minute_effective_decision, five_minute_data_quality_valid, one_hour_signal_id, one_hour_raw_decision, one_hour_effective_decision, one_hour_data_quality_valid, assessment_band, max_initial_percent, legacy_veto_result, final_result FROM crypto_ai.buy_htf_assessment_audit WHERE reference_signal_id IN (156723,159408,165412,165415,167668,171589,176710) ORDER BY reference_signal_id, evaluated_at LIMIT 60;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: Settle U17, the HTF context signals at entry: raw vs final decision, quality and confluence/BTC status, and the tail of the final-decision explanation (why STRONG_SELL became NEUTRAL).
+SQL:
+SELECT id, symbol, interval_code, UNIX_TIMESTAMP(generated_at) AS gen_epoch, decision, original_decision, total_score, confidence_score, data_quality_valid, final_entry_allowed, primary_blocking_stage, confluence_status, confluence_higher_decision, btc_context_status, liquidity_status, derivatives_status, RIGHT(explanation, 900) AS expl_tail FROM crypto_ai.trade_signal WHERE id IN (156721,155320,176655,175258,171559,164516,165289,167616,167617,159285,159407) ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: Settle U20, closed-position outcome by entry route/code and by planned R:R bucket over the last 14 days (epoch-bounded, timezone-safe). Planned R:R uses `wallet_managed_position` original geometry where available.
+SQL:
+SELECT eo.execution_source, eo.decision_code, COUNT(*) AS n, SUM(p.realized_pnl<0) AS losses, SUM(p.realized_pnl>0) AS wins, ROUND(SUM(p.realized_pnl),4) AS pnl_usdt, ROUND(AVG((p.exit_price-p.entry_price)/p.entry_price*100),4) AS avg_ret_pct FROM crypto_ai.paper_position p JOIN crypto_ai.execution_opportunity eo ON eo.latest_signal_id=p.signal_id AND eo.status='EXECUTED' WHERE p.status='CLOSED' AND p.closed_at >= FROM_UNIXTIME(UNIX_TIMESTAMP()-14*86400) GROUP BY eo.execution_source, eo.decision_code ORDER BY n DESC LIMIT 40;
+SELECT CASE WHEN s.risk_reward_ratio IS NULL THEN 'NULL' WHEN s.risk_reward_ratio < 0.5 THEN '<0.5' WHEN s.risk_reward_ratio < 1 THEN '0.5-1' WHEN s.risk_reward_ratio < 2 THEN '1-2' ELSE '>=2' END AS rr_bucket, COUNT(*) AS n, SUM(p.realized_pnl<0) AS losses, SUM(p.realized_pnl>0) AS wins, ROUND(SUM(p.realized_pnl),4) AS pnl_usdt FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id=p.signal_id WHERE p.status='CLOSED' AND p.closed_at >= FROM_UNIXTIME(UNIX_TIMESTAMP()-14*86400) GROUP BY rr_bucket ORDER BY rr_bucket LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: Settle U19, the EGLD 1m/5m/1h signals visible during 143's hold (19:39:55–19:44:00 UTC), to identify the continuation inputs at each TP extension and the newest-signal view seen by live management.
+SQL:
+SELECT id, interval_code, UNIX_TIMESTAMP(candle_open_time) AS candle_epoch, UNIX_TIMESTAMP(generated_at) AS gen_epoch, UNIX_TIMESTAMP(created_at) AS created_epoch, decision, original_decision, total_score, trend_score, momentum_score, volume_score, atr_entry_type, atr_immediate_entry_allowed FROM crypto_ai.trade_signal WHERE symbol='EGLDUSDT' AND generated_at BETWEEN FROM_UNIXTIME(1791747595) AND FROM_UNIXTIME(1791747840) ORDER BY generated_at LIMIT 30;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-005
+Purpose: Read-only F22 parity check. Find whether any existing Replay/shadow run already covers the 143/158 windows (schema first; no Replay execution).
+SQL:
+DESCRIBE crypto_ai.wallet_position_test;
+SELECT * FROM crypto_ai.wallet_position_test WHERE symbol IN ('EGLDUSDT','XRPUSDT') ORDER BY id DESC LIMIT 20;
+### END_DB_REQUEST
+
+**Log search request (needs SSH through the Coordinator):** production log for 2026-10-11 17:50 – 2026-10-12 07:10 UTC.
+- `FIX-11G transitional BUY authority` and `FIX-11G post-guard result` with signalId 156723 or 176710
+- `[FIX-118][PRODUCTION][TP_EXTENSION] positionId=172`
+- `FIX-11T Near-TP evaluation: positionId=172`
+- `Execution Intelligence did not open a BUY` for signalId 165412
+
+---
+
+## Self-review (Iteration 4)
+
+**Resolved:**
+- **U4b:** size chain fully traced.
+- **U5:** no R:R gate on the routes used.
+- **U12:** the veto reads the final decision.
+- **U13 (143):** the gap came from Binance, not ingestion.
+- **U14:** clock skew; same trigger.
+- **U15:** the low printed after the exit.
+- **U16:** transaction durations measured.
+
+**Corrected:**
+- **F14 sentinel (iteration 3):** on the SETUP_TIMEFRAME_ATR route, mapping the 1m ATR 0% to 100 is consistent with the route's design, because the 5m-derived percentage already bounds the size. Downgraded to a "general ambiguity, no effect here" note.
+- **F13:** ingestion serialization is per session (at least two threads), not global.
+
+**Strengthened:** F1 (143) is now both an entry-input defect candidate and a Replay-parity candidate (F22).
+
+**New findings:**
+- **F21:** a TP win was converted into a loss by extension under rule-following policy.
+- **F24:** documentation contradiction about FIX-154.
+- **F19:** design gap with neutralised bearish 5m signals.
+- **F23:** ATR inconsistency on the entry-quality recheck.
+- **F26:** latent issue with signal age in live exits.
+
+**Next iteration:** apply the I4 results, quantify route and R:R loss rates, and decide whether F21's extension policy and F20's missing R:R gate are the dominant systemic contributors.

@@ -1,0 +1,242 @@
+# FTS WINDOW1 · Claude · Iteration 5: entry quality
+
+This iteration was analysis only. I made no code, config, database, git or file writes, and did not read any Codex, LIVE or other-agent files. Code references point to the current local working tree, which has uncommitted changes, so code citations show the local version, not necessarily what was deployed.
+
+**Times.** Stored times are UTC. My DB session shows them in KSA: DBQ-CLAUDE-I3-001 gives session time zone `SYSTEM` = Arab Standard Time, and `NOW` − `UTC_TIMESTAMP` = +3 h. Every DB time below is therefore KSA, with UTC in brackets. This does not break the "stored UTC" rule; only the display is local.
+
+## Settled from Iteration 4 (PROJECT EVIDENCE)
+
+| I4 item | Result | Evidence |
+|---|---|---|
+| U-I4-02: was FIX-154 deployed? | **Yes.** V107 "fix 154 trusted higher timeframe buy" was installed 2026-10-10 00:15:21 KSA (10-09 21:15 UTC), and V109 followed at 01:52:45 KSA. Audit rows exist for the study signals. | I4-003; I4-004 audit ids 1938, 2196, 2199, 2284, 2424, 2425 |
+| F-I4-01: what neutralised the 5m for 182? | The `MULTI_TIMEFRAME` stage (sequence 5). It downgraded STRONG_SELL to NEUTRAL because the 1h was WATCH (trend 16/25, WEAK_UPTREND), and entry stayed allowed. | I4-001, signals 176529 and 176655 |
+| F-I4-03: how did 162 enter? | Partly confirmed (see F-I5-06). | I4-004 (2196, 2199), I4-005 |
+| F-I4-04: was 172's 5m blocked from entry? | **Confirmed.** 5m 171559 has `final_entry_allowed=0`, blocked by `RANGE_ENTRY_LOCATION` (59.09% of the Bollinger range, limit 55%), confidence 49. FIX-154 still approved BALANCED_STRONG at 75%. | I4-001; audit 2284 |
+| F-I4-05: did the 1m/5m boundary race happen on 143? | **Confirmed.** The position's entry 5m is 159285 BUY (candle 22:30), while 159407 WATCH existed 2 ms later. | I4-001; I4-007 row 143 |
+
+## FINDINGS
+
+### F-I5-01: The stop/target geometry gives R:R below 1 on 5 of 6 entries (PROJECT EVIDENCE; confirmed design property)
+
+I reconstructed every level exactly from the DB:
+- **Target:** decision price + 3 × the 1m signal's ATR. This holds exactly on all six trades.
+- **Stop:** decision price × 0.995, i.e. the 0.5% floor, on five trades. Trade 143 is the exception: its stop is decision price − 2 × 1m ATR, which is 0.54%.
+
+| Pos | Decision price | Stop (risk %) | TP (reward %) | R:R | Break-even win rate |
+|---|---|---|---|---|---|
+| 182 ACE | 0.1884 | 0.187458 (0.50%) | 0.18885364 (0.241%), = 3 × 0.000151214 | 0.48 | 67.5% |
+| 172 SHIB | 0.00000549 | 0.00000546255 (0.50%) | 0.000005510418 (0.372%), = 3 × 6.806e-9 | 0.74 | 57.3% |
+| 162 DOGE | 0.08705 | 0.08661475 (0.50%) | 0.08724072 (0.219%), = 3 × 0.0000635742 | 0.44 | 69.5% |
+| 158 XRP | 1.4109 (fill 1.4108) | 1.4038455 (0.50%) | 1.41320887 (0.164%), = 3 × 0.000769623 | 0.35 | 74.3% |
+| 143 EGLD | 4.032 (fill 4.033) | 4.010202 (0.54%), = 2 × 0.0108988 | 4.0647 at open, later extended to 4.1043 | 1.50 | 40% |
+| 137 EGLD | 3.999 | 3.979005 (0.50%) | 4.011875 (0.322%), = 3 × 0.0042917 | 0.64 | 60.8% |
+
+- **Where the rules live:** `AtrRiskService.java:27-75` sets the levels, and the floor was established in F-I2-02. R:R < 1 costs 30 entry-quality points but is not a gate (`ExecutionIntelligenceService.java:991`, `CHASE_ENTRY_CUTOFF=50` at `:229`).
+- **Two routes take their levels from the 1m ATR even though a 5m was the authority:**
+  - 158 (wake-up on 5m BUY 165415, whose ATR is 0.13%).
+  - 143 (SETUP_TIMEFRAME_ATR, whose own message says the 5m ATR is the authority, `:1505-1511`). In practice only entry quality uses the 5m ATR.
+- **172 nuance:** SHIB's 1e-8 tick rounds both levels to about ±3 ticks, so its effective R:R is close to 1.
+- **Route results since 10-05 (I4-006, AGENT INFERENCE):**
+
+  | Route | Trades | Win rate | Net P&L (USDT) |
+  |---|---|---|---|
+  | IMMEDIATE_VALIDATION | 60 | 45% | −2.31 |
+  | SETUP_CONFIRMATION_WAKEUP | 41 | 37% | −0.91 |
+  | SETUP_TIMEFRAME_ATR | 24 | 54% | −0.77 |
+  | ACCUMULATED_EVIDENCE | 44 | 57% | +0.20 |
+
+  All four win rates sit below the 57–74% break-even rates above. That points to structurally negative expectancy for floor-dominated entries, but it is **not yet stratified by R:R**; DBQ-CLAUDE-I5-001 does that.
+- **Classification:** a design issue in entry geometry. It is not a code defect, because the code does what it says.
+
+### F-I5-02: Paper trading charges zero fees (PROJECT EVIDENCE)
+
+- **DB fact:** every `wallet_trade` row for the six trades has `fee_usdt = 0` (I1-006).
+- **Why it matters (EXTERNAL knowledge, not fetched this iteration, unverified):** the standard Binance spot taker fee is about 0.1% per side, so about 0.2% round trip. That is comparable to or larger than the 0.16–0.24% targets on 158, 162 and 182.
+- **Effect (AGENT INFERENCE):** paper P&L overstates live viability, and the fee-blind 30-point R:R penalty underweights the problem.
+
+### F-I5-03: The FIX-154 audit's "raw" decision is really the effective decision, so the confluence downgrade is invisible there (PROJECT EVIDENCE)
+
+- **Code:** `BuyHtfAssessmentAuditStore.java:87` writes `signal.getDecision()` into `*_raw_decision`. `HigherTimeframeBuyAssessmentService.java:50,64` likewise read only `getDecision()`.
+- **DB:** audits 2424 and 2425 record five_minute_raw_decision = NEUTRAL, while `trade_signal` 176655 has `original_decision = STRONG_SELL`.
+- **Two more audit gaps:**
+  - The audit is asynchronous and best-effort (`:17-21, 47`), so it can record an approval for a signal whose execution rolled back (see F-I5-05).
+  - `evaluated_at` is the signal's `generated_at`, not when the evaluation actually ran (`:96`).
+- **Classification:** an observability defect; it does not change trading behaviour. Separately, F-I4-01 (direct-path routes ignore the raw bearish 5m) stays a semantic inconsistency. Across all entries since 10-05 whose 5m was a neutralised bearish (I4-007: 23, 37, 95, 97, 113, 138, 139, 181, 182), 5 of 9 won. **It is not supported as a systematic cause.**
+
+### F-I5-04: A 5m that was blocked from entry still grants BALANCED_STRONG authority (PROJECT EVIDENCE; confirmed inconsistency)
+
+- **Trade 172:** 171559 was blocked by `RANGE_ENTRY_LOCATION`, with confidence capped at 49. It is also a RANGE_MEAN_REVERSION signal, while 1m 171589 is TREND_FOLLOWING. Audit 2284 still says "5m is bullish … approved 75%".
+- **Other routes require `five.isFinalEntryAllowed()`** (`ExecutionIntelligenceService.java:1487`).
+- **Since 10-05 (I4-007):** entries with an entry-blocked 5m were 14, 17, 68, 78, 83, 101, 144 and 172. Five of the eight lost; that is too small a sample to call systematic.
+
+### F-I5-05: The first ACE BUY was approved, then rolled back into a terminal REVIEW_REQUIRED state (PROJECT EVIDENCE; confirmed processing defect, small impact on outcome)
+
+- **Approval:** 1m BUY 176692 (09:56:02 KSA / 06:56:02 UTC) was approved by FIX-154 (audit 2424, FIX-11G 25%).
+- **Failure:** its `signal_processing_work` row is `REVIEW_REQUIRED`, `PROCESSING_OR_COMMIT`, `UnexpectedRollbackException … marked as rollback-only`, attempts = 1.
+- **Why there was no retry:** `SignalProcessingCoordinator.java:127` sends every exception except an initial-lock failure straight to REVIEW_REQUIRED. That conflicts with AGENTS.md's "no pending outcome may require manual review".
+- **What happened next:** the next minute's BUY, 176710, executed instead (position 182).
+- **Possible trigger (HYPOTHESIS):** PEPE position 181 opened at 09:56:07.589 KSA, in the same second, so there may have been wallet-level contention. DBQ-CLAUDE-I5-002 checks this.
+- **Relevance:** this is not the cause of the loss. It is a reliability defect that can delay entries or change which signal enters.
+
+### F-I5-06: Trade 162's late-entry guard is bypassed through ACCUMULATED_EVIDENCE (PROJECT EVIDENCE for the code path; whether FIX-041 actually fired on 167646 is unconfirmed)
+
+- **167646 (BUY, 04:01:02 KSA):**
+  - The direct-path validation passed as BALANCED_EARLY (audit 2196).
+  - The work completed but no position was opened (I4-005: `COMPLETED`, `paper_position_id = NULL`).
+  - The R:R of 0.39 implies an entry quality of 70 or below. FIX-041 blocks only BALANCED_EARLY combined with LATE_ENTRY (50–54) (`:672-684`). I cannot prove it blocked here: there is no durable per-signal EI decision history. `execution_opportunity` is one mutable row per symbol (`saveOpportunity`, `:2534-2574`).
+- **167668 (WATCH, BREAKOUT profile, 2.82 ATR from SMA20):** it entered through ACCUMULATED_EVIDENCE with "1 BUY, 9 WATCH", BALANCED_EARLY and LATE_ENTRY 50. FIX-119 stands aside whenever `buyCount > 0` (`:1275-1280`), and the only BUY in the window is 167646 itself.
+- **Effect (AGENT INFERENCE):** a direct-path late-entry block can be turned into an accumulated-path entry one minute later, at a higher price (0.08693 → 0.08705).
+- **Classification:** a guard-scope gap.
+
+### F-I5-07: Trade 143 bought a spike against current retracement instructions (PROJECT EVIDENCE; poor entry quality, valid by the code)
+
+What was knowable when the BUY ran at 22:40:03.115 KSA (19:40 UTC):
+- **1m 159408:** `WAIT_FOR_RETRACEMENT`, recommended position 0%, 4.35 ATR above SMA20, with a retracement target of 4.0118.
+- **Current 5m 159407 (2 ms later):** WATCH, `atr_immediate_entry_allowed = 0`, retrace near 4.0158, 5m price change 1.15%.
+- **The previous EGLD position (paper 142):** exited at 3.996 at 22:39:41, 22 s earlier. The fill at 4.033 was +0.93% above that exit.
+
+The route authorised the entry with the previous 5m, 159285 (0.67 ATR from SMA20, STANDARD_ENTRY), and scored entry quality 70 (GOOD_ENTRY) against that older 5m ATR.
+
+**Outcome, assessed separately:** the price reached 4.101 (95% of the extended target) before the hard profit-lock exit at 4.027. The loss came from exit handling, not from the entry's direction.
+
+### F-I5-08: Trade 137 entered through the expansion-transition exception after a range-location veto (PROJECT EVIDENCE; valid but low quality)
+
+- **The veto:** 156695 (20:54 KSA) was blocked at 63.07% of the Bollinger range (limit 55%).
+- **The exception:** one minute later, 156723 passed at 68.28% through the strict expansion-transition exception (score ≥ 90, RVOL ≥ 2). That is a breakout-style entry inside a RANGE_MEAN_REVERSION profile.
+- **Context:** the 1h was WATCH in a WEAK_DOWNTREND, and the 5m was NEUTRAL.
+- **Target placement:** the target, 4.01188, sits just under a persistent ask wall at 4.012 (0.325% away).
+- **Other quality markers:** R:R 0.64 and entry quality 58.
+
+### F-I5-09: Per-trade entry-quality scorecard (AGENT INFERENCE; uses only information available at entry)
+
+| Pos | Entry quality | R:R | Opposing evidence visible at entry | Verdict |
+|---|---|---|---|---|
+| 182 | 50 LATE | 0.48 | Raw 5m STRONG_SELL ×3, seven 1m STRONG_SELLs, no bid support above the stop | Weak; complies with the rules; the price never traded above the entry (high 0.1884) |
+| 172 | 60 | 0.74 (about 1 after tick rounding) | 5m entry-blocked, 5m BTC CONFLICT, 1h trend 8/25 | Authority defect (F-I5-04) |
+| 162 | 50 LATE | 0.44 | WATCH-only HTF; guard bypass | Guard-scope gap (F-I5-06) |
+| 158 | 50 | 0.35 | 1m ATR 0.05%; earlier BUY 165389 had STOP_EXPOSED | Weak by geometry (F-I5-01) |
+| 143 | 70 (old 5m ATR) | 1.5 | Fresh 1m and 5m both said wait; +0.93% in 22 s | Chase; race-dependent |
+| 137 | 58 | 0.64 | Counter-trend 1h; nine prior 1m STRONG_SELLs | Low quality; complies with the rules |
+
+The common factor across 5 of 6 is a stop at the 0.5% floor combined with a 3 × 1m ATR target.
+
+### F-I5-10: Stale 15m signals and a documentation contradiction (PROJECT EVIDENCE)
+
+- **Stale 15m signals:** the latest 15m signals for every study symbol were generated 2026-10-06 around 23:00 KSA (I4-002: 61934, 61944, 61968, 61998, 62000), more than 5 days before the trades. The decision paths list only "1h=…", so this did not affect these trades. Whether 15m generation was intentionally retired is unknown.
+- **Docs vs reality:** `claude-docs/ARCHITECTURE.md:19`, `claude-docs/TRADING_RULES.md:124` and AGENTS.md describe FIX-154 as not implemented, but the DB shows it live since 2026-10-10. I am reporting this, not editing anything; it needs dual-agent reconciliation.
+
+## EVIDENCE
+
+| ID | Label | Source |
+|---|---|---|
+| E-I5-01 | PROJECT | DBQ-CLAUDE-I4-001 … I4-007 results; I2-007; I1-006; I3-001 |
+| E-I5-02 | PROJECT | `ExecutionIntelligenceService.java:229, 640-699, 976-1022, 1257-1329, 1472-1514, 2534-2574` |
+| E-I5-03 | PROJECT | `BuyHtfAssessmentAuditStore.java:17-21, 47, 82-103`; `HigherTimeframeBuyAssessmentService.java:50, 64` |
+| E-I5-04 | PROJECT | `SignalProcessingCoordinator.java:124-130`; `SignalProcessingStore.java:158-164` |
+| E-I5-05 | EXTERNAL (unverified, not fetched) | Binance spot taker fee of about 0.1% per side |
+
+## UNKNOWNS
+
+- **U-I5-01:** 167646's actual EI result code. It is not durably stored; only server logs would show it.
+- **U-I5-02:** The root cause of 176692's rollback-only transaction.
+- **U-I5-03:** Whether the floor-geometry problem holds outside this sample (needs I5-001).
+- **U-I5-04:** The price path behind 143's +0.93% spike and the early excursions of each trade (I5-004/005).
+- **U-I5-05:** Replay parity for the race in F-I5-07 and the rollback in F-I5-05. Not verified.
+- **U-I5-06:** Whether 15m signal generation was retired intentionally.
+
+---
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: Outcome by entry-signal R:R bucket and entry-quality bucket since 2026-10-05 KSA (tests F-I5-01).
+SQL:
+SELECT CASE WHEN s1.risk_reward_ratio IS NULL THEN 'z_null'
+            WHEN s1.risk_reward_ratio < 0.5 THEN 'a_<0.5'
+            WHEN s1.risk_reward_ratio < 0.75 THEN 'b_0.5-0.75'
+            WHEN s1.risk_reward_ratio < 1 THEN 'c_0.75-1'
+            ELSE 'd_>=1' END AS rr_bucket,
+       CASE WHEN wmp.entry_quality_score IS NULL THEN 'z_null'
+            WHEN wmp.entry_quality_score < 55 THEN 'EQ50-54'
+            WHEN wmp.entry_quality_score < 70 THEN 'EQ55-69'
+            ELSE 'EQ70+' END AS eq_bucket,
+       COUNT(*) AS trades, SUM(pp.realized_pnl < 0) AS losses,
+       ROUND(SUM(pp.realized_pnl), 6) AS pnl_usdt,
+       ROUND(AVG((pp.entry_price - pp.stop_loss) / pp.entry_price * 100), 3) AS avg_risk_pct,
+       ROUND(AVG(s1.atr_percent), 3) AS avg_1m_atr_pct
+FROM crypto_ai.paper_position pp
+JOIN crypto_ai.trade_signal s1 ON s1.id = pp.signal_id
+LEFT JOIN crypto_ai.wallet_managed_position wmp ON wmp.entry_signal_id = pp.signal_id
+WHERE pp.status IN ('CLOSED','STOPPED') AND pp.opened_at >= '2026-10-05 00:00:00'
+GROUP BY rr_bucket, eq_bucket
+ORDER BY rr_bucket, eq_bucket;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: How often processing failures occur and what ran alongside the 176692 rollback (F-I5-05).
+SQL:
+SELECT 'WORK' AS src, signal_id AS id, symbol, interval_code AS detail, status, failure_stage AS extra, updated_at AS ts, LEFT(error_message, 300) AS msg
+FROM crypto_ai.signal_processing_work
+WHERE status IN ('REVIEW_REQUIRED','RETRYABLE_FAILURE') AND updated_at >= '2026-10-05 00:00:00'
+UNION ALL
+SELECT 'TRADE', id, symbol, side, status, execution_reason, executed_at, CAST(signal_id AS CHAR)
+FROM crypto_ai.wallet_trade
+WHERE executed_at BETWEEN '2026-10-12 09:55:50' AND '2026-10-12 09:57:10'
+ORDER BY ts
+LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: The 30-minute 1m look-back before each entry, for the entry-quality inputs (expansion, ATR extension, rejected highs) and the accumulated-evidence count (F-I5-06/07/08/09).
+SQL:
+SELECT id, symbol, generated_at, decision, original_decision, final_entry_allowed, primary_blocking_stage,
+       latest_price, atr_at_signal, atr_percent, risk_reward_ratio, atr_entry_type, atr_immediate_entry_allowed,
+       liquidity_status, market_regime, selected_strategy, entry_authority
+FROM crypto_ai.trade_signal
+WHERE interval_code = '1m' AND (
+      (symbol='ACEUSDT'  AND generated_at BETWEEN '2026-10-12 09:26:00' AND '2026-10-12 09:58:00')
+   OR (symbol='SHIBUSDT' AND generated_at BETWEEN '2026-10-12 06:05:00' AND '2026-10-12 06:37:00')
+   OR (symbol='DOGEUSDT' AND generated_at BETWEEN '2026-10-12 03:31:00' AND '2026-10-12 04:03:00')
+   OR (symbol='XRPUSDT'  AND generated_at BETWEEN '2026-10-12 02:04:00' AND '2026-10-12 02:36:00')
+   OR (symbol='EGLDUSDT' AND generated_at BETWEEN '2026-10-11 22:09:00' AND '2026-10-11 22:41:00')
+   OR (symbol='EGLDUSDT' AND generated_at BETWEEN '2026-10-11 20:24:00' AND '2026-10-11 20:56:00'))
+ORDER BY symbol, generated_at
+LIMIT 250;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: Tick-level move into the entry (pre-entry chase) and the first five minutes after it (MFE/MAE, outcome only) for the six positions.
+SQL:
+SELECT pp.id, pp.symbol, pp.entry_price, pp.opened_at,
+  (SELECT MIN(e.price) FROM crypto_ai.market_price_event e WHERE e.symbol=pp.symbol AND e.observed_at BETWEEN pp.opened_at - INTERVAL 120 SECOND AND pp.opened_at) AS pre120_min,
+  (SELECT MAX(e.price) FROM crypto_ai.market_price_event e WHERE e.symbol=pp.symbol AND e.observed_at BETWEEN pp.opened_at - INTERVAL 120 SECOND AND pp.opened_at) AS pre120_max,
+  (SELECT MAX(e.price) FROM crypto_ai.market_price_event e WHERE e.symbol=pp.symbol AND e.observed_at BETWEEN pp.opened_at AND pp.opened_at + INTERVAL 300 SECOND) AS post300_max,
+  (SELECT MIN(e.price) FROM crypto_ai.market_price_event e WHERE e.symbol=pp.symbol AND e.observed_at BETWEEN pp.opened_at AND pp.opened_at + INTERVAL 300 SECOND) AS post300_min,
+  (SELECT COUNT(*) FROM crypto_ai.market_price_event e WHERE e.symbol=pp.symbol AND e.observed_at BETWEEN pp.opened_at - INTERVAL 120 SECOND AND pp.opened_at + INTERVAL 300 SECOND) AS ticks
+FROM crypto_ai.paper_position pp
+WHERE pp.id IN (182,172,162,158,143,137)
+ORDER BY pp.id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-005
+Purpose: The current execution-opportunity rows for the study symbols. They show only the latest state, so this checks whether any 167646-era evidence survives (U-I5-01).
+SQL:
+SELECT id, symbol, status, started_at, last_evidence_at, latest_signal_id, evidence_count, buy_count, watch_count,
+       five_minute_decision, one_hour_decision, execution_source, decision_code, LEFT(decision_explanation, 400) AS expl, executed_at, updated_at
+FROM crypto_ai.execution_opportunity
+WHERE symbol IN ('ACEUSDT','SHIBUSDT','DOGEUSDT','XRPUSDT','EGLDUSDT')
+ORDER BY symbol, updated_at DESC
+LIMIT 50;
+### END_DB_REQUEST
+
+---
+
+**Self-review**
+- Entry assessments use only data that existed at entry. Outcomes (143's MFE, 182's high) are labelled separately.
+- Only F-I5-01 (design property), F-I5-03, F-I5-04 and F-I5-05 are stated as confirmed, each backed by record IDs and code. F-I5-06 stays partly hypothetical.
+- Every displayed time is KSA, with the UTC conversion shown or stated.
+
+**Plan for Iteration 6:** confirm or reject the R:R expectancy finding with I5-001, test the chase finding with I5-004, and assess how the six trades would reproduce in Replay.

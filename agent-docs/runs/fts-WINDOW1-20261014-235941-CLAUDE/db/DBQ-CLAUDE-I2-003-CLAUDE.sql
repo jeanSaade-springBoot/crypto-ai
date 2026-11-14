@@ -1,0 +1,1 @@
+SELECT id, signal_id, symbol, execution_reason, gross_amount_usdt, LEFT(notes,500) AS notes, LEFT(execution_message,3000) AS execution_message FROM wallet_trade WHERE id IN (344,358,392,403,426,451) ORDER BY id

@@ -1,0 +1,21 @@
+installed_rank	version	description	installed_on	success
+111	111	fix 156 replay profile evidence	2026-10-17 03:11:55	1
+110	110	fix 156 replay owned tables	2026-10-15 01:58:18	1
+109	109	fix 154 forward replay and audit columns	2026-10-10 01:52:45	1
+108	108	fix 153 local candle reconciliation	2026-10-10 00:15:21	1
+107	107	fix 154 trusted higher timeframe buy	2026-10-10 00:15:21	1
+106	106	fix 153 local candle evidence	2026-10-09 01:12:00	1
+105	105	fix 151 delivery selection indexes	2026-10-06 01:50:51	1
+104	104	fix 150 protection entry evidence	2026-10-06 00:58:53	1
+103	103	fix 149 fresh admission indexes	2026-10-05 01:38:10	1
+102	102	fix 147 cutover approver account	2026-10-04 23:44:33	1
+101	101	fix 145 operator work cancellation	2026-10-04 01:06:29	1
+100	100	fix 144 paper position reason capacity	2026-10-04 00:15:43	1
+99	99	fix 142 delivery ownership	2026-10-03 16:11:07	1
+98	98	fix 141 reconciliation scan index	2026-10-03 16:11:07	1
+97	97	fix 141 btc context freshness	2026-10-03 16:11:07	1
+id	reference_signal_id	evaluation_path	evaluated_at	five_minute_signal_id	five_minute_raw_decision	five_minute_effective_decision	one_hour_signal_id	one_hour_raw_decision	one_hour_effective_decision	assessment_band	max_initial_percent	legacy_veto_result	final_result
+1938	156723	DIRECT_BUY	2026-10-11 20:55:01.575650	156721	NEUTRAL	NEUTRAL	155320	WATCH	WATCH	NO_CONFLICT	NULL	NULL	BALANCED_NEUTRAL_5M_WATCH_1H
+2199	167668	ACCUMULATED_EVIDENCE	2026-10-12 04:02:02.813094	167616	WATCH	WATCH	167617	WATCH	WATCH	NO_CONFLICT	NULL	NULL	BALANCED_EARLY
+2284	171589	DIRECT_BUY	2026-10-12 06:36:01.506950	171559	BUY	BUY	170667	NEUTRAL	NEUTRAL	NO_CONFLICT	NULL	NULL	BALANCED_STRONG
+2425	176710	DIRECT_BUY	2026-10-12 09:57:01.850059	176655	NEUTRAL	NEUTRAL	175258	WATCH	WATCH	NO_CONFLICT	NULL	NULL	BALANCED_NEUTRAL_5M_WATCH_1H

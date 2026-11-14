@@ -1,0 +1,1 @@
+SELECT @@global.time_zone AS global_tz, @@session.time_zone AS session_tz, @@system_time_zone AS system_tz, NOW(6) AS session_now, UTC_TIMESTAMP(6) AS utc_now, TIMESTAMPDIFF(MINUTE, UTC_TIMESTAMP(), NOW()) AS session_offset_minutes;

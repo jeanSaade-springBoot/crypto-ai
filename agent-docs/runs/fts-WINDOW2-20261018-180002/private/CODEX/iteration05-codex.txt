@@ -1,0 +1,93 @@
+## Iteration 5 — Entry Quality
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+| Frozen `paper_position.id` | Entry-quality verdict |
+|---:|---|
+| 182 | Unverifiable — no permitted DB evidence |
+| 172 | Unverifiable — no permitted DB evidence |
+| 162 | Unverifiable — no permitted DB evidence |
+| 158 | Unverifiable — no permitted DB evidence |
+| 143 | Unverifiable — no permitted DB evidence |
+| 137 | Unverifiable — no permitted DB evidence |
+
+- The permitted `db/CODEX/` directory remains empty. No results for `DBQ-FTS-001` through `DBQ-FTS-005`, or prior Codex requests, are available. Therefore no individual entry’s symbol, signal, decision, entry-time price, stop, target, freshness, quality score, or contemporaneous context can be established.
+- Current source requires a successful wallet BUY before a `paper_position` is created; the position uses the fresh execution price, not the signal snapshot. [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:340)
+- Current source resolves a canonical execution price no more than 15 seconds old, then rejects a BUY at/below its stop or at/above its target. [ExecutionPriceAuthorityService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionPriceAuthorityService.java:25) [ExecutionIntelligenceService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1150)
+- Under current source, Entry Quality below 50 blocks the entry as a chase. Scores of 50–54, 55–69, 70–84, and 85+ are execution-eligible but size-capped; BTC conflict, explicit entry authority, and a recent rejection zone can further constrain exposure. [ExecutionIntelligenceService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:976)
+- The current quality score considers execution-price expansion from a recent/opportunity reference, ATR extension, opportunity age, reward/risk, recent rejection, volatility regime, and stop-exposed liquidity. It is recalculated at execution price. [ExecutionIntelligenceService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:865)
+- Signal processing claims durable work, obtains the position lock, then freshness-checks before the business route runs. Completion means processing committed, not necessarily that a trade opened. [SignalProcessingCoordinator.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:43)
+- `trade_signal` is designed to retain contemporaneous decision, BTC, derivatives, liquidity, regime, strategy, stop/target, ATR, risk/reward, and generated-time evidence. [TradeSignal.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/TradeSignal.java:150)
+
+**AGENT INFERENCE**
+
+- A realized loss does not imply weak entry quality. Each of the six trades remains classified as **unverifiable**, rather than weak or defective, until its contemporaneous signal and execution evidence is available.
+- Current source is not proof of the deployed historical version or configuration for these trades. In particular, current FIX-154/data-quality behavior must not be projected backward without record-level timestamps and version/configuration evidence.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+### UNKNOWNS
+
+- Entry signal ID, symbol, UTC entry time and corresponding KSA time for every frozen position.
+- Whether each entry was initial, progressive, setup-wakeup, retracement, accumulated-evidence, or another path.
+- Decision-time and execution-time prices; price-observation age; price drift; stop, target, ATR, and actual reward/risk.
+- Final entry allowance, execution-intelligence result/source, entry-quality score/classification, position-size cap, duplicate-consumption state, wallet/risk-limit outcome.
+- Contemporaneous BTC, 5m/1h, liquidity/order-book, derivatives, data-quality, regime, and strategy evidence.
+- Whether the historical route/configuration matched current source, and whether an equivalent Replay comparison is possible.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Read deployed schema before selecting entry-quality columns, retrieve the six authoritative positions, and independently re-prove frozen selection. This is bounded, read-only, and confined to `crypto_ai`.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'execution_opportunity',
+      'wallet_settings',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position
+LIMIT 1000;
+
+SELECT p.*
+FROM crypto_ai.paper_position p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137)
+LIMIT 6;
+
+SELECT
+    id,
+    status,
+    closed_at,
+    realized_pnl
+FROM crypto_ai.paper_position
+WHERE status = 'CLOSED'
+  AND closed_at IS NOT NULL
+  AND realized_pnl < 0
+ORDER BY closed_at DESC
+LIMIT 6;
+```
+### END_DB_REQUEST
+
+No documentation update was made: this is analysis-only, with no confirmed new project finding and writes prohibited.

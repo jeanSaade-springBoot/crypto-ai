@@ -1,0 +1,1 @@
+SELECT open_time, close_time, open_price, high_price, low_price, close_price, volume, closed FROM candle WHERE symbol = 'EGLDUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-11 22:41:00' AND '2026-10-11 22:44:00' ORDER BY open_time

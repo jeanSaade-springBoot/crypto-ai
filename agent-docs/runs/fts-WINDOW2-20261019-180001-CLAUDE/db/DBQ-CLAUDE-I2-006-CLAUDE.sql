@@ -1,0 +1,1 @@
+SELECT id, signal_id, symbol, execution_reason, executed_at, execution_message FROM crypto_ai.wallet_trade WHERE id IN (358, 403, 392) ORDER BY id LIMIT 3;

@@ -1,0 +1,72 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The response correctly preserves the rejection: it explicitly says it neither amends nor approves RPR-0.4. The draft remains implementation-forbidden. [Response](C:/workspace/crypto-ai-trader-mysql/agent-docs/RPR-0.4_REVIEW_RESPONSE.md:9) [Draft](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:3)
+
+- **PROJECT EVIDENCE:** CR-01, CR-02, CR-08, and CR-09 are handled correctly in principle: granular registry, shared-class Production impact, a single-symbol alternative, and user-approved retirement decisions are necessary.
+
+- **PROJECT EVIDENCE:** The response materially underhandles pre-write qualification. Replay currently generates and persists `analysis_test_signal` and `trade_signal_test` before the price-evidence guard runs. Calling this merely a “pre-write guard” correction is insufficient. [Worker flow](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:174) [writes](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:636) [guard](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:195)
+
+- **PROJECT EVIDENCE:** CR-03 is incomplete. Exact-price Replay performs live-price protection, then only a validated bearish 1m SELL on the signal path; Production’s signal path also has TP, profit-lock, stop-loss, hard-floor, SELL suppression, and progressive-add logic. [Replay](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:232) [Production](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:170)
+
+- **PROJECT EVIDENCE:** The response’s parity tiers are the right start, but it does not resolve the central isolation conflict. Production execution decisions depend on account-derived state—executed BUY consumption, managed position allocation, daily statistics, and opportunity memory—while Replay scope substitutes empty replay-local state. Therefore strict prohibition of Production wallet/position reads permits analysis/decision parity only unless independently captured immutable account evidence is explicitly allowed. [Consumption](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/EntryConsumptionPolicy.java:20) [wallet execution inputs](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:86) [replay opportunity substitution](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionReplayScope.java:147)
+
+- **PROJECT EVIDENCE:** CR-05 correctly preserves `NON_CANONICAL` and `PROTECTION_NOT_APPLIED` as exclusions from the accepted protection stream, but does not define accepted-event coverage, close-message identity, or a certifiable tie rule. `find()` selects in `observed_at, id` order but returns only time, price, and source—discarding both `id` and `ordering_slot`. [Price evidence](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118)
+
+- **PROJECT EVIDENCE:** Correction to my earlier wording: I cannot substantiate that equal-time rows are inherently non-deterministic. The source establishes database ID ordering on retrieval. The material defect is instead that retained Replay evidence cannot identify the selected row or prove that ID order was the Production application order.
+
+- **PROJECT EVIDENCE:** The response omits the live/historical order-book inversion. Missing live observations block entry with `INSUFFICIENT_DATA_HOLD`; missing historical observations return `UNAVAILABLE`. Persisted snapshots are also intentionally lossy when their asynchronous persistence queue rejects or write fails. [Live vs historical evaluation](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/OrderBookLiquidityService.java:154) [lossy persistence](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/OrderBookSnapshotService.java:40)
+
+- **PROJECT EVIDENCE:** CR-06 is incomplete. It offers future capture or explicit simulation, but omits stored-evidence injection as a defined option. Derivatives currently become historical `UNAVAILABLE`, yet derivatives can select the DEFENSIVE strategy and affect confidence and entry authority. [Historical derivatives](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/DerivativesPositioningService.java:38) [strategy selection](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/MarketStrategyService.java:43)
+
+- **PROJECT EVIDENCE:** The no-live-HTTP objective still needs an explicit requirement. Both Replay near-TP routes call `BinanceMinimumExecutionPolicy`, which calls current Binance `exchangeInfo`. [Replay call](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:534) [HTTP call](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/client/binance/BinanceMarketDataClient.java:159)
+
+- **PROJECT EVIDENCE:** CR-07 is directionally valid but must explicitly address the current FIX-154 contradiction. The draft declares FIX-154 out of scope, while current source includes V107/V109 and invokes higher-timeframe assessment in shared BUY validation. That proves working-tree state, not deployment state. [Draft scope](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:77) [shared BUY gate](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:93) [migrations](C:/workspace/crypto-ai-trader-mysql/src/main/resources/db/migration/V107__fix_154_trusted_higher_timeframe_buy.sql:4)
+
+- **PROJECT EVIDENCE:** The response’s proposed `RegimeStateService` reset is unsupported for baseline parity. The service immediately bypasses its state map unless Replay is explicitly `EXPERIMENTAL`; current scopes open in `PRODUCTION_PARITY`. [Regime guard](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/RegimeStateService.java:33) [default scope](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionReplayScope.java:33)
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Production protection is invoked before close-event publication, but the stored price event has neither the kline closed flag nor candle identity. Replay therefore cannot prove which price row was the closing message without new durable lineage or an explicit ambiguity refusal. [Ingestion order](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BinanceKlineService.java:101) [stored event fields](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:121)
+
+- **PROJECT EVIDENCE:** Replay fills using the last accepted price at or before the generated-signal time, whereas Production resolves price at execution wall-clock time. The next contract must name the fill-clock evidence and refusal rule. [Replay fill](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:305) [Production fill](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:340)
+
+- **PROJECT EVIDENCE:** Processing outcomes affect whether business logic runs at all: expired work bypasses `business.apply`, while lock/transaction outcomes are durably recorded. Those outcomes need a declared Replay reproduction/refusal treatment. [Coordinator](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:97)
+
+- **PROJECT EVIDENCE:** `ReplayParityValidator` is signal-only and has no caller in `src/main/java`; it cannot be the execution/lifecycle oracle. [Validator](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ReplayParityValidator.java:15)
+
+- **PROJECT EVIDENCE:** Existing deployment evidence records JAR SHA-256 and selected command-line overrides, but not commit identity, external YAML, or environment configuration. A historical version-dependent claim must refuse when that mapping cannot be reconstructed. [Deploy record](C:/workspace/crypto-ai-trader-mysql/scripts/deploy/Deploy-Trader.ps1:123)
+
+## OBJECTIONS
+
+- **PROJECT EVIDENCE:** Reject the response as a sufficient requirements basis. It drops the pre-write contradiction, does not require a complete no-I/O/side-effect inventory, and leaves wallet isolation incompatible with execution/lifecycle claims.
+
+- **AGENT INFERENCE:** The next single specification must obtain these user decisions before authorizing a design:
+  1. Parity target: frozen working tree or evidenced deployed JAR/configuration per window.
+  2. Isolation boundary: absolute prohibition on Production wallet/position reads, or named read-only oracle/evidence reads.
+  3. Permitted claim tiers: analysis parity, execution-decision parity, lifecycle parity, or simulation.
+  4. No-look-ahead treatment for recovered/historical signals and unavailable context.
+  5. Single-symbol first versus fully specified multi-symbol account scheduling.
+  6. Default mode and each Replay-only retirement.
+
+- **PROJECT EVIDENCE:** The next specification must include a master registry for:
+  - preflight qualification before business-output writes, with a narrowly defined refusal audit record and a no-write regression test;
+  - per-tier oracle records: source identity, as-of time, availability time, equality rule, missing-evidence result, and account-state eligibility;
+  - immutable price-event IDs, ordering slots, source era, close-message linkage, accepted-stream coverage, tie/refusal rules, and separate signal-price mechanics;
+  - full orchestration: protection, signal exits, price authority, fill/open-time clocks, expiry/retry/rollback outcomes, daily-budget creation timing, daily-loss failure, global caps, progressive adds, and stop-history boundary;
+  - field-by-field context handling for derivatives, order book, sentiment, BTC, and higher timeframes: inject persisted evidence, recompute from sufficient as-of evidence, or refuse;
+  - deny-by-default external I/O and side effects, including HTTP, mutable wallet settings, shared-table writes, and in-process metrics;
+  - baseline/deployment/configuration/era rules, including V106–V109 and the FIX-154 source/document discrepancy;
+  - Production impact, transaction/latency analysis, rollback, resource/cancellation safeguards, and disposable-MySQL validation;
+  - explicit refusal/mismatch-rate reporting and documentation updates only after implementation becomes authorized.
+
+- **PROJECT EVIDENCE:** The response should remove the RegimeState reset item. It should distinguish ordinary daily-budget decline from the daily-loss path that throws; they are not the same failure mode. [Daily-loss call](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:322)
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No database, production system, runtime, deployment record, build, test, or network resource was accessed in this review.
+
+- **PROJECT EVIDENCE:** The deployed JAR/configuration, actual Flyway history, evidence-era dates, and FIX-154 deployment status remain unverified.
+
+- **AGENT INFERENCE:** With strict wallet/position isolation, lifecycle parity will usually be unavailable unless independently captured immutable starting-state and constraint evidence is approved and shown sufficient.
+
+VERDICT: REJECTED

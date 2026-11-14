@@ -1,0 +1,315 @@
+You are conducting an independent, adversarial, READ-ONLY investigation of crypto-ai-trader.
+Never modify source, configuration, DB, git, or runtime. No implementation or deployment.
+Inspect actual code when relevant; do not treat README or other agent opinions as proof.
+Use relevant AGENTS.md, codex-docs and claude-docs without assuming they are correct.
+Do not disclose credentials or secrets. Do not access production systems.
+Respond with clear sections: FINDINGS, EVIDENCE (file paths and lines), OBJECTIONS, UNKNOWNS, VERDICT.
+VERDICT must be exactly one of APPROVED, REJECTED, INSUFFICIENT_EVIDENCE.
+APPROVED means no unresolved material objection to the specific question/document reviewed; not authorization to change code.
+QUESTION:
+Investigate the candle ingestion architecture as currently implemented in crypto-ai-trader-mysql versus the pending local-candle direction documented in AGENTS.md.
+
+READ-ONLY. No source, config, DB, git, runtime, or implementation changes.
+
+Investigate at minimum:
+1. Who currently owns Binance kline WebSocket ingestion.
+2. Who currently owns REST/backfill/recovery ingestion.
+3. Where candles are actually persisted.
+4. crypto_ai.candle versus collector/shared-market tables.
+5. shared-market.mode and related configuration.
+6. Candle close-transition behavior.
+7. Recovery/backfill behavior.
+8. Analysis dispatch after candle closure.
+9. Coupling between crypto-ai-trader and the external collector.
+10. Replay behavior.
+11. Production behavior.
+12. Differences between IMPLEMENTED architecture and PENDING architecture.
+13. Any architectural contradictions among AGENTS.md, codex-docs, claude-docs, configuration, and actual implementation.
+
+Evidence rule: actual implementation has priority over documentation. Cite file, class, method, configuration, SQL/table, test, or log where possible. Do not manufacture certainty.
+
+If a technical solution emerges, record it only as a candidate for later solution review. Do not treat findings as implementation authorization.
+
+No code changes.
+OTHER AGENT (CLAUDE) SAID:
+I couldn't run git, the build or tests, or touch any database or production system, so everything below comes from reading the source. "Implemented" means implemented in the working tree. According to the docs and the git status, most of the FIX-153 work is uncommitted; I couldn't run git to confirm which files are untracked.
+
+# FINDINGS
+
+**Summary:** the trader-owned local-candle design that AGENTS.md calls "pending" is already the default code path in the working tree. Its automatic candle recovery is turned off by default, and several things contradict it:
+- **Config:** `application.yml` defines the top-level `local-candle:` key twice.
+- **Docs:** AGENTS.md, codex-docs and claude-docs no longer match the code.
+- **Rules:** a few AGENTS.md rules are not met.
+
+What's running in production is unknown.
+
+1. **Kline WebSocket ingestion.** `shared-market.mode` defaults to `OFF`, and in OFF the trader owns the WebSocket. The chain is `BinanceWebSocketManager` → `BinanceKlineService.processKline` → `KlineTransactionCoordinator`. These components turn themselves off only in `LIVE`. In `OBSERVE` the trader's own WebSocket still runs.
+2. **REST / backfill / recovery.** There are three paths, all owned by the trader:
+   - **Startup bootstrap:** `MarketDataBootstrapService` → `MarketDataService.importCandles` → `CandleRepository.upsert`, tagged BACKFILL. In OFF it loads data only: no analysis and no trades.
+   - **Automatic recovery:** `LocalCandleReconciliationService` can close a stuck open row (update-only) or fill a missing candle (insert-only). **It is disabled by default** (`local-candle.reconciliation.enabled: false`), and the deploy script doesn't turn it on.
+   - **Diagnostics only:** `LocalClosedCandleDetector` re-sends candles that closed but were never analysed. It doesn't repair missing close data.
+3. **Where candles are stored.** In OFF, all reads and writes go to the trader's own database. `SharedMarketSource.reader()` returns the local connection, and the OFF branch never creates the collector connection pool. In LIVE, reads go to `crypto_ai_v2.candle` and local candle writes are refused.
+4. **`crypto_ai.candle` vs collector tables.** In OFF, the runtime paths I traced don't read or write `market_data_stream_event`, `market_data_stream_cursor` or `shared_market_*`. The shared-market health check returns local health first, and the shared-market consumer stops early in OFF. The exception is the Flyway migration V103, which needs `crypto_ai_v2.market_data_stream_event` to exist when it runs.
+5. **Configuration.** The defaults match the target in AGENTS.md: mode OFF, both `fix142` flags false, scheduled analysis false. The deploy script forces the same values on the command line. Two problems:
+   - **`local-candle:` is defined twice** at the top level of `application.yml` (lines 40 and 447). As far as I know, Spring Boot's YAML loader rejects duplicate keys, so the file would fail to load at startup. I haven't verified this by running it. If duplicates were accepted instead, one block would silently replace the other.
+   - **`activation-approved` defaults to `true`** in the yml, while the deploy script forces it to `false`.
+6. **Candle close handling.** Updates only move forward: once a row is closed, nothing reopens or changes it. Each closing receipt carries a unique token. The token is only written when the row actually changes from open to closed, and reading it back decides whether to dispatch analysis. The four transactions run in the order AGENTS.md requires: input → protection → observer → close dispatch. Analysis then runs on a separate executor, never on the WebSocket thread.
+7. **Recovery and backfill.**
+   - **Automatic recovery** (`LocalCandleReconciliationService`, the off-by-default path) follows the AGENTS.md rules: it waits until the exchange's time says the candle is final, uses an exact REST match, keeps durable audit rows with retries, creates no token, and records "not live" or "data unavailable" outcomes.
+   - **The startup/coin-activation backfill is different.** It uses insert-or-update, so it can close an open row that live data was still writing.
+8. **Analysis after a close.** The listener fires after commit and hands off to `CandleAnalysisDispatcher`, which has one lane per symbol and timeframe.
+   - For 1m, only the newest waiting candle is kept; for higher timeframes, at most 4 wait in order.
+   - The worker then runs: data-quality check → indicators → check for an existing signal → freshness check (1m/5m/1h allow 90/120/300 s after close) → either live analysis or history-only analysis.
+9. **Coupling to the collector.**
+   - **At runtime in OFF:** I found none in the paths I traced.
+   - **Remaining coupling:**
+     - The V103 migration.
+     - The collector pool, opened in OBSERVE and LIVE.
+     - OBSERVE mode runs the trader's WebSocket and the shared-market discovery loop at the same time.
+     - Collector credentials are still in the yml defaults.
+10. **Replay.** Replay reads candles through the same `CandleRepository`, so in OFF it reads local candles. It evaluates every closed candle and ignores where it came from (live, backfill or recovered) and what production recorded for it.
+11. **Production.** Unknown; I had no access, as instructed. What I can see:
+    - The docs say FIX-153 is uncommitted and not approved for production.
+    - The 2026-10-09 evidence in codex-docs is from the local `crypto_ai` database, not production.
+12. **Implemented vs pending.**
+    - **Implemented (working tree):**
+      - Trader-owned ingestion is the default.
+      - Updates only move forward, and close tokens decide dispatch.
+      - There is a detector that re-sends missed analysis.
+      - Durable tables for analysis outcomes and recovery audit exist (V107).
+      - Automatic recovery code exists.
+      - There is a trader-only baseline migration (B105).
+      - There are drain support and an instance lock.
+    - **Still pending or not met:**
+      - Automatic recovery is switched on nowhere.
+      - The live-close grace period is still a provisional value.
+      - There is no shared handling of Binance REST rate limits or bans.
+      - B105 hasn't been tested on MySQL.
+      - Protecting open positions while the application is replaced is unresolved.
+      - Replay doesn't distinguish candle origin.
+      - The Java 21 / MySQL validation gates haven't been run.
+
+# EVIDENCE
+
+- Config:
+  - `src/main/resources/application.yml:40-51`: first `local-candle:` block; `reconciliation.enabled: false`, marked "Provisional".
+  - `application.yml:111-112`: scheduled analysis is `false`.
+  - `application.yml:420-439`: mode `OFF`, `activation-approved` defaults to `true`, collector JDBC settings with credential defaults.
+  - `application.yml:447-459`: second `local-candle:` block.
+  - `pom.xml:9`: Spring Boot 4.1.0.
+- WebSocket:
+  - `BinanceWebSocketManager.java:28-29,95-105`: turned off only in LIVE.
+  - `BinanceWebSocketManager.java:198-201`: on reconnect it requests recovery.
+- Ingestion:
+  - `BinanceKlineService.java:56`: refuses in LIVE.
+  - `BinanceKlineService.java:101-111`: the token transition, and dispatch only when the row actually closed.
+  - `BinanceKlineService.java:114-125`: handling for duplicate closes and late open updates.
+- Transaction order: `KlineTransactionCoordinator.java:36-92`.
+- Persistence:
+  - `CandleRepository.java:32-37`: reads go through `source.reader()`.
+  - `CandleRepository.java:99-124`: `upsert` (BACKFILL) and `upsertRuntime`.
+  - `CandleRepository.java:132-145`: recovery that only updates an existing open row.
+  - `CandleRepository.java:152-168`: insert-only gap fill.
+  - `CandleRepository.java:173-203`: the insert-or-update rules that only move forward.
+- Source switch: `SharedMarketSource.java:19-23,45,54-56`.
+- Bootstrap and backfill:
+  - `MarketDataBootstrapService.java:50,105-110`: in OFF, loads data only.
+  - `MarketDataService.java:37-50`: skips candles the exchange hasn't closed yet; upserts with `closed=true`.
+- Detector:
+  - `LocalClosedCandleDetector.java:47-51`: lookback is max(180 s, 2 × grace); excludes BACKFILL rows and rows with no token.
+  - `LocalClosedCandleDetector.java:28-29,99-104`: retry state is kept in memory; gives up after 6 attempts.
+- Recovery:
+  - `LocalCandleReconciliationService.java:44,92-96`: disabled flag.
+  - `LocalCandleReconciliationService.java:122-159`: how it picks candidates.
+  - `LocalCandleReconciliationService.java:161-192`: the recovery itself.
+  - `LocalCandleReconciliationService.java:198-207`: requires proof the close was lost (a later candle exists, or a reconnect happened).
+- Dispatch and worker:
+  - `CandleClosedEventListener.java:30-33`.
+  - `CandleAnalysisDispatcher.java:74-81,106-110`.
+  - `CandleClosedAnalysisWorker.java:119-166`.
+  - `SharedEventPolicy.java:22-27`: grace periods.
+- Shared-market consumer:
+  - `SharedMarketConsumer.java:136-148`: OFF returns early; OBSERVE continues to the discovery and price clocks.
+  - `SharedMarketConsumer.java:322-333`: OBSERVE reads `market_data_stream_cursor` and writes `shared_market_consumer_state`.
+- Health: `Fix142HealthService.java:25`.
+- Startup guards:
+  - `LocalTraderInstance.java:18-25`: the lock path is required in OFF.
+  - `LocalRuntimeSchemaChecks.java:26-27`: checks for V106 only, not V107.
+- Migrations:
+  - `src/main/java/db/migration/V103__fix_149_fresh_admission_indexes.java:20-21,43-52`.
+  - `B105__fix_153_trader_only_baseline.sql:1-4`.
+  - `V106` and `V107` (`.sql` in `src/main/resources/db/migration`).
+- Deploy:
+  - `scripts/deploy/Deploy-Trader.ps1:75-82`: requires V106, B105 and `LocalTraderInstance` in the jar.
+  - `Deploy-Trader.ps1:126-130`: forces OFF and the flags; recovery is not enabled.
+- Replay:
+  - `RegressionTestWorker.java:469-506`: loads data via `CandleRepository`.
+  - `RegressionTestWorker.java:580-622`: evaluates every closed candle, with evaluation time = open time + interval.
+  - `RegressionTestWorker.java:663-683`: a Replay-only signal keeps a null source signal ID.
+- Rate limits: no 429/418/Retry-After handling anywhere in `src/main/java`. `BinanceMarketDataClient` is shared with the clock sync (`ExchangeClockSynchronizer.java:44`).
+- Docs:
+  - AGENTS.md, "Current architecture direction (pending implementation)".
+  - `codex-docs/ARCHITECTURE.md:85-88,111-116,137-141`.
+  - `claude-docs/ARCHITECTURE.md:35-37,96-99`.
+  - `claude-docs/INVESTIGATION_LOG.md:11-16,37-40`.
+  - `codex-docs/INVESTIGATION_LOG.md:12,15,19-21`.
+
+# OBJECTIONS
+
+1. **AGENTS.md is out of date.** It says the target design is "not an implemented/deployed change", but it is the default code path in the working tree. AGENTS.md also says V103 blocks a trader-only install until a forward policy exists, while the source already contains a B105 baseline meant to solve that (untested on MySQL).
+2. **The docs contradict the code and each other.**
+   - claude-docs says nothing repairs the reconnect gap automatically (`ARCHITECTURE.md:96-99`, `INVESTIGATION_LOG.md:11`) and that a fresh install fails because of V103. The code has both a recovery service and B105.
+   - codex-docs says the trader-only bootstrap is "pending" (`ARCHITECTURE.md:85-88`), yet B105 exists.
+   - codex-docs also correctly says recovery is "disabled by default" (`:137-141`).
+3. **The yml has a duplicate top-level key.** Both `local-candle:` blocks sit at the top level of the same YAML document. My understanding is that this stops startup; at best, one block silently wins. Either way it's a material configuration defect.
+4. **Automatic recovery is off, which conflicts with AGENTS.md.** The rule says "Candle recovery is automatic… no manual repair step". With recovery disabled, a reconnect at a candle close leaves the row open, and the zero-missing-candles quality rule then blocks that lane. That is exactly the 2026-10-09 incident, which was fixed by hand (`codex-docs/INVESTIGATION_LOG.md:12-21`). In practice, only a restart's bootstrap fixes it.
+5. **No shared Binance rate-limit or ban handling.** AGENTS.md requires it across recovery, clock sync and bootstrap. I found none anywhere.
+6. **The startup/coin-activation backfill uses insert-or-update** and can close an open row. If that happens while the WebSocket is live for that symbol, the live close becomes a duplicate. No token is created, so the detector also skips the candle. It then only gets a late-close audit row, with no terminal analysis outcome. The startup run happens before the WebSocket starts, so it's safe. Whether the coin-activation path can overlap with a live stream is **unknown**.
+7. **Detector gaps against AGENTS.md:**
+   - **Not durable across long outages:** the detector's lookback is 180–600 s and its retry state is in memory. After a crash or outage longer than that, a closed candle that was never analysed is never revisited and gets no terminal outcome. That conflicts with "each candle/work path must write one durable terminal analysis outcome".
+   - **Possible out-of-order live execution:** a 1m candle that was replaced in the queue can be re-sent by the detector while still inside its 90 s grace. It would then be analysed as live, after a newer candle. I found no guard against this in `execution/`; whether one exists elsewhere is **unknown**.
+8. **Replay is likely to diverge from production.** Replay analyses BACKFILL/recovered candles and candles that were replaced in the 1m queue. Production deliberately records those as not live, or never analyses them. I found no exclusion based on candle origin or production outcome.
+9. **OBSERVE mode runs both paths at once.** In OBSERVE, the trader's own WebSocket runs alongside the shared-market discovery loop. That conflicts with "do not run direct ingestion and the shared-market executors together". It's not the default mode, but nothing prevents it.
+10. **Smaller points:**
+    - `activation-approved` defaults to `true` in the yml.
+    - The startup schema check doesn't require V107, although recovery and outcome recording need it.
+
+# UNKNOWNS
+
+- **Production:** which mode, jar or commit is actually running, and any external `application.yml` in `C:\apps\crypto-ai` (the deploy script keeps external config resolution).
+- **The YAML failure:** whether Spring Boot 4.1 really rejects the duplicate key. This needs a startup or unit check.
+- **B105:** whether this Flyway version supports baseline (`B`) migrations, and whether B105 works on a real empty MySQL database. The docs say it hasn't been tested.
+- **Untracked files:** git status was truncated and I couldn't run git, so I couldn't confirm which files are untracked.
+- **Build and tests:** whether the project compiles and the tests pass under Java 21. The docs say Java 17 is installed on this workstation.
+- **Replay trades:** whether shadow execution in Replay (`ShadowProductionReplayService`) excludes candles that weren't analysed live in production. I only traced signal generation.
+- **Coin activation race:** whether activating a coin can race the live stream for the same symbol.
+
+# CANDIDATES (for later solution review only; nothing implemented)
+
+- Merge the two `local-candle:` blocks, and add a test that loads the context or the yml.
+- Measure the live-close grace period, then enable recovery in reviewed OFF deployments.
+- Add shared Binance REST rate-limit and ban handling.
+- Make the coin-activation backfill insert-only, or keep it out of live lanes.
+- Write a durable terminal outcome for analysis that is never resolved, and for 1m candles replaced in the queue.
+- Add provenance/outcome-aware exclusion in Replay.
+- Make OBSERVE mode refuse to start the trader's WebSocket.
+- Update AGENTS.md (only with your approval) and the codex-docs/claude-docs pages listed above.
+
+# VERDICT
+
+REJECTED
+
+YOUR PRIOR FINDINGS:
+## FINDINGS
+
+1. The repository implements two mutually exclusive intended paths:
+   - `OFF`: trader-owned Binance WebSocket ingestion, local `crypto_ai.candle` writes, local close detection/dispatch.
+   - `LIVE`: collector-backed shared-market consumption from `crypto_ai_v2`.
+   
+   This broadly matches the pending local-candle direction in `AGENTS.md`, but it is not deployment-ready.
+
+2. In `OFF`, the trader owns Binance kline WebSocket ingestion. The WebSocket handler calls `BinanceKlineService.processKline`, which persists the local candle and canonical 1m price event, runs protection and observer work, then publishes a close event only after an atomic close transition.
+
+3. In `OFF`, REST bootstrap/backfill is trader-owned:
+   - `MarketDataBootstrapService` invokes `MarketDataService.importCandles`.
+   - It writes closed REST data to local `candle` and explicitly suppresses analysis/execution for bootstrap in OFF mode.
+   - A separate reconciliation implementation exists for authoritative recovery/gap backfill, but is disabled by default.
+
+4. Local candle persistence is implemented through `CandleRepository` writing `crypto_ai.candle` when not in LIVE mode. Runtime updates preserve monotonic closure; recovery has distinct update-only and insert-if-absent paths.
+
+5. In `LIVE`, the trader has an explicit runtime dependency on the external collector:
+   - a read-only pool connects to configured `crypto_ai_v2`;
+   - `SharedMarketConsumer` reads `market_data_stream_event` / cursor tables;
+   - it writes local shared-delivery/state tables and dispatches work from them.
+   
+   This is retained legacy/shared functionality, not the target OFF architecture.
+
+6. Material architectural defect: `OBSERVE` is neither isolated nor mutually exclusive. `SharedMarketSource` treats only `LIVE` as enabled, so direct Binance WebSocket ingestion remains enabled in `OBSERVE`; but `SharedMarketConsumer` also starts its collector polling for every non-OFF mode. Thus `OBSERVE` can run direct ingestion and collector consumption together, violating the documented “do not run direct ingestion and shared-market executors together” rule.
+
+7. Close handling in OFF is substantially aligned with the pending safety direction:
+   - runtime upsert uses an immutable close-transition token;
+   - duplicate close and late-open updates do not re-admit work;
+   - the transaction order is input → protection → observer → close dispatch;
+   - analysis is dispatched asynchronously, not on the WebSocket callback thread.
+
+8. Recovery/backfill behavior is partly implemented but operationally inactive by default. The reconciler requires `OFF` and `local-candle.reconciliation.enabled=true`; the checked-in default is `false`. Recovery finalizes existing open rows without a token; gap recovery is insert-if-absent with `BACKFILL` provenance and records a non-live terminal outcome. It does not dispatch analysis or execution.
+
+9. Replay uses candle data through `CandleRepository`: local `crypto_ai.candle` in OFF and the collector-side reader in LIVE. Replay also consumes persisted `market_price_event` evidence for exact-price behavior when available. I found source-level parity machinery, but no executed Replay validation evidence in this investigation.
+
+10. The current default configuration is OFF, but the checked-in default cannot start OFF mode as-is: `local-candle.instance-lock-path` is empty while startup requires an explicit absolute path. This is a deliberate fail-fast control, but it means default OFF configuration is not independently runnable.
+
+11. A fresh trader-only install remains blocked by applied Java Flyway migration `V103`: it requires `crypto_ai_v2.market_data_stream_event`. This directly contradicts a fully collector-free bootstrap, though both AGENTS.md and the architecture documents acknowledge it as an unresolved release blocker.
+
+12. Documentation is generally candid that FIX-153 is source-implemented but unverified/not approved for production. However, its “current primary flow” describes OFF mode as the current architecture without equally prominently describing the actual OBSERVE dual-path contradiction and the disabled reconciliation default.
+
+## EVIDENCE
+
+- Direct WebSocket ownership:
+  - [BinanceWebSocketHandler.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/client/binance/websocket/BinanceWebSocketHandler.java:58) constructs receipt evidence and calls `BinanceKlineService.processKline`.
+  - [BinanceWebSocketManager.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/client/binance/websocket/BinanceWebSocketManager.java:95) starts the trader WebSocket unless `sharedMarketEnabled` is true.
+  - [BinanceKlineService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BinanceKlineService.java:101) writes runtime candle data and price evidence; [line 110](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BinanceKlineService.java:110) publishes only a confirmed close transition.
+
+- Transaction order and asynchronous dispatch:
+  - [KlineTransactionCoordinator.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:40) commits input first; [line 51](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:51) runs protection; [line 81](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:81) observer; [line 90](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:90) close dispatch.
+  - [CandleAnalysisDispatcher.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/event/CandleAnalysisDispatcher.java:106) executes work on its executor, not the ingestion callback.
+
+- Local persistence and monotonic close:
+  - [CandleRepository.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:109) defines runtime upsert; [line 120](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:120) recognizes closure only by matching token.
+  - [CandleRepository.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:132) performs recovery as update-only for existing open rows.
+  - [CandleRepository.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:152) uses insert-if-absent for absent recovery identities.
+  - [LocalClosedCandleDetector.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/local/LocalClosedCandleDetector.java:50) admits only closed, tokenized, non-BACKFILL candles.
+
+- REST/bootstrap/recovery:
+  - [MarketDataService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/MarketDataService.java:31) fetches Binance REST klines and writes them locally.
+  - [MarketDataBootstrapService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/MarketDataBootstrapService.java:105) makes OFF-mode bootstrap data-only: no analysis/execution.
+  - [LocalCandleReconciliationService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/local/LocalCandleReconciliationService.java:92) runs only when enabled and OFF; [line 183](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/local/LocalCandleReconciliationService.java:183) differentiates recovery from gap backfill; [line 189](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/local/LocalCandleReconciliationService.java:189) records `SKIPPED_NOT_LIVE`.
+
+- Configuration:
+  - [application.yml](C:/workspace/crypto-ai-trader-mysql/src/main/resources/application.yml:40) sets reconciliation disabled.
+  - [application.yml](C:/workspace/crypto-ai-trader-mysql/src/main/resources/application.yml:417) sets default `shared-market.mode=OFF`.
+  - [application.yml](C:/workspace/crypto-ai-trader-mysql/src/main/resources/application.yml:454) leaves the required instance-lock path empty.
+  - [LocalTraderInstance.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/local/LocalTraderInstance.java:20) fails OFF startup if that path is absent or non-absolute.
+
+- Collector/shared coupling:
+  - [SharedMarketSource.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/shared/SharedMarketSource.java:20) supports `OFF`, `OBSERVE`, and `LIVE`; [line 22](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/shared/SharedMarketSource.java:22) enables shared mode only for `LIVE`; [lines 25–36](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/shared/SharedMarketSource.java:25) create the collector read pool for non-OFF.
+  - [SharedMarketConsumer.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/shared/SharedMarketConsumer.java:136) returns only for OFF and schedules collector discovery/price/analysis consumers for non-OFF at [lines 146–149](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/shared/SharedMarketConsumer.java:146).
+  - [SharedMarketConsumer.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/shared/SharedMarketConsumer.java:345) reads `market_data_stream_event`.
+
+- OBSERVE contradiction:
+  - `OBSERVE` makes `sharedMarketEnabled=false` by [SharedMarketSource.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/shared/SharedMarketSource.java:22).
+  - The WebSocket therefore starts because it exits only when that boolean is true: [BinanceWebSocketManager.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/client/binance/websocket/BinanceWebSocketManager.java:95).
+  - The shared consumer also starts because it exits only for OFF: [SharedMarketConsumer.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/shared/SharedMarketConsumer.java:136).
+
+- Replay:
+  - [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:129) loads candles through the same repository abstraction.
+  - [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:85) selects persisted live-price evidence where present and labels fallback behavior separately.
+
+- Bootstrap blocker:
+  - [V103__fix_149_fresh_admission_indexes.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/db/migration/V103__fix_149_fresh_admission_indexes.java:43) checks for `crypto_ai_v2.market_data_stream_event`; [line 49](C:/workspace/crypto-ai-trader-mysql/src/main/java/db/migration/V103__fix_149_fresh_admission_indexes.java:49) fails if absent.
+  - [AGENTS.md](C:/workspace/crypto-ai-trader-mysql/AGENTS.md:57) identifies this as a trader-only bootstrap release blocker.
+  - [codex-docs/ARCHITECTURE.md](C:/workspace/crypto-ai-trader-mysql/codex-docs/ARCHITECTURE.md:85) reports the same blocker.
+
+## OBJECTIONS
+
+- `OBSERVE` permits concurrent direct Binance ingestion and shared collector execution. This materially violates the pending direction’s exclusivity requirement and makes the mode unsafe as an architectural transition/observation mode.
+- Reconciliation is disabled by default, so the source implementation does not establish operational recovery coverage for missed close events.
+- A default OFF launch fails without external lock-path configuration; this is safe fail-fast behavior, but means the checked-in default is not a runnable local-candle deployment configuration.
+- Fresh trader-only installation still requires the collector schema due to V103; the trader is not bootstrap-independent.
+- No source-only inspection can establish production configuration, migration state, deployed artifact identity, reconnect behavior, crash/restart properties, MySQL concurrency behavior, or Replay parity execution.
+
+Candidate for later solution review only: make the mode model explicitly exclusive—either disable direct ingestion in OBSERVE or prohibit OBSERVE while the direct path is enabled—and verify this with an integration test that asserts only one ingestion architecture starts.
+
+## UNKNOWNS
+
+- Whether any deployed environment is using OFF, LIVE, or OBSERVE.
+- Whether reconciliation has been enabled in an approved runtime configuration.
+- Whether production satisfies the required absolute instance lock and local schema prerequisites.
+- Whether the required MySQL/Java 21/race/crash/Replay parity gates have passed.
+- Whether collector-free bootstrap has a tested forward migration/installer policy.
+- Whether current source changes are the exact artifact used by any runtime; no git, database, runtime, or production system was accessed.
+
+## VERDICT
+
+REJECTED
+
+Challenge the other findings with code evidence. Correct your own mistakes. Identify unresolved issues. Do not rubber-stamp.

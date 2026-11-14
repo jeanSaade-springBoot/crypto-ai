@@ -1,0 +1,1 @@
+SHOW COLUMNS FROM production_exit_audit

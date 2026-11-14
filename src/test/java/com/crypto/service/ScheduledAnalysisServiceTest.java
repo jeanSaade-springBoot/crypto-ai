@@ -42,7 +42,6 @@ class ScheduledAnalysisServiceTest {
 
     @Test
     void fix131DisabledRecoveryDoesNotReadOrAnalyze() {
-        when(properties.scheduledAnalysisEnabled()).thenReturn(false);
         ScheduledAnalysisService service = new ScheduledAnalysisService(
                 properties, coinConfigurationService, candleRepository, technicalIndicatorRepository,
                 technicalIndicatorService, analysisService, paperTradingService, tradeSignalRepository,

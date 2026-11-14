@@ -432,7 +432,7 @@ public class ExecutionIntelligenceService {
         if (hardBlock.blocked()) return SetupWakeupEvaluation.none();
 
         TradeExecutionValidationService.ValidationResult authority =
-                validationService.validateBuyContext(fiveMinuteTrigger);
+                validationService.validateBuyContext(fiveMinuteTrigger, "SETUP_WAKEUP");
         if (!authority.allowed()) return SetupWakeupEvaluation.none();
 
         Evidence evidence = evidence(current1m);
@@ -1076,6 +1076,12 @@ public class ExecutionIntelligenceService {
 
         if (!isSupportiveCurrentSignal(current) || !fiveSupportive || !oneHourSupportive
                 || q.classification().equals("CHASE_ENTRY")) {
+            // FIX-154: the existing raw 1h guard remains the authority for add-ons.
+            // Only after it has rejected an add do we write optional audit evidence;
+            // this call can never change the decision and is skipped on successful paths.
+            if (!oneHourSupportive) {
+                validationService.recordProgressiveAssessmentIfSoftBlocked(current);
+            }
             return null;
         }
 

@@ -1,0 +1,1 @@
+SELECT id, symbol, status, close_reason, realized_pnl, UNIX_TIMESTAMP(opened_at) AS open_epoch, UNIX_TIMESTAMP(closed_at) AS close_epoch, signal_id FROM crypto_ai.paper_position WHERE status='STOPPED' AND closed_at >= FROM_UNIXTIME(1791741612) ORDER BY closed_at DESC LIMIT 40;

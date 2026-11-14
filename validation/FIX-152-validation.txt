@@ -1,0 +1,9 @@
+FIX-152 DEVELOPMENT CANDIDATE VALIDATION
+EXECUTED: Java syntax parse (three changed Java files); SQLite extracted marker
+CAS/audit success/stale-token/audit-rollback tests; Node registry syntax;
+prior FIX-151 SQL equivalence checks and all migration bytes preserved.
+NOT EXECUTED: Java 21 Maven, four JUnit/H2 inherited MySQL regressions,
+Spring/JPA transaction participation, real old/new JVM races, backlog load,
+protective-exit and Production/Replay acceptance.
+No user database modifications executed here. No new migration required.
+No guarantee of full recovery; existing five analysis review fences remain.

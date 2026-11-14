@@ -1,0 +1,84 @@
+## FINDINGS — Iteration 3: log and timing forensics
+
+- **[PROJECT EVIDENCE]** No assigned database artifacts exist under `db/CODEX`; the six frozen positions—**182, 172, 162, 158, 143, 137**—cannot yet be tied to symbols, UTC/KSA entry/exit times, price events, or logs.
+
+- **[PROJECT EVIDENCE]** The accessible active application logs cover only the startup interval **2026-10-19 14:32:18.902–14:32:36.235 UTC** (KSA **17:32:18.902–17:32:36.235**), not the supplied snapshot date of 2026-10-20. No selected position ID appeared in that active log.
+
+- **[PROJECT EVIDENCE]** Active JDBC timing logs cover **2026-10-19 14:32:26–14:32:34 UTC** (KSA **17:32:26–17:32:34**). They contain explicit `startUtc` and `startKsa` fields, but no frozen-trade correlation. The application log’s timestamp prefix is explicitly configured in UTC.
+
+- **[PROJECT EVIDENCE]** Historical application logs exist only as compressed rollover files dated 2026-10-12 through 2026-10-17. This read-only sandbox lacks a usable decompression path; their contents were not inspected. Therefore, no conclusion may be drawn from their presence or presumed absence of a trade record.
+
+- **[PROJECT EVIDENCE]** Normal application-file delivery is asynchronous (`queueSize=2048`, `neverBlock=true`). A missing application-log line is therefore not proof that an event did not happen; durable DB evidence remains authoritative.
+
+- **[PROJECT EVIDENCE]** Current source supports the intended timing chain: input transaction → protection transaction → observer → close dispatch. Direct price protection receives `observedAt`, rejects invalid/stale/future/out-of-order observations, and records an atomic price-event outcome.
+
+- **[PROJECT EVIDENCE]** `paper_position.closed_at` is set from application `Instant.now()` during paper close; it is not the Binance observation timestamp. Actual protection/execution latency requires comparing the accepted `market_price_event.observed_at` with the durable position/audit timestamps.
+
+- **[PROJECT EVIDENCE]** Exit logs identify symbol, price, and reason, but normal exit messages do not include the price-event ID or Binance observation timestamp. The DB chain is therefore required to prove which observation triggered a frozen trade’s close.
+
+- **[AGENT INFERENCE]** There is currently no evidence that any of the six losses involved stale data, delayed protection, an out-of-order price event, or a logging failure. Equally, none can be ruled out.
+
+- **[PROJECT EVIDENCE]** Snapshot metadata remains internally inconsistent: `2026-10-20 11:54:53 UTC` converts to **2026-10-20 14:54:53 KSA**, not the supplied actual snapshot clock **2026-10-20 12:31:38 KSA**. The latter corresponds to **2026-10-20 09:31:38 UTC**. The frozen IDs remain authoritative; snapshot-clock timing does not.
+
+## EVIDENCE
+
+- `src/main/resources/logback-spring.xml`
+- `logs/crypto-ai-trader.log`
+- `logs/database-timing.log`
+- `src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java`
+- `src/main/java/com/crypto/position/service/LivePositionProtectionService.java`
+- `src/main/java/com/crypto/market/service/MarketPriceEventService.java`
+- `src/main/java/com/crypto/domain/PaperPosition.java`
+- `src/main/java/com/crypto/audit/domain/ProductionExitAudit.java`
+
+## UNKNOWNS
+
+- Each frozen position’s symbol and exact entry/exit UTC timestamps.
+- The accepted/rejected `market_price_event` sequence around entry and close.
+- Whether a pending/non-canonical event, protection retry, or close latency occurred.
+- Linked wallet-managed position, wallet trade, source/exit signal, and immutable exit audit.
+- Whether the current source/logging behavior was the runtime version active for each trade.
+- Contents of compressed historical application logs.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Schema-first confirmation of the durable timing and exit-evidence tables before querying the six frozen positions. This enables a later bounded reconstruction of `observed_at` → protection outcome → paper close → exit audit, without assuming physical schema from source mappings.  
+SQL:
+```sql
+SELECT
+    table_name,
+    table_type
+FROM information_schema.tables
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'market_price_event',
+      'production_exit_audit',
+      'wallet_managed_position',
+      'wallet_trade',
+      'trade_signal',
+      'position_management_event'
+  )
+ORDER BY table_name;
+
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'market_price_event',
+      'production_exit_audit',
+      'wallet_managed_position',
+      'wallet_trade',
+      'trade_signal',
+      'position_management_event'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

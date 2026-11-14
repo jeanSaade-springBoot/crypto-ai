@@ -1,0 +1,1 @@
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME IN ('trade_signal','signal_processing_work','wallet_managed_position','market_price_event') AND (COLUMN_NAME LIKE '%\_at' OR COLUMN_NAME LIKE '%time%') ORDER BY TABLE_NAME, ORDINAL_POSITION

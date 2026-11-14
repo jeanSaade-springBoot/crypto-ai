@@ -1,0 +1,53 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen cohort is exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutions made.
+- **PROJECT EVIDENCE:** The permitted `db/CODEX` folder contains no executed query results, so no trade-specific entry, exit, P&L, or rule-compliance conclusion is currently evidence-backed.
+- **PROJECT EVIDENCE:** Source establishes the reconstruction fields and rules:
+  - [`PaperPosition.java`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:12) holds lifecycle, entry/exit prices, stop/target, linked entry/exit signals, reasons, and UTC open/close times.
+  - [`MarketPriceEventService.java`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:25) treats only `LEGACY`/`APPLIED` price events as accepted protection evidence.
+  - [`PositionExitPolicy.java`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:18) defines normal, higher-timeframe, and profit-lock exit decisions.
+- **PROJECT EVIDENCE:** The charter’s snapshot values conflict by two seconds: `2026-10-20 15:00:04 UTC` converts to `18:00:04 KSA`, while the supplied snapshot KSA is `18:00:02`. This does not alter the frozen IDs, but should be preserved as a study metadata discrepancy.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Read required shared context, database investigation rules, charter, and Codex investigation/trading/architecture documentation.
+- **EXTERNAL RESEARCH:** None used.
+- **AGENT INFERENCE:** No valid classification—valid loss, strategy defect, stale-data failure, protection failure, or execution delay—can yet be made for any frozen trade.
+
+## UNKNOWNS
+
+For each frozen position: symbol, entry/exit signal IDs, entry/exit UTC timestamps and KSA conversions, close reason, wallet executions, fees, protection observations, accepted exit trigger, data quality/freshness, and Replay eligibility remain unknown.
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual `crypto_ai` schema before issuing trade-specific reconstruction queries for the six frozen `paper_position` IDs.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    data_type,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'position_analysis',
+      'position_management_event',
+      'production_exit_audit',
+      'signal_processing_work',
+      'market_price_event'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+Iteration 1 is limited to evidence intake and schema-safe reconstruction setup. No code, configuration, database, Git, or deployment changes were made.

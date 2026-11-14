@@ -1,0 +1,59 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE — FIX-156 cannot be accepted as complete.** The exact RPR-0.9.12 design named by hash is absent; the repository’s canonical specification is still RPR-0.4 marked “NOT APPROVED — IMPLEMENTATION FORBIDDEN.” Exact registry reconciliation is therefore impossible.
+
+- **PROJECT EVIDENCE — Replay still reaches the shared Production BUY validation path.** `ShadowProductionReplayService` calls `ExecutionIntelligenceService.evaluateBuy`; that calls `TradeExecutionValidationService.validateBuy`, which reads `WalletSettingsRepository`. This violates the Jean requirement for a Replay-local BUY path with no wallet-settings fallback.
+
+- **PROJECT EVIDENCE — The SQL boundary is opt-in, not enforced.** Only the new profile and FIX-122 stores invoke `ReplayAccessPolicy`. The active worker, shadow lifecycle, and regression service issue direct JDBC operations. The policy cannot reject those operations.
+
+- **PROJECT EVIDENCE — A shared-table write remains reachable.** With `shared-market.mode=LIVE`, every Replay worker opens `CandleInputAudit`, which inserts `shared_candle_input_audit`. Jean’s stated exception permits only specified `fix122_evaluation` operations.
+
+- **PROJECT EVIDENCE — Profile lifecycle is unsafe and incomplete.** No main-source profile creator/insert caller was found, so normal new runs refuse at `require(runId)`. Worse, Delete Data resets `analysis_test_run` IDs but does not purge `replay_policy_profile`; a reused run ID can load a prior run’s frozen profile.
+
+- **PROJECT EVIDENCE — Parity evidence is not implemented end-to-end.** The certificate, trace, output, fixture, and price-coverage tables have no application writer. “Exact” price mode is still set when the price-event list is merely non-empty, not after proving complete position-lifetime coverage.
+
+- **PROJECT EVIDENCE — O-8 is still bypassable.** `ReplayFix122EvaluationStore` has the intended four statement shapes, but `StopLossEvidenceStore` still directly reads/writes `fix122_evaluation`; the Replay diagnostics controller uses that Production store directly.
+
+- **PROJECT EVIDENCE — Required test evidence is absent.** No T156-09a test exists. The present policy tests test declared categories, not static reachability or interception of the actual Replay lifecycle. No Java 21 or disposable-MySQL validation output was run or supplied for this review.
+
+- **PROJECT EVIDENCE — Prior reports require correction.** The current shadow service no longer calls `BinanceMinimumExecutionPolicy`; it uses `ReplayMinimumExecutionPolicy`. Also, the FIX-156 status report’s “OPEN” finding state is stale against the later Jean closure record. That closure does not prove technical completion.
+
+## EVIDENCE
+
+- Canonical-contract gap: `agent-docs/FINAL_CHANGE_SPECIFICATION.md:3-4`; RPR-0.9.12 is only referenced externally in `agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:6-8, 313, 423-430`.
+
+- Jean scope and closure record: `agent-docs/JEAN_REVIEW_FIX-156.md:17, 65-93, 139-140`.
+
+- Shared BUY/wallet route: `ShadowProductionReplayService.java:257`; `ExecutionIntelligenceService.java:651-653`; `TradeExecutionValidationService.java:62-67, 400-410`.
+
+- Guard limitation: `ReplayAccessPolicy.java:50-69`; only its two stores invoke it. Active direct lifecycle JDBC: `ShadowProductionReplayService.java:363, 410, 435, 795-964`; worker direct persistence: `RegressionTestWorker.java:119-120, 205`.
+
+- Shared audit write: `RegressionTestWorker.java:42-43, 117`; `CandleInputAudit.java:40-48`.
+
+- Missing profile producer/collision: `ShadowProductionReplayService.java:64-66`; `ReplayPolicyProfileStore.java:50-81`; `RegressionTestService.java:352-364, 403-409`; `V110__fix_156_replay_owned_tables.sql:2-13`.
+
+- Unused parity-evidence schema: `V110__fix_156_replay_owned_tables.sql:15-50`; `V111__fix_156_replay_profile_evidence.sql:4-44`.
+
+- Incomplete price qualification and omitted event ID: `ShadowProductionReplayService.java:91-97`; `MarketPriceEventService.java:118-128, 173-175`; required event-ID evidence is described in `FIX-156_IMPLEMENTATION_PREPARATION.md:75, 188`.
+
+- FIX-122 bypass: `ReplayFix122EvaluationStore.java:24-48`; `StopLossEvidenceStore.java:48-65`; `Fix122DiagnosticsController.java:39-42`.
+
+## OBJECTIONS
+
+- **AGENT INFERENCE — Do not declare a Replay/Production parity result.** Current configuration-sensitive BUY authority, incomplete price coverage qualification, and absent trace/certificate integration create material false-positive and look-ahead/configuration-drift risk.
+
+- **AGENT INFERENCE — Do not “finish” by adding more call-site checks.** A caller-declared table/operation category cannot prove statement safety. The approved design must first identify the full active Replay data boundary and enforce it structurally.
+
+- **AGENT INFERENCE — The run-ID collision must be corrected before profile seeding.** Otherwise a Replay can proceed with an unrelated historical profile instead of refusing, which is worse than the current fail-closed behavior.
+
+- **AGENT INFERENCE — Jean’s closure is authorization to continue within scope, not evidence that the technical acceptance checks now pass.** This review does not reopen or alter Jean findings.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE — The exact RPR-0.9.12 text and D01–D56/S01–S14 registry are unavailable in the workspace**, so exact approved-scope reconciliation cannot be completed.
+
+- **PROJECT EVIDENCE — No database, runtime, production system, migration application, Git operation, or test execution was performed.** Migration state and Java 21/MySQL validation remain unverified.
+
+- **EXTERNAL RESEARCH — None used.** Public research cannot establish this project’s Replay correctness.
+
+VERDICT: REJECTED

@@ -1,0 +1,63 @@
+## FINDINGS
+
+Freeze-ready: **no**. Two read-only static-review rounds completed; no workspace, runtime, DB, or Production access/change occurred.
+
+- **PROJECT EVIDENCE:** All seven stated preparation gates remain pending, including source/configuration freeze, E01–E10 evidence, canonical specification, approvals, boundary tests, and sealed acceptance controls. This alone prevents a freeze. [Preparation gates](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:53)
+
+- **PROJECT EVIDENCE:** The canonical specification is still `RPR-0.4-DRAFT`, while the preparation relies on an external RPR-0.9.12 draft. The preparation is therefore not a self-contained, exact implementation contract. [Canonical specification](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:1)
+
+- **PROJECT EVIDENCE:** The current tree contains untracked FIX-156 Java, tests, and V110 migration, despite the preparation stating that no FIX-156 code/migration had started. These files are not wired into the existing Replay pipeline, so they neither establish completion nor can they be omitted from the baseline/freeze reconciliation. [Replay access policy](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/replay/ReplayAccessPolicy.java:7) [V110](/C:/workspace/crypto-ai-trader-mysql/src/main/resources/db/migration/V110__fix_156_replay_owned_tables.sql:1)
+
+- **PROJECT EVIDENCE:** The owner’s required non-wallet exit parity cannot be verified from the proposed contract: it references “Section 3.3.1,” but that section is absent. This leaves T156-02a/b without a frozen precedence oracle. [Dangling precedence reference](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:167)
+
+- **PROJECT EVIDENCE:** Current Production and Replay signal-path precedence differs: Production evaluates TP, then profit-lock, then stop-loss; Replay fallback evaluates TP, then stop-loss, then profit-lock. The preparation recognizes a difference, but lacks the exact executable specification needed to resolve it. [Production](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:170) [Replay](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:570)
+
+- **PROJECT EVIDENCE:** Equal-time canonical-price order is unreconstructable through the current projection. SQL orders by `(observed_at,id)`, but the returned DTO discards both `id` and `delivery_status`; Replay then has no stable persisted tie-breaker. [Projection](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118) [DTO](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:173)
+
+- **PROJECT EVIDENCE:** Independent of `wallet_settings`, current Replay invokes live minimum-order evaluation in both live-price and signal fallback near-TP paths. That conflicts with the frozen-fixture/no-HTTP owner boundary. [Live-price near-TP](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:534) [Fallback near-TP](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:687)
+
+- **PROJECT EVIDENCE:** “Zero Production code” is not yet made enforceable. R156-05 names the shared `ExecutionReplayScope`, which is a Spring component injected into Production validation, execution, and confluence services. The change registry must instead explicitly require Replay-owned replacements/readers—or declare a narrowly reviewed exception. [Registry](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:72) [Shared scope](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionReplayScope.java:17) [Production validation dependency](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:51)
+
+- **PROJECT EVIDENCE:** Analysis parity remains under-specified. The current shared analysis path reads multiple as-of-sensitive services and mutable state; the preparation only identifies selected inputs and leaves E03–E10 open. [Analysis graph](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:227) [Pending evidence](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:288)
+
+- **AGENT INFERENCE:** “Later Production enhancements must also be mirrored in Replay” needs a binding maintenance mechanism: a named source-version/fingerprint set, a decision/exit change registry, and a CI rule requiring the same change to update Replay mirrors and fixtures. “Version-matched” alone is not a detectable obligation. [Current duplicated replay rebase logic](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:753)
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** The preparation expressly reports P01–P07 pending and says it is not implementation authorization. [Status](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:49)
+
+- **PROJECT EVIDENCE:** Current Replay still reads Production trade history for the all-trades chart and uses legacy wallet-shaped Replay artifacts, which contradicts the intended baseline until replaced. [Chart query](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:549) [Replay persistence](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:893)
+
+- **PROJECT EVIDENCE:** The draft Replay SQL allow-list currently permits only four Replay tables and excludes the preparation’s stated narrow `fix122_evaluation` exception. It is also not used by the existing Replay path. [Allow-list](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/replay/ReplayAccessPolicy.java:11)
+
+- **PROJECT EVIDENCE:** The preparation’s 99% claim has no frozen confidence-interval method, denominator, coverage rule, or sealed acceptance cohort yet; P07 says those are pending. [P07](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:59)
+
+## OBJECTIONS
+
+- **AGENT INFERENCE:** A static reachability scan alone cannot establish the requested boundary: it can miss dynamic SQL, JPA access, Spring proxies, and asynchronous scope loss. The contract needs both static checks and direct/async context tests that prove no publication after forbidden account, HTTP, or shared-write access.
+
+- **AGENT INFERENCE:** Refusals/exclusions can inflate a parity percentage unless the cohort denominator, refusal taxonomy, and minimum coverage are frozen before the sealed dataset is opened.
+
+- **AGENT INFERENCE:** V110 is Replay-owned in purpose, but it is a Flyway migration in the shared application schema. The owner must explicitly decide whether that schema mutation is permitted under “Replay-only/zero Production code,” and record the deployment behavior. It must not be silently treated as no Production impact.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No tests, build, database query, service, Production system, or private log was accessed in this review.
+
+- **AGENT INFERENCE:** The complete external RPR-0.9.12 difference register—especially D02–D29 and S01–S14—is unavailable in this workspace, so it cannot be independently frozen from this preparation alone.
+
+- **AGENT INFERENCE:** The untracked FIX-156 artifacts may be prior work; their presence does not prove they were run, applied, or approved.
+
+## FINDINGS FOR JEAN
+
+- **AGENT INFERENCE:** Do not freeze FIX-156 yet.
+
+- **PROJECT EVIDENCE:** First produce one canonical, hashed specification that includes every D/S row and the missing exact signal-path and price-path precedence tables.
+
+- **AGENT INFERENCE:** Add an explicit file-boundary registry: Replay implementation may modify only Replay-owned packages, tests, documentation, and any specifically approved migration; shared execution/market/analysis/validation classes must be prohibited unless Jean grants a documented exception.
+
+- **AGENT INFERENCE:** Require Replay-owned price projection preserving event ID/status/order; immutable as-of fixtures for every analysis input; direct/async boundary tests; and a future-Production-change synchronization rule enforced in CI.
+
+- **PROJECT EVIDENCE:** `wallet_settings` was not treated as a remaining blocker in this review, per owner instruction.
+
+VERDICT: REJECTED

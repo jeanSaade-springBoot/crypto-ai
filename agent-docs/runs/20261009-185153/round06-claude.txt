@@ -1,0 +1,120 @@
+I re-checked both reports against the code. The verdict stays REJECTED, but three earlier claims need correcting: one of Codex's documentation objections is wrong, my restart finding A was framed with the wrong impact, and my suggested fix for A would not have worked. Nothing was modified. This session has no file-write or ExitPlanMode tool, so there is no plan file; this report is the deliverable.
+
+# FINDINGS
+
+## Corrections to my round-3 report
+
+**1. Finding A: the defect is real, but its impact is a missing audit/outcome record and a Replay mismatch, not a lost trade.**
+- Both Codex and I said a candle closed by the startup REST import becomes "ineligible for close dispatch". That is true, but under the intended design it was never dispatchable anyway.
+  - A candle that closes while the trader is down is historical-only. The correct recovery path also never dispatches it: it records `SKIPPED_NOT_LIVE` (`LocalCandleReconciliationService.java:189`).
+- What is actually wrong with the import path:
+  - It closes the existing open row but leaves its provenance as `RUNTIME` with a NULL token (`CandleRepository.java:173-188`). A historical row is stored looking like a live one.
+  - It writes no audit row and no terminal outcome, which breaks AGENTS.md's "one durable terminal outcome" rule.
+  - Replay selects closed candles by time, so it will include this row even though production never analysed it.
+- How often it happens is an inference: a 1m candle will be affected on most deploys, because the drain wait can be up to 120 s (`Deploy-Trader.ps1:112`). No measured downtime exists.
+
+**2. My suggested fix for A was incomplete.**
+- I suggested routing rows left open at shutdown through the update-only recovery path. That cannot work as things stand:
+  - Recovery only looks at open rows (`closed=0`, `LocalCandleReconciliationService.java:131`).
+  - It starts after a 15 s delay (`application.yml:45`).
+  - The startup import (`@Order(10)` runner, `MarketDataBootstrapService.java:27,96`) has already closed those rows by then.
+- So switching reconciliation on would change nothing for A. Any fix also needs the import to leave non-`BACKFILL` open rows alone.
+
+**3. The comment contradiction is wider than one line.** Besides `CandleRepository.java:205`, two more comments contradict the code:
+- `MarketDataBootstrapService.java:23-24` says only missing rows are inserted.
+- `CandleRepository.java:127-130` says only recovery avoids stealing a live close.
+
+## Challenges to Codex
+
+- **Codex objection 11 (claude-docs says direct ingestion is disabled in LIVE and OBSERVE) is wrong.** `claude-docs/ARCHITECTURE.md:47-50` says "disabled in LIVE". The real errors are elsewhere:
+  - It groups OBSERVE with LIVE under "`SharedAnalysisDispatcher` drives analysis".
+  - It says "The two paths must never run together", but OBSERVE runs both.
+- **Codex finding 7 (OBSERVE startup trading) is confirmed, with a limit.**
+  - The bootstrap analysis and paper-trading step is skipped only in OFF (`MarketDataBootstrapService.java:107`).
+  - The shared processing path checks freshness on every attempt regardless of where the signal came from (`SignalProcessingCoordinator.java:97-99`).
+  - Freshness only requires the newest closed candle within its grace period (`SignalProcessingFreshness.java:31-38`).
+  - Strategy and risk rules still run afterwards, so a trade is possible, not certain.
+- **Codex findings 5, 6, 9 and 10 are re-confirmed.** Codex's "not every restart" qualifier is correct.
+
+## New findings this round
+
+- **V103 changes the collector's schema, not just checks that it exists.**
+  - It confirms the history database is `crypto_ai`, then adds indexes to `crypto_ai_v2.market_data_stream_event` (`V103...java:39-58`).
+  - This is a startup migration rather than runtime access, so it isn't strictly the runtime rule AGENTS.md states. It still couples the trader to the collector's schema more tightly than "requires the table".
+- **B105 may be silently ignored.**
+  - The trader-only baseline depends on Flyway honouring `B`-prefixed migrations. The project uses stock `spring-boot-starter-flyway` and `flyway-mysql` with no edition setting (`pom.xml:57-66`).
+  - I believe baseline migrations may be limited to paid Flyway editions. If the edition in use doesn't support them, B105 is skipped without error, V103 runs, and a fresh install fails. This is unverified.
+- **No test catches the duplicate `local-candle:` key.**
+  - The key appears twice (`application.yml:40` and `:447`).
+  - The only test that touches the file reads it as raw text (`DeploymentSafetyContractTest.java:14`). Nothing starts Spring with it (no `@SpringBootTest`).
+  - I could not check Boot 4.1.0's YAML loader: the local sources jar is compressed and can't be searched with these tools.
+- **The bundled defaults auto-approve a LIVE cutover.**
+  - `activation-approved` and `automatic-first-cutover-enabled` both default to true (`application.yml:422-424`).
+  - Only the deploy script forces `activation-approved=false` (`Deploy-Trader.ps1:127`). A manual or IDE start with `SHARED_MARKET_MODE=LIVE` would inherit approval.
+- **There is no runtime evidence that this code has ever run.** `logs/` contains no FIX-153 markers (`BACKFILL_IMPORT_RETURNED`, `DETECTOR_GAP_EXPIRED`) and no duplicate-key error. Every behaviour claim here comes from source.
+
+## Unchanged (re-verified)
+
+| Mode | Kline WebSocket | REST import / bootstrap | Candle reads and writes | Collector |
+|---|---|---|---|---|
+| **OFF** (default; forced by deploy) | Trader | Trader | Local `crypto_ai.candle` | Not used |
+| **LIVE** | Refused (`BinanceKlineService.java:56`) | Refused (`MarketDataService.java:32`) | Reads from collector `crypto_ai_v2`; local writes refused | Supplies candles |
+| **OBSERVE** | Trader | Trader | Local | Connection pool and consumer both active |
+
+- A close token is assigned only when a row goes from open to closed (`CandleRepository.java:201`).
+- Only the receipt that owns that token publishes close analysis (`BinanceKlineService.java:110-111`). Phase order is input → protection → observer → close dispatch.
+- The detector only takes closed rows with a token that are not `BACKFILL`, and only looks back 180–600 s (`LocalClosedCandleDetector.java:47-50`).
+
+# EVIDENCE
+- `MarketDataBootstrapService.java:23-24, 27, 50, 96, 107-136`
+- `MarketDataService.java:32, 37-50`
+- `CandleRepository.java:99-106, 116-121, 127-144, 152-167, 173-212`
+- `BinanceKlineService.java:56-57, 101-125`
+- `LocalClosedCandleDetector.java:36, 47-51, 135-139`
+- `LocalCandleReconciliationService.java:93, 122-159, 161-196, 198-204`
+- `SignalProcessingCoordinator.java:43-112`
+- `SignalProcessingFreshness.java:24-49`
+- `V103__fix_149_fresh_admission_indexes.java:32-62`
+- `B105__fix_153_trader_only_baseline.sql:1-4`
+- `application.yml:39-51, 420-439, 447-459`
+- `Deploy-Trader.ps1:111-140`
+- `DeploymentSafetyContractTest.java:14`
+- `claude-docs/ARCHITECTURE.md:45-50, 77-81`
+- `pom.xml:9, 57-66`
+
+# OBJECTIONS (unresolved, material)
+1. **The startup import and the manual/coin-activation import close open `RUNTIME` rows** with no audit row, no outcome and no provenance change. Switching reconciliation on does not fix this.
+2. **OBSERVE in the main trader** runs direct ingestion, startup paper trading and collector consumption together, without any of the OFF-only safeguards. Nothing in the trader refuses OBSERVE.
+3. **Reconciliation** is disabled, has no terminal age-out, and applies `LIMIT 50` before its due/evidence filtering.
+4. **The detector keeps its retry state only in memory** with a short lookback, so after a longer outage some candles get no outcome.
+5. **No shared Binance REST rate-limit or ban handling** across bootstrap, reconciliation and clock calls.
+6. **Replay parity is not shown:** Replay selects by time, not by provenance or outcome.
+7. **Fresh trader-only install is unproven.** V103 needs and alters `crypto_ai_v2`, and B105 may not be honoured by this Flyway edition.
+8. **Duplicate `local-candle:` key** with no test that loads the configuration. Possible startup failure.
+9. **Documentation drift:**
+   - AGENTS.md calls the design "pending", but it is the code default.
+   - claude-docs misdescribes OBSERVE and omits that backfill closes open rows.
+   - Three source comments contradict the SQL they describe.
+
+# UNKNOWNS
+- Whether Boot 4.1.0 rejects duplicate YAML keys.
+- Whether this Flyway edition supports `B` migrations.
+- MySQL 8 behaviour of B105.
+- Production artifact, mode, overrides and Flyway history (not accessed).
+- Actual deploy downtime.
+- Java 21 build, race and crash test results (nothing was run).
+- Whether strategy/risk rules block typical OBSERVE STARTUP signals.
+- How open positions are protected while the application is being replaced (still an open release gate).
+
+**Candidates for later solution review only (not authorised):**
+- Make the import insert-if-absent, and exclude non-`BACKFILL` open rows so enabled reconciliation can record them with an audit row and a `SKIPPED_NOT_LIVE` outcome.
+- Have the main trader refuse OBSERVE, or disable direct ingestion outside OFF.
+- Merge the two YAML blocks and add a test that starts Spring with the real configuration.
+- Prove B105 on the actual Flyway edition against MySQL 8.
+- Give reconciliation a terminal age-out outcome and filter to due rows before the limit.
+- Add a shared REST rate-limit/ban policy.
+- Make Replay select candles by provenance and outcome.
+- Correct claude-docs. Any AGENTS.md change needs your approval.
+
+# VERDICT
+REJECTED

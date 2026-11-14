@@ -1,0 +1,1 @@
+SELECT * FROM buy_htf_assessment_audit WHERE reference_signal_id IN (156723,159408,165412,167668,171589,176710) ORDER BY reference_signal_id, id LIMIT 100

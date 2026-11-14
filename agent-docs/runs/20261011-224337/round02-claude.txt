@@ -1,0 +1,110 @@
+I've checked the claims both agents disputed against the current source. Here is the cross-examination result.
+
+# Round 2: Claude cross-examination of FIX-156 RPR-0.9.4 against the current Java
+
+**Bottom line:** the current code still has every Replay-side difference the spec lists. One requirement in the spec contradicts another, and the result labels don't cover lifecycle parity. Until both are fixed the spec can't be frozen, so no one can yet say whether 98-99% is reachable. I changed nothing: no source, spec, database or git.
+
+## FINDINGS
+
+**R2-1. Codex's open-candle claim is confirmed, and it is worse than described. This closes S07.** [PROJECT EVIDENCE]
+- The Replay timeline is built from the unfiltered `candles(...)` query, which has no closed filter (`RegressionTestWorker.java:129-140`, `509-511`, `550-556`). Only the indicator dataset is filtered to closed candles (`475-480`).
+- `calculateSnapshotForRegression(..., dataset)` takes `closedCandlesAtOrBefore(openTime)` and does not check that the result is the requested candle (`TechnicalIndicatorService.java:135-145`).
+- So an open candle in the timeline produces a second analysis of the previous closed candle, stamped with a later `evaluationTime` (`RegressionTestWorker.java:584, 616`). That is an extra Replay signal with no Production counterpart.
+- S07 should be closed as "Replay change", not "not fully traced". The 6.1 identity check after each snapshot is required, not optional.
+
+**R2-2. My D01 correction holds.** [PROJECT EVIDENCE]
+- `validateSell` calls `validateBaseSignal(signal, false)`, which rejects any non-1m signal with `NON_EXECUTION_TIMEFRAME` (`TradeExecutionValidationService.java:166, 350-357`).
+- Codex did not dispute this. D01 should be classed as Production-proven equivalent.
+- One consequence: the F3 fixtures for "active lock with a 5m SELL" and "active lock with a 1h STRONG_SELL" give the same result in both systems. Keep them only as regression guards. The 1m case is the only one that changes behaviour.
+
+**R2-3. My F-E holds, and it reaches D09 as well.** [PROJECT EVIDENCE]
+- When `canUseSignalPrice` is false, `profitLock` is forced to `inactive(...)` (`PaperTradingService.java:133-137`).
+- That turns off SELL suppression (`199`), and it also turns off the add-path guard `!profitLock.active()` (`217`).
+- So in Production a 1m add can run while the real lock is active, if the signal price predates the entry. The Replay mirrors for D02 and D09 must copy this exact condition. "Skip adds while the lock is active" is not the rule.
+
+**R2-4. My F-D options were incomplete. I'm correcting option (a).** [PROJECT EVIDENCE + AGENT INFERENCE]
+- `settings()` reads `settingsRepository.findById(1L)` and has no Replay branch (`TradeExecutionValidationService.java:400-401`).
+- Option (a), "treat the values as versioned configuration evidence", would make the decisions comparable. But Replay would still read `wallet_settings` at run time, which breaks Section 2. The forbidden-dependency guard in RPR7-05 would then refuse every BUY validation.
+- Only two options actually resolve this:
+  - **(i)** A Replay-local copy of `validateBuy`. That is roughly 350 lines of strategy policy, which conflicts with Section 4's "no second strategy engine" and carries high drift risk.
+  - **(ii)** A narrow Production change: a settings source that knows when a Replay scope is active. That means reopening the "no Production class change" boundary.
+- Codex's item 2 ("eliminate or replace by Replay-local mirror") picks (i) without weighing this risk. I recommend (ii), approved explicitly by the owner as a separate Production-safe change. Either way the owner must decide before the freeze.
+
+**R2-5. I accept Codex's label objection; I had missed it.** [PROJECT EVIDENCE]
+- Section 1 says `ANALYSIS_PARITY` "makes no account/lifecycle claim".
+- Sections 7.1 and 7.2 and Appendix C require lifecycle parity, and no label exists that can certify it.
+- The spec needs a separate lifecycle label, for example `LIFECYCLE_PARITY_FIXED_NOTIONAL`, issued only when its own gates pass, or it must state explicitly that lifecycle parity is only a reported metric.
+
+**R2-6. Codex's other evidence matches my reads.** [PROJECT EVIDENCE]
+- Run-wide price pass flag (S14).
+- `wallet_trade` read in the chart endpoint (D26).
+- Final price-event tail not processed (D25).
+- Plain `@Async` executor.
+- The 13-field validator that nothing calls (S13).
+
+**R2-7. Correction: my sample-size statement was too vague.** [AGENT INFERENCE: standard Wilson-interval arithmetic, z = 1.96]
+- At 99% observed agreement, the 95% Wilson lower bound is about 97.1% with n = 300, about 98.1% with n = 500, and about 98.2% with n = 1000.
+- At 100% observed agreement, n of about 200 gives a lower bound of about 98.1%.
+- So "at least 98% lower bound at 99% observed" needs **roughly 500 or more comparable units per metric**.
+- Individual exit classes (hard floor, near-TP, POSITION_STOP_LOSS) will never have enough cases for their own rate. That is why the 7.2 zero-unexplained-mismatch gate, not a rate, has to govern them.
+
+## EVIDENCE
+- `RegressionTestWorker.java`: 129-140, 162-164, 469-511, 550-560, 584-616
+- `TechnicalIndicatorService.java`: 118-145
+- `TradeExecutionValidationService.java`: 63, 166, 350-365, 400-409
+- `PaperTradingService.java`: 113-121, 133-137, 170-217
+
+## OBJECTIONS
+1. The spec contradicts itself on `wallet_settings` (R2-4) and has no lifecycle label (R2-5). Both block the freeze.
+2. The register needs corrections: D01 is equivalent; D02 and D09 need the signal-price-authority condition; S07 is a confirmed Replay change.
+3. POSITION_STOP_LOSS (from D23) is missing from the exit classes in 7.1 and 7.2. Codex did not address this, so it stays open.
+4. Coverage has to be a hard gate with a minimum per-metric n of about 500 (R2-7). Otherwise the exclusions for S01-S03, S09, S12 and F7/F10 can push "99%" onto a self-selected subset.
+5. The worktree is dirty. I agree with Codex that the package hash must be frozen and D01-D27 and S01-S14 checked again against it.
+
+## UNKNOWNS
+- None of E01-E10 exists. I ran no database queries, so all coverage, availability and configuration-history figures are unmeasured.
+- Two other open questions:
+  - whether `market_price_event.id` order matches the order Production processed events in the collector era;
+  - whether the FIX-122 `stopLossEvidence` wrappers have side effects.
+- I have not checked D14 (profit-lock state across the TP-extension rebase) against shared fixtures.
+
+VERDICT: REJECTED
+
+## REMAINING WORK
+**A. Spec revision (needed before the freeze)**
+1. Owner decision on `validateBuy`'s `wallet_settings` reads: (i) a Replay mirror of `validateBuy`, or (ii) an approved scope-aware settings source in Production. Add `requireNewBuyTransition` and `executionProfile` to 3.6 and E10.
+2. Add a lifecycle result label, or state that lifecycle parity is only a reported metric.
+3. Register fixes: D01 equivalent; D08 equivalent once the wrapper side-effect check is done; D02 and D09 tied to `canUseSignalPrice`; S07 closed as a Replay change; POSITION_STOP_LOSS added to D23, 7.1 and 7.2.
+4. Make the run-wide `PENDING` refusal and the FIX-122 revision flag per-span or per-decision.
+5. Freeze before measuring: minimum coverage, n of about 500 or more per metric, the Wilson method, a BUY-decision coverage gate, and a separate final window.
+6. Freeze the source package SHA-256 and re-verify every register row against it.
+
+**B. Read-only evidence:** E01-E10, with the D25 final tail inside E02 and E03, and the collector-era ordering check inside E03.
+
+**C. Implementation (Replay output tables only; only after dual approval and the user's approval)**
+- **Stage 1:**
+  - Closed-only timeline with a snapshot identity check (R2-1).
+  - Remove the zero-event fallback, FIX-11K/FIX-11Q, cash/sizing and the run-wide price flags.
+  - Profit-lock suppression and the add-path guard using the exact Production condition.
+  - Signal-path order TP, lock, SL, floor, then SELL.
+  - Production entry time and the same `markExecuted` decision object.
+  - D25 tail drain and D27 censoring.
+  - Position-management (D23) and profit-lock (D14) mirrors with fixtures.
+  - An id-preserving price-event projection.
+  - A new comparator (RPR7-09).
+  - Per-span coverage replacing S14.
+  - Chart endpoint fed from fixtures, not `wallet_trade`.
+- **Stage 2:**
+  - Forbidden-dependency guard that propagates to async tasks.
+  - Named bounded executor.
+  - Qualifier and certificate.
+  - Staging and atomic promotion, archive and purge.
+  - Flyway migration chosen after a preflight check.
+  - Load-isolation proof.
+
+**D. Acceptance**
+- Separate signal, BUY-decision and lifecycle rates, each judged on its lower confidence bound.
+- Zero unexplained critical mismatches.
+- First-divergence report for every mismatch.
+- Registry reconciliation, then Claude's full code review.
+- Documentation updates, including the FIX-156 "virtual account" title in `fix-registry.js`.

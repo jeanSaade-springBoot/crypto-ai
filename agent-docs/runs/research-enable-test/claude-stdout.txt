@@ -1,0 +1,13 @@
+1. **Source title:** RFC 3339, "Date and Time on the Internet: Timestamps," by G. Klyne and C. Newman (Standards Track, Proposed Standard)
+2. **URL:** https://www.rfc-editor.org/rfc/rfc3339 (the RFC Editor, which officially publishes RFCs). The IETF Datatracker also keeps an official record at https://datatracker.ietf.org/doc/rfc3339
+3. **Publication date:** July 2002
+4. **Finding:** RFC 3339 defines a date and time format for Internet protocols that is a profile of the ISO 8601 standard for dates and times in the Gregorian calendar.
+5. **Label:** EXTERNAL RESEARCH
+
+I opened the RFC Editor page and checked the title, authors, date, status and abstract there. The search results also say the Datatracker lists RFC 3339 as updated by RFC 9557. I didn't open the Datatracker page to check this. If it's right, RFC 9557 should be read alongside RFC 3339.
+
+I didn't change any files or access any databases.
+
+Sources:
+- [RFC 3339 – RFC Editor](https://www.rfc-editor.org/rfc/rfc3339)
+- [Date and Time on the Internet: Timestamps – IETF Datatracker](https://datatracker.ietf.org/doc/rfc3339)

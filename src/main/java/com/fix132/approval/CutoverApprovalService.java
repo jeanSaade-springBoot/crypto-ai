@@ -95,7 +95,7 @@ public class CutoverApprovalService {
         int prior=jdbc.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_approval WHERE symbol=?",Integer.class,symbol);
         int history=jdbc.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_history WHERE symbol=?",Integer.class,symbol);
         if((prior==0 && history==0)!=operation.equals("FIRST_CUTOVER"))throw new IllegalStateException("Use explicit FIRST_CUTOVER or REAPPROVAL for this symbol");
-        var work=jdbc.queryForList("SELECT signal_id,status,source_event_id FROM signal_processing_work WHERE symbol=? AND status NOT IN ('COMPLETED','EXPIRED') LIMIT 25",symbol);
+        var work=jdbc.queryForList(com.crypto.shared.OperatorWorkCancellation.APPROVAL_BLOCKERS,symbol);
         if(!work.isEmpty())throw new IllegalStateException("Unfinished processing work: "+work);
         var delivery=jdbc.queryForList("""
             SELECT source_event_id,status,analysis_status FROM shared_market_event_delivery WHERE symbol=?

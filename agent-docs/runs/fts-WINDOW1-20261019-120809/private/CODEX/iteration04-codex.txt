@@ -1,0 +1,77 @@
+## FINDINGS
+
+### PROJECT EVIDENCE
+
+- The frozen cohort remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No individual attribution is possible: Codex-scoped DB evidence is still empty.
+
+- Current source has two materially different close routes:
+
+  1. **Live-price protection:** accepted direct price event → managed-wallet lock/checks → wallet mechanical exit → `paper_position` close → exit audit. A price event marked `APPLIED` proves only that the protection callback completed; it does not itself prove an exit occurred. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:53) [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:82)
+
+  2. **Signal processing:** durable signal work claim/freshness check → position advice → existing-position TP/profit-lock/SL/validated SELL checks → paper close and signal-linked wallet exit. [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:54) [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:122)
+
+- The valid frozen-trade bridge is expected to be `production_exit_audit`: it stores `paper_position_id`, `wallet_position_id`, source signal, close trigger, exit price, and optional `position_analysis_id`. Current code derives the managed position through the paper position’s entry signal. [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:29) [ProductionExitAuditService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:33)
+
+- `wallet_trade` does not carry `paper_position_id`; direct mechanical exits also do not attach a signal to the wallet SELL row. Therefore symbol/timestamp-only joining would be unsafe when positions are reused. The audit bridge must be proven from deployed rows before correlating wallet execution, logs, or price events. [WalletTrade.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletTrade.java:16) [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:533)
+
+- Current source persists no direct `market_price_event.id` on `paper_position`, `wallet_trade`, or `production_exit_audit`. Hence accepted direct-price evidence can support a reconstructed timeline only after an evidence-backed bridge through the managed position/audit and bounded timestamps; it cannot independently identify any frozen trade.
+
+- Current paper P&L calculation is price delta × remaining quantity plus any prior partial-harvest P&L. The wallet execution code currently writes zero fees. This is source behavior only, not proof of historical code/configuration or the six stored rows. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:495) [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:533)
+
+- A `POSITION_STOP_LOSS` route is also possible: position analysis may execute a wallet stop before normal paper-position processing completes. It must be checked through `position_analysis`, its linked wallet SELL, and the exit audit—not inferred from a generic STOP_LOSS label. [PositionManagementService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionManagementService.java:105)
+
+### AGENT INFERENCE
+
+- The numeric `positionId` log matches found in Iteration 3 remain unusable for any frozen trade until the audit bridge is retrieved. They are managed-wallet identifiers, not `paper_position` IDs.
+
+- For each frozen loss, the minimum defensible reconstruction route is:
+
+  `paper_position` → entry/exit `trade_signal` → `production_exit_audit` → `wallet_managed_position` → relevant `wallet_trade` rows → `position_analysis` / `position_management_event` where applicable → accepted `market_price_event` evidence.
+
+- No root cause, rule breach, stop-loss failure, fee effect, execution-delay conclusion, or Replay claim is supportable yet.
+
+### EXTERNAL RESEARCH
+
+- None.
+
+## EVIDENCE
+
+- Codex DB evidence directory: `agent-docs/runs/fts-WINDOW1-20261019-120809/db/CODEX/` contains no result files.
+- The supplied snapshot remains time-inconsistent: `2026-10-19 09:08:24 UTC` converts to `2026-10-19 12:08:24 KSA`, while the supplied KSA snapshot is `12:08:09 KSA`. This does not alter the frozen IDs, but it prevents a precise intended-clock selection claim.
+
+## UNKNOWNS
+
+For every frozen ID: deployed row values, symbol, entry/exit UTC timestamps and KSA conversions, audit bridge existence, managed wallet ID, entry/exit signals, exact exit trigger, price-event IDs/statuses, fees, partial harvests, position-analysis involvement, source/config version, and Replay reproducibility.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Read the deployed schema before selecting lifecycle columns or constructing joins for the six frozen `paper_position` IDs. This validates the paper-to-audit-to-wallet route and direct-price evidence availability without querying any trade rows.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    ordinal_position,
+    column_type,
+    is_nullable,
+    column_key,
+    column_default
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_managed_position',
+      'wallet_trade',
+      'production_exit_audit',
+      'position_analysis',
+      'position_management_event',
+      'market_price_event',
+      'signal_processing_work'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST

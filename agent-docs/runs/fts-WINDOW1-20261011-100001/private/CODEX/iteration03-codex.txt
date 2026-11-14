@@ -1,0 +1,71 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Frozen scope remains exactly `paper_position` IDs `104, 101, 96, 91, 82, 78`.
+- **PROJECT EVIDENCE:** `logs/crypto-ai-trader.log` covers `2026-10-11 06:35:04–07:00:03 UTC` (KSA `09:35:04–10:00:03`) within the study cutoff. It contains no explicit frozen position/trade ID match, so no log event can be attributed to any selected loss.
+- **PROJECT EVIDENCE:** The runtime repeatedly logged an exchange clock ahead of database/JVM by `3,106–3,145 ms` during `06:35–06:59 UTC` (KSA `09:35–09:59`). Automatic corrections were reported active.
+- **PROJECT EVIDENCE:** Pre-snapshot log metrics include 463 negative `liveCloseToGenerationMs` and 359 negative `liveCloseToInsertionMs`. This is consistent with an exchange-time-confirmed close being processed while raw JVM/database time remains about three seconds behind exchange time.
+- **AGENT INFERENCE:** These negative metrics are not evidence of early use of an unclosed Binance candle, nor evidence of latency, unless the persisted candle close and exchange-clock-corrected admission evidence for a specific selected trade contradict them.
+- **PROJECT EVIDENCE:** The same log interval records no `ERROR`, no `outcome=FAILED`, and no nonzero runtime summary values for input/pipeline/protection “failed or unconfirmed” counters. This is only system-level evidence; it neither proves nor disproves correct execution for the six closed losses.
+- **PROJECT EVIDENCE:** One 615 ms symbol-lock wait was logged for unrelated `AEROUSDT` activity. The log identifies no frozen position ID, so it must not be associated with a selected loss.
+- **PROJECT EVIDENCE:** Snapshot metadata remains internally inconsistent: `2026-10-11 07:00:03 UTC` converts to `2026-10-11 10:00:03 KSA`, not the stated `10:00:01 KSA`. The intended clock is `10:00:00 KSA`.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Example clock sample: database midpoint `2026-10-11 06:35:11.410392 UTC` (KSA `09:35:11.410392`) versus exchange `2026-10-11 06:35:14.543 UTC` (KSA `09:35:14.543`), a `3,132 ms` exchange lead.
+- **PROJECT EVIDENCE:** `PRICE_OUTCOME_COMMITTED` log records pair a raw log timestamp with a later `observedUtc`; therefore exit/protection timing must use the durable price-event observation and committed execution, not the log-line prefix alone.
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- Which symbols and time windows correspond to positions `104, 101, 96, 91, 82, 78`.
+- Whether any selected trade’s entry or exit occurred under the observed clock offset.
+- Per-trade signal-to-entry, observation-to-protection, and trigger-to-exit latencies.
+- Whether the loss exits followed stop, trailing, profit-lock, take-profit, signal, or another path.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Obtain authoritative identity, lifecycle, timing, P&L, and any direct linkage fields for the six frozen positions without assuming their schema.  
+SQL:
+```sql
+SELECT p.*
+FROM crypto_ai.paper_position AS p
+WHERE p.id IN (104, 101, 96, 91, 82, 78)
+ORDER BY FIELD(p.id, 104, 101, 96, 91, 82, 78);
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-002  
+Purpose: Establish the authoritative position-table keys and constraints before constructing linked timing queries.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-003  
+Purpose: Discover actual timestamp and linkage columns for the bounded set of execution, signal, work, protection, and candle entities.  
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    ordinal_position,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'managed_position',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'candle'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

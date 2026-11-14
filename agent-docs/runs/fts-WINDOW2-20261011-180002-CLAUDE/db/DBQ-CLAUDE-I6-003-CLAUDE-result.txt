@@ -1,0 +1,5 @@
+installed_rank	version	description	installed_on	execution_time	success
+106	106	fix 153 local candle evidence	2026-10-09 01:12:00	16030	1
+107	107	fix 154 trusted higher timeframe buy	2026-10-10 00:15:21	299	1
+108	108	fix 153 local candle reconciliation	2026-10-10 00:15:21	59	1
+109	109	fix 154 forward replay and audit columns	2026-10-10 01:52:45	471	1

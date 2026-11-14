@@ -1,0 +1,13 @@
+﻿[17:18:18] START WINDOW1 TestMode=False
+[17:18:23] FROZEN 6 ids
+[17:18:23] START CODEX / iteration01-codex
+[17:22:10] DONE CODEX / iteration01-codex
+[17:22:11] START CLAUDE / iteration01-claude
+[17:24:01] DONE CLAUDE / iteration01-claude
+[17:24:11] START CODEX / iteration02-codex
+[17:28:04] DONE CODEX / iteration02-codex
+[17:28:05] START CLAUDE / iteration02-claude
+[17:32:36] DONE CLAUDE / iteration02-claude
+[17:32:46] START CODEX / iteration03-codex
+[17:37:29] DONE CODEX / iteration03-codex
+[17:37:30] START CLAUDE / iteration03-claude

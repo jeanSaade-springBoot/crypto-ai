@@ -1,0 +1,3 @@
+SELECT DATE(generated_at) AS d_ksa, interval_code, COUNT(*) AS n, COUNT(DISTINCT symbol) AS symbols, MIN(generated_at) AS first_sig, MAX(generated_at) AS last_sig FROM crypto_ai.trade_signal WHERE generated_at >= '2026-10-13 00:00:00' GROUP BY DATE(generated_at), interval_code ORDER BY d_ksa, interval_code;
+SELECT DATE(observed_at) AS d_ksa, COUNT(*) AS n, COUNT(DISTINCT symbol) AS symbols, MIN(observed_at) AS first_obs, MAX(observed_at) AS last_obs FROM crypto_ai.market_price_event WHERE observed_at >= '2026-10-13 00:00:00' GROUP BY DATE(observed_at) ORDER BY d_ksa;
+SELECT interval_code, MAX(open_time) AS last_open, MAX(close_time) AS last_close, COUNT(*) AS n_since_1013 FROM crypto_ai.candle WHERE open_time >= '2026-10-13 00:00:00' GROUP BY interval_code;

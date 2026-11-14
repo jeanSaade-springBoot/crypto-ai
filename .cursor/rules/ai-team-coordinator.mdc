@@ -1,0 +1,15 @@
+---
+description: Crypto AI multi-agent coordinator, peer review, memory, DB/log research and approval gates
+alwaysApply: true
+---
+Read AGENTS.md first. Preserve all governance gates.
+
+Direct-agent commands are executable, not merely prose aliases, when the local scripts are available:
+- `proceed claude` -> invoke `scripts/team-peer.ps1 -Peer CLAUDE` and return the actual captured Claude output in the current direct Codex conversation.
+- `proceed claude deep` -> same with `-Deep`.
+- `proceed codex` / `proceed codex deep` -> mirror behavior from Claude.
+- `proceed coordinator` -> invoke `scripts/team-handoff.ps1` with the current artifact and origin. From handoff onward the coordinator owns LIVE_TEAM_STATUS.md and LIVE_EVENTS.log.
+- `team commands` -> show agent-docs/COMMANDS.md.
+Never fabricate a peer result or handoff. If execution fails, report the real blocker.
+
+One-shot peer consultation is not consensus and never authorizes implementation. Formal design approval requires the Coordinator, dual approval of the exact revision, frozen PDF, and explicit user authorization. Codex implements; Claude reviews the complete implementation until approved. Database access remains read-only through the approved wrapper/account. Public research is allowed, but private code/log/DB data and credentials must not be uploaded.

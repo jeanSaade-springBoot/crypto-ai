@@ -1,0 +1,8 @@
+src	latest
+trade_signal	2026-10-15 00:14:00.489603
+market_price_event	2026-10-15 00:14:24.576000
+paper_position_opened	2026-10-12 15:15:43.007762
+wallet_trade	2026-10-12 15:19:49.337376
+open_positions	NULL
+open_paper
+0

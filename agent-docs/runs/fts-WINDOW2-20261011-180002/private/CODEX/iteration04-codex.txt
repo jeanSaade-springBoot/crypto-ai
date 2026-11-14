@@ -1,0 +1,130 @@
+## FINDINGS
+
+- **[PROJECT EVIDENCE]** All six frozen positions use the same source-level lifecycle: signal → coordinator → `PaperTradingService`; entry uses a fresh canonical price event, wallet BUY, then `paper_position` creation. A saved signal alone is not execution proof.
+
+- **[PROJECT EVIDENCE]** There are two materially different exit routes:
+  - Live-price protection: `LivePositionProtectionService` evaluates TP, stop-loss, profit-lock policy, then normal multi-timeframe exits. It performs the wallet mechanical exit first; only a successful result closes `paper_position`.
+  - Signal processing: `PaperTradingService` may close an open `paper_position` from a fresh signal price. Its profit-lock branch is unconditional once triggered; it does not call `PositionExitPolicy`.
+
+- **[PROJECT EVIDENCE / trade 104]** Prior targeted logs show an EDUUSDT live profit-lock breach at UTC `2026-10-10 14:45:22.035` / KSA `17:45:22.035`, held under `1h=BUY, 5m=WATCH, current=WATCH`. At UTC `14:46:01.312` / KSA `17:46:01.312`, signal `115326` triggered the signal-path profit-lock close at `0.070900`. The ~39-second gap is explained by different route policies, not by the recorded 207 ms symbol-lock wait.
+
+- **[AGENT INFERENCE / trade 104]** This is a confirmed policy-route divergence requiring trade evidence before it can be called a defect: the live path permits a protected hold when higher-timeframe support remains; the signal path closes immediately at a triggered profit lock. The application of both records to `paper_position.id=104` still needs the immutable audit and wallet linkage.
+
+- **[PROJECT EVIDENCE]** Signal-path financial consistency is not guaranteed merely by a closed `paper_position`: `PaperTradingService` saves the paper close before calling the wallet exit and catches wallet exceptions. Conversely, live protection closes paper state only after `executeMechanicalExit(...)` returns true. Therefore each frozen loss requires wallet-trade reconciliation; no loss should yet be classified as strategy, protection, or accounting failure.
+
+- **[PROJECT EVIDENCE]** A negative paper P&L with a final price above a managed-position average entry cannot be explained from logs alone. `paper_position` may include a different entry basis, progressive adds, or prior realized P&L effects. The exact persisted quantities, prices, and wallet fills are required.
+
+## EVIDENCE
+
+- **[PROJECT EVIDENCE]** [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:170) checks signal-path TP, then profit lock, then stop loss. Its profit-lock close saves `paper_position` before the wallet call at [line 464](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:464).
+
+- **[PROJECT EVIDENCE]** [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:173) gives stop loss precedence in the live route; [line 219](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:219) invokes `PositionExitPolicy` for a triggered profit lock.
+
+- **[PROJECT EVIDENCE]** [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:57) holds a breached profit lock with bullish 1h and supportive 5m, or `1h=WATCH` with supportive 5m and non-bearish current context; otherwise it returns a profit-lock exit.
+
+- **[PROJECT EVIDENCE]** [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:29) is the immutable position-to-wallet-position/trigger evidence boundary. [WalletTrade.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletTrade.java:22) supplies executed price, quantity, fees, reason, and timestamp.
+
+- **[EXTERNAL RESEARCH]** None.
+
+## UNKNOWNS
+
+- For IDs `104, 101, 96, 91, 82, 78`: persisted symbol, entry/exit signal, trigger, timestamps, quantity, P&L reconciliation, fees, and wallet/managed-position linkage.
+- Whether any of the six losses used live protection, signal-path closure, a normal SELL, stop loss, take profit, or partial-harvest sequence.
+- Whether position `104` has an audit/fill inconsistency, and whether the observed EDUUSDT route divergence changed its financial outcome.
+- The active runtime mode/version and configuration at each entry/exit.
+- The provided snapshot time still conflicts internally: UTC `15:00:04` converts to KSA `18:00:04`, while supplied snapshot KSA is `18:00:02`.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Confirm the actual current schema and timestamp session context before interpreting or joining frozen-trade evidence.  
+SQL:
+```sql
+SELECT
+    @@session.time_zone AS session_time_zone,
+    @@global.time_zone AS global_time_zone,
+    @@system_time_zone AS system_time_zone;
+
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'production_exit_audit',
+      'market_price_event',
+      'position_management_event'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I4-002  
+Purpose: After DBQ-CODEX-I4-001 confirms the columns, retrieve the authoritative lifecycle and immutable terminal-trigger evidence for exactly the six frozen paper positions.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (104, 101, 96, 91, 82, 78)
+ORDER BY FIELD(id, 104, 101, 96, 91, 82, 78);
+
+SELECT *
+FROM crypto_ai.production_exit_audit
+WHERE paper_position_id IN (104, 101, 96, 91, 82, 78)
+ORDER BY paper_position_id, audited_at;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I4-003  
+Purpose: After DBQ-CODEX-I4-001 confirms the columns, obtain the entry/exit signal evidence, managed-position lifecycle, and signal-linked wallet fills for the frozen positions. This establishes the safe keys for a later bounded mechanical-exit query.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.trade_signal
+WHERE id IN (
+    SELECT signal_id
+    FROM crypto_ai.paper_position
+    WHERE id IN (104, 101, 96, 91, 82, 78)
+
+    UNION
+
+    SELECT exit_signal_id
+    FROM crypto_ai.paper_position
+    WHERE id IN (104, 101, 96, 91, 82, 78)
+)
+ORDER BY generated_at, id;
+
+SELECT *
+FROM crypto_ai.wallet_managed_position
+WHERE entry_signal_id IN (
+    SELECT signal_id
+    FROM crypto_ai.paper_position
+    WHERE id IN (104, 101, 96, 91, 82, 78)
+)
+ORDER BY opened_at, id;
+
+SELECT *
+FROM crypto_ai.wallet_trade
+WHERE signal_id IN (
+    SELECT signal_id
+    FROM crypto_ai.paper_position
+    WHERE id IN (104, 101, 96, 91, 82, 78)
+
+    UNION
+
+    SELECT exit_signal_id
+    FROM crypto_ai.paper_position
+    WHERE id IN (104, 101, 96, 91, 82, 78)
+)
+ORDER BY executed_at, id;
+```
+### END_DB_REQUEST

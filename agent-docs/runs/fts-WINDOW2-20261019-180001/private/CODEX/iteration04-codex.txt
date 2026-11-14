@@ -1,0 +1,72 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Current source has a distinct live-price protection route for all five frozen positions with `exit_signal_id = NULL` (#182, #172, #158, #143, #137). It closes `paper_position` only after `WalletAutoExecutionService.executeMechanicalExit(...)` returns true, then writes the position close and immutable exit audit in the same transaction path. [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:235)
+
+- **PROJECT EVIDENCE:** The current route-compatible classifications are:
+
+| Position | Stored close reason | Stored exit signal | Current route-compatible condition |
+|---:|---|---:|---|
+| 182 ACEUSDT | `SELL_CONFIRMED` | NULL | bearish 1m + bearish 5m + non-bullish/missing 1h |
+| 172 SHIBUSDT | `HTF_SELL_CONFIRMED` | NULL | bearish 1h + 5m not supportive |
+| 158 XRPUSDT | `SELL_CONFIRMED` | NULL | bearish 1m + bearish 5m + non-bullish/missing 1h |
+| 143 EGLDUSDT | `PROFIT_LOCK_HARD_EXIT` | NULL | profit lock triggered, then price fell below the hard protected-profit floor |
+| 137 EGLDUSDT | `SELL_CONFIRMED` | NULL | bearish 1m + bearish 5m + non-bullish/missing 1h |
+| 162 DOGEUSDT | `STRONG_SELL` | 168277 | signal-processing route: validated 1m `STRONG_SELL` |
+
+- **PROJECT EVIDENCE:** `PositionExitPolicy` is the sole current source of `SELL_CONFIRMED` and `HTF_SELL_CONFIRMED`. It requires the conditions above; a 1m pullback alone is deliberately insufficient. [PositionExitPolicy.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:20)
+
+- **PROJECT EVIDENCE:** #162 is materially different. Its populated `exit_signal_id=168277`, stored `STRONG_SELL` reason, and exit explanation that is formatted as a signal explanation are compatible with `PaperTradingService` closing directly from a validated SELL/STRONG_SELL signal. That route writes the signal as `exitSignal`; it requires a 1m bearish signal plus fresh bearish 5m and fresh non-bullish 1h context. [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:197) [TradeExecutionValidationService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:165)
+
+- **PROJECT EVIDENCE:** #143’s saved explanation is numerically consistent with the current live hard-floor branch: `4.033000000000 × 1.0005 = 4.035016500000`, exactly the recorded hard protected-profit floor; its exit price was `4.027000000000`, below that floor. Current code applies that branch only after profit-lock triggering. [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:207)
+
+- **PROJECT EVIDENCE:** For all six rows, `realized_pnl` matches `quantity × (exit_price − entry_price)` to the persisted 12-decimal rounding tolerance. This is consistent with the current terminal paper-position formula and does not indicate fees or an unaccounted partial exit in the authoritative position P&L. [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:495) [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:395)
+
+- **AGENT INFERENCE:** The #182 and #158 near-synchronous `APPLIED` price callbacks from Iteration 3 are route-compatible with their `SELL_CONFIRMED` closes, but remain unproven as causes. `APPLIED` can represent a successful no-position/no-op callback, so a durable position/wallet/audit link is required.
+
+- **AGENT INFERENCE:** The source evidence supports a preliminary split: #162 likely exited via persisted-signal processing; the other five are more consistent with live-price protection. This is not yet a historical-runtime finding because the deployed revision/configuration at the October 12 UTC events is not evidenced.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Authoritative frozen-row evidence: `DBQ-CODEX-I2-001-CODEX-result.txt`.
+- **PROJECT EVIDENCE:** Current route and close semantics: [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487), [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:391), [WalletAutoExecutionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:356).
+- **PROJECT EVIDENCE:** The live price-event receipt is marked `APPLIED` only after the effects transaction commits, but that outcome alone does not identify a position mutation. [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:82)
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- The actual `trade_signal` evidence for #162 exit signal `168277`, including generated UTC time, final/original decision, interval, and exact 5m/1h evidence.
+- Whether an immutable `production_exit_audit` row links each position to a wallet position, source signal, and close trigger.
+- The corresponding `wallet_trade` SELL execution key, reason, price, quantity, UTC execution time, and fee fields.
+- The exact `market_price_event` identity and active managed-position state that prove each live-price exit threshold.
+- Historical deployed source revision, configuration, and ingestion mode at the October 12 UTC events.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Inspect the actual `crypto_ai` schema before requesting route-specific records. This is needed to construct bounded joins that can prove or refute the provisional signal-route versus live-protection-route classifications for frozen positions only.  
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    c.extra
+FROM information_schema.columns AS c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'production_exit_audit',
+      'market_price_event',
+      'position_management_event',
+      'position_analysis',
+      'signal_processing_work'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+### END_DB_REQUEST

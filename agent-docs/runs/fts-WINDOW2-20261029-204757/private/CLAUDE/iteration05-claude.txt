@@ -1,0 +1,261 @@
+# Claude: Daily Failed-Trade Study, WINDOW2, Iteration 5: Entry Quality (self-review)
+
+**Scope:** run `fts-WINDOW2-20261029-204757`. This iteration was analysis only. I changed no code, config, database or git state and deployed nothing. Plan mode was on, but this session has no Write or ExitPlanMode tool, so everything is in this response.
+
+**Inputs:** my iteration 1–4 outputs, the `db/CLAUDE/` results I1-001 to I4-006, and the current source tree. I did not read the Codex folders, LIVE_TEAM_STATUS or LIVE_EVENTS. I made no external requests.
+
+**Time:** stored values are UTC. The result files display them in KSA (confirmed by DBQ-CLAUDE-I3-001), so every time below is a displayed KSA value and UTC is 3 hours earlier. Entry Quality ages and gaps are differences, so the time zone does not affect them.
+
+---
+
+## Summary
+
+- **I5-F01: Five of the six stored Entry Quality scores reproduce exactly from code and data; the sixth (158) reproduces once its opportunity age is included.** The scoring code runs as written, and none of the six scores was corrupted. Note that the stored `entry_quality_score` is the score recomputed at fill time, not the score that approved the trade.
+- **I5-F02: The −30 penalty for reward/risk below 1 is the main cost in five of six scores, but it can never block a trade on its own.** With reward/risk below 1, the best possible score is 70, which is GOOD_ENTRY. This corrects the wording of I4-F07.
+- **I5-F03: Three trades (158, 162, 182) entered at exactly 50, the lowest passing score.** Trade 182 only reached 50 because of the FIX-091 clamp. Without the clamp its score would have been 38, which is blocked (CHASE_ENTRY_BLOCKED).
+- **I5-F04 (new, Replay parity): Trade 162 avoided a −5 opportunity-age penalty by 24 ms.** The opportunity was 20 min 59.976 s old, which counts as 20 minutes. Replay times signals at the exact candle close, which makes the age 21 minutes and the score 45. So Replay would most likely block this entry.
+- **I5-F05: The "30-minute" Entry Quality and evidence window is really the latest 20 one-minute signals.** Trade 162's recorded "1 BUY, 9 WATCH" only reconciles with a 20-row window.
+- **I5-F06: The price-expansion penalty starts at +1.5%, which is outside the range these low-volatility symbols move in.** It affected only trade 143. Four of six entries were at 69–100% of their 20-minute range, and three were at the top.
+- **I5-F07: Trade 143 was scored 60 when approved and 70 at the fill**, because the two checks use different ATR bases (`atr_at_signal`, the ATR stored on the signal). The premise in the code comment was reversed at that moment: the 1m ATR was larger than the 5m ATR. Separately, the sizing code turns a 0% ATR-recommended position into 100%.
+- **Closed from I4:** U4-01, U4-02, U4-03, U4-04 and U4-07. Defect B for trade 143 is now confirmed as a mechanism. The I4-F03 parity gap had no effect on trade 143.
+
+---
+
+## FINDINGS
+
+### I5-F01: Every stored Entry Quality score reproduces from code (PROJECT EVIDENCE: I1-003, I1-004, I1-005, I1-007, I2-001, I2-003, I4-002, I4-006)
+
+**How the score is built** (`ExecutionIntelligenceService.java:865-1030`):
+
+| Component | Penalty or bonus |
+|---|---|
+| Starting score | 100 |
+| Price expansion above the reference low | >1.5% −10, >3% −22, >5% −35, >8% −50 |
+| ATR extension above the reference low | >2.5 −10, >4 −20, >6 −30 |
+| Opportunity age in whole minutes, `toMinutes()` | >20 −5, >40 −10, >60 −15 |
+| Reward/risk at the given price | <1 −30, <1.25 −15, ≥2 +5 |
+| Recent rejected high (FIX-091) | −12, but clamped at 50 if the score was already ≥50 (`:995-1003`) |
+| HIGH_VOLATILITY regime | −10 |
+| STOP_EXPOSED liquidity | −15 |
+| BREAKOUT regime, small extension | +5 |
+
+- **Reference low:** the lowest price among the recent 1m signals. A fresh opportunity's anchor or best price can lower it further (`:877-933`).
+- **Fill-time recheck:** it rescores at the fill price using the 1m ATR (`revalidateAtExecutionPrice` at `:1167`).
+- **What gets stored:** `PaperTradingService.java:377-385` stores `assessEntryQualityAtPrice(fill)`. So `wallet_managed_position.entry_quality_score` is the fill-time score.
+
+**Reproduction** (fill prices from I1-004; ATR = `atr_percent` × price):
+
+| ID | Fill price | Reference low (20 rows) | Expansion | ATR extension (penalty) | Age (penalty) | Reward/risk at fill (penalty) | Rejected high | Computed | Stored |
+|---|---|---|---|---|---|---|---|---|---|
+| 137 | 3.999 | 3.992 | 0.18% | 1.63 (0) | 1 min | 0.644 (−30) | 4.005, 0.15% away (−12) | **58** | 58 ✓ |
+| 143 (fill) | 4.033 | 3.972 | 1.54% (−10) | 5.60 on 1m ATR (−20) | 0 | 1.390 (0) | none | **70** | 70 ✓ |
+| 143 (signal) | 4.032 | 3.972 | 1.51% (−10) | 6.61 on 5m ATR (−30) | 0 | 1.500 (0) | none | **60** | 60 in opportunity #36524 ✓ |
+| 158 | 1.4108 | 1.4084 | 0.17% | 3.12 (−10) | **53 min (−10)** | 0.346 (−30) | 1.4115, only 1 later lower print (none) | **50** | 50 ✓ |
+| 162 | 0.08705 | 0.08675 | 0.35% | 4.72 (−20) | 20 min 59.976 s, so 20 (0) | 0.438 (−30) | none (entry is the window high) | **50** | 50 ✓ |
+| 172 | 0.00000549 | 0.00000547 | 0.37% | 2.94 (−10) | 14 min | 0.744 (−30) | none | **60** | 60 ✓ |
+| 182 | 0.1884 | 0.1875 | 0.48% | 5.95 (−20) | 1 min | 0.482 (−30) | 0.1888, 0.21% away (−12, clamped) | **50** | 50 ✓ |
+
+- **Opportunity ages** come from `execution_opportunity.started_at` (I2-003): #37621 for XRP started 02:35:01.469 − 53 min (at 01:42:00.086), and #37952 for DOGE started at 03:41:02.837.
+- **Inputs still assumed rather than proven:** no STOP_EXPOSED status and no anchor below the rolling low for these trades. Trade 158 additionally needs its anchor at or above 1.40772. DBQ-CLAUDE-I5-001 and I5-003 verify these.
+- **Classification:** the Entry Quality scores were computed as coded. There was no data or logic fault in the scoring itself.
+
+### I5-F02: The reward/risk penalty dominates but cannot block (DESIGN WEAKNESS; PROJECT EVIDENCE; corrects I4-F07)
+
+- In five of six trades, a reward/risk between 0.33 and 0.74 cost exactly 30 points, the same as a reward/risk of 0.99 would. The penalty has no gradation below 1.
+- With reward/risk below 1 and nothing else wrong, the score is 70 (GOOD_ENTRY). Blocking needs at least 21 more penalty points.
+- Size caps barely differentiate either (`:1183`): every score below 70 gets the same 25% cap. All six trades were sized at 25% before the ATR multiplier, which brought 162 and 182 down to 15%.
+- **Correction to I4-F07:** "never reads `rewardRisk()`" is literally true of the guard itself. But reward/risk **is** part of the score, as a soft −30 penalty rather than a minimum.
+- The design weakness stands. A 0.33 reward/risk trade (158) needs about a 75% win rate just to break even, and it passed.
+
+### I5-F03: Three entries at the passing threshold; FIX-091 clamp decided trade 182 (DESIGN WEAKNESS; PROJECT EVIDENCE)
+
+- **Trade 182:** 100 − 20 − 30 = 50 before the rejection penalty. The −12 would have made it 38. The clamp `Math.max(CHASE_ENTRY_CUTOFF, score)` (`:1000-1001`) raised it back to 50. The −12 therefore had **zero effect**, and the trade passed both the FIX-11G "≥ 50" rule (I4-F05) and the guard.
+- **What was knowable at entry (182):**
+  - 17 consecutive 1m STRONG_SELL signals from 09:38 to 09:54.
+  - Two BUYs bouncing 0.48% off the low, into a rejected-high zone 0.21% above.
+  - WEAK_DOWNTREND regime.
+  - The 5m signal was originally STRONG_SELL.
+- **Outcome (evaluated separately):** price never traded above the entry.
+- The clamp is documented intent ("must not by itself push … below the hard cutoff"), so this is **not a code defect**. Its effect is that rejection evidence is ignored exactly where the score is weakest.
+- **Trades 158 and 162:** 50 from several soft penalties, none of which blocks alone.
+
+### I5-F04: Trade 162 escaped an age penalty by 24 ms; Replay most likely blocks it (PARITY RISK; PROJECT EVIDENCE + AGENT INFERENCE)
+
+- **Age calculation:** age = `Duration.between(opp.startedAt, current.generatedAt).toMinutes()` (`:948-951`).
+  - `startedAt` is the creating signal's `generatedAt` (`:2541`). Both values are wall-clock analysis-start times.
+  - Opportunity #37952 started at 03:41:02.836972. Signal #167668 was generated at 04:02:02.813094.
+  - The gap is 20 min 59.976 s, which rounds down to 20, so there was **no penalty** (">20" is false).
+- **Replay:** signals are timed at the candle close, `openTime + interval` (`RegressionTestWorker.java:584`). That gives 03:41:00 to 04:02:00, which is exactly 21 minutes, so the −5 penalty applies.
+  - The score becomes 45, below 50, which produces `CHASE_ENTRY_BLOCKED` (`:1173`).
+- **Effect:** Production's result depended on a 24 ms difference in dispatch lag (2.837 s versus 2.813 s after the close). The same jitter can flip any minute boundary at 20, 40 or 60 minutes.
+- **Classification:** candidate Replay/Production **parity defect** (wall-clock jitter inside a deterministic scoring bucket). This is the second such case after trade 143's 5m race (I3-F02/I3-F03).
+- **Not yet proven:** that Replay builds the same opportunity starting at 03:41 (DBQ-CLAUDE-I5-004 looks for existing Replay evidence). Running Replay is out of scope.
+
+### I5-F05: Effective lookback is 20 one-minute signals, not 30 minutes (PROJECT EVIDENCE)
+
+- `recentSignals` returns `findTop20…OrderByGeneratedAtDesc` in Production and `replayScope.recent(…, 20)` in Replay (`:2601-2604`). The 30-minute `EVIDENCE_WINDOW` cutoff (`:47`, `:879`) therefore never applies to 1m signals.
+- Entry Quality (`:872`) and `evidence()` (`:2245`) both use this method.
+- **Proof from trade 162:** the recorded "1 BUY, 9 WATCH" (I4-004, FIX-122 payload) matches the 20 rows from 03:43 to 04:02 exactly. A true 30-minute window back to 03:32 would include WATCH #167123 and #167142, giving 11 WATCH.
+- **Proof from trade 143:** the 20 rows back to 22:21 give 1 BUY and 5 WATCH, matching the FIX-122 payload `buyCount=1, watchCount=5`.
+- Production and Replay agree. This is a mismatch between documentation or intent and the code, not a parity gap.
+
+### I5-F06: The chase measures miss small-range tops (DESIGN WEAKNESS; PROJECT EVIDENCE + AGENT INFERENCE)
+
+**Where each entry sat in its 20-row range** (PROJECT EVIDENCE, I1-007):
+
+| ID | Position in range |
+|---|---|
+| 143 | 100%, a new high |
+| 162 | 100%, a new high |
+| 172 | 100% of a 2-tick range |
+| 158 | 77% |
+| 182 | 69% |
+| 137 | 54% |
+
+- Expansion stayed between 0.17% and 0.48% for five trades. The expansion penalty starts at 1.5%, so it never applied to them.
+- ATR extension is the only effective chase measure here, and price-tick size distorts it (AGENT INFERENCE):
+  - SHIB moves in steps of 0.00000001, which is 0.18% of price and 1.47 ATR. Trade 172's "2.94 ATR" was two ticks.
+  - ACE's tick is 0.66 ATR.
+- **RANGE_ENTRY_LOCATION (FIX-036/042)** applies only when the selected strategy is RANGE_MEAN_REVERSION (`RangeEntryLocationService.java:68-71`). FinalDecisionService handles it at `:98-120`.
+  - **Trade 172:** two 1m BUYs at the same price, 0.00000549 (#171462 and #171484), were vetoed by RANGE_ENTRY_LOCATION. The entry BUY #171589 at the same price was TREND_FOLLOWING, so the guard did not apply.
+  - **Trade 137:** #156695 (STRONG_BUY, score 89) at 3.998 was vetoed. The entry #156723 (STRONG_BUY, score 91) at the *higher* price 3.999 passed. That fits the expansion exception's score ≥ 90 (`:96-103`), but this is unproven until DBQ-CLAUDE-I5-002 returns.
+  - In both cases, a change of strategy label or 2 score points removed a location veto at the same or a worse price. This is classed as a design weakness, pending the decision path.
+
+### I5-F07: Trade 143 had two scoring bases and a 0%→100% sizing mapping (PROJECT EVIDENCE: I4-006, I2-001, I4-004)
+
+- **Signal-time score:** 60, using the 5m ATR 0.009073.
+- **Fill-time score:** 70, using the 1m ATR 0.010899.
+- **Reversed premise:** the code comment says "a tiny 1m ATR cannot manufacture a false late-stage chase". Here the 1m ATR was *larger*, so the fill-time recheck graded the same entry better (GOOD_ENTRY).
+- **Allocation was unaffected:** min(25, 40) = 25.
+- **Audit gap:** the stored score of 70 is not the score that approved the trade (60).
+- **Facts knowable at entry and not captured by the score:**
+  - The 1m ATR plan said WAIT_FOR_RETRACEMENT with a 0% recommended position, a 4.35 ATR candle and RSI 84.3.
+  - The previous EGLD position had exited 22 s earlier at 3.996.
+- **Sizing:** `PaperTradingService.java:328-330` maps `atrRecommendedPositionPercent <= 0` to 100. For trade 143, the 1m signal's "0%" became a 100% multiplier.
+  - For this route, that matches the intent (the 5m plan said 100%).
+  - In general, the same 0 means both "not computed" and "do not enter now" (AGENT INFERENCE). I record this as a candidate design hazard, not a defect in this trade.
+
+### I5-F08: I4 unknowns closed (PROJECT EVIDENCE)
+
+- **U4-01 (Defect B, trade 143), now a confirmed mechanism:**
+  - The 20-row evidence for #159408 contains BUY #159281 (22:35:01) and WATCH #159321, #159337, #159361 and #159383. All were generated before position 171's exit at 22:39:41 (I4-002).
+  - The FIX-122 boundary in force was `stopAt=2026-10-10T17:43:55Z` (stop #230). The profit-lock exit created no boundary (I4-004).
+  - Whether the evidence score of 8 was *decisive* for the route is still open. The SETUP_TIMEFRAME_ATR approval rests mainly on the 5m signal.
+- **U4-02:** #36481 was already EXECUTED (I4-003), so `completePositionOpportunity` would not have changed it. The I4-F03 parity gap had **no effect on trade 143**; it stays a general gap.
+- **U4-03:** the FIX-154 audit rows exist for 137, 158, 162, 172 and 182 (I4-001). **FIX-154 ran in Production on 10-11/12**, so the contradiction with AGENTS.md and claude-docs is confirmed.
+  - Trade 143's route has no audit row, which fits a route that bypasses `validateBuy`.
+  - Trade 182's `five_minute_raw_decision` is NEUTRAL. FIX-154 saw only the demoted label, which supports I3-F05.
+- **U4-04:**
+  - Trade 162's single BUY was #167646 at 04:01:02.771, one minute before the entry, so it was fresh.
+  - Its 9 WATCH signals were 11 to 18 minutes old and were separated from the entry by eight consecutive minutes of original SELL decisions (03:53–03:59, shown as NEUTRAL).
+  - The entry was the 20-row high, 4.7 ATR above the low.
+- **U4-07:** trade 143's reward/risk was 1.50 at signal time and 1.39 at fill, on the 1m levels.
+
+---
+
+## Entry assessment using only information available at the time (outcome kept separate)
+
+| ID | Entry Quality | What was knowable at entry | Assessment | Outcome (separate) |
+|---|---|---|---|---|
+| 137 | 58 | Single-candle reversal after ~10 SELL/STRONG_SELL minutes; reward/risk 0.64; 0.15% under a rejected high; the prior BUY was range-vetoed | Weak entry, coded rules followed | Max favourable move 46.6% of target distance; SELL_CONFIRMED |
+| 143 | 60 when approved, 70 at fill | Outdated 5m (Defect A); pre-exit evidence (Defect B); 1m plan said wait, RSI 84; new 20-row high, 1.5% above the low | **Defective entry** | 95% of target reached, then a one-second sweep (I3-F04) |
+| 158 | 50 | Opportunity 53 min old; 0.22% range, entered at 77%; reward/risk 0.35 | Weak entry, rules followed | 33% of target; SELL_CONFIRMED |
+| 162 | 50 | Entered at the 20-row high after 8 SELL minutes; reward/risk 0.44; escaped age penalty by 24 ms | Weak entry; **parity risk** | 31% of target; STRONG_SELL |
+| 172 | 60 | Flat 2-tick range, entered at its top; range guard bypassed by strategy label; 5m BUY not executable (I3-F05) | Weak entry, rules followed | 49% of target; HTF_SELL |
+| 182 | 50 (38 without clamp) | 17 STRONG_SELL in a row; WEAK_DOWNTREND; 5m originally STRONG_SELL; rejection zone | Weakest entry, rules followed | Never above entry |
+
+- **AGENT INFERENCE:** with n = 6, the observation that higher scores went further toward target (70 → 95%; 50s → 0–33%) cannot be generalised. DBQ-CLAUDE-I5-005 tests the population.
+
+---
+
+## Updated classification
+
+| ID | Entry | Classification |
+|---|---|---|
+| 137 | Followed the rules | Valid loss; reward/risk weakness (I5-F02); location-guard question (I5-F06) |
+| 143 | **Defects A (confirmed) and B (mechanism confirmed)** | Logic defect at entry; valid gap exit |
+| 158 | Followed the rules | Design weakness (reward/risk 0.33, threshold score) |
+| 162 | Followed the Production rules | Design weakness plus **candidate parity defect** (I5-F04) |
+| 172 | Followed the rules | Design inconsistency (I3-F05, I5-F06) |
+| 182 | Followed the rules | Design inversion (I4-F05) plus clamp effect (I5-F03) |
+
+---
+
+## EVIDENCE INDEX
+
+- **DB:** I1-003, 004, 005, 007; I2-001, 003; I4-001, 002, 003, 004, 005, 006.
+- **Code:**
+  - `ExecutionIntelligenceService.java:47, 62-66, 226-236, 634, 865-1030, 1150-1223, 2245, 2534-2547, 2601-2619`
+  - `PaperTradingService.java:328-385`
+  - `RangeEntryLocationService.java:44-118`
+  - `FinalDecisionService.java:98-120`
+  - `RegressionTestWorker.java:580-584`
+- **Logs:** none were searched; there is still no log access (I3-F07).
+
+## UNKNOWNS
+
+- **U5-01:** Opportunity anchor and best prices, and liquidity and regime inputs, needed to rule out alternative penalty combinations (I5-001, I5-003).
+- **U5-02:** Whether Replay actually blocks trade 162 (I5-004). Running a Replay is out of scope.
+- **U5-03:** Why the range-location guard passed for #156723 and #171589 (I5-002).
+- **U5-04:** Whether Entry Quality predicts outcomes across the population (I5-005), and how often wall-clock jitter changes the age bucket (I5-006).
+- **U5-05:** Whether Defect B's evidence score was *decisive* for the SETUP_TIMEFRAME_ATR approval. This needs a code trace of the route's evidence and health thresholds in iteration 6.
+
+---
+
+## DB_REQUEST blocks
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: Anchor and best entry prices and lifecycle fields of the six entry opportunities. Verifies the Entry Quality reference low (I5-F01, U5-01).
+SQL:
+SELECT o.id, o.symbol, o.status, o.started_at, o.created_at, o.last_evidence_at, o.anchor_entry_price, o.best_entry_price, o.buy_count, o.watch_count, o.neutral_count, o.bearish_count, o.evidence_score, o.opportunity_health, o.last_bearish_at FROM execution_opportunity o WHERE o.id IN (35535,36524,37621,37952,39062,40290) ORDER BY o.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: Range-location decision path for the vetoed and passed BUYs around trades 137 and 172 (I5-F06).
+SQL:
+SELECT s.id, s.symbol, s.generated_at, s.decision, s.original_decision, s.total_score, s.selected_strategy, s.market_regime, s.latest_price, s.final_entry_allowed, s.primary_blocking_stage, LEFT(CAST(s.decision_path AS CHAR), 3500) AS decision_path FROM trade_signal s WHERE s.id IN (156695,156723,171462,171484,171589) ORDER BY s.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: Liquidity, regime and ATR inputs to the Entry Quality score for the six entry signals and the 5m trigger of trade 158 (I5-F01, I5-F07).
+SQL:
+SELECT s.id, s.symbol, s.interval_code, s.latest_price, s.atr_at_signal, s.atr_percent, s.liquidity_status, s.liquidity_entry_allowed, s.market_regime, s.detected_regime, s.confirmed_regime, s.atr_recommended_position_percent, s.entry_authority_max_position_percent FROM trade_signal s WHERE s.id IN (156723,159408,165412,165415,167668,171589,176710) ORDER BY s.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: Existing Replay evaluations, if any, of the entry candles for trades 162, 143 and 182 (I5-F04 parity; no Replay is run).
+SQL:
+SELECT f.id, f.test_run_id, f.symbol, f.signal_id, f.stage, LEFT(f.payload, 700) AS payload FROM fix122_evaluation f WHERE f.test_run_id IS NOT NULL AND ((f.symbol = 'DOGEUSDT' AND f.payload LIKE '%"candleOpenTime": "2026-10-12T01:01:00Z"%') OR (f.symbol = 'EGLDUSDT' AND f.payload LIKE '%"candleOpenTime": "2026-10-11T19:39:00Z"%') OR (f.symbol = 'ACEUSDT' AND f.payload LIKE '%"candleOpenTime": "2026-10-12T06:56:00Z"%')) ORDER BY f.test_run_id, f.id LIMIT 60
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-005
+Purpose: Population outcome by fill-time Entry Quality band (I5-F02/F03; U5-04).
+SQL:
+SELECT CASE WHEN m.entry_quality_score < 55 THEN 'a50-54' WHEN m.entry_quality_score < 70 THEN 'b55-69' WHEN m.entry_quality_score < 85 THEN 'c70-84' ELSE 'd85+' END AS eq_band, p.status, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losses, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum, ROUND(AVG(m.profit_lock_progress_percent), 2) AS avg_progress_pct FROM paper_position p JOIN wallet_managed_position m ON m.entry_signal_id = p.signal_id WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL GROUP BY eq_band, p.status ORDER BY eq_band, p.status
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-006
+Purpose: Executed opportunities whose age sat within 3 s of an Entry Quality age bucket boundary (20, 40 or 60 min), to measure how often jitter decides the bucket (I5-F04).
+SQL:
+SELECT o.id, o.symbol, o.execution_source, o.started_at, s.generated_at, TIMESTAMPDIFF(MICROSECOND, o.started_at, s.generated_at) / 1000000 AS age_s, m.entry_quality_score, p.id AS paper_id, p.status, p.realized_pnl FROM execution_opportunity o JOIN trade_signal s ON s.id = o.latest_signal_id LEFT JOIN wallet_managed_position m ON m.entry_signal_id = s.id LEFT JOIN paper_position p ON p.signal_id = s.id WHERE o.status = 'EXECUTED' AND o.executed_at >= '2026-10-01 00:00:00' AND (TIMESTAMPDIFF(SECOND, o.started_at, s.generated_at) BETWEEN 1197 AND 1263 OR TIMESTAMPDIFF(SECOND, o.started_at, s.generated_at) BETWEEN 2397 AND 2463 OR TIMESTAMPDIFF(SECOND, o.started_at, s.generated_at) BETWEEN 3597 AND 3663) ORDER BY o.executed_at LIMIT 60
+### END_DB_REQUEST
+
+---
+
+## Self-review (iteration 5)
+
+- **Frozen set:** 182, 172, 162, 158, 143 and 137, unchanged with no substitutions.
+- **Labels:** score reproductions are PROJECT EVIDENCE. The Replay outcome for trade 162, the tick-size effect and the 0%→100% hazard are AGENT INFERENCE. No EXTERNAL RESEARCH was used.
+- **Correction:** I4-F07 is restated. Reward/risk is part of the Entry Quality score as a non-blocking −30 penalty.
+- **Defect claims:**
+  - Trade 143 has Defects A and B (B is now a confirmed mechanism; whether it was decisive is still open).
+  - Trade 162 has a *candidate* parity defect.
+  - No defect is claimed for 137, 158, 172 or 182.
+- **Contradiction kept open:** FIX-154 is now proven to have run in Production. It still needs dual-agent review; I edited no shared documents.
+- **Plan for iteration 6:** use the I5 results to settle U5-01 to U5-03, trace whether Defect B was decisive, and rank the design weaknesses by how many of the six losses each explains.

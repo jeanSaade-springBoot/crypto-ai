@@ -1,0 +1,17 @@
+INDEX_NAME	SEQ_IN_INDEX	COLUMN_NAME	NON_UNIQUE
+idx_candle_closed	1	closed	1
+idx_candle_dashboard_closed_time	1	symbol	1
+idx_candle_dashboard_closed_time	2	interval_code	1
+idx_candle_dashboard_closed_time	3	closed	1
+idx_candle_dashboard_closed_time	4	open_time	1
+idx_candle_symbol_interval_time	1	symbol	1
+idx_candle_symbol_interval_time	2	interval_code	1
+idx_candle_symbol_interval_time	3	open_time	1
+PRIMARY	1	id	0
+uk_candle_symbol_interval_open_time	1	symbol	0
+uk_candle_symbol_interval_open_time	2	interval_code	0
+uk_candle_symbol_interval_open_time	3	open_time	0
+TABLE_ROWS
+0
+429
+312946

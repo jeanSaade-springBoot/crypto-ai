@@ -1,0 +1,6 @@
+SIMULATION_STATUS: STARTED  
+AUTH: Codex CLI authentication appears usable  
+WEB: EXTERNAL RESEARCH — “How to Use a Trading Journal” — https://www.investopedia.com/articles/trading/11/trading-journal.asp  
+FROZEN_IDS: 96, 91, 82, 78, 71, 72  
+DB: I did not receive a database password  
+VERDICT: SIMULATION_OK

@@ -1,0 +1,1 @@
+SELECT table_name, column_name, data_type, column_type FROM information_schema.columns WHERE table_schema = 'crypto_ai' AND table_name IN ('buy_htf_assessment_audit', 'execution_opportunity') ORDER BY table_name, ordinal_position;

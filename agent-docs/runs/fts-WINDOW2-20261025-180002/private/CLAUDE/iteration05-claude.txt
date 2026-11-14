@@ -1,0 +1,264 @@
+# CLAUDE: FTS WINDOW2, Iteration 5: Entry quality
+
+**Run:** `fts-WINDOW2-20261025-180002` · **Frozen trades:** 182, 172, 162, 158, 143, 137 (none substituted). This is analysis only: I made no code, config or DB writes, no git and no deployment. I did not open the other agent's files, `LIVE_TEAM_STATUS.md` or `LIVE_EVENTS.log`.
+
+**Time rule:** our DB results are displayed in KSA (F-I4-00, settled by I3-001). Below, **displayed value = KSA** and **UTC = KSA − 3 h**.
+
+**Method:** I judge each entry only on information that existed at or before the entry signal's `generated_at`. Results after the exit appear only in the outcome column and are never used to judge an entry.
+
+## Summary
+
+- None of the six entries was good on the information available at the time.
+  - Three were poor or chases: **182, 162, 143**.
+  - Two were marginal: **172, 158**.
+  - One had a clean signal but a poor price location: **137**.
+- The system's Entry Quality score (EQ) did not separate them well:
+  - **EQ penalises volatility, not location (F-I5-01).** At the signal price its risk/reward input depends only on ATR% (the coin's volatility). So low-volatility coins lose 30 points automatically, whatever the entry location.
+  - **The most extended entry scored joint-highest (F-I5-03).** Trade 143 scored 60 (ACCEPTABLE), tied with 172, while trades with milder price-location problems scored 50–58.
+- **The weakest route has the loosest bar (F-I5-02).** The FIX-11G route (5m NEUTRAL + 1h WATCH) admits EQ 50, while stronger-context routes need more. It admitted trade 182 at exactly the 50 cut-off.
+- **Trade 162 cleared the bar by 24 ms (F-I5-04).** It reached EQ 50 only because the opportunity age (20 min 59.976 s) was rounded down to 20 minutes.
+
+## FINDINGS
+
+**F-I5-01: EQ's risk/reward term measures volatility, not entry location. It cost 5 of the 6 trades 30 points. (PROJECT EVIDENCE + code)**
+- **How R:R is computed:**
+  - `currentRewardRisk` (`ExecutionIntelligenceService.java:1811-1817`) uses the signal's own stop and TP.
+  - `AtrRiskService.java:40-45` sets stop = max(2·ATR, 0.5%·price) and TP = 3·ATR.
+  - So at the signal price, R:R depends only on ATR%: 1.5 when ATR% ≥ 0.25%, and below 1 when ATR% < 0.1667%.
+- **The penalty:** `ExecutionIntelligenceService.java:991-993` takes 30 points off when R:R < 1, and 15 when it is below 1.25. The +5 bonus needs R:R ≥ 2, which this formula can never produce.
+- **The effect on our trades:**
+  - 182 (0.48), 172 (0.74), 162 (0.44), 158 (0.33) and 137 (0.64) all lost 30 points. Each started from a maximum of 70.
+  - 143 (ATR 0.27%, R:R 1.50) lost nothing.
+- **The penalty points the wrong way across all trades.** F-I3-07 found the R:R < 0.75 bucket at 34 wins / 20 losses (+0.234), against 21 / 42 (−4.130) for R:R ≥ 1.5.
+- **Verdict:** design defect candidate. EQ is documented as "deliberately independent from signal quality" (`:845-846`), but a third of its range is a volatility term. DBQ-CLAUDE-I5-003 checks the outcome relationship.
+
+**F-I5-02: the FIX-11G route has the weakest higher-timeframe authority but the loosest EQ bar. (code + PROJECT EVIDENCE)**
+
+| Route | Higher-timeframe context | EQ requirement |
+|---|---|---|
+| FIX-112B `BALANCED_NEUTRAL_5M` (`TradeExecutionValidationService.java:234-236`) | 5m NEUTRAL, 1h bullish | EQ ≥ 70 and confidence ≥ 72 |
+| FIX-041 `BALANCED_EARLY` (`ExecutionIntelligenceService.java:672-684`) | 5m WATCH, 1h WATCH | LATE_ENTRY (50–54) is blocked |
+| FIX-11G `BALANCED_NEUTRAL_5M_WATCH_1H` (`TradeExecutionValidationService.java:263-284`, `:49`) | 5m NEUTRAL, 1h WATCH (weaker than both above) | EQ ≥ 50, so LATE_ENTRY is accepted; no confidence floor |
+
+- **Trade 182:** admitted with `entryQuality=50` (wallet 451, opportunity 40290).
+  - Under the BALANCED_EARLY rule it would have been held as `BALANCED_EARLY_LATE_ENTRY_BLOCKED`.
+  - Under the FIX-112B bar it would have been rejected (EQ 50 < 70; confidence 68 < 72).
+- **Trade 137:** admitted with EQ 58 (ACCEPTABLE), which BALANCED_EARLY would also allow, so the gap made no difference there.
+- On 182 this adds to F-I4-01: the "5m NEUTRAL" that qualified the route was a SELL/STRONG_SELL neutralised by confluence (masked).
+- **Verdict:** inconsistent thresholds across routes (logic defect candidate). It is decisive for 182 only.
+
+**F-I5-03: trade 143 was a chase that EQ itself measured, yet it was rated ACCEPTABLE. (PROJECT EVIDENCE + code + AGENT INFERENCE)**
+- **Recorded EQ:** 60 (opportunity 36524, wallet 358), with R:R 1.50 and therefore no R:R penalty.
+- **How the 40 lost points break down.** Within the coded penalty set (`:978-1015`) the only combination worth 40 points is:
+  - ATR extension above 6 (−30), using the **5m** ATR (`:634`), plus
+  - expansion of 1.5–3% from the 30-minute reference (−10).
+  - Rejection is ruled out: its floor would give 50. Age is 0, the opportunity being newly created. Stop-exposure does not apply (BULLISH_SUPPORT).
+  - Conclusion: price was more than 6 setup ATRs and 1.5–3% above its 30-minute base. Confirmation is pending from DBQ-CLAUDE-I5-001/002.
+- **What else was known at entry:**
+  - The 1m signal said `WAIT_FOR_RETRACEMENT`, with 0% recommended size and "retrace near 4.01180". The fill at 4.033 was **0.52% above the system's own retracement level**.
+  - RSI was about 84, and price was 4.35 ATR from SMA20.
+  - The previous EGLD position had exited 22 s earlier at 3.996.
+  - Funding was at the 100th percentile.
+- **The stated reason for the override did not apply.** `SETUP_TIMEFRAME_ATR` replaces the 1m ATR so that "a tiny 1m ATR cannot manufacture a false late-stage chase" (`:1510-1511`). But 143's 1m ATR (0.27%) was the *largest* of all six trades.
+- The authority 5m BUY was the stale bar from the 2 ms race (F-I4-02).
+- **Verdict:** poor entry. It was admitted by a route whose override bypassed the 1m retracement instruction, and EQ scored it above trades that were genuinely less extended because of F-I5-01.
+
+**F-I5-04: trade 162 reached EQ 50 only because its opportunity age was rounded down by 24 ms. (PROJECT EVIDENCE + code)**
+- **Inputs:**
+  - Opportunity 37952 had `started_at` 04:02 −21 min = 03:41:02.836972 KSA. The signal 167668 was generated at 04:02:02.813094 KSA.
+  - The gap is 20 min 59.976 s. `Duration.toMinutes()` gives 20, so the age penalty did not fire (`:987-989`; it needs more than 20).
+- **Score arithmetic:**
+  - Reference = best_entry 0.08675. ATR extension = (0.08705 − 0.08675) / 0.0000636 = **4.72** (−20). R:R 0.44 (−30). Total **50**, which matches the recorded "Entry Quality 50/100 (LATE_ENTRY)".
+  - 24 ms later the age would have been 21 min (−5), giving EQ 45, which is a CHASE_ENTRY block (`:1173-1180`).
+- **The FIX-119 late-entry guard did not apply.** It is skipped when there is any accumulated BUY (`:1275-1279`), and the evidence contained **1 BUY / 9 WATCH**.
+- **Other context known at entry:**
+  - The 1m signal was WATCH in the BREAKOUT regime.
+  - The candle range was 2.82 ATR, overextended, with REDUCED_POSITION.
+  - 5m and 1h were both WATCH (BALANCED_EARLY context via `validateBuyContext`, which has no LATE_ENTRY block, unlike the direct BUY path).
+- **Two side effects:**
+  - The exact reproduction suggests the deployed EQ formula matches the working tree for these terms. That partly addresses U-I4-01 for EQ only.
+  - Whole-minute age buckets create cliff edges at the chase cut-off.
+- **Verdict:** the entry followed the coded rules. It was a marginal pass, and its quality was poor.
+
+**F-I5-05: trade 137 had the strongest signal of the six, but bought just under a known rejection high. (PROJECT EVIDENCE + code)**
+- **Signal strength:** STRONG_BUY with score 91 and confidence 81, AGREEMENT, 0.61 ATR from SMA20, STANDARD_ENTRY.
+- **EQ 58 has only one decomposition: 100 − 30 (R:R 0.64) − 12.** 12 is exactly `RECENT_REJECTION_ENTRY_QUALITY_PENALTY` (`:236, :995-1003`); no other combination of penalties gives 12.
+  - So at entry the system had found a recent high within 0.5% of price that at least 2 later signals failed to reclaim (`:971`).
+  - It applied only the soft penalty, as FIX-091 designs.
+- **Price location:** RANGE_MEAN_REVERSION bought at **68.28%** of the Bollinger range, allowed through the "expansion-transition exception".
+- **Order book:** TP 4.01188 sat just under a persistent ask wall at 4.012 (55 s, strength 65).
+- **Context:** 5m NEUTRAL and 1h WATCH, admitted by FIX-11G. Funding was at the 100th percentile.
+- **Verdict:** a reasonable signal at a poor location. It is a valid loss under the current rules, but the rules let a long be placed just under a rejection high in a range.
+
+**F-I5-06: trade 172 was a clean signal with an entry plan that SHIB's price step makes meaningless. (PROJECT EVIDENCE + AGENT INFERENCE)**
+- **Signal and context:** 5m BUY (original BUY, not masked); BALANCED_STRONG, capped at 25% by EQ 60; STANDARD_ENTRY, 1.18 ATR from SMA20; confidence 67; 1h NEUTRAL (trend 8, RANGE).
+- **EQ:** 60 = 70 − 10. Age was 14 min and the anchor 5.48e-6, so the only consistent −10 is an ATR extension of 2.5–4 from a 30-minute low of 5.47e-6.
+  - That is **2 price steps** (1 step = 1.47 ATR, F-I3-05). The −10 is a price-step artifact. (Inference; I5-001 confirms.)
+- **Verdict:** valid losing trade. The weakness is structural: an ATR plan on a pair whose price step exceeds its ATR. There was no logic defect at entry.
+
+**F-I5-07: trade 158 was a late WATCH wake-up with a target smaller than fees. (PROJECT EVIDENCE + code + AGENT INFERENCE)**
+- **Entry:** 1m WATCH (score 64, confidence 73), triggered by 5m BUY 165415. The opportunity was **53 minutes old** (age −10).
+- **TP distance:** 0.17%, below an estimated ~0.2% round-trip spot fee (EXTERNAL, unverified this run; F-I2-02).
+- **EQ was not printed.** The base was 25% and the cap did not reduce it, so no text was added (`:1213-1214`). My reconstruction:
+  - **At decision:** this route uses the 5m ATR (`:439`). The 5m ATR is unknown; if the extension came out under 2.5, EQ ≈ 100 − 10 − 30 = 60.
+  - **At execution:** `revalidateAtExecutionPrice` uses the **1m** ATR (`:858`). The extension is (1.4108 − 1.4082) / 0.00077 = 3.38 (−10), giving EQ ≈ 50, which only just passes.
+- **Verdict:** marginal entry, and a valid loss under the rules.
+
+**F-I5-08: decision-time EQ and execution-time EQ use different ATRs, and the execution-time EQ is never stored. (code)**
+- The setup and wake-up routes score EQ with the 5m ATR (`:364, :439, :615, :634`). The FIX-056 re-check at execution price uses `current.getAtrAtSignal()`, the 1m ATR (`:857-858`).
+- Re-check results are not persisted. They change nothing when the cap does not bind, and the EQ components (reference, expansion, ATR extension, age, rejection) are never stored anywhere.
+- Replay calls the same method (`ShadowProductionReplayService.java:300, 335`), so the logic is shared. But without stored components, a Production EQ cannot be audited against Replay without re-running it.
+- **Verdict:** an observability gap, plus an ATR inconsistency. No outcome effect is proven in this sample.
+
+**F-I5-09: added to F-I4-02. The 1m/5m boundary race is systemic, and it admitted 6 of 86 boundary BUYs on a stale bullish 5m. (PROJECT EVIDENCE: I4-003)**
+- **Scope:** I4-003 returned the 86 executed BUYs whose 1m signal closed on a 5-minute boundary.
+- **Every one** stored the *previous* 5m bar in `confluence_higher_signal_generated_at`.
+  - That includes rows where the same-boundary 5m had an *earlier* `generated_at`: 461, 314, 344 (trade 137) and 144.
+  - So the stored confluence context follows commit visibility, not just `generatedAt` ordering.
+  - **Correction to my method:** the stored `confluence_higher_*` on a 1m row is not proof of which 5m the execution validation used. For 143 the execution's use of the 5m BUY stays proven by the fill message and opportunity 36524 (`five_minute_decision=BUY`).
+- **Adverse cases:** the 1m was analysed first, used a bullish 5m, and the same-boundary 5m was no longer bullish. Wallets **358 (143), 305, 255, 199, 119, 72**.
+  - 119 and 255 are also `SETUP_TIMEFRAME_ATR`, the same pattern as 143.
+- **Favourable cases:** in about 20 wake-ups the newer 5m BUY *triggered* the entry (for example 392, trade 158).
+- Outcomes of the 6 adverse cases are pending (I5-006).
+
+## Entry-quality scorecard (information at entry only)
+
+| Pos | Entry KSA (UTC) | Route / authority | Recorded EQ | Main entry-quality problems known at the time | Verdict | Outcome (separate) |
+|---|---|---|---|---|---|---|
+| 182 | 10-12 09:57:06 (06:57:06) | FIX-11G, 15% after ATR reduction | 50 LATE | Masked bearish 5m; TREND_FOLLOWING in WEAK_DOWNTREND; 1m candle range 2.15 ATR; R:R 0.48; funding 99th pct; no bid support above stop | **Poor; admitted by F-I5-02 and F-I4-01** | Exit −0.21%; TP reached 88 min after exit |
+| 172 | 10-12 06:36:05 (03:36:05) | BALANCED_STRONG, 25% | 60 ACCEPTABLE | Price step > ATR; R:R 0.74; 1h trend 8 | Marginal; valid loss | TP reached 21 min after exit |
+| 162 | 10-12 04:02:06 (01:02:06) | ACCUMULATED_EVIDENCE / BALANCED_EARLY, 15% | 50 LATE | 1m WATCH; 4.72 ATR above opportunity best; 1 BUY / 9 WATCH; candle range 2.82 ATR | **Poor; 24 ms from a block** | Stop hit 3 min after exit |
+| 158 | 10-12 02:35:04 (10-11 23:35:04) | SETUP_CONFIRMATION_WAKEUP, 25% | not printed (~60 at decision / ~50 at execution, inferred) | 1m WATCH; opportunity 53 min old; TP 0.17% < fees | Marginal; valid loss | TP reached 11 min after exit |
+| 143 | 10-11 22:40:04 (19:40:04) | SETUP_TIMEFRAME_ATR, 25% | 60 ACCEPTABLE | Overrode the 1m WAIT_FOR_RETRACEMENT (+0.52% above the retracement level); RSI 84; more than 6 setup ATRs above base (inferred); stale 5m; re-entered 22 s after an exit | **Poor; chase (F-I5-03, F-I4-02)** | Ran to +1.69%, then gap exit (F-I3-03) |
+| 137 | 10-11 20:55:04 (17:55:04) | FIX-11G, 25% | 58 ACCEPTABLE | Under a recent rejection high (−12 proven by arithmetic); 68% of Bollinger range; TP under the 4.012 ask wall; funding 100th pct | Fair signal, poor location; valid loss | Stop hit 55 s after exit |
+
+**Data freshness at entry:** clean for all six (F-I3-02: LIVE mode, `data_quality_valid=1`, prices 1.5–3 s old). The only timing defect affecting entry quality is the 143 boundary race.
+
+## EVIDENCE
+- **E-I5-01:** I2-001 (R:R, ATR%, overextension, regime, funding, confidence); I2-002 (ATR text "retrace near 4.01179709862", Bollinger 68.28% exception, order-book walls).
+- **E-I5-02:** I2-006 wallet messages 451, 426, 403, 392, 358 and 344 (EQ values, routes, sizes).
+- **E-I5-03:** I2-014 opportunities 40290, 39062, 37952, 37621, 36524 and 35535 (`started_at`, anchor and best prices, EQ text).
+- **E-I5-04:** I4-001 (ACE masked SELL sequence), I4-002 (159285 BUY / 159407 WATCH / 159408 confluence), I4-003 (86 boundary BUYs).
+- **E-I5-05:** code:
+  - `ExecutionIntelligenceService.java:47, 62, 65, 229, 236, 364, 439, 538, 615, 634, 652-710, 777-785, 857-1030, 1150-1223, 1271-1279, 1472-1514, 1811-1817, 2139-2144`
+  - `TradeExecutionValidationService.java:49, 62-113, 123-163, 218-321`
+  - `ShadowProductionReplayService.java:300, 335`
+- **E-I5-06:** I4-005 returned only ranks 1–60 (all 2026-10-03). It gives no evidence about the FIX-154/11G deployment date.
+
+## UNKNOWNS
+- **U-I5-01:** the 30-minute reference and recent high for each entry. These decide 182 (ATR extension > 4 vs rejection floor), 172 (the 5.47e-6 low) and 143 (1.5–3% expansion), and identify 137's rejection high. (I5-001)
+- **U-I5-02:** the 5m ATRs for 143 (159285) and 158 (165415), needed to confirm the more-than-6-ATR claim and the 158 EQ split. (I5-002)
+- **U-I5-03:** whether EQ class or bucket relates to outcome across all trades, and how the FIX-11G route performs overall. (I5-003)
+- **U-I5-04:** outcomes of the 6 adverse boundary-race entries. (I5-006)
+- **U-I5-05:** the share of all closed positions entered on a masked-bearish 5m. I4-004 returned no result file; it is re-issued in a lighter form. (I5-004)
+- **U-I5-06:** the deployment timeline of FIX-11G and FIX-154. I4-005 only reached rank 60. (I5-005)
+- **Carried over:** U-I4-03 (Replay `evaluationTime` at the shared boundary) and the log searches from I3/I4.
+
+## DB_REQUESTS
+Literals use the session's KSA display zone, consistent with earlier results.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: U-I5-01. The 30-minute 1m price window before each entry signal (the EQ reference low and the recent/rejected high).
+SQL:
+SELECT p.id AS position_id, e.id AS entry_signal, s.id, s.generated_at, s.decision, s.latest_price, s.total_score
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.trade_signal e ON e.id = p.signal_id
+JOIN crypto_ai.trade_signal s ON s.symbol = p.symbol AND s.interval_code = '1m'
+ AND s.generated_at BETWEEN e.generated_at - INTERVAL 30 MINUTE AND e.generated_at
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC, s.generated_at
+LIMIT 220;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: U-I5-02. ATR and plan of the 5m authority signals used by the setup and wake-up routes, plus the latest 5m for the other entries.
+SQL:
+SELECT id, symbol, interval_code, generated_at, decision, latest_price, atr_at_signal, atr_percent, atr_entry_type, atr_recommended_position_percent, atr_immediate_entry_allowed, risk_reward_ratio, candle_range_atr_multiple
+FROM crypto_ai.trade_signal
+WHERE id IN (159285, 165415, 171559, 167616, 156721, 176655)
+ORDER BY id
+LIMIT 6;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: U-I5-03. Outcome of all closed positions by entry route and by EQ parsed from the initial BUY message.
+SQL:
+SELECT execution_reason, eq_class, COUNT(*) AS n, SUM(realized_pnl > 0) AS wins, SUM(realized_pnl < 0) AS losses, ROUND(SUM(realized_pnl), 6) AS pnl_sum
+FROM (
+  SELECT p.id, p.realized_pnl, w.execution_reason,
+   CASE
+     WHEN w.execution_message LIKE '%BALANCED_NEUTRAL_5M_WATCH_1H%' THEN CONCAT('FIX11G_EQ', COALESCE(REGEXP_SUBSTR(REGEXP_SUBSTR(w.execution_message, 'entryQuality=[0-9]+'), '[0-9]+'), '?'))
+     WHEN w.execution_message REGEXP 'Entry Quality [0-9]+/100' THEN REGEXP_SUBSTR(w.execution_message, '(EXCELLENT|GOOD|ACCEPTABLE|LATE)_ENTRY')
+     ELSE 'NOT_PRINTED'
+   END AS eq_class
+  FROM crypto_ai.paper_position p
+  JOIN crypto_ai.wallet_trade w ON w.signal_id = p.signal_id AND w.side = 'BUY' AND w.status = 'EXECUTED'
+  WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL
+) t
+GROUP BY execution_reason, eq_class
+ORDER BY execution_reason, eq_class
+LIMIT 80;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: U-I5-05 (lighter re-issue of I4-004). Positions whose latest 5m at or before the entry signal was masked bearish, with outcomes.
+SQL:
+SELECT p.id, p.symbol, p.realized_pnl, p.status, f.id AS five_id, f.decision, f.original_decision
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.trade_signal s ON s.id = p.signal_id
+JOIN crypto_ai.trade_signal f ON f.id = (
+  SELECT f2.id FROM crypto_ai.trade_signal f2
+  WHERE f2.symbol = p.symbol AND f2.interval_code = '5m' AND f2.generated_at <= s.generated_at
+    AND f2.generated_at >= s.generated_at - INTERVAL 20 MINUTE
+  ORDER BY f2.generated_at DESC LIMIT 1)
+WHERE p.closed_at IS NOT NULL AND f.decision NOT IN ('SELL','STRONG_SELL') AND f.original_decision IN ('SELL','STRONG_SELL')
+ORDER BY p.id DESC
+LIMIT 100;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-005
+Purpose: U-I5-06. Migrations after rank 60 (release and deployment timeline around 10-09 to 10-12).
+SQL:
+SELECT installed_rank, version, description, installed_on, success
+FROM crypto_ai.flyway_schema_history
+WHERE installed_rank > 60
+ORDER BY installed_rank
+LIMIT 120;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-006
+Purpose: U-I5-04. Outcomes of the adverse boundary-race entries (wallet BUYs 358, 305, 255, 199, 119, 72).
+SQL:
+SELECT w.id AS wallet_id, w.symbol, w.execution_reason, w.signal_id, w.price_usdt, w.executed_at, p.id AS position_id, p.status, p.realized_pnl, p.close_reason, p.closed_at
+FROM crypto_ai.wallet_trade w
+LEFT JOIN crypto_ai.paper_position p ON p.signal_id = w.signal_id
+WHERE w.id IN (358, 305, 255, 199, 119, 72)
+ORDER BY w.id
+LIMIT 12;
+### END_DB_REQUEST
+
+### LOG_SEARCH_REQUEST (needs an operator with SSH; read-only; windows in true UTC)
+1. `FIX-11G post-guard result` and `FIX-11G transitional BUY authority granted` for signalId 176710 (around 2026-10-12 06:57:01Z–06:57:06Z) and 156723 (around 2026-10-11 17:55:01Z–17:55:04Z).
+2. `FIX-105 chase reference` (DEBUG; may not be enabled) for 167668, 159408 and 176710. This gives the reference source and price directly.
+
+## Self-review (iteration 5)
+- **New confirmed code findings:**
+  - F-I5-01: EQ's R:R term depends only on ATR%.
+  - F-I5-02: inconsistent EQ thresholds across routes, decisive for 182.
+  - F-I5-04: 162 passed through minute truncation; the arithmetic reproduces the recorded 50 exactly.
+  - F-I5-08: EQ components and the execution-time EQ are not stored.
+- **Proven by unique decomposition:** 137's rejection penalty and 143's {ATR extension > 6, 1.5–3% expansion} components. I labelled the 143 inputs as inference until I5-001/002 return.
+- **Corrected:** the stored 1m `confluence_higher_*` does not prove which 5m the execution used (F-I5-09). The 143 conclusion stands on separate evidence.
+- **Per-trade classification:**
+  - Logic or threshold defect contributed: 182 (F-I4-01 + F-I5-02) and 143 (F-I4-02 + F-I5-03).
+  - Rule-following marginal pass: 162.
+  - Valid losing trades with structural weaknesses: 172, 158, 137.
+- No entry judgement used later price action.
+- **Caveat:** the working-tree vs deployed-code question (U-I4-01) remains open, though EQ arithmetic matching on 162/137 partly supports parity.
+- **Next (iteration 6):** fold in the I5 results, trace the Replay `evaluationTime` caller, and test whether a 143- or 182-style entry reproduces in Replay.

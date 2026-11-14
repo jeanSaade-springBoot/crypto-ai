@@ -1,0 +1,1 @@
+SELECT id, symbol, observed_at, UNIX_TIMESTAMP(observed_at) AS epoch_s, created_at, UNIX_TIMESTAMP(created_at) AS created_epoch_s FROM crypto_ai.market_price_event WHERE id = 2195977 OR (symbol = 'EGLDUSDT' AND observed_at BETWEEN '2026-10-11 22:40:00.900' AND '2026-10-11 22:40:01.200') ORDER BY id;

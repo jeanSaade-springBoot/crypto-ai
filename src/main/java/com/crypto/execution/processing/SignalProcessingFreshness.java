@@ -12,12 +12,22 @@ import java.time.Instant;
 public class SignalProcessingFreshness {
     @org.springframework.beans.factory.annotation.Autowired
     private com.crypto.shared.SharedMarketSource sharedCandleSource;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.crypto.local.ExchangeClockSynchronizer exchangeClock;
     private org.springframework.jdbc.core.JdbcTemplate candleReader(org.springframework.jdbc.core.JdbcTemplate legacy) {
         return sharedCandleSource == null ? legacy : sharedCandleSource.reader();
     }
 
     private final JdbcTemplate jdbc;
     public SignalProcessingFreshness(JdbcTemplate jdbc) { this.jdbc=jdbc; }
+    /** Production clock comes from the database session, which startup requires to be UTC. */
+    public boolean eligible(SignalProcessingStore.Work work) {
+        Timestamp databaseNow=jdbc.queryForObject("SELECT CURRENT_TIMESTAMP(6)",Timestamp.class);
+        if(databaseNow==null)throw new IllegalStateException("FIX-153 database did not return current timestamp");
+        Instant reference=databaseNow.toInstant();
+        if(exchangeClock!=null)reference=exchangeClock.correctDatabase(reference);
+        return eligible(work,reference);
+    }
     public boolean eligible(SignalProcessingStore.Work work, Instant now) {
         var candles=candleReader(jdbc).query("""
                 SELECT open_time,close_time FROM candle WHERE symbol=? AND interval_code=?

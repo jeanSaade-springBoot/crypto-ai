@@ -1,0 +1,1 @@
+SELECT p.id, p.symbol, p.opened_at, p.realized_pnl, p.status, (SELECT MAX(q.closed_at) FROM paper_position q WHERE q.symbol = p.symbol AND q.id <> p.id AND q.closed_at <= p.opened_at) AS prev_close FROM paper_position p WHERE p.closed_at IS NOT NULL HAVING prev_close IS NOT NULL AND TIMESTAMPDIFF(SECOND, prev_close, p.opened_at) <= 120 ORDER BY p.opened_at LIMIT 100

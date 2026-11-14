@@ -1,0 +1,1 @@
+SELECT s.id, s.symbol, s.interval_code, s.decision, s.generated_at, s.created_at, TIMESTAMPDIFF(MICROSECOND, s.generated_at, s.created_at)/1000 AS gen_to_created_ms, w.status, w.completed_at, w.updated_at FROM trade_signal s LEFT JOIN signal_processing_work w ON w.signal_id=s.id WHERE s.id IN (166819,166821,176655,176710,176927,176934,172587,172588) ORDER BY s.generated_at

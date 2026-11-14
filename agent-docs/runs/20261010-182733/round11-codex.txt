@@ -1,0 +1,59 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** RPR-0.6 is not the canonical change contract required by governance. The required artifact remains `agent-docs/FINAL_CHANGE_SPECIFICATION.md` at RPR-0.4, while RPR-0.6 explicitly says it supersedes prior drafts “for review only.” It cannot safely receive the required dual-agent approval in its current location/status.
+
+- **PROJECT EVIDENCE:** The “complete” registry is materially incomplete and names a nonexistent run table. The implementation uses `analysis_test_run`, not `regression_test_run`; `RegressionTestService` owns run creation, cancellation, purge, archive, reset, and Investigation Queue execution, yet is omitted.
+
+- **PROJECT EVIDENCE:** The qualifier-before-write contract is not fully designed. Current `RegressionTestService.start()` creates `analysis_test_run` and `fix122_replay_revision` before the async worker begins. RPR-0.6 registers neither this start path nor the required changes to make a profile/mode available before qualification. The Investigation Queue likewise cannot carry either required value.
+
+- **PROJECT EVIDENCE:** RPR-0.6’s `closed=1` rule does not establish decision-time candle visibility. The current timeline admits open candles; shared snapshot/quality queries use the row’s current closed state. Recovery can subsequently close an existing candle or insert a closed backfill. The current `Candle` projection omits provenance and database timestamps, so it cannot support the proposed historical-finality assertion by itself.
+
+- **PROJECT EVIDENCE:** The proposed isolation boundary lacks an enforceable architecture and overlooks an existing forbidden account read. Current Replay directly reads `wallet_settings` and can invoke Binance HTTP for minimum-notional checks. Separately, the current Replay chart endpoint reads `wallet_trade`, which RPR-0.6 absolutely forbids, but the endpoint is not registered as an exemption, removal, or changed display contract.
+
+- **PROJECT EVIDENCE:** Price-event ordering cannot meet RPR-0.6 as written. The query orders by `observed_at, id`, but maps to a `PriceEvent` that discards `id`; Replay later sorts price events by timestamp only. `MarketPriceEventService` and the event projection are not in the “complete” registry despite §3 requiring retained ID and ordering slot.
+
+- **PROJECT EVIDENCE:** Staging is underspecified. Current Replay persists signals during generation and positions/executions during simulation. RPR-0.6 requires private staging and terminal-only publication but names neither staging objects nor promotion transaction, crash/cancel behavior, archive/purge treatment, retention, or handling of terminal diagnostics. This fails the governance requirement for class/method, database, concurrency, and transaction contracts.
+
+- **PROJECT EVIDENCE:** The claimed current-policy scope is incomplete against the current workspace. `ShadowProductionReplayService` invokes `ExecutionIntelligenceService` and `ExecutionPriceAuthorityService`, but neither is registered. Current execution code also contains FIX-154 higher-timeframe assessment paths; RPR-0.6 permits associated evidence tables but does not define how those policies, audit availability/failure, and as-of ordering participate in Replay.
+
+- **PROJECT EVIDENCE:** `ANALYSIS_PARITY` has no complete earned-claim algorithm. RPR-0.6 acknowledges unavailable deployed JAR/config lineage, but does not define the mandatory fingerprint source, comparison fields, or refusal rule. The existing `ReplayParityValidator` has no production caller and compares only a limited set of signal fields; it is not sufficient evidence for the label.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** [AGENTS.md](/C:/workspace/crypto-ai-trader-mysql/AGENTS.md:327) requires the same exact revision of `agent-docs/FINAL_CHANGE_SPECIFICATION.md`, with a complete file/method/database/test registry, before implementation approval.
+
+- **PROJECT EVIDENCE:** [RPR-0.6](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:5) uses a commit baseline but declares itself review-only; its incorrect run table and incomplete registry are at [line 54](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:54) and [line 64](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:64). The canonical artifact remains [FINAL_CHANGE_SPECIFICATION.md](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:3).
+
+- **PROJECT EVIDENCE:** Run creation is in [RegressionTestService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:173) and writes `analysis_test_run` plus FIX-122 revision data before scheduling the worker at [line 210](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:210). The Investigation Queue start path has no profile/mode at [line 81](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:81); the request DTO similarly lacks them at [RegressionTestRunRequest.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/dto/RegressionTestRunRequest.java:5).
+
+- **PROJECT EVIDENCE:** Current Replay loads unfiltered candle identities at [RegressionTestWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:509), builds its timeline from them at [line 550](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:550), and writes output during processing at [line 636](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:636). Closed reads use present state at [CandleRepository.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:51); reconciliation can close or insert later at [line 132](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:132) and [line 152](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:152). The row mapper omits provenance/timestamps at [line 23](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:23).
+
+- **PROJECT EVIDENCE:** Replay’s current wallet read is at [ShadowProductionReplayService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:999); its minimum-notional path calls the Binance-backed policy at [line 535](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:535), whose HTTP dependency is explicit at [BinanceMinimumExecutionPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/BinanceMinimumExecutionPolicy.java:29). The production-trade chart query is at [RegressionTestService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:549).
+
+- **PROJECT EVIDENCE:** Price-event ID loss is demonstrated by [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118) and its three-field record at [line 173](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:173).
+
+- **PROJECT EVIDENCE:** Replay directly depends on omitted execution services at [ShadowProductionReplayService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:46). FIX-154 execution assessment is active in [TradeExecutionValidationService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:94). The existing comparator’s bounded field set is at [ReplayParityValidator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ReplayParityValidator.java:17).
+
+## OBJECTIONS
+
+- **AGENT INFERENCE:** Create one exact, canonical revision in `agent-docs/FINAL_CHANGE_SPECIFICATION.md`, including a reviewed workspace/source manifest. The currently dirty workspace makes a commit-only baseline insufficient for technical approval.
+
+- **AGENT INFERENCE:** Add all run-entry, lifecycle, archive, purge, controller/request, UI, and migration artifacts to the registry. Specify profile/mode propagation for both manual and Investigation Queue starts.
+
+- **AGENT INFERENCE:** Define a single decision-time candle-visibility rule for every primary, BTC, and shared-context read. It must use durable outcome evidence where available, identify clock/tolerance/provenance rules, and refuse strict analysis parity where historical visibility cannot be proven.
+
+- **AGENT INFERENCE:** Specify an enforceable Replay dependency boundary: concrete interfaces/adapters, async scope propagation, forbidden access behavior, and the disposition of the production-trade overlay.
+
+- **AGENT INFERENCE:** Define exact staging schemas and atomic promotion, including cancellation, restart, failure, archive, purge, and diagnostic semantics.
+
+- **AGENT INFERENCE:** Register every actual policy dependency, including execution intelligence/price authority and current FIX-154 paths, or narrow the claim so it does not imply their parity.
+
+- **AGENT INFERENCE:** Define the precise field/evidence/version/config requirements for each earned label; otherwise remove `ANALYSIS_PARITY` from Release 1.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No database, runtime, production system, deployment host, or test suite was accessed or changed.
+
+- **AGENT INFERENCE:** Historical eligibility rates, deployed configuration/JAR identity, and real-world mismatch rates remain unknown. They cannot validate an earned parity claim until a revised evidence model exists.
+
+VERDICT: REJECTED

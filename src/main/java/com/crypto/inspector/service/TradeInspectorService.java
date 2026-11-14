@@ -234,6 +234,22 @@ public class TradeInspectorService {
                     .toList();
         }
 
+        // FIX-143: This is persisted signal eligibility, not an execution promise or failure cause.
+        // Keep the existing blocked/open/completed branches unchanged; never trigger execution.
+        if ("ALLOWED_BUY".equals(type)) {
+            return tradeSignalRepository.findAllowedUnexecutedBuys(
+                    com.crypto.domain.SignalDecision.BUY,
+                    com.crypto.domain.SignalDecision.STRONG_BUY,
+                    symbol, from, to, PageRequest.of(0, limit)).stream().map(s -> {
+                        Map<String, Object> row = signalAnalysisView(s);
+                        row.put("rowKind", "ALLOWED_BUY");
+                        row.put("executionStatus", "NOT_EXECUTED");
+                        row.put("executionReason", "No executed wallet BUY linked to this signal; cause not established.");
+                        row.put("eventTime", s.getCandleOpenTime() != null ? s.getCandleOpenTime() : s.getGeneratedAt());
+                        return row;
+                    }).toList();
+        }
+
         // Reuse the already-proven blocked BUY / blocked SELL repository semantics instead of
         // reinterpreting those states in the UI layer. In particular, a blocked SELL means an
         // original SELL/STRONG_SELL that FinalDecision changed to a non-SELL state; it is not

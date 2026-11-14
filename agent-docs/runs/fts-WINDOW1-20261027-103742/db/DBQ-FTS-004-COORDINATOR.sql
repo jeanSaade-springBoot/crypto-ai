@@ -1,0 +1,1 @@
+SHOW TABLES LIKE 'wallet_position_test'

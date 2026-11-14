@@ -1,0 +1,180 @@
+Code checks are done. Writing up the iteration-6 root-cause synthesis.
+
+# Claude, failed-trade study WINDOW1, iteration 6: root cause and research
+
+Four of the six losses (78, 91, 96, 104) share one root cause. The code admits a BUY while the hourly signal says SELL, then closes the position because of that same unchanged hourly SELL as soon as one 5m bar stops being bullish. Trade 82 was a weak entry, made weaker by a confirmed restart defect. Trade 101 was a good entry lost by its exit policy. No loss was caused by stale data or slow execution.
+
+New this round:
+- **UNI protection gap (outside the frozen set):** the price went below UNI's stop during the restart outage on 10-10, and the stop did not fire until 15 minutes later.
+- **FIX-154 is live in Production**, although `AGENTS.md` describes it as not yet implemented.
+- **The entry-quality score does not track outcomes** across all 72 positions since V107.
+
+This round was analysis only: no code, config, DB, git, doc or deploy writes. I didn't open Codex's private or db folders, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or Codex memory. I analysed the frozen trades **104, 101, 96, 91, 82, 78** and substituted none. This session has no Write or ExitPlanMode tool, so the plan file was not written and the findings are in this message only.
+
+**Time basis (unchanged since I3-001/002):** the DB stores UTC, but the query wrapper displays and accepts times in KSA. Below, UTC = displayed value − 3 h. All DB_REQUEST literals are in KSA on purpose.
+
+## 0. Results from iteration 5
+
+*PROJECT EVIDENCE*
+
+| Query | Result | Effect |
+|---|---|---|
+| I5-001 | **No result file exists.** | U-17 (exact entry-quality components) is still open. Requested again in reduced form as I6-003. |
+| I5-002 | The 5m triggers were moderate, not strong: PEPE 115050 score 80 / confidence **60**, SHIB 121201 77/68 (reward/risk 1.14), PEPE 122356 78/67, ENA 133251 80/68. The 1h SELLs for 78, 91 and 96 (114160, 120186, 121720) were all **RANGE regime / RANGE_MEAN_REVERSION**, score 38–40, confidence 70–71. ENA's 1h SELL 132367 was WEAK_UPTREND / TREND_FOLLOWING. | F-27 holds. The new F-31 below follows from the regime. |
+| I5-003 | Since V107: **72 closed positions, 39 losses, net about −1.565 USDT**. | New F-32 below. |
+| I5-004 | For 82, the opportunity anchor and best price both equal the entry, 0.1984, so there is no chase-expansion component. ENA 29327 had health 57 / evidence 6; SHIB 25823 had health 65. | F-23's arithmetic (a pre-penalty score of 50–61, lifted to 50 by the clamp) is consistent. F-23's chase label is still not fully verified, because the components are missing (I5-001). |
+| I5-005 | UNI 1m 18:00 KSA (15:00 UTC) BACKFILL low **7.624**, and 18:01 KSA low **7.628**, both below position 80's stop of **7.628665**. Live 18:02 KSA low was 7.636, above the stop. | **U-19 is answered: yes.** See F-30. |
+
+## 1. Root causes
+
+### RC-1 (78, 91, 96, 104): the same hourly SELL is soft at entry and forces the exit
+*CONFIRMED in code; DB I3-012, I4-008, I5-002.*
+
+- **At entry:** `HigherTimeframeBuyAssessmentService.java:33-34,47` turns any quality-valid 1h SELL into NEUTRAL and caps the entry at 25%.
+- **At exit:** `PositionExitPolicy.java:25-32` exits on "1h bearish and 5m not supportive". It uses the newest 1h signal with no check on its age or on when the position opened (`LivePositionProtectionService.java:95-97`). The Javadoc (`:14`) promises a "fresh" 1h SELL.
+- **Why it loses by construction:** entry needs the first 5m flip to BUY, so the first 5m bar that isn't BUY or WATCH closes the trade. No new 1h signal arrived during any of these four holds.
+- **Business effect:** 4 of 5 SELL-context entries since V107 lost, net −0.1635 USDT.
+
+### RC-2 (82): weak entry geometry plus the restart defect
+*CONFIRMED in code and DB.*
+
+- **Weak entry:** a 0.5% stop floor with a 3-ATR target produced a reward/risk of 0.45 (F-24). The −12 penalty clamp held the entry-quality score at exactly 50 when it would otherwise have blocked the entry (F-23).
+- **Restart defect:** the startup candle import closed open candles without analysing them (F-21), so the hour-boundary candle was never analysed and the entry ran on a 63-minute-old 1h signal. Whether that changed the decision is **not proven**.
+
+### RC-3 (101): exit policy, not the entry
+- The trade reached its target. After the FIX-118 rebase, it exited on the hard floor (F-13).
+
+### Contributing factors in all six trades (policy weaknesses, not defects)
+- No minimum reward/risk on the direct, accumulated-evidence and wake-up routes (F-24).
+- One tick of fill drift is accepted without re-anchoring the stop and target (F-25).
+- No fee or tick-size awareness (F-26).
+- A WATCH signal exactly at the support threshold of 60 carried the order in 78 and 91 (F-28).
+
+## 2. New findings
+
+### F-30: the restart outage left a breached stop unacted on
+*PROJECT EVIDENCE: I4-005, I5-005.*
+
+- **The breach:** UNI position 80 had a stop of 7.628665. Price traded at 7.624 in the 18:00 KSA (15:00 UTC) minute while no price events were arriving (outage 17:59:06–18:02:21 KSA).
+- **The late exit:** the stop actually executed at 18:15:47 KSA (15:15:47 UTC), at 7.627.
+- **Financial effect:** close to nothing this time, because the exit price was about the same.
+- **Why it matters anyway:** the outage-window candles were later filled in as BACKFILL rows. That repairs the candle history but not the protection, because nothing replays protection over backfilled lows. This is a real occurrence of the `AGENTS.md` release gate on protecting open positions during application replacement.
+- **AERO position 81 is inconclusive.** Its stored stop of 0.908416 had already been crossed by a *live* candle at 17:58 KSA (low 0.9080), yet the stop never fired. Two possible reasons:
+  - the active stop in `wallet_managed_position.stop_loss_usdt`, which drives protection (`LivePositionProtectionService.java:174`), differed from the stored paper stop; or
+  - protection only evaluates the ~2-second kline price updates, so short wicks between updates are never seen.
+- I6-001 and I6-002 test which one it was. If it is the second, **every stop is exposed to unseen wicks**. That is an outcome-fidelity issue for paper trading and a parity issue for Replay, which works from candle closes.
+
+### F-31: in three of the four RC-1 trades, the hourly SELL meant "near the top of the range"
+*PROJECT EVIDENCE: I5-002; the interpretation is AGENT INFERENCE.*
+
+- The 1h signals for 78, 91 and 96 came from RANGE_MEAN_REVERSION in a RANGE regime. A SELL from that strategy means price is near the upper band.
+- The system entered a 1m TREND_FOLLOWING BUY into that range top, on a 5m flip with confidence 60–68.
+- So the soft-conflict cap treats a structural "you are at resistance" signal as neutral. The entry-quality score has no hourly-range term, which matches the F-29 observation for 104.
+
+### F-32: the entry-quality score does not track outcomes
+*PROJECT EVIDENCE: I5-003. This is outcome-based prevalence and is not used to judge any entry.*
+
+| Band | n | Losses | Net PnL (USDT) |
+|---|---|---|---|
+| EQ 85+ | 7 | 3 | **+1.24** |
+| EQ 70–84 | 16 | **14** | **−2.17** |
+| EQ 55–69 | 21 | 10 | −0.53 |
+| EQ < 55 | 28 | 12 | −0.10 |
+| RR ≥ 1.25 | 24 | 18 (75%) | −0.94 |
+| RR < 1 | 33 | 15 (45%) | −0.25 |
+
+- **This partly revises F-24:** a reward/risk floor alone would not have cut losses on this sample. Trades with a high signal reward/risk lost more often, because their targets are farther away and these exits cut them early.
+- **Effect on the root cause:** the losses come mainly from the **exit policy (RC-1) and calibration**, not from reward/risk alone.
+- **Caveats:**
+  - one day of data (n = 72);
+  - the bands use the *signal* reward/risk, not the reward/risk at the fill;
+  - the join to `wallet_managed_position` is assumed to be one-to-one.
+
+### F-33: FIX-154 is deployed, and its code differs from the design in `AGENTS.md`
+*PROJECT EVIDENCE; a contradiction to be reported, not resolved here.*
+
+**It is live:**
+- `AGENTS.md` says FIX-154 is "not-yet-implemented" and must not be described as deployed.
+- V107 `__fix_154_trusted_higher_timeframe_buy` and V109 are applied: V109 at 10-10 01:52:45 KSA (I4-001).
+- FIX-154 code is present in 9 Java classes.
+- Production signals and audits behave as the code says.
+
+**What the code does compared with the `AGENTS.md` design:**
+
+| | `AGENTS.md` design | Code (`HigherTimeframeBuyAssessmentService.java`) |
+|---|---|---|
+| How the 1h is classified | Scored from closed-candle indicators | Read from decision and confidence only |
+| Hard veto | Strong 1h **plus** fresh, quality-valid bearish 5m confirmation | STRONG_SELL with confidence ≥ 70 on its own (`:30,46`) |
+| Soft conflict | Not a simple mapping | Every SELL, at any confidence (`:47`) |
+
+- Whether an approved later revision replaced the `AGENTS.md` text is **unknown**.
+- This must go through the dual-agent knowledge process. It does not change the trade verdicts.
+
+## 3. External research
+
+- **Spring startup order.** Spring Boot calls `ApplicationRunner`s in order and then publishes `ApplicationReadyEvent`. This supports F-21's premise that the WebSocket starts only after the startup import has finished. Sources: [reflectoring.io](https://reflectoring.io/spring-boot-execute-on-startup/), [cnblogs (Spring source walk-through)](https://www.cnblogs.com/FraserYu/p/12117888.html), [codemia](https://codemia.io/knowledge-hub/path/running_code_after_spring_boot_starts). One source calls it "asynchronous"; that claim looks wrong ([mastertheboss](https://mastertheboss.com/spring-boot/getting-started-with-spring-boot/spring-boot-quickstarts/how-to-execute-a-java-class-at-spring-boot-startup/)).
+- **Binance fees.** Most sources agree on 0.10% spot taker for regular users, or 0.075% with the 25% BNB discount. I didn't reach the official page, so this is **still unverified**, and F-26 keeps its 0.075–0.10% sensitivity range. Sources: [hijri-calendars](https://hijri-calendars.com/blog/binance-fees-explained-2026?lang=en), [intercom](https://intercom.help/cryptoreferralcodes/en/articles/15054844).
+- **Multi-timeframe practice.** Practitioner sources describe the higher timeframe as a gate on entries and recommend using the last *completed* higher-timeframe value. I found no peer-reviewed evidence either way. Supporting the RC-1 diagnosis is AGENT INFERENCE: an hourly signal that is overridden at entry but authoritative at exit contradicts that common framing. Sources: [LuxAlgo](https://www.luxalgo.com/library/concept/higher-timeframe-trend-filter/), [QuantifiedStrategies](https://quantifiedstrategies.substack.com/p/multi-timeframe-analysis-and-strategy).
+- **Prior external work, still valid:** Binance kline streams push updates about every 2 s ([Binance docs](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)). This is the basis for the wick hypothesis in F-30.
+
+## 4. Verdicts so far (AGENT INFERENCE)
+
+| Trade | Classification |
+|---|---|
+| 78, 91, 96, 104 | Followed the rules. **Logic-defect candidate:** the entry/exit contradiction of RC-1, worsened by range-top entries (F-31) and trade geometry. |
+| 82 | Followed the rules, with weak geometry. A confirmed upstream data-path defect (F-21) exists, but its causal link to the loss is unproven. |
+| 101 | Valid entry. The loss came from the FIX-118 exit policy. |
+
+## 5. Unknowns
+
+- **U-10:** the `.gz` logs are still unreadable with my tools.
+- **U-17:** the exact entry-quality components (see I6-003).
+- **U-18:** whether `QUALITY_DECAY` updates the opportunity's status and should block a wake-up.
+- **U-20:** which stop was actually active for AERO 81, and whether intrabar wicks go unseen (I6-001, I6-002, I6-004).
+- **U-21:** whether the FIX-154 code is an approved revision of the `AGENTS.md` design.
+- **Replay:** not run. RC-1 and F-23 through F-29 are deterministic and should reproduce. F-21 and F-30 are effects of the Production runtime.
+
+## 6. DB_REQUEST blocks
+All literals are KSA, the wrapper session zone.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: U-20: the active wallet-managed stop/TP/profit-lock state for UNI (paper 80) and AERO (paper 81), which drives live protection
+SQL:
+SELECT * FROM wallet_managed_position WHERE symbol IN ('UNIUSDT','AEROUSDT') AND opened_at BETWEEN '2026-10-10 17:43:00' AND '2026-10-10 17:52:00' ORDER BY opened_at LIMIT 5
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: U-20/F-30: per-minute min/max observed live price-event price compared with the candle low (wick visibility) for AERO and UNI while their positions were open
+SQL:
+SELECT symbol, DATE_FORMAT(observed_at,'%H:%i') AS ksa_minute, COUNT(*) AS events, MIN(price) AS min_price, MAX(price) AS max_price, MIN(observed_at) AS first_obs, MAX(observed_at) AS last_obs FROM market_price_event WHERE symbol IN ('AEROUSDT','UNIUSDT') AND observed_at BETWEEN '2026-10-10 17:56:00' AND '2026-10-10 18:16:00' GROUP BY symbol, ksa_minute ORDER BY symbol, ksa_minute LIMIT 60
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: U-17 (I5-001 returned no result): the last 30 closed 1m candles before each frozen entry, giving the 30m range, extension and volume baseline
+SQL:
+SELECT p.id, p.symbol, p.opened_at, p.entry_price, COUNT(*) AS n, MIN(c.low_price) AS low_30m, MAX(c.high_price) AS high_30m, AVG(c.volume) AS avg_vol FROM paper_position p JOIN candle c ON c.symbol = p.symbol AND c.interval_code = '1m' AND c.closed = 1 AND c.open_time BETWEEN p.opened_at - INTERVAL 31 MINUTE AND p.opened_at - INTERVAL 1 MINUTE WHERE p.id IN (104,101,96,91,82,78) GROUP BY p.id, p.symbol, p.opened_at, p.entry_price ORDER BY p.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-004
+Purpose: U-20: stop/profit-lock management events for the AERO and UNI wallet positions during the outage window
+SQL:
+SELECT wallet_position_id, symbol, event_type, old_value_usdt, new_value_usdt, market_price_usdt, occurred_at FROM position_management_event WHERE symbol IN ('AEROUSDT','UNIUSDT') AND occurred_at BETWEEN '2026-10-10 17:44:00' AND '2026-10-10 18:16:00' ORDER BY occurred_at LIMIT 50
+### END_DB_REQUEST
+
+## 7. What would disprove these findings
+
+- **RC-1:** an exit that fired on a 1h signal generated *after* entry would weaken the "stale 1h" framing. I3-012 already rules that out for the four trades.
+- **F-30, UNI:** if I6-001 shows UNI's managed stop was below 7.624, the gap claim fails.
+- **F-30, AERO:** if I6-002 shows an AERO price event at or below 0.908416 while the position was open and no exit followed, that points to a protection defect rather than either explanation above.
+- **F-32:** the pattern may be one day of noise. It needs another window to confirm.
+
+**Labels:**
+- **PROJECT EVIDENCE:**
+  - Code: `HigherTimeframeBuyAssessmentService.java:15-51`, `PositionExitPolicy.java:14-50`, `LivePositionProtectionService.java:95-249`, plus the code cited in iterations 4–5.
+  - DB: I4-001/005, I5-002…005.
+- **EXTERNAL RESEARCH:** Spring startup order, Binance fees and multi-timeframe practice (sources above).
+- **AGENT INFERENCE:** the range-top interpretation, the wick hypothesis, the verdicts and the Replay reproducibility claims.

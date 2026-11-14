@@ -1,0 +1,76 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Frozen scope remains exactly `paper_position` IDs `104, 101, 96, 91, 82, 78`. The CODEX DB-evidence folder is empty; no trade-specific conclusion can be established.
+
+- **PROJECT EVIDENCE — correction:** Earlier wording that this `status=CLOSED` cohort “excludes ordinary stop-loss losses” is too strong. Current source assigns ordinary signal/direct/manual-at-or-below-stop exits `STOPPED`, but that does not prove the historic database rows or deployed version had no stop-related route. `close_reason`, `exit_reason`, and audit evidence are required. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:172) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:175)
+
+- **PROJECT EVIDENCE:** A `CLOSED` paper position alone is not proof of a committed wallet SELL. Signal/profit-lock closing code saves the paper position before attempting the wallet exit and catches runtime wallet failures. The processing coordinator normally wraps the route in a transaction, but a wallet method can also return without an effect (for example no open managed position or zero quantity). This is a source-level risk only—not evidence it occurred in any frozen trade. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487) [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:211)
+
+- **PROJECT EVIDENCE — correction:** The prior proposed wallet-BUY lookup by same symbol and a five-minute time window is not sufficient attribution evidence. `wallet_trade` has `signal_id` and `position_analysis_id`, but no direct `paper_position_id`; overlapping/reopened same-symbol activity could create false matches. Wallet linkage must be established through signal IDs, production-exit audit, managed-position ID, execution key, and time ordering. [WalletTrade.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletTrade.java:11) [ProductionExitAuditService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:32)
+
+- **PROJECT EVIDENCE:** `production_exit_audit` is useful route evidence but is not independently sufficient to prove the wallet liquidation: it records the paper position ID and attempts to locate a managed position by the entry signal. Reconcile it with the actual managed-position and executed wallet-trade records.
+
+- **PROJECT EVIDENCE:** Current source computes paper-position realised P&L from paper entry/exit price and remaining quantity, preserving earlier partial-harvest P&L. It is not by itself a fee-inclusive wallet reconciliation. The ledger must be used for any fee/P&L conclusion. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:495)
+
+- **PROJECT EVIDENCE:** The log observations from Iteration 3 remain system-level only. Absence of a literal frozen position ID in logs is not proof that no selected-trade route, latency, or error occurred.
+
+- **PROJECT EVIDENCE:** Metadata remains internally inconsistent: raw `2026-10-11 07:00:03 UTC` converts to `2026-10-11 10:00:03 KSA`, while the supplied snapshot KSA is `10:00:01`. Preserve both supplied values; this does not change the mandated frozen IDs.
+
+- **EXTERNAL RESEARCH:** None. Public research cannot establish causation for private paper-trading rows.
+
+- **AGENT INFERENCE:** Every selected trade remains classified **insufficient evidence**. No valid-loss, strategy-defect, protection-failure, or accounting-defect finding is justified yet.
+
+## EVIDENCE
+
+- CODEX-private DB evidence: no files/results available.
+- Current source confirms `STOPPED` for current ordinary stop-loss paths, while multiple other exit paths use `CLOSED`; historic runtime/version equivalence is unproven.
+- Current source confirms paper/wallet audit boundaries but not facts for IDs 104, 101, 96, 91, 82, or 78.
+
+## UNKNOWNS
+
+- Independent proof that the six rows satisfy the frozen snapshot selection.
+- All six symbols, UTC/KSA lifecycle times, close triggers, exit explanations, prices, quantities, and realised-loss amounts.
+- Entry-signal and exit-signal linkage; scale-ins and partial-harvest history.
+- Executed wallet BUY/SELL, managed-position state, production-exit audit, and canonical protection-event evidence.
+- Deployed schema/version/configuration at each trade.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Obtain deployed schemas before any linked wallet, signal, audit, protection, or candle query; prior proposed linked queries must not be treated as schema-confirmed.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+SHOW CREATE TABLE crypto_ai.trade_signal;
+SHOW CREATE TABLE crypto_ai.wallet_trade;
+SHOW CREATE TABLE crypto_ai.wallet_managed_position;
+SHOW CREATE TABLE crypto_ai.production_exit_audit;
+SHOW CREATE TABLE crypto_ai.position_analysis;
+SHOW CREATE TABLE crypto_ai.signal_processing_work;
+SHOW CREATE TABLE crypto_ai.market_price_event;
+SHOW CREATE TABLE crypto_ai.candle;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I7-002  
+Purpose: Independently prove the frozen selection and retrieve only the authoritative position rows without assuming unverified linkage columns. Returned timestamps are UTC.  
+SQL:
+```sql
+SELECT p.*
+FROM crypto_ai.paper_position AS p
+WHERE p.id IN (104, 101, 96, 91, 82, 78)
+ORDER BY FIELD(p.id, 104, 101, 96, 91, 82, 78);
+
+SELECT
+    id,
+    status,
+    closed_at,
+    realized_pnl
+FROM crypto_ai.paper_position
+WHERE status = 'CLOSED'
+  AND closed_at IS NOT NULL
+  AND realized_pnl < 0
+ORDER BY closed_at DESC
+LIMIT 6;
+```
+### END_DB_REQUEST

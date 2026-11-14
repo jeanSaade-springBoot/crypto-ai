@@ -1,0 +1,1 @@
+SHOW COLUMNS FROM wallet_managed_position

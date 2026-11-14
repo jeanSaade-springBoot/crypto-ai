@@ -1,0 +1,46 @@
+## FINDINGS
+
+- **[PROJECT EVIDENCE]** `Perform` identifies no artifact, claim, or acceptance criterion to approve or reject.
+
+- **[PROJECT EVIDENCE]** Production’s close-event worker enforces the 210-candle/gap/OHLC quality gate; fresh Replay does not call that gate. Replay therefore is not production-parity evidence for windows where Production would reject analysis for candle quality.
+
+- **[PROJECT EVIDENCE]** Replay-generated signals are unsaved and retain `id=null`. Its consumed-entry ledger ignores null IDs, so `BUY_CONTINUATION` cannot identify a prior replay BUY as consumed. Claude’s corrected B2 finding is supported.
+
+- **[PROJECT EVIDENCE]** FIX-154 compares its threshold against `confidenceScore`, which is the effective score and is capped at 49 when entry is blocked. Raw confidence is separately persisted but unused by the FIX-154 assessment. Claude’s B3 mechanics are supported.
+
+- **[PROJECT EVIDENCE]** V109 supplies Replay-table columns already mapped by reflection from `TradeSignal`. A database migrated through V97–V108 but not V109 would fail Replay persistence for those mapped fields. Whether any such database or Replay run exists is unproven.
+
+- **[PROJECT EVIDENCE]** The committed configuration enables reconciliation, while architecture documentation says it must remain disabled pending listed release gates. This is a documentation/configuration contradiction; it does not establish that the observed runtime is Production.
+
+## EVIDENCE
+
+- Production quality admission: [CandleClosedAnalysisWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java:119), [CandleDataQualityService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/CandleDataQualityService.java:24).
+
+- Replay loads all candles without `closed=1`, then analyzes unsaved signals: [RegressionTestWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:510), [RegressionTestWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:616), [AnalysisService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:183).
+
+- Null-ID continuation defect: [ExecutionReplayScope.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionReplayScope.java:84), [EntryConsumptionPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/EntryConsumptionPolicy.java:20), [TradeExecutionValidationService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:62).
+
+- Capped-confidence use: [HigherTimeframeBuyAssessmentService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/HigherTimeframeBuyAssessmentService.java:46), [FinalDecisionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/FinalDecisionService.java:159), [AnalysisService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:497).
+
+- Conditional V109 risk: [V107](/C:/workspace/crypto-ai-trader-mysql/src/main/resources/db/migration/V107__fix_154_trusted_higher_timeframe_buy.sql:3), [V109](/C:/workspace/crypto-ai-trader-mysql/src/main/resources/db/migration/V109__fix_154_forward_replay_and_audit_columns.sql:4), [RegressionTestWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:741).
+
+- Reconciliation contradiction: [application.yml](/C:/workspace/crypto-ai-trader-mysql/src/main/resources/application.yml:57), [ARCHITECTURE.md](/C:/workspace/crypto-ai-trader-mysql/codex-docs/ARCHITECTURE.md:230).
+
+## OBJECTIONS
+
+- **[PROJECT EVIDENCE]** “Replay would produce signals and possibly trades for every candle” is not proven without executing a bounded Replay; snapshot failures and execution gates remain possible.
+
+- **[PROJECT EVIDENCE]** “Every new signal is data-quality-valid” is too broad. `MarketContextService` has a weaker EMA/price predicate, but this does not prove every signal path reaches it with `true`.
+
+- **[AGENT INFERENCE]** The confidence-70 split cannot validate a trading policy or threshold. The cited count is in-sample, lacks outcomes and cost/slippage treatment, and does not address correlated observations or false-veto rate.
+
+- **[PROJECT EVIDENCE]** The worktree is extensively modified and untracked, so there is no immutable source baseline for a broad approval.
+
+## UNKNOWNS
+
+- **[PROJECT EVIDENCE]** The intended review subject for “Perform.”
+- **[PROJECT EVIDENCE]** Actual Flyway history, including whether V109 is applied.
+- **[PROJECT EVIDENCE]** The effective configuration and deployment identity behind local logs.
+- **[AGENT INFERENCE]** Frequency and financial impact of the identified Replay divergences require controlled, non-Production validation.
+
+VERDICT: INSUFFICIENT_EVIDENCE

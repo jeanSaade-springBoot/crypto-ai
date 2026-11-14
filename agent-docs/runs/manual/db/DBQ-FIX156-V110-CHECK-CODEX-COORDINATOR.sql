@@ -1,0 +1,1 @@
+SELECT installed_rank, version, description, success FROM flyway_schema_history WHERE version='110' ORDER BY installed_rank

@@ -1,0 +1,1 @@
+SELECT id, signal_id, symbol, execution_reason, executed_at, execution_price_observed_at, execution_message FROM crypto_ai.wallet_trade WHERE signal_id IN (156723, 171589, 176710) AND side = 'BUY' ORDER BY id LIMIT 5;

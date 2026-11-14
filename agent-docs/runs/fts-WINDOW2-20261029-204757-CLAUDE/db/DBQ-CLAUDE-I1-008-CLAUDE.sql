@@ -1,0 +1,1 @@
+SELECT p.id AS position_id, e.id, e.observed_at, e.price, e.source, e.delivery_status, e.ordering_slot, e.outcome_reason, e.created_at FROM paper_position p JOIN market_price_event e ON e.symbol = p.symbol AND e.observed_at BETWEEN p.opened_at - INTERVAL 30 SECOND AND p.closed_at + INTERVAL 10 SECOND WHERE p.id IN (143,137) ORDER BY p.id, e.observed_at, e.id LIMIT 800

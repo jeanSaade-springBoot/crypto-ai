@@ -1,0 +1,57 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The cohort remains exactly IDs **182, 172, 162, 158, 143, 137**. No substitution was made.
+- **PROJECT EVIDENCE:** The permitted `db/CODEX` folder has no query results. Entry quality for every frozen trade is therefore **unverifiable**, not “poor,” “late,” or rule-compliant.
+- **PROJECT EVIDENCE:** The current source re-scores entry quality at the fresh execution price immediately before wallet BUY. It blocks scores below 50, permits 50–69 only at a 25% cap, 70–84 at 40%, and 85+ at 50%, subject to stricter guards/caps. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:865)
+- **PROJECT EVIDENCE:** A BUY is also rejected if its fresh execution price is at/below stop or at/above target. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1150)
+- **PROJECT EVIDENCE:** The stored `paper_position.entry_price` is the fresh execution price, but it does not persist the calculated entry-quality score or its components. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:377)
+- **AGENT INFERENCE:** Reconstructing entry quality needs the entry signal, contemporaneous 1m signals/opportunity state, entry price, ATR/risk-reward inputs, and the actual runtime version. Position data alone cannot establish the score.
+- **PROJECT EVIDENCE:** There is a status contradiction: `AGENTS.md` describes FIX-154 as not implemented, while current workspace source contains its assessment service. This establishes neither deployment nor applicability to these six trades; runtime/version evidence is required.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Entry-quality score components are: expansion from a bounded rolling/opportunity reference, ATR extension, opportunity age, execution-price risk/reward, recent-rejection proximity, high-volatility regime, stop exposure, and a qualifying breakout bonus. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:935)
+- **PROJECT EVIDENCE:** Entry authority also requires structural, strategy, BTC, derivatives, liquidity, ATR, and higher-timeframe checks; entry quality is a downstream guard, not sole authority. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:2221)
+- **PROJECT EVIDENCE:** The supplied snapshot UTC `2026-10-20 15:00:04` converts to **KSA `2026-10-20 18:00:04`**, while the charter states `18:00:02 KSA`. This two-second metadata discrepancy does not change the frozen selection.
+- **EXTERNAL RESEARCH:** None.
+- **AGENT INFERENCE:** No causal finding—late chase, stale signal, weak risk/reward, quality-gate bypass, or valid loss—can be made for any selected trade yet.
+
+## UNKNOWNS
+
+For each of 182, 172, 162, 158, 143, and 137:
+
+- Symbol, linked entry signal, entry UTC timestamp/KSA conversion, and actual entry price.
+- Entry-quality score/classification, chosen reference, expansion, ATR extension, risk/reward, rejection-zone status, and opportunity age.
+- Whether the entry used direct BUY, setup wake-up, accumulated evidence, consolidation, or another route.
+- Freshness/data-quality and 5m/1h context at entry.
+- Wallet BUY proof, execution-price observation time, allocation, and whether the workspace’s current rules were the rules running then.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Obtain actual physical schema for bounded entry-quality reconstruction before selecting trade-specific fields or joins.  
+SQL:
+
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    data_type,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'execution_opportunity',
+      'signal_processing_work',
+      'buy_htf_assessment_audit'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST

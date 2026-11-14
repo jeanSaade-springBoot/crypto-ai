@@ -1,0 +1,51 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The preparation is explicitly incomplete: P01–P07 are all pending, E03–E10 are absent, and the canonical specification is still RPR-0.4 draft—not the stated RPR-0.9.11 revision. The RPR-0.9.11 source file is not present in the workspace.
+
+- **PROJECT EVIDENCE:** E01 correctly identifies major current violations: Replay reads `wallet_settings`, calls shared BUY validation, can call Binance `exchangeInfo`, writes `fix122_evaluation`, and uses wallet-shaped replay tables/state.
+
+- **PROJECT EVIDENCE:** The proposed historical fixture scope is materially incomplete for analysis parity. Current `analyzeForRegression` consumes sentiment, fundamentals, prior indicators, market context, strategy configuration, BTC context, historical order-book data, derivatives configuration, ATR/data-quality rules, and scoring configuration. The preparation names a BUY policy profile and sentiment fixture, but does not yet require a complete dated analysis-policy/configuration snapshot or a refusal classification for every missing input.
+
+- **PROJECT EVIDENCE:** The preparation’s endpoint boundary is underspecified. It names `/runs/**`, yet the same Replay controller exposes `/proven-trades`; its enrichment can read `wallet_trade`. That route must be explicitly excluded, redesigned, or brought inside the enforced boundary.
+
+- **PROJECT EVIDENCE:** The current replay signal timeline uses generated time, while FIX-156 correctly proposes E07-derived availability time. E07 remains pending, so same-boundary ordering is not implementable yet.
+
+- **AGENT INFERENCE:** “Replay only; no Production source changes” conflicts with registry items naming shared production-used classes (`ExecutionReplayScope`, `MarketPriceEventService`). The frozen contract must either define strictly Replay-owned adapters or clarify the permitted shared-source edits and prove zero Production behavioural impact.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Pending gates and missing prerequisite evidence: [FIX-156 preparation](C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:51), [completion statement](C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:249). Current canonical spec is [RPR-0.4 draft](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:1).
+
+- **PROJECT EVIDENCE:** Current Replay initializes cash, daily budget, and settings from `wallet_settings`: [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:75). Shared BUY validation reads settings: [TradeExecutionValidationService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:62).
+
+- **PROJECT EVIDENCE:** Near-TP Replay calls the Binance minimum-order policy: [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:532), which calls live `exchangeInfo`: [BinanceMinimumExecutionPolicy.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/BinanceMinimumExecutionPolicy.java:39).
+
+- **PROJECT EVIDENCE:** Replay-scoped stop evidence still writes shared `fix122_evaluation`: [StopLossEvidenceStore.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/StopLossEvidenceStore.java:48). The preparation records this as D48: [FIX-156 preparation](C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:202).
+
+- **PROJECT EVIDENCE:** Signal generation has broad as-of dependencies: [AnalysisService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:227). Strategy scoring uses runtime dynamic-strategy properties: [MarketStrategyService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/MarketStrategyService.java:24). The planned profile only explicitly calls out BUY values and two profit-lock settings: [FIX-156 preparation](C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:69).
+
+- **PROJECT EVIDENCE:** `provenTrades()` enriches output through `TradeInvestmentHistory`: [RegressionTestService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:640); that path can query `wallet_trade`: [TradeInvestmentHistory.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/inspector/service/TradeInvestmentHistory.java:100).
+
+- **PROJECT EVIDENCE:** Current price projection orders by ID but discards ID and delivery status: [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118), [PriceEvent record](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:173). R156-06 correctly identifies this required correction: [FIX-156 preparation](C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:71).
+
+## OBJECTIONS
+
+- **AGENT INFERENCE:** Do not freeze an acceptance metric before E03/E06 establishes coverage, exclusions, comparable count, lower-confidence-bound method, and the sealed acceptance cohort. Otherwise a high result can be produced by excluding difficult or unavailable cases.
+
+- **AGENT INFERENCE:** A static “table-name/repository/HTTP-client” test is useful but insufficiently specified as the sole guard. The contract needs an exact Replay reachability graph, explicit allow-list ownership, and test cases for reflective/dynamic SQL and asynchronous scope loss.
+
+- **AGENT INFERENCE:** The required Replay executor has no exact bean/configuration ownership yet. Current `RegressionTestWorker.runAsync` uses unqualified `@Async`; the future contract must name the executor, queue, rejection behaviour, scope propagation mechanism, and numerical capacity limits.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No production system, database, runtime service, or private logs were accessed.
+
+- **PROJECT EVIDENCE:** No external research was used.
+
+- **AGENT INFERENCE:** E03–E10, historical configuration availability, fixture reconstructability, resource limits, and the feasible qualified denominator remain unproven.
+
+## FINDINGS FOR JEAN
+
+- **AGENT INFERENCE:** This preparation is a useful inventory, not a freeze- or implementation-ready contract. Before authorization, freeze and supply the exact RPR-0.9.11 specification; complete E03–E10; expand the immutable/as-of configuration registry to every analysis dependency; resolve the shared-source versus Replay-only contradiction; and close all controller/output boundary routes with direct and async tests.
+
+VERDICT: REJECTED

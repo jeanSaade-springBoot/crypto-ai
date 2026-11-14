@@ -1,0 +1,2 @@
+n	avg_slip_pct	max_slip_pct	filled_below_stop
+75	0.0754	0.5587	75

@@ -1,0 +1,1 @@
+SELECT id, symbol, observed_at, price, source, source_event_id, source_sequence, source_received_at, created_at, delivery_status, ordering_slot, outcome_reason FROM crypto_ai.market_price_event WHERE symbol = 'EGLDUSDT' AND observed_at BETWEEN '2026-10-11 22:42:50' AND '2026-10-11 22:43:50' ORDER BY observed_at, id;

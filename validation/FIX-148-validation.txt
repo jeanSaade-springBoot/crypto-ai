@@ -1,0 +1,21 @@
+PASS: Java syntax parsing for five main/test files; not dependency/type checking.
+PASS: Java 17 authority-policy compile/smoke; durable activation execution not tested.
+PASS: YAML and registry JavaScript syntax.
+PASS: all existing Flyway migrations unchanged from FIX-147 bundle.
+Ten H2 regressions authored but NOT RUN. Full Java 21 Maven, Spring, MySQL concurrency/rollback, end-to-end backlog and Production/Replay/protection gates remain pending.
+
+Timestamp correction after local Maven execution
+The supplied Java 21 clean verify log ran 508 tests: 1 failure, 7 errors.
+Seven automatic-activation tests failed on a Timestamp cast of H2's
+OffsetDateTime CURRENT_TIMESTAMP result. The readiness test also reported
+CHECK_FAILED. Both activation-boundary and retirement-close conversions now
+use an explicit JDBC timestamp adapter: Timestamp, OffsetDateTime and Instant
+preserve their instant; timezone-free LocalDateTime is interpreted as UTC.
+Null/unsupported types fail closed. One additional regression verifies offset
+and microsecond preservation and invalid evidence rejection. Existing H2
+activation tests still use real CURRENT_TIMESTAMP, not a stubbed cast.
+This revision has NOT run the full Maven/H2 suite here. Re-run clean verify;
+prior test failures are recorded evidence, not proof this correction is green.
+No migration, approval policy, trading decisions or Replay rules changed.
+
+Correction checks: exact production timestamp converter source-file smoke passed on Java 17 (four supported types, microsecond/offset preservation, null/string rejection). Main/test syntax parse and registry JS syntax passed. Full project type checks/H2/Maven rerun pending.

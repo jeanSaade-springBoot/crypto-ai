@@ -1,0 +1,2 @@
+DESCRIBE crypto_ai.execution_opportunity;
+SELECT id, symbol, status, latest_signal_id, execution_source, recommended_position_percent, decision_code, LEFT(decision_explanation,900) AS expl, five_minute_decision, one_hour_decision, evidence_score, opportunity_health, executed_at, UNIX_TIMESTAMP(executed_at) AS exec_epoch FROM crypto_ai.execution_opportunity WHERE latest_signal_id IN (156723,159408,165412,167668,171589,176710) ORDER BY id LIMIT 20;

@@ -1,0 +1,1 @@
+SELECT id, symbol, side, execution_price_observed_at, UNIX_TIMESTAMP(execution_price_observed_at) AS observed_epoch_s, executed_at, UNIX_TIMESTAMP(executed_at) AS executed_epoch_s, CONVERT_TZ(executed_at, @@session.time_zone, '+00:00') AS executed_utc FROM wallet_trade WHERE id IN (195,201,205,219,231,232,245,247,257,258,259,264,265) ORDER BY id

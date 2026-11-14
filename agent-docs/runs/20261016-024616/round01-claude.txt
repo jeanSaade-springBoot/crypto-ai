@@ -1,0 +1,94 @@
+# FIX-156 Round 1 (Claude, independent): is the preparation ready to freeze?
+
+**No, it is not ready to freeze.** Its core design conflicts with your rules. I changed no code, configuration, database or git state, and did not edit the preparation file. I could not save a plan file either, because the write tool is disabled in this session, so this report is the whole output. I used no external research. Every material claim is PROJECT EVIDENCE unless it is marked as INFERENCE.
+
+## FINDINGS
+
+**F1 – The BUY decision cannot be reproduced in Replay without either changing Production code or ignoring the document's own rules.**
+- The document requires Replay-local copies of the decision rules. Rules O-1, R156-09, RET-08 and T156-05c, and your finding USR-REV-002, all say Replay must never call the shared BUY validation (`validateBuy`).
+- But Replay's BUY decision today is Production's own `ExecutionIntelligenceService.evaluateBuy`. That method calls `validateBuy`, and the wake-up path calls `validateBuyContext`.
+- So avoiding `validateBuy` means one of two things:
+  - change Production code, which is forbidden; or
+  - rewrite the whole BUY path inside Replay (`ExecutionIntelligenceService` is over 2,600 lines). INFERENCE: that copy would drift every time Production changes, which breaks your rule that Production enhancements must also reach Replay.
+- Your `wallet_settings` waiver allows the other route: reuse the shared services. The document has not been revised to say so.
+
+**F2 – Nothing in the document keeps Replay in step with future Production changes.** There is no rule that a Production fix must update Replay and add a register row. There is no test that fails the build when a Replay copy and its Production counterpart disagree.
+
+**F3 – Some registry items would require editing Production classes, and none says whether it is Replay-only or Production-loaded.**
+- R156-05 names `ExecutionReplayScope`. That class is checked by 12 Production classes, including `ExecutionIntelligenceService`, `TradeExecutionValidationService`, `EntryConsumptionPolicy` and `BtcMarketContextService`.
+- R156-06 names the price-event projection and DTO. `MarketPriceEventService` is a Production class, and its `PriceEvent` record has no `id`.
+- D50–D52 ask for "fail closed" behaviour inside `EntryConsumptionPolicy`, which is also a Production class.
+
+**F4 – The document is out of date and is not self-contained.**
+- The required specification file still holds the old RPR-0.4 draft. Its items RPR-02, RPR-03 and RPR-04 call for a Replay account profile, extracting a paper-wallet policy with Production adapters, and a multi-symbol coordinator. All three contradict your rules.
+- Section 3.3.1, rows D02–D29 and S01–S14 exist only in RPR-0.9.12, which is in your Downloads folder, not the repository.
+- §12 says no FIX-156 code has started. In fact a Replay-only foundation already exists: the `regression/replay/*` classes, migration `V110`, and two tests. The status report and `JEAN_REVIEW_FIX-156.md` both say so.
+- §12 also requires approval from both agents, but your formal review mode (JEAN_REVIEW) is active and removes that requirement.
+
+**F5 – Waiving `wallet_settings` also waives decision settings that are not about the wallet.**
+- That table holds the execution profile (`executionProfile`: CONSERVATIVE, BALANCED or AGGRESSIVE) and the new-BUY-transition switch (`requireNewBuyTransition`).
+- It also holds the dynamic-profit-lock switch and its percentages.
+- No history or audit table exists for these settings. Historical values cannot be rebuilt, so Replay will always use today's values.
+- As a result, R156-04(b), the dated policy profile, has no data source.
+
+**F6 – A run-id collision defect in the foundation.**
+- "Delete Data" resets the run-id counter for `analysis_test_run`, so ids get reused.
+- It does not purge the new `replay_*` tables, and `replay_policy_profile` uses `run_id` as its primary key.
+- Once ids are reused, a new run either fails on a duplicate key or picks up an old run's fixtures and output.
+
+**F7 – Some Replay table access is not on any allow-list.**
+- Replay reads `fix122_replay_revision`, which is not on any allow-list. That read also still drives the pre-FIX-122 selector that RET-05 is supposed to retire.
+- `ReplayAccessPolicy` checks only table names, so it cannot enforce the per-statement rules in §4.2a. This confirms your USR-REV-001.
+
+**F8 – D22 is confirmed.** Production's take-profit-extension path passes a literal `true` for the profit-lock switch. Replay passes the administration toggle instead. Production's normal profit-lock path checks the toggle first and then passes `true`, so it is equivalent there.
+
+**F9 – D56 is confirmed, and it affects decisions.** Signals regenerated in memory have no id. A missing id is treated as "not consumed", so in Replay the new-BUY-transition rule never blocks a repeat entry, while Production does block it. INFERENCE: Replay can fix this on its own side with synthetic negative keys.
+
+**F10 – Two gaps not in the register.**
+- FIX-154 (the higher-timeframe BUY check) is not in the register. Replay inherits it today only because it calls `evaluateBuy` directly. Whether regenerated signals carry the right data-quality flag (`dataQualityValid`) as of their own time is not proven.
+- When Replay runs `validateBuy`, it increments Production's FIX-154 metrics. The audit write is guarded against Replay; the metric counters are not.
+
+## EVIDENCE
+- `ShadowProductionReplayService.java`:
+  - `:79-82`, `:296-298`, `:318-321`: wallet-based sizing and daily budget
+  - `:93`: price events sorted by time only
+  - `:113-116`: reads `fix122_replay_revision`
+  - `:157`, `:202`, `:250`: `completePositionOpportunity`
+  - `:235`: `validateSell`
+  - `:270`, `:273`, `:277`, `:310-313`: Production decision services
+  - `:746`, `:781`: toggle passed to the profit-lock policy
+  - `:999-1000`: loads `wallet_settings` row 1
+- `ExecutionIntelligenceService.java`: `:435` and `:653` call validation; `:2602-2622` route through the Replay scope.
+- `TradeExecutionValidationService.java`: `:66-79` and `:100` read decision settings; `:152`; `:400-401` load settings; `:416` and `:447-450` increment metrics.
+- `EntryConsumptionPolicy.java:21-33`: null-id handling and the fall-through to `wallet_trade`.
+- `DynamicProfitLockService.java:79-81`, `:118-122`, `:256`, `:311-317`: profit-lock toggle and percentages.
+- `MarketPriceEventService.java:118-129` (`find()`) and `:173` (`PriceEvent` without `id`).
+- `ExecutionReplayScope.java:31`: the scope is per-thread (`ThreadLocal`).
+- `RegressionTestService.java`: `:360` is the `fix122_evaluation` purge; `:401-407` resets the auto-increment counters.
+- `V110__fix_156_replay_owned_tables.sql:2-3` (`run_id` primary key); `ReplayAccessPolicy.java:11-15` (table-name-only list).
+- `FINAL_CHANGE_SPECIFICATION.md:3` and `:224-228`; `JEAN_REVIEW_FIX-156.md:23`, `:67`, `:88-90`, `:103`, `:109-115`.
+- Preparation file: `:40`, `:71`, `:76`, `:152`, `:167-168`, `:429-435`.
+
+## OBJECTIONS
+1. A plan built on copies of Production rules, with no drift check, is not compatible with "mirror later Production enhancements" (F1, F2).
+2. Rules O-1, RET-01, RET-08, T156-05a, T156-05c, D47 and USR-REV-002 still treat `wallet_settings` as a hard prohibition, which contradicts your waiver.
+3. The file registry does not separate Replay-only files from Production-loaded ones (F3).
+4. The canonical specification is RPR-0.4 and conflicts with your rules (F4).
+5. The completion rule "zero unexplained critical-safety mismatches" can fail just because a setting changed since the trade, and settings history cannot be recovered (F5). The document needs an explicit outcome for that case, such as `SETTINGS_ASSUMED_CURRENT`.
+
+## UNKNOWNS
+- Whether `wallet_settings` actually changed during the planned evaluation windows.
+- Whether `dataQualityValid` on regenerated signals depends on wall-clock time.
+- Whether `analyzeForRegression` reaches other shared tables that I did not trace.
+- The real content of RPR-0.9.12 (Section 3.3.1, D02–D29, S01–S14), which is outside the repository.
+- E03–E10 evidence. I ran no tests, compilation or database queries.
+
+## FINDINGS FOR JEAN
+1. **Reuse or copy?** Should Replay reuse Production decision services (it stays in step automatically and works under your `wallet_settings` waiver) or copy them (they will drift)? I recommend reuse, which means revising O-1, R156-09, RET-08, T156-05c and USR-REV-002 bullet 6.
+2. **Settings label.** Should each run record a fingerprint of the current settings, with results labelled "current settings assumed"? That would cover the execution profile, the new-BUY-transition switch and the profit-lock switch and percentages.
+3. **`ExecutionReplayScope` and `MarketPriceEventService`.** Are they frozen Production files? If so, R156-05 and R156-06 must instead be Replay-owned queries and classes.
+4. **A rule for future fixes.** Should every future Production fix carry a "Replay impact" register row plus a contract test?
+5. **Add to the register:** FIX-154 parity, the Replay-driven metric increments, the run-id collision in Delete Data, and the `fix122_replay_revision` read.
+6. **Replace stale content.** Install the RPR-0.9.12 text in the repository, replacing RPR-0.4, and correct §12 so it reflects the existing foundation and JEAN_REVIEW mode.
+
+VERDICT: REJECTED

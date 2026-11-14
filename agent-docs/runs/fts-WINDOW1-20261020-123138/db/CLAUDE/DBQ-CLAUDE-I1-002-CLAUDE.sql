@@ -1,0 +1,4 @@
+SELECT id, symbol, status, quantity, entry_price, stop_loss, take_profit, exit_price, realized_pnl, close_reason, signal_id, exit_signal_id, opened_at, closed_at, UNIX_TIMESTAMP(opened_at) AS opened_epoch_utc, UNIX_TIMESTAMP(closed_at) AS closed_epoch_utc FROM crypto_ai.paper_position WHERE id IN (182,172,162,158,143,137) ORDER BY id;
+SELECT id, symbol, closed_at, realized_pnl FROM crypto_ai.paper_position WHERE status='CLOSED' AND closed_at IS NOT NULL AND realized_pnl < 0 ORDER BY closed_at DESC LIMIT 8;
+SELECT COUNT(*) AS positions_after_182, SUM(status='OPEN') AS open_now, MIN(opened_at) AS first_opened, MAX(opened_at) AS last_opened FROM crypto_ai.paper_position WHERE id > 182;
+SELECT id, symbol, interval_code, generated_at, UNIX_TIMESTAMP(generated_at) AS gen_epoch FROM crypto_ai.trade_signal ORDER BY id DESC LIMIT 1;

@@ -1,0 +1,52 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No permitted CODEX database result exists for this run; `db/CODEX` is absent/empty. Therefore there is no confirmed root cause for frozen trades **182, 172, 162, 158, 143, 137**.
+
+- **PROJECT EVIDENCE:** The only confirmed population fact remains the charter’s frozen selection: six negative, closed `crypto_ai.paper_position` rows at the specified snapshot. It cannot yet be independently re-proven from CODEX evidence.
+
+- **PROJECT EVIDENCE:** Current source exposes two forensic risk areas, neither attributable to a frozen trade without records:
+  - Signal-driven closes persist `paper_position` before attempting the wallet exit; wallet-exit exceptions are logged and swallowed. This is a potential paper/wallet consistency risk, not a confirmed loss cause.
+  - A protection event marked `APPLIED` proves the callback transaction committed, but can be a no-op; a loss diagnosis still requires the matching paper-position close, wallet SELL, and `production_exit_audit`.
+
+- **PROJECT EVIDENCE:** A prior documented reconnect-boundary candle-finalization gap can suppress signal generation through the zero-missing-candle quality gate. It is a plausible operational category only; no symbol/time evidence connects it to these six trades.
+
+- **EXTERNAL RESEARCH:** Binance documents Spot kline updates as UTC+0, with a boolean closure field and a 2-second update cadence for intervals other than 1 second. This supports the need to verify durable closed-candle evidence across disconnect/reconnect boundaries, but does not establish an outage or cause for any frozen trade. [Binance Spot WebSocket Market Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)
+
+## EVIDENCE
+
+- Frozen IDs retained exactly: `182, 172, 162, 158, 143, 137`.
+- Snapshot: `2026-11-01 08:17:41 UTC` / `2026-11-01 11:17:36 KSA`; intended 18:00 KSA window clock was not preserved.
+- Current route evidence: `PaperTradingService.java:458-532`, `LivePositionProtectionService.java:53-72, 391-411`, and `MarketPriceEventService.java:43-115`.
+- No trade-specific UTC timestamps were obtained, so no trade-specific KSA conversions are asserted.
+
+## UNKNOWNS
+
+- Each trade’s symbol, entry/exit time, entry/exit signal, close reason, P&L components, and exit route.
+- Whether any loss was a valid stop/strategy result, stale-data outcome, delayed execution, protection failure, or paper/wallet inconsistency.
+- Whether accepted price-event evidence, production exit audit, wallet execution, and position record reconcile.
+- Historical runtime version/configuration and any relevant archived logs.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Establish actual `paper_position` schema, retrieve only the six frozen records, and compare the current qualifying selection with the frozen snapshot population. All returned timestamps must be treated as UTC.
+
+SQL:
+```sql
+SHOW CREATE TABLE paper_position;
+
+SELECT *
+FROM paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+
+SELECT id, status, closed_at, realized_pnl
+FROM paper_position
+WHERE status = 'CLOSED'
+  AND closed_at IS NOT NULL
+  AND realized_pnl < 0
+ORDER BY closed_at DESC
+LIMIT 6;
+```
+
+### END_DB_REQUEST

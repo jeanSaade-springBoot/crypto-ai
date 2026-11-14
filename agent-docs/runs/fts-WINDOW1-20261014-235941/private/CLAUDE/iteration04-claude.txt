@@ -1,0 +1,243 @@
+# Claude: Failed-Trade Study, WINDOW1, Iteration 4 (code and trade route, self-review)
+
+I traced all six trades through the code and found three defects:
+
+1. **Trade 143 entered on outdated 5m evidence.** At 5-minute boundaries, Production's 1m entry checks almost always run before the 5m signal is saved, so they read the 5m signal from 5 minutes earlier.
+2. **Replay cannot reproduce that.** Replay's ordering gives the 1m decision the 5m signal that just closed.
+3. **The rule meant to stop a closed position's evidence opening a new one doesn't cover one entry route.** That route (SETUP_TIMEFRAME_ATR) is how 143 re-entered 20 s after a previous exit.
+
+The other five trades followed the rules as written. Several of them entered with weak higher-timeframe confirmation.
+
+This was analysis only. I made no code, config, database, git or doc changes, and I did not write the plan file (there is no Write tool in this session).
+
+**Read this iteration:**
+- **Required docs:** AGENTS.md, AGREED_KNOWLEDGE.md (no entries), DECISIONS.md (only checked its size; not read in full) and the time-zone section of DATABASE_INVESTIGATION_RULES.md. I searched claude-docs/ for these routes and found nothing on them.
+- **Run files:** CHARTER.md, my iteration-3 output and my iteration-4 prompt.
+- **DB results:** I1-002, I1-006, I1-008, I2-003, and I3-001/002/003/004/006/008.
+
+**Not read:** the `private/CODEX` and `db/CODEX` folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log and PROGRESS.log.
+
+**Requested queries that were never run:** I3-005 has a SQL file but no result. I3-007 has no file at all.
+
+**Logs:** none examined. The files are gzipped and this session cannot decompress them.
+
+---
+
+## Time convention (CONFIRMED, PROJECT EVIDENCE)
+
+The wrapper returns `TIMESTAMP` columns in KSA, not UTC (DBQ-CLAUDE-I3-001):
+- The session time zone is `SYSTEM` = Arab Standard Time, offset +180 min.
+- Wallet 358 `execution_price_observed_at` shows as `2026-10-11 22:40:01.028`. Its epoch is `1791747601.028`, which is 2026-10-11T19:40:01.028Z.
+
+So MySQL stores UTC, but this wrapper displays KSA. That contradicts both `DATABASE_INVESTIGATION_RULES.md:35` and this task's "DB timestamps are UTC". I am reporting the contradiction rather than silently accepting the rule. Below, "KSA" means a wrapper-displayed `TIMESTAMP` value and "UTC" means that value minus 3 h.
+
+**New caution (AGENT INFERENCE):** some columns are `DATETIME(6)`, not `TIMESTAMP` (`btc_context_evaluated_at`, `btc_signal_generated_at`; I1-002). MySQL does not convert `DATETIME` for the session zone. Given the app writes with `time_zone='+00:00'`, those columns probably display UTC while the `TIMESTAMP` columns beside them display KSA. Neither agent should compare the two kinds directly without converting.
+
+---
+
+## FINDINGS
+
+### F4-1 Entry and exit route for each trade [PROJECT EVIDENCE: I1-006, I2-003, I3-004, I3-008 + code]
+
+| Pos | Entry route → validation code | Size calculation | Code path | Exit route | Outcome after the exit (I3-008) |
+|---|---|---|---|---|---|
+| 137 EGLD | IMMEDIATE_VALIDATION → `BALANCED_NEUTRAL_5M_WATCH_1H` (FIX-11G). 5m NEUTRAL, 1h WATCH, Entry Quality (EQ) 58 | 25% × ATR 100% = 25 | `EIS:652-710` → `TEVS:263-284` | SELL_CONFIRMED, live path | SL hit later; the exit saved money (F3-7) |
+| 143 EGLD | SETUP_TIMEFRAME_ATR. Used the old 5m BUY (159285) while the 1m was ATR-extended | min(30, 100) = 30 → EQ 60 caps at 25 → × 1m ATR% = 25 | `EIS:628-641, 1472-1514` | PROFIT_LOCK_HARD_EXIT (`LPPS:210-216`) | Covered in F3-4 |
+| 158 XRP | SETUP_CONFIRMATION_WAKEUP, triggered by 5m 165415. Executed on 1m 165412, which was 21 ms older. Authority `BALANCED_STRONG` | min(25, 75) = 25 | `EIS:397-457` | SELL_CONFIRMED at 03:30:04 KSA | TP reached at the 03:41 KSA candle, SL at 04:30, so **TP came first: the exit was premature** |
+| 162 DOGE | ACCUMULATED_EVIDENCE: 1 BUY + 9 WATCH, 5m WATCH, 1h WATCH → `BALANCED_EARLY`. EQ 50 = LATE_ENTRY | 50 → cap 25 → × 1m ATR 60% = **15** | `EIS:777-785`, `TEVS:128-163, 314-316` | SIGNAL_SELL, filled at the signal's own price | SL reached at the 04:29 KSA candle, 3 min after exit. **The exit saved money** |
+| 172 SHIB | IMMEDIATE_VALIDATION → `BALANCED_STRONG` (5m bullish, 1h NEUTRAL) | 75 → EQ 60 caps at 25 → × 100 = 25 | `EIS:652-710`, `TEVS:306-308` | HTF_SELL_CONFIRMED (`PositionExitPolicy:25-33`) | TP at 07:37 KSA, no SL within 240 min. **Premature** |
+| 182 ACE | IMMEDIATE_VALIDATION → FIX-11G (5m NEUTRAL, 1h WATCH). EQ **50, exactly the minimum** | 25 × 1m ATR 60% = **15** | as for 137 | SELL_CONFIRMED | TP at the 10:37 KSA candle (high 0.1892 ≥ 0.18885), no SL. **Premature.** This resolves U-ACE |
+
+`EIS` = `ExecutionIntelligenceService.java`, `TEVS` = `TradeExecutionValidationService.java`, `LPPS` = `LivePositionProtectionService.java`.
+
+**F2-7 (sizing) is closed: not a defect.** The wallet % is `atrRecommendedPositionPercent(1m) × decision%` (`PaperTradingService.java:328-333, 358-360`). That explains the 15% fills for 162 and 182. The "100%" in 143's message is the 5m ATR permission, not the size actually used.
+
+**Pattern (AGENT INFERENCE):** four of six entries had no bullish 5m or 1h confirmation at the true decision moment:
+- 137 and 182: FIX-11G (5m NEUTRAL, 1h WATCH).
+- 162: `BALANCED_EARLY` (WATCH/WATCH).
+- 143: the same-cycle 5m was WATCH and 1h was NEUTRAL.
+
+Two entries (162, 182) sat exactly on the EQ = 50 minimum. The aggregate check is DBQ-CLAUDE-I4-005.
+
+### F4-2 At 5m boundaries the 1m entry decision usually reads the previous 5m signal — CONFIRMED [PROJECT EVIDENCE: I3-002, I3-003, code]
+
+**Mechanism:**
+- Production stamps `generatedAt = Instant.now()` when analysis finishes (`AnalysisService.java:150, 550`).
+- Every entry-side higher-timeframe lookup is `generated_at <= 1m.generated_at`: `EIS:2455-2461`, `TEVS:81, 133, 376-378`, and the FIX-154 assessment inputs at `TEVS:93, 145`.
+- Nothing ties the lookup to the 5m candle that closed at the same instant.
+
+**Scale (I3-002):** in 10,028 boundary pairs (10-11 00:00 to 10-12 18:00 KSA), the 5m signal was generated after the 1m in **8,614 (85.9%)**. The average lag was 385 ms and the maximum 10.2 s.
+
+**Boundary load (I3-003):** at 5m boundaries the 1m close-to-signal latency averages **5.50 s**, against 1.72 s otherwise. Analysis is visibly queued at boundaries (AGENT INFERENCE on cause).
+
+**Effect:**
+- The 5m signal for the candle that just closed stays invisible to that minute's 1m decision.
+- The 5m arrives about 0.4 s later and re-runs only the wake-up paths (`PaperTradingService.java:298-305`).
+- **A 5m that flips BUY → WATCH cannot undo a 1m entry already made on the stale BUY.**
+
+### F4-3 Trade 143 is a confirmed rule violation; the system's own management path saw the correct 5m 38 s later [PROJECT EVIDENCE: I1-008, I2-003, I3-004]
+
+- **The route requires a bullish 5m with immediate entry allowed** (`EIS:1486-1487`).
+  - The 5m candle that closed with the entry candle produced signal 159407: **WATCH, immediate entry not allowed**.
+  - It was generated 2.0 ms after the 1m (I3-004).
+  - So the route must have used 159285 (the BUY from the 19:30–19:35 UTC candle).
+- **Management saw the correct 5m.** Position-management event 51 at 22:40:41.050 KSA (19:40:41 UTC) records "Continuation PASS … **5m=WATCH**, 1h=NEUTRAL".
+  - Live protection reads the newest rows with no as-of bound (`LPPS:95-97`), so it saw 159407.
+  - **Entry and management therefore judged the same position on different 5m evidence 38 s apart.**
+- **Other SETUP_TIMEFRAME_ATR boundary entries in I3-004 where the same-cycle 5m was WATCH but the 5m was saved after the 1m:**
+
+  | Wallet | Symbol | P&L (USDT) |
+  |---|---|---|
+  | 119 | ENA | +0.041 |
+  | 255 | ONG | +0.032 |
+  | 358 | EGLD (trade 143) | −0.037 |
+
+  By the code, each of these would have returned null under same-cycle evidence. **The P&L effect is mixed (net +0.036)**: this defect is about evidence correctness, not a proven loss driver. Wider scope is DBQ-CLAUDE-I4-001.
+
+### F4-4 Replay cannot reproduce the trade-143 entry — CONFIRMED by code; the Replay run itself is not done [PROJECT EVIDENCE]
+
+- **How Replay orders signals:**
+  - It stamps every signal `generatedAt = candle close time` (`RegressionTestWorker.java:584, 612-616` and `AnalysisService.java:190`).
+  - It sorts ties as 1h → 5m → 1m (`RegressionTestWorker.java:557-560, 787-793`).
+  - It includes ties (`ExecutionReplayScope.java:112`, `!isAfter(ref)`).
+- **Consequence:** in Replay the 1m decision **always** sees the same-cycle 5m; in Production it does in about 14% of boundary cases. Replay would have seen 159407 = WATCH and, by the code, not entered 143 through SETUP_TIMEFRAME_ATR.
+- **Classification:** a **Production/Replay parity defect** for every boundary entry. Under AGENTS.md, Replay must not claim parity here.
+- **Not verified:** an actual Replay run for 10-11 19:35–19:45 UTC.
+
+### F4-5 Trade 143 re-entered on evidence from before the previous position's exit [PROJECT EVIDENCE + AGENT INFERENCE on intent]
+
+- **Sequence:** wallet 357 closed EGLD position 171 (PROFIT_LOCK_EXIT at 3.996) at 22:39:41 KSA (19:39:41 UTC). 20 s later, wallet 358 re-bought at 4.033 (+0.93%), and the 1m signal itself was ATR-extended.
+- **Evidence used:** the 5m authority, 159285, was generated at about 22:35:01.55 KSA, before that exit.
+- **What FIX-020 says:** "pre-exit evidence may never finance a brand-new position" (`EIS:812-839`). But it only marks the opportunity row COMPLETED. `setupTimeframeAtrAuthoritySignal` (`EIS:1472-1492`) reads `trade_signal` directly and never checks the exit boundary.
+- **Classification:** a probable gap in FIX-020's coverage. Whether FIX-020 was meant to cover higher-timeframe authority signals is unconfirmed (no design doc read).
+
+### F4-6 Exit mechanics [PROJECT EVIDENCE: code + I1-006]
+
+- **Live exits** (137, 158, 172, 182) happen on a **price update**, using the newest 1m/5m/1h rows (`LPPS:75-97, 235-243`). They close at the observed price.
+  - That explains F3-5's 1.3–39.6 s delays: the exit fires on the first applied price update after the last required signal is saved.
+  - Thin or large-tick symbols update less often (I3-006: 15 of 60 EGLD gaps were ≥ 5 s).
+- **The signal-linked exit** (162, SIGNAL_SELL) fills at `signal.getLatestPrice()` (`WalletAutoExecutionService.java:230`), not a fresh execution price. There was no cost here (1.34 s), but this path has no price-freshness check. That is a latent mismatch with FIX-056 and the AGENTS.md freshness direction.
+- **Exits are judged against a different snapshot than entries:**
+
+  | | Entries | Exits |
+  |---|---|---|
+  | Lookup | "as of" the 1m `generated_at` | newest row |
+  | Result | stale at boundaries | current |
+
+  So the system can enter on an old BUY that an exit check reading the current 5m would already treat as WATCH.
+- **The exits followed the policy.** In hindsight, 158, 172 and 182 sold 11–32 min before TP was reached. That is a design trade-off, not a defect: SELL_CONFIRMED and HTF_SELL fire on a 1m/5m SELL or 1h SELL with the 5m not supportive, with no "minimum loss" or confirmation requirement.
+
+### F4-7 Paper P&L includes no fees [PROJECT EVIDENCE + EXTERNAL]
+
+- `fee_usdt = 0` on every BUY and SELL (I1-006; also `WalletAutoExecutionService.java:173, 260`).
+- Binance spot's base fee is 0.1% per side [EXTERNAL RESEARCH: prior knowledge, not re-fetched this iteration].
+- Adding about 0.2% per round trip would roughly double these six losses (−0.13% to −0.34%). It would likely turn many small "wins" negative, for example the 0.007–0.05 USDT profit-lock exits in I3-004.
+- AGENT INFERENCE: the measured edge is overstated. DBQ-CLAUDE-I4-005 estimates by how much.
+
+### F4-8 FIX-154 code is in the working tree, which conflicts with AGENTS.md [PROJECT EVIDENCE]
+
+- AGENTS.md says FIX-154 is "not-yet-implemented". But `TEVS:54-60, 93-98, 145-150` call `HigherTimeframeBuyAssessmentService`, `BuyHtfAssessmentAuditStore` (which writes `buy_htf_assessment_audit`) and `Fix154Metrics`, and `trade_signal.data_quality_valid` exists (I1-002).
+- Git status shows these files as uncommitted modifications.
+- It is unknown whether the build running on 10-11/12 contained them (U-7). DBQ-CLAUDE-I4-004 checks this.
+- I am reporting this, not resolving it.
+
+---
+
+## Per-trade classification (iteration 4)
+
+| Pos | Classification |
+|---|---|
+| 137 | **Valid loss.** Weak but permitted FIX-11G entry; it correctly saw the same-cycle NEUTRAL 5m (5m saved 17.6 ms before the 1m). The exit followed the rules and avoided a later SL hit. |
+| 143 | **Logic defect** (F4-3 stale 5m authority, plus F4-5 pre-exit evidence) and a **parity defect** (F4-4). Then a design trade-off (TP extended) and a market gap (F3-4). |
+| 158 | **Valid per rules.** The wake-up route used same-cycle evidence correctly. The exit was premature in hindsight. |
+| 162 | **Valid per rules.** Entry was LATE_ENTRY at the EQ minimum with only WATCH/WATCH higher-timeframe support (design weakness). The exit saved money. It filled at the signal price (latent issue, F4-6). |
+| 172 | **Valid per rules.** The 1-tick SHIB loss is dominated by tick size. The exit was premature. |
+| 182 | **Valid per rules.** Weak FIX-11G entry at the EQ minimum. The exit was premature. |
+
+## EVIDENCE
+
+- **DB:** I1-002, I1-006, I1-008, I2-003, I3-001, I3-002, I3-003, I3-004, I3-006, I3-008.
+- **Code:**
+  - `ExecutionIntelligenceService.java:66-71, 104, 397-457, 466-786, 812-839, 1171-1223, 1472-1514, 2455-2461`
+  - `TradeExecutionValidationService.java:42-43, 62-163, 165-191, 218-321, 367-386`
+  - `PaperTradingService.java:292-389`
+  - `WalletAutoExecutionService.java:79-195, 197-264`
+  - `WalletExecutionSizingPolicy.java:17-37`
+  - `LivePositionProtectionService.java:75-249`
+  - `PositionExitPolicy.java:20-93`
+  - `AnalysisService.java:150, 183-196, 550`
+  - `RegressionTestWorker.java:550-620, 787-793`
+  - `ExecutionReplayScope.java:99-120`
+  - `ShadowProductionReplayService.java:479-514`
+
+## UNKNOWNS
+
+- **U-7:** the deployed build on 10-11/12, including whether FIX-154 was present (I4-004).
+- **U-8:** no log evidence (gz files).
+- **U-10:** narrowed. Code shows Replay will diverge at boundaries; an actual Replay run is not done.
+- **U-14:** the system-wide decision-mismatch rate and P&L effect of F4-2 (I4-001).
+- **U-15:** whether price-update gaps are change-only filtering or dropped updates (I3-005 never ran).
+- **U-18:** whether FIX-020 was meant to cover higher-timeframe authority signals (F4-5).
+- **U-19:** which 5m and 1h signals 162's SIGNAL_SELL and each live exit actually read (I4-003).
+- **U-20:** the net P&L of FIX-11G / `BALANCED_EARLY` entries after an estimated fee (I4-005).
+
+---
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: F4-2/F4-3 scope. For every 5m-boundary BUY not triggered by a wake-up, compare the 5m signal the code would have used (latest generated_at <= 1m generated_at) with the 5m signal for the same close, and show the outcome.
+SQL:
+SELECT w.id AS wallet_id, w.execution_reason, s.id AS one_id, s.symbol, s.candle_open_time, s.generated_at AS one_gen, (SELECT u.id FROM trade_signal u WHERE u.symbol = s.symbol AND u.interval_code = '5m' AND u.generated_at <= s.generated_at ORDER BY u.generated_at DESC LIMIT 1) AS used5_id, (SELECT u.decision FROM trade_signal u WHERE u.symbol = s.symbol AND u.interval_code = '5m' AND u.generated_at <= s.generated_at ORDER BY u.generated_at DESC LIMIT 1) AS used5_decision, f.id AS same5_id, f.decision AS same5_decision, f.atr_immediate_entry_allowed AS same5_imm, p.realized_pnl, p.close_reason FROM wallet_trade w JOIN trade_signal s ON s.id = w.signal_id LEFT JOIN trade_signal f ON f.symbol = s.symbol AND f.interval_code = '5m' AND f.candle_open_time = s.candle_open_time - INTERVAL 4 MINUTE LEFT JOIN paper_position p ON p.signal_id = w.signal_id WHERE w.side = 'BUY' AND s.interval_code = '1m' AND MOD(MINUTE(s.candle_open_time)+1,5) = 0 AND w.execution_reason <> 'SETUP_CONFIRMATION_WAKEUP' ORDER BY w.id LIMIT 200
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: The evidence each frozen entry could see. Shows the 1m entry signal plus the 5m/1h the code would have used (as of 1m generated_at), with quality and BTC fields. 165415 is 158's wake-up trigger.
+SQL:
+SELECT s.id, s.symbol, s.interval_code, s.candle_open_time, s.generated_at, s.created_at, s.decision, s.original_decision, s.confidence_score, s.final_entry_allowed, s.atr_immediate_entry_allowed, s.atr_recommended_position_percent, s.btc_context_status, s.risk_reward_ratio, s.data_quality_valid, s.signal_mode, f.id AS f_id, f.decision AS f_dec, f.candle_open_time AS f_open, f.generated_at AS f_gen, f.final_entry_allowed AS f_final, f.atr_immediate_entry_allowed AS f_imm, h.id AS h_id, h.decision AS h_dec, h.candle_open_time AS h_open, h.generated_at AS h_gen FROM trade_signal s LEFT JOIN trade_signal f ON f.id = (SELECT u.id FROM trade_signal u WHERE u.symbol = s.symbol AND u.interval_code = '5m' AND u.generated_at <= s.generated_at ORDER BY u.generated_at DESC LIMIT 1) LEFT JOIN trade_signal h ON h.id = (SELECT u.id FROM trade_signal u WHERE u.symbol = s.symbol AND u.interval_code = '1h' AND u.generated_at <= s.generated_at ORDER BY u.generated_at DESC LIMIT 1) WHERE s.id IN (156723, 159408, 165412, 165415, 167668, 171589, 176710) ORDER BY s.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: F4-6 / U-19. For each exit, the newest 1m/5m/1h signals saved before the SELL, and the last price update before it. Tests whether the exit fired on the first update after the last required signal.
+SQL:
+SELECT w.id, w.symbol, w.execution_reason, w.executed_at, (SELECT CONCAT(u.id,'|',u.decision,'|',u.generated_at,'|',u.created_at) FROM trade_signal u WHERE u.symbol = w.symbol AND u.interval_code = '1m' AND u.created_at <= w.executed_at ORDER BY u.generated_at DESC LIMIT 1) AS one_m, (SELECT CONCAT(u.id,'|',u.decision,'|',u.generated_at,'|',u.created_at) FROM trade_signal u WHERE u.symbol = w.symbol AND u.interval_code = '5m' AND u.created_at <= w.executed_at ORDER BY u.generated_at DESC LIMIT 1) AS five_m, (SELECT CONCAT(u.id,'|',u.decision,'|',u.generated_at,'|',u.created_at) FROM trade_signal u WHERE u.symbol = w.symbol AND u.interval_code = '1h' AND u.created_at <= w.executed_at ORDER BY u.generated_at DESC LIMIT 1) AS one_h, (SELECT CONCAT(m.id,'|',m.observed_at,'|',m.created_at,'|',m.price,'|',m.delivery_status) FROM market_price_event m WHERE m.symbol = w.symbol AND m.created_at <= w.executed_at ORDER BY m.created_at DESC LIMIT 1) AS last_tick, (SELECT COUNT(*) FROM market_price_event m WHERE m.symbol = w.symbol AND m.observed_at BETWEEN w.executed_at - INTERVAL 60 SECOND AND w.executed_at) AS ticks_prev_60s FROM wallet_trade w WHERE w.id IN (346, 401, 407, 429, 454) ORDER BY w.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: U-7 / F4-8. What was deployed on 10-11/12: latest Flyway versions, existence of the FIX-154 audit and opportunity tables, and when data_quality_valid first appears on signals.
+SQL:
+SELECT installed_rank, version, description, installed_on, success FROM flyway_schema_history ORDER BY installed_rank DESC LIMIT 15;
+SELECT table_name, create_time FROM information_schema.tables WHERE table_schema = DATABASE() AND (table_name LIKE 'buy_htf%' OR table_name LIKE '%opportunit%');
+SELECT MIN(generated_at) AS first_dqv_signal, COUNT(*) AS n_dqv FROM trade_signal WHERE data_quality_valid IS NOT NULL
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-005
+Purpose: F4-1 pattern and F4-7 fees. Closed-position P&L by entry route and validation profile, raw and with an estimated 0.2% round-trip fee.
+SQL:
+SELECT w.execution_reason, CASE WHEN LOCATE('BALANCED_NEUTRAL_5M_WATCH_1H', w.execution_message) > 0 THEN 'FIX11G' WHEN LOCATE('BALANCED_NEUTRAL_5M:', w.execution_message) > 0 THEN 'NEUTRAL_5M' WHEN LOCATE('approved 100%', w.execution_message) > 0 THEN 'BAL_FULL' WHEN LOCATE('approved 75%', w.execution_message) > 0 OR LOCATE('BALANCED_STRONG', w.execution_message) > 0 THEN 'BAL_STRONG' WHEN LOCATE('BALANCED_EARLY', w.execution_message) > 0 OR LOCATE('approved 50%', w.execution_message) > 0 THEN 'BAL_EARLY' ELSE 'OTHER' END AS profile, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losses, SUM(p.realized_pnl >= 0) AS wins, ROUND(SUM(p.realized_pnl), 4) AS net_raw, ROUND(SUM(p.realized_pnl - 0.002 * w.gross_amount_usdt), 4) AS net_after_est_fee, SUM(p.realized_pnl - 0.002 * w.gross_amount_usdt < 0) AS losses_after_fee FROM wallet_trade w JOIN paper_position p ON p.signal_id = w.signal_id WHERE w.side = 'BUY' AND p.status = 'CLOSED' GROUP BY w.execution_reason, profile ORDER BY net_raw
+### END_DB_REQUEST
+
+---
+
+## Iteration 4 self-review
+
+- **Confirmed:**
+  - F4-2: the systematic mechanism and its scale.
+  - F4-3: trade 143's rule violation, with in-system contradictory evidence (management event 51).
+  - F4-4: the Replay divergence, by code.
+  - F4-6: exit mechanics.
+  - F4-7: zero fees.
+- **New issues:** F4-5 (gap in FIX-020 coverage) and F4-8 (FIX-154 code present despite AGENTS.md).
+- **Closed:** F2-7 sizing (not a defect) and the ACE outcome conflict (TP was reached).
+- **Corrected from iteration 3:**
+  - The 158 outcome is now known: TP came first, so its exit was premature, not "unknown".
+  - The F3-5 mechanism is now traced in code instead of inferred.
+- **Limits:**
+  - No logs.
+  - No Replay run.
+  - F4-5's design intent is unconfirmed.
+  - F4-3's P&L impact is mixed, so I don't claim the boundary defect caused the losses overall.
+- **Docs:** none written. This task is analysis-only and plan mode was active. INVESTIGATION_LOG updates are deferred to the Coordinator's comparison and consensus stage.

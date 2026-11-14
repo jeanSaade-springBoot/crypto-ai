@@ -1,0 +1,23 @@
+exit_code=0
+duration_ms=129
+row_count=15
+--- stdout ---
+COLUMN_NAME	DATA_TYPE
+signal_id	bigint
+symbol	varchar
+interval_code	varchar
+candle_open_time	timestamp
+origin	varchar
+status	varchar
+attempts	int
+owner_token	varchar
+next_attempt_at	timestamp
+updated_at	timestamp
+completed_at	timestamp
+paper_position_id	bigint
+failure_stage	varchar
+error_message	mediumtext
+source_event_id	bigint
+
+--- stderr ---
+

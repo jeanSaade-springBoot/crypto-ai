@@ -1,0 +1,81 @@
+## FINDINGS — Iteration 7 self-challenge
+
+- **PROJECT EVIDENCE:** The frozen scope remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutes were used.
+
+- **PROJECT EVIDENCE:** `agent-docs/runs/fts-WINDOW1-20261016-124815/db/CODEX/` currently contains **zero files**. There is no Codex-scoped executed schema, position, signal, ledger, audit, or price-event result.
+
+- **AGENT INFERENCE:** The frozen selection is a charter fact, but cannot be independently re-proven from a live query now. The actual snapshot was **2026-10-16 09:48:32 UTC** / **2026-10-16 12:48:15 KSA**; the intended 10:00 KSA clock was not preserved. A current query—even one constrained by `closed_at <=` snapshot time—cannot establish the row state or ordering as it existed at snapshot time.
+
+- **PROJECT EVIDENCE:** Current source closes a live-price position only after `executeMechanicalExit(...)` succeeds, then writes `paper_position` and `production_exit_audit`. Conversely, the signal close path persists the paper close before attempting a wallet exit and catches wallet exceptions. Therefore a closed paper position alone is not universal proof of a committed wallet exit; the required proof is route-specific ledger and audit evidence. Current source is not proof of the historical deployed version.
+
+- **PROJECT EVIDENCE:** Current `PaperPosition` close calculations use `(exitPrice - entryPrice) × quantity`, preserving prior partial realized P&L; the shown close methods do not subtract fees. Thus `realized_pnl < 0` proves only a negative stored paper-position value once the row is obtained—not a reconciled net loss after wallet fees or partial-exit accounting.
+
+- **PROJECT EVIDENCE:** `APPLIED` on a direct `market_price_event` means the protection callback transaction committed, including successful no-position callbacks. It does not prove an exit. A trade-specific stop/protection conclusion still requires the linked managed-position, wallet trade, exit audit, and accepted event evidence.
+
+- **PROJECT EVIDENCE:** Current source maps `production_exit_audit.paper_position_id` as unique, so the current model permits at most one audit row per paper position. Prior broad audit queries should be interpreted as finding zero-or-one audit, not a chronological sequence. Physical schema and historical deployment remain unverified.
+
+- **EXTERNAL RESEARCH:** None in this iteration.
+
+## EVIDENCE
+
+- [CHARTER.md](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/fts-WINDOW1-20261016-124815/CHARTER.md)
+- [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:10)
+- [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:165)
+- [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487)
+- [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:82)
+- [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:29)
+
+## UNKNOWNS
+
+For each frozen trade, the authoritative row, symbol, lifecycle timestamps, entry/exit geometry, close reason, entry/exit signals, actual close route, managed-position and wallet linkage, fees, accepted protection observation, and deployed configuration/version remain unverified.
+
+No individual loss can be classified as valid, strategy-related, stale-data-related, protection-related, or accounting-related from the available evidence.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Schema-first retrieval for exactly the frozen positions, plus a diagnostic comparison to the declared snapshot cutoff. The cutoff result must not be represented as proof of the historical snapshot state. All returned timestamps are UTC; report KSA only as UTC +03:00.
+
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key
+FROM information_schema.columns c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'production_exit_audit',
+      'wallet_managed_position',
+      'wallet_trade',
+      'market_price_event',
+      'trade_signal',
+      'signal_processing_work',
+      'position_analysis'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+
+SELECT p.*
+FROM crypto_ai.paper_position p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+
+SELECT
+    p.id,
+    p.status,
+    p.closed_at,
+    p.realized_pnl
+FROM crypto_ai.paper_position p
+WHERE p.status = 'CLOSED'
+  AND p.closed_at IS NOT NULL
+  AND p.realized_pnl < 0
+  AND p.closed_at <= '2026-10-16 09:48:32'
+ORDER BY p.closed_at DESC
+LIMIT 6;
+```
+
+### END_DB_REQUEST

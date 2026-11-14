@@ -94,7 +94,9 @@ public class SignalProcessingCoordinator {
                     if(!work.symbol().equals(signal.getSymbol()) || !work.interval().equals(signal.getInterval())
                             || !work.candleOpenTime().equals(signal.getCandleOpenTime()))
                         throw new IllegalStateException("FIX-127 signal lineage changed");
-                    if((background || work.attempts()>1) && !freshness.eligible(work,Instant.now()))throw new Expired();
+                    // FIX-153: every claimed attempt, including the first direct
+                    // attempt regardless of origin, is checked after normal locks.
+                    if(!freshness.eligible(work))throw new Expired();
                     Optional<PaperPosition> outcome=business.apply(signal);
                     store.complete(work,outcome.map(PaperPosition::getId).orElse(null));
                     return outcome;
@@ -103,7 +105,9 @@ public class SignalProcessingCoordinator {
                         signalId,work.symbol(),work.interval(),work.attempts());
                 return result;
             } catch(Expired ex) {
-                store.finishWithoutBusiness(work,"EXPIRED","FRESHNESS","Exact candle is no longer latest and fresh for recovery");
+                // Only exact RUNNING ownership can expire this attempt, after business TX rolled back.
+                if(store.finishWithoutBusiness(work,"EXPIRED","FRESHNESS","Exact candle is no longer latest and fresh")!=1)
+                    throw new IllegalStateException("FIX-153 expiry ownership unconfirmed: signal="+signalId);
                 log.warn("[FIX-127][EXPIRED] signalId={}, symbol={}, attempt={}",signalId,work.symbol(),work.attempts());
                 return Optional.empty();
             } catch(RuntimeException ex) {

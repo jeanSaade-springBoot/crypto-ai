@@ -1,0 +1,112 @@
+Trade signal latency audit - 2026-10-03 (Asia/Riyadh)
+
+Scope
+Inspected the local crypto_ai schema on localhost:3307, TradeSignalRepository,
+its callers, direct JDBC reads, existing Flyway indexes, and actual SELECT plans.
+No production table, index, server setting, or application source was changed.
+Only session timezone and SELECT execution limits were set during diagnostics.
+No new model or trading decision behavior was introduced.
+
+Database evidence
+MySQL 8.0.41. Actual trade_signal count: 4,940 across eight symbols.
+Allocated table data: 105.6 MiB; indexes: 1.2 MiB (InnoDB allocation, not payload).
+InnoDB buffer pool: 128 MiB shared by all tables. candle uses another 45.6 MiB
+of data plus indexes. This makes cache pressure plausible, not proven.
+Average combined seven JSON/text fields: 7,416 bytes; maximum: 13,096 bytes.
+Estimated row count: 2,669. Optimizer estimates are materially below actual count;
+statistics refresh may help plan selection but does not replace missing indexes.
+Latest recorded generated_at: 2026-09-27 19:26:00.289747 UTC. This local snapshot
+is not a representative measurement of an active October 3 production workload.
+fix129_stage_timing contains no samples. Available application statement digests
+were sparse: 41 inserts averaged 0.976 ms, with maximum 2.233 ms; 56 candle-ID
+existence checks averaged 0.535 ms, with maximum 15.446 ms. These observations do
+not establish production p95/p99 or complete evaluation/HTTP latency.
+
+Observed SELECT plans (EXPLAIN ANALYZE, server iterator timing)
+1. Previous 20 BTCUSDT/1m signals: scans 320 global generated_at index entries
+   to return 20. Initial sample 452 ms; UTC repeated full-row samples 11.7, 7.19,
+   9.08 ms. Scalar samples 0.764, 3.98, 0.717 ms. Cache/order affects comparisons;
+   these are separate SQL executions, not a controlled speedup benchmark.
+2. Actionable BTCUSDT/1m dashboard: 490 entries examined for 50 rows, 34.3 ms.
+3. Blocked BUY BTCUSDT full-history window (July 30 through September 28):
+   scans all 4,940 rows through a generated_at index, returns four, 1,210 ms.
+   Its UPPER(symbol) predicate prevents ordinary symbol index matching. This is
+   a long historical window, not the default three-hour UI request.
+4. Symbol generated-time history over the same long window: 1,502 rows returned,
+   explicit sort, approximately 295 ms.
+5. Symbol candle-time history across all intervals: 545 rows returned, explicit
+   sort, approximately 166 ms; existing unique index begins symbol,interval_code.
+6. BTC candle-close context within a specified interval: existing unique index
+   range/reverse scan, one row returned, approximately 0.159 ms in sampled plan.
+7. Latest global 100 rows: existing generated_at reverse scan, about 5.17 ms in
+   sampled plan. No new global timestamp index is justified.
+8. Health strategy/regime aggregate over full history: existing V76 covering
+   index, about 15.4 ms for 4,940 entries. Retain that index.
+
+Query map and priority
+TradeSignalRepository.java lines 22-49: latest/previous/top-20 and actionable
+signal lists. Used by execution intelligence, execution validation, opportunity
+consolidation, MTF context, paper entry, dashboard and live protection. Priority
+index: (symbol,interval_code,generated_at). Symbol-only latest/history needs its
+own (symbol,generated_at); one cannot substitute for the other.
+
+LivePositionProtectionService.java lines 71-73: three full TradeSignal queries
+per price update when an open managed position exists. This is on Binance's
+canonical live-price protection path. First fix indexing; then evaluate one
+batched lookup or a narrow immutable projection that preserves all policy inputs
+and freshness/ordering. Avoid a blind TTL cache of trading decisions.
+
+TradeSignalRepository.java lines 89-123 and TradeInspectorService.java lines
+154,170,243: blocked BUY/SELL searches use UPPER(symbol), optional-symbol OR and
+wide entities. Split symbol/all-symbol query branches and normalize parameters.
+Use direct column equality for the symbol-specific branch; preserve original vs
+final decision semantics. Start with (symbol,generated_at), then remeasure before
+adding blocker/decision-specific indexes. UPPER removal alone is not a measured
+fix and the SQL proposal alone does not optimize these repository predicates.
+
+TradeSignalRepository.java lines 126-133: unpaged symbol generated/candle-time
+history. Callers include TradeInspectorService.java line 954, TradeReplayService,
+PriceMoveMonitorService.java lines 289-295 and RegressionTestWorker. All load wide
+entities; historical consumers need paging/streaming or narrower projections
+without silently dropping forensic/replay rows. (symbol,candle_open_time) is an
+optional third index for cross-timeframe candle history.
+
+TradeActivityService.java line 278: explicit projection with symbol and generated
+time range, ordered by generated_at/id, capped at 5,000; (symbol,generated_at)
+matches its range/order. Joins from wallet/opportunity tables to trade_signal.id
+already use the primary key; their driving-table indexes are separate scope.
+
+ScoreDiagnosticsService.java lines 35-43: already scalar projection and 60-second
+cache. Do not add a large all-score covering index without workload evidence.
+SystemHealthDailyService: already uses V76 for strategy/regime aggregates;
+interval counts/staleness use generated-time filtering. Remeasure under actual
+load before adding a separate covering index for those scalar queries.
+Exact candle existence/read and recovery identity scans: existing unique
+(symbol,interval_code,candle_open_time) is appropriate. Keep it intact.
+AnalysisController.java line 28: latest 100 full entities. Index already suitable;
+consider a summary DTO plus a detail endpoint if response transfer/mapping is slow.
+findForInspectorAnalysis and findByGeneratedAtGreaterThanEqualOrderByGeneratedAtDesc
+are repository declarations without current callers found; avoid optimizing dead
+query paths at the expense of the actual blocked-signal queries.
+
+Recommended sequence
+1. Adopt the two priority index definitions through a new Flyway migration after
+   review; do not run the proposal manually and later deploy duplicate DDL.
+2. Split blocked-search symbol/all-symbol branches and remove UPPER on the column.
+3. Run the same populated-window plans before/after; record rows examined, sorts,
+   returned IDs/ordering, warm repeated timings, and insert throughput.
+4. Reduce unused JSON fields in frequent reads; consider batching live protection
+   context reads, keeping policy and temporal semantics unchanged.
+5. Capture real production stage timing, JDBC/pool waits, response serialization,
+   and endpoint p95/p99. There is no evidence yet that index changes solve the
+   entire evaluation delay. Review buffer-pool sizing against available RAM.
+6. Consider the optional symbol/candle index only if historical usage warrants it.
+   Review redundant indexes separately; zero recent use alone is insufficient.
+
+Artifacts
+scripts/diagnostics/trade-signal-latency.sql: repeatable bounded read-only audit.
+scripts/diagnostics/trade-signal-index-proposal.sql: unapplied candidate DDL.
+
+Technical references
+https://dev.mysql.com/doc/refman/8.0/en/multiple-column-indexes.html
+https://dev.mysql.com/doc/refman/8.0/en/explain.html

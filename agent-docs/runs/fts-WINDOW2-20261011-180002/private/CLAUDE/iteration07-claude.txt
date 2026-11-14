@@ -1,0 +1,133 @@
+Iteration 6's queries came back, so I'm now checking my earlier conclusions against them.
+
+# Iteration 7: self-challenge on the six frozen failed trades (Claude)
+
+Three of my earlier conclusions changed this iteration:
+
+- **The exit rule is not what made these trades lose.** For four of the six trades, closing early avoided a bigger loss. Trade 91 is the only one where the early exit gave up a later win.
+- **My iteration-5 statistics are unreliable.** The query matched trades in a way that counted some losing trades twice and missed many winners. The tables built on it should not be used.
+- **The 18:00 KSA gap on 2026-10-10 was very probably an application restart.** The data now shows the restart pattern clearly, though I still have no log line to confirm it.
+
+This was analysis only: no code, config, database, git or deploy changes. Plan mode was on, but I have no Write or ExitPlanMode tool, so this text is the whole deliverable. I did not read the CODEX folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log or the other agent's memory.
+
+**Time labels.** Times are KSA unless marked UTC; UTC = KSA − 3 h.
+- Your brief says database timestamps are UTC. That is true of how `TIMESTAMP` columns are stored, but the database **displays** them in KSA: the session time zone is SYSTEM = Arab Standard Time, a +180 minute offset (DBQ-CLAUDE-I3-001).
+- A new cross-check agrees: the Flyway install times (which use the database clock) fall in the same minutes as the restart bursts in the candle `updated_at` column (C3).
+- The snapshot was taken at 18:00:02 KSA (15:00:04 UTC) on 2026-10-11.
+
+## FINDINGS
+
+**C1. Withdrawn: the iteration-5 entry-stage and 1h-decision statistics (PROJECT EVIDENCE: I5-001 compared with I6-005)**
+- I5-001 joined `wallet_managed_position` to `paper_position` by symbol and an opening time within 5 seconds. It returned 121 rows totalling **−2.73 USDT**.
+- I6-005 reads `paper_position` directly and found only **76** closed trades since 2026-10-03, totalling **+7.19 USDT** before fees.
+- So the join counted some trades more than once and missed many winners. The loss counts in the G0 tables, and the conclusions drawn from them, are not reliable. I5-002 uses the same join, so this also covers "a 1h BUY did worse than a 1h SELL" and my weakening of R2 on that basis.
+- The two tables share a link column (`paper_position.signal_id` and `wallet_managed_position.entry_signal_id`). DBQ-CLAUDE-I7-001 re-runs the breakdown on that link.
+- The per-trade facts for the six frozen trades are unaffected: they came from queries on each ID.
+
+**C2. Answered: whether the early exits helped or hurt (PROJECT EVIDENCE: I6-004)**
+
+For each trade, what price did over the next 240 minutes after the actual exit:
+
+| Trade | Exit (KSA) | After the exit | Effect of exiting when it did |
+|---|---|---|---|
+| 78 | 17:50 at 4.05e-6 | Stop touched 18:11 (low 4.02); target never | Avoided a bigger loss |
+| 82 | 19:25 at 0.1978 | Stop touched 20:59; target never | Avoided a bigger loss |
+| **91** | 21:45 at 5.47e-6 | **Target touched first, 23:40**; stop 00:44 | **Gave up a win**: +0.36% gross, about +0.16% after fees |
+| 96 | 22:45 at 4.05e-6 | Stop touched 01:00; target never | Avoided a bigger loss |
+| 101 | 02:21 at 0.9487 | Stop touched 02:27; low 0.9353 within 60 min | The profit-lock exit avoided a much bigger loss |
+| 104 | 05:40 at 0.2246 | Stop touched 05:51; target never | Avoided a bigger loss |
+
+- Caveats:
+  - The stored `stop_loss` may be the final, moved stop rather than the original.
+  - Trade 91's two-hour wait for the target assumes no other exit would have fired first. That is unproven.
+- **What this means:** R2 (the HTF_SELL exit reacts to an old 1h SELL signal, regardless of its age or the soft-conflict decision made at entry) remains a confirmed design inconsistency. But for 3 of the 4 frozen HTF_SELL trades, the early exit made the loss smaller. **R2 is not a root cause of these losses.** The G4 root causes stand: the entries had no real edge.
+- Do not tighten or remove the HTF_SELL exit on the strength of these six trades. DBQ-CLAUDE-I7-002 runs the same check on all 7 HTF_SELL trades.
+
+**C3. The 18:00 outage was very probably an application restart (PROJECT EVIDENCE: I6-001, I6-002, I6-003)**
+- **The order of the repairs matches the startup import.** In I6-001, the import closed live candles symbol by symbol in alphabetical order (ENA, ETH, ICP, ONG, PEPE, SHIB, SOL, SUI, TAO, UNI, XLM, XRP), about 2 seconds per symbol, from 18:01:01 to 18:02:19.
+  - Each symbol went 1m, then 5m, then 1h.
+  - It also inserted `BACKFILL` 1m rows for 18:00 and 18:01.
+  - Only the startup import goes through every symbol like this. Coin activation and the manual `/import` endpoint handle one symbol.
+- **Earlier bursts line up with deploys.** I6-002 found five bursts of the same pattern.
+  - Two match Flyway installs to the minute:
+    - V107 and V108 were installed at 00:15:21 on 2026-10-10, and a burst followed at 00:16–00:18.
+    - V109 was installed at 01:52:45, and a burst followed at 01:53–01:55.
+  - The 18:00–18:02 (2026-10-10) and 02:42–02:43 (2026-10-11) bursts have no migration. They look like restarts with no schema change, or crash recoveries.
+- This replaces R7 ("a 24-hour WebSocket disconnect") for this event. Confirming it needs one log line, which my tools cannot search (U1).
+
+**C4. The startup-import defect is wider than I first reported (PROJECT EVIDENCE: I6-001, I6-002)**
+- **Scope of G2:**
+  - It affects every restart, not one symbol: 29 rows at 18:00–18:02 alone.
+  - Across the five restart bursts there are 218 affected rows.
+  - Each affected row is a candle that was open and became closed with no analysis outcome or audit record.
+  - This includes the 1h 17:00 and 5m 17:55 candles for every symbol in that run.
+- **Classification unchanged:** it is a confirmed defect against the AGENTS.md rules that every candle needs one terminal outcome and that backfill must never finalise a live row.
+- **It did not cause any frozen trade's loss.**
+
+**C5. Fees: the system is profitable before fees and much less so after (PROJECT EVIDENCE: I6-005; the fee rate is EXTERNAL RESEARCH)**
+- Of the 76 closed trades, 19 lost money before fees. After an estimated 0.1% fee on each side, **39** lose.
+- **Net result:** +7.19 gross minus about 4.24 in fees ≈ **+2.96**.
+- **13 of 30 PROFIT_LOCK_EXIT trades** and **5 of 16 PROFIT_LOCK trades** that won before fees lose after them. The profit-lock floor sits inside the fee band, so trade 101's problem (T2/R9) is general, not a one-off.
+- None of the 76 trades closed on a STOP_LOSS reason. Every loss came from a signal exit, an HTF exit or a profit-lock exit.
+- **Classification:** a design gap in how risk is modelled. Paper P&L excludes fees (`WalletAutoExecutionService` always sets `feeUsdt(ZERO)`). It is not a breach of the current rules.
+
+**C6. Checks that survived (PROJECT EVIDENCE)**
+- **G5 geometry:** I re-derived trade 91's figures from the stored values (entry 5.48e-6, target needs 5.50e-6 = +0.365%, stop triggers at 5.45e-6 = −0.547%). They match. Trades 78 and 96 also check out (entry 4.06e-6, exit 4.05e-6, same −0.0616 loss).
+- **Trade 82's timing:** it opened at 18:03:06, about 1 minute after the import finished. It used evidence from 17:52–17:53, from before the restart. Still a gap in the rules, not a breach.
+- **Trade 101:** open 02:12–02:21, which ended before the 02:42 restart, so the restart did not touch it.
+
+**Final classification after iteration 7**
+
+| Trade | Root cause | How it ended | Was the exit harmful? |
+|---|---|---|---|
+| 78 | Weak entry: 1m WATCH at the minimum score of 60; net R/R 0.45 | HTF_SELL exit (R2) | No, it avoided the stop |
+| 91 | Weak entry: 1m WATCH at 60; net R/R 0.22 | HTF_SELL exit (R2) | **Yes**: the target was hit about 2 h later |
+| 96 | False breakout: a 1-tick move inside a 2-tick range, scored as a perfect BREAKOUT | HTF_SELL exit (R2) | No |
+| 104 | Chased a +0.76% (about 4× ATR) move made on 25–40× volume | HTF_SELL exit (R2) | No |
+| 101 | TP-extension rebase defect (T2); the profit-lock floor is below fee cost | PROFIT_LOCK_HARD_EXIT | No, price fell to 0.9353 |
+| 82 | A loss under the rules: poor entry flagged at the time (E5), net R/R 0.07, evidence from before the restart | SELL_CONFIRMED | No |
+
+Labels: "weak entry", "false breakout" and "chase" are AGENT INFERENCE based on PROJECT EVIDENCE.
+
+## EVIDENCE
+- **DB:** DBQ-CLAUDE-I6-001 to I6-005 (new); I3-001; I5-001 (now discredited); DBQ-FTS-001 and DBQ-FTS-005.
+- **Code:** as cited in iteration 6 (`CandleRepository.java:99-106,173-188`; `MarketDataService.java:31-56`; `MarketDataBootstrapService.java:49-69`; `WalletAutoExecutionService.java:173,260`). No new code was read this iteration.
+- **Logs:** none (the archives are gzipped).
+- **External research:** the 0.1% per-side spot fee and the tick sizes come from the iteration-6 sources; nothing new.
+
+## UNKNOWNS
+- **U1:** A log line proving the 18:00 restart. The coordinator would need to search `logs/crypto-ai-trader.2026-10-10.*.log.gz` around 14:58–15:04 UTC for `Started`, `Historical bootstrap completed` and shutdown hooks.
+- **U2:** Whether the early-exit result holds for all HTF_SELL trades (DBQ-CLAUDE-I7-002).
+- **U3:** The corrected entry-stage statistics (DBQ-CLAUDE-I7-001).
+- **U4:** Why the 1m `atrImmediateEntryAllowed` flag allowed trade 104's 2-candle impulse. Not traced.
+- **U5:** Whether Replay reproduces these trades. Not run, because running Replay creates state.
+- **U6:** Whether the deployed program matches the working tree, which has uncommitted changes.
+- **U7:** Whether any position was open and unprotected during the five restart gaps (DBQ-CLAUDE-I7-003). This relates to the open release gate on protection during application replacement.
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-001
+Purpose: C1/U3. Redo the entry-stage breakdown using the signal-ID link instead of the symbol + 5 s join, and report trades with no match. Aggregate only.
+SQL:
+SELECT COALESCE(w.entry_stage,'NO_MATCH') AS entry_stage, COUNT(*) AS n, SUM(p.realized_pnl<0) AS losers, ROUND(SUM(p.realized_pnl),6) AS pnl_gross, ROUND(SUM(p.realized_pnl - 0.001*p.quantity*(p.entry_price+p.exit_price)),6) AS pnl_net_est FROM paper_position p LEFT JOIN wallet_managed_position w ON w.entry_signal_id = p.signal_id WHERE p.status='CLOSED' AND p.closed_at >= '2026-10-03 00:00:00' AND p.exit_price IS NOT NULL GROUP BY COALESCE(w.entry_stage,'NO_MATCH') ORDER BY n DESC LIMIT 50;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-002
+Purpose: C2/U2. The same "what if we had held" check for every HTF_SELL_CONFIRMED trade since 2026-10-03: within 240 min after the exit, did price touch the target or the stop first?
+SQL:
+SELECT p.id, p.symbol, p.entry_price, p.exit_price, p.stop_loss, p.take_profit, p.closed_at, (SELECT MIN(c.open_time) FROM candle c WHERE c.symbol=p.symbol AND c.interval_code='1m' AND c.open_time >= p.closed_at - INTERVAL 1 MINUTE AND c.open_time < p.closed_at + INTERVAL 240 MINUTE AND c.high_price >= p.take_profit) AS first_tp_touch, (SELECT MIN(c.open_time) FROM candle c WHERE c.symbol=p.symbol AND c.interval_code='1m' AND c.open_time >= p.closed_at - INTERVAL 1 MINUTE AND c.open_time < p.closed_at + INTERVAL 240 MINUTE AND c.low_price <= p.stop_loss) AS first_sl_touch FROM paper_position p WHERE p.status='CLOSED' AND p.close_reason='HTF_SELL_CONFIRMED' AND p.closed_at >= '2026-10-03 00:00:00' ORDER BY p.id LIMIT 20;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-003
+Purpose: U7. List paper positions that were open during any of the five restart bursts (each window starts 5 min before the burst, KSA as displayed).
+SQL:
+SELECT p.id, p.symbol, p.opened_at, p.closed_at, p.close_reason, p.realized_pnl FROM paper_position p WHERE (p.opened_at < '2026-10-09 10:29:00' AND (p.closed_at IS NULL OR p.closed_at > '2026-10-09 10:23:00')) OR (p.opened_at < '2026-10-10 00:19:00' AND (p.closed_at IS NULL OR p.closed_at > '2026-10-10 00:11:00')) OR (p.opened_at < '2026-10-10 01:56:00' AND (p.closed_at IS NULL OR p.closed_at > '2026-10-10 01:48:00')) OR (p.opened_at < '2026-10-10 18:03:00' AND (p.closed_at IS NULL OR p.closed_at > '2026-10-10 17:55:00')) OR (p.opened_at < '2026-10-11 02:44:00' AND (p.closed_at IS NULL OR p.closed_at > '2026-10-11 02:37:00')) ORDER BY p.opened_at LIMIT 50;
+### END_DB_REQUEST
+
+**Labels**
+- **PROJECT EVIDENCE:** C1–C6 data, I6-001 to I6-005, I3-001, DBQ-FTS-005, and the code references from iteration 6.
+- **AGENT INFERENCE:** the restart reading in C3 (strong, but no log yet), trade 91's counterfactual, and the root-cause wording.
+- **EXTERNAL RESEARCH:** the 0.1% per-side Binance spot fee and the symbol tick sizes (sources cited in iteration 6).

@@ -1,0 +1,1 @@
+SELECT t.id, t.symbol, t.side, t.execution_reason, t.executed_at, t.price_usdt, s.id AS signal_id, s.interval_code, s.decision, s.stop_loss, s.take_profit FROM wallet_trade t LEFT JOIN trade_signal s ON s.id = t.signal_id WHERE t.symbol IN ('UNIUSDT','AEROUSDT') AND t.executed_at BETWEEN '2026-10-10 17:43:00' AND '2026-10-10 18:16:00' ORDER BY t.executed_at LIMIT 20

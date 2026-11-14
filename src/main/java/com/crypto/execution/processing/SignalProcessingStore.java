@@ -20,6 +20,8 @@ public class SignalProcessingStore {
     private static final int QUARANTINE_BATCH_SIZE = 50;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate independent;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.crypto.local.CandleAnalysisOutcomeStore outcomes;
     public SignalProcessingStore(JdbcTemplate jdbc, PlatformTransactionManager manager) {
         this.jdbc = jdbc;
         independent = new TransactionTemplate(manager);
@@ -105,12 +107,20 @@ public class SignalProcessingStore {
                 WHERE signal_id=? AND status='RUNNING' AND owner_token=?
                 """, Timestamp.from(Instant.now()), Timestamp.from(Instant.now()), positionId, work.signalId(),work.owner());
         if (changed != 1) throw new IllegalStateException("FIX-127 lost processing ownership");
+        // A processing work row is created from an already-persisted TradeSignal;
+        // positionId only says whether execution opened a position, not whether
+        // analysis produced a signal.
+        recordOutcome(work,"ANALYSED_SIGNAL","PROCESSING_COMPLETED");
     }
     public int finishWithoutBusiness(Work work, String status, String stage, String error) {
-        return independent.execute(tx -> jdbc.update("""
+        return independent.execute(tx -> {
+            int changed=jdbc.update("""
                 UPDATE signal_processing_work SET status=?,failure_stage=?,error_message=?,owner_token=NULL,
                 updated_at=?,next_attempt_at=? WHERE signal_id=? AND status='RUNNING' AND owner_token=?
-                """,status,stage,error,Timestamp.from(Instant.now()),Timestamp.from(Instant.now().plusSeconds(30)),work.signalId(),work.owner()));
+                """,status,stage,error,Timestamp.from(Instant.now()),Timestamp.from(Instant.now().plusSeconds(30)),work.signalId(),work.owner());
+            if(changed==1 && "EXPIRED".equals(status))recordOutcome(work,"SKIPPED_STALE",stage);
+            return changed;
+        });
     }
     /** FIX-140: retry evidence is persisted after rollback, under the exact attempt owner.
      * No connection is held during the 1/3/10-second scheduling delay. */
@@ -119,10 +129,11 @@ public class SignalProcessingStore {
         return independent.execute(tx->jdbc.update("UPDATE signal_processing_work SET status=?,failure_stage='INITIAL_SYMBOL_LOCK_ROLLED_BACK',error_message=?,owner_token=NULL,updated_at=?,next_attempt_at=? WHERE signal_id=? AND status='RUNNING' AND owner_token=?",
             status,error,Timestamp.from(Instant.now()),Timestamp.from(Instant.now().plusSeconds(delay)),work.signalId(),work.owner()));
     }
+    // FIX-153: collector-owned work never becomes a legacy/local recovery attempt after mode OFF.
     public List<Long> due() {
         return jdbc.query("""
                 SELECT signal_id FROM signal_processing_work WHERE status IN ('PENDING','RETRYABLE_FAILURE')
-                AND origin IN ('WORKER','RECOVERY') AND attempts<2 AND next_attempt_at<=?
+                AND origin IN ('WORKER','RECOVERY') AND source_event_id IS NULL AND attempts<2 AND next_attempt_at<=?
                 ORDER BY next_attempt_at,signal_id LIMIT 50
                 """,(rs,n)->rs.getLong(1),Timestamp.from(Instant.now()));
     }
@@ -176,5 +187,8 @@ public class SignalProcessingStore {
     private static void requireTransaction() {
         if (!TransactionSynchronizationManager.isActualTransactionActive())
             throw new IllegalStateException("FIX-127 operation requires a transaction");
+    }
+    private void recordOutcome(Work work,String outcome,String reason){
+        if(outcomes!=null)outcomes.record(work.symbol(),work.interval(),work.candleOpenTime(),outcome,reason,work.signalId(),work.origin().name());
     }
 }

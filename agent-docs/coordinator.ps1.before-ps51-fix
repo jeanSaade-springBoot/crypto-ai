@@ -1,0 +1,130 @@
+param(
+ [Parameter(Mandatory=$true)][string]$Question,
+ [string]$ProjectRoot = (Get-Location).Path,
+ [int]$MaxRounds = 12
+)
+$ErrorActionPreference='Stop'
+$root=(Resolve-Path $ProjectRoot).Path
+$docs=Join-Path $root 'agent-docs'
+New-Item -ItemType Directory -Force -Path $docs | Out-Null
+$runId=Get-Date -Format 'yyyyMMdd-HHmmss'
+$run=Join-Path $docs "runs\$runId"
+New-Item -ItemType Directory -Force -Path $run | Out-Null
+$log=Join-Path $run 'PROGRESS.log'
+function Say($s) { $line="[$(Get-Date -Format HH:mm:ss)] $s"; Write-Host $line; Add-Content -LiteralPath $log -Value $line }
+function LatestBinary($pattern,$relative) {
+ $ext=Join-Path $env:USERPROFILE '.cursor\extensions'
+ $d=Get-ChildItem $ext -Directory | Where-Object Name -Like $pattern | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+ if (-not $d) { throw "Extension not found: $pattern" }
+ $exe=Join-Path $d.FullName $relative
+ if (-not (Test-Path $exe)) { throw "Executable missing: $exe" }
+ return $exe
+}
+$codex=LatestBinary 'openai.chatgpt-*' 'bin\windows-x86_64\codex.exe'
+$claude=LatestBinary 'anthropic.claude-code-*' 'resources\native-binary\claude.exe'
+$policy=@'
+You are conducting an independent, adversarial, READ-ONLY investigation of crypto-ai-trader.
+Never modify source, configuration, DB, git, or runtime. No implementation or deployment.
+Inspect actual code when relevant; do not treat README or other agent opinions as proof.
+Use relevant AGENTS.md, codex-docs and claude-docs without assuming they are correct.
+Do not disclose credentials or secrets. Do not access production systems.
+Respond with clear sections: FINDINGS, EVIDENCE (file paths and lines), OBJECTIONS, UNKNOWNS, VERDICT.
+VERDICT must be exactly one of APPROVED, REJECTED, INSUFFICIENT_EVIDENCE.
+APPROVED means no unresolved material objection to the specific question/document reviewed; not authorization to change code.
+'@
+function Invoke-Agent([string]$who,[string]$prompt,[string]$name) {
+ $out=Join-Path $run "$name.txt"
+ $err=Join-Path $run "$name.stderr.txt"
+ $inputFile=Join-Path $run "$name.prompt.txt"
+ [IO.File]::WriteAllText($inputFile,$prompt,[Text.UTF8Encoding]::new($false))
+ Say "START $who / $name"
+ if($who -eq 'Codex') {
+   # The CLI receives the prompt via stdin to avoid PowerShell quoting/length problems.
+   Get-Content -LiteralPath $inputFile -Raw | & $codex exec --sandbox read-only -C $root - 2> $err | Out-File -LiteralPath $out -Encoding utf8
+ } else {
+   # No shell/edit tools, only project-local read tools. Do not bypass permissions.
+   Push-Location $root
+   try { & $claude -p --permission-mode plan --permission-prompts none --tools 'Read,Glob,Grep' --output-format text $prompt 2> $err | Out-File -LiteralPath $out -Encoding utf8 }
+   finally { Pop-Location }
+ }
+ if($LASTEXITCODE -ne 0) { throw "$who failed ($LASTEXITCODE). See $err" }
+ $body=Get-Content -LiteralPath $out -Raw
+ if([string]::IsNullOrWhiteSpace($body)) { throw "$who returned empty output. See $err" }
+ Say "DONE $who / $name"
+ return $body
+}
+function Verdict($body) {
+ $m=[regex]::Matches($body,'(?im)^\s*VERDICT\s*:\s*(APPROVED|REJECTED|INSUFFICIENT_EVIDENCE)\s*$')
+ if($m.Count -ne 1) { return 'INSUFFICIENT_EVIDENCE' }
+ return $m[0].Groups[1].Value.ToUpperInvariant()
+}
+$intro="$policy`nQUESTION:`n$Question`nNo code changes."
+Say "RUN $runId | ROOT $root | READ-ONLY"
+$ca=Invoke-Agent 'Codex' "$intro`nIndependently investigate. Do not assume Claude's findings." 'round01-codex'
+$cl=Invoke-Agent 'Claude' "$intro`nIndependently investigate. Do not assume Codex's findings." 'round01-claude'
+$history=@()
+$agreed=$false
+for($round=2;$round -le $MaxRounds;$round++) {
+ Say "ROUND $round | mutual challenge"
+ $crossC="$intro`nOTHER AGENT (CLAUDE) SAID:`n$cl`nYOUR PRIOR FINDINGS:`n$ca`nChallenge the other findings with code evidence. Correct your own mistakes. Identify unresolved issues. Do not rubber-stamp."
+ $crossL="$intro`nOTHER AGENT (CODEX) SAID:`n$ca`nYOUR PRIOR FINDINGS:`n$cl`nChallenge the other findings with code evidence. Correct your own mistakes. Identify unresolved issues. Do not rubber-stamp."
+ $ca=Invoke-Agent 'Codex' $crossC ("round{0:D2}-codex" -f $round)
+ $cl=Invoke-Agent 'Claude' $crossL ("round{0:D2}-claude" -f $round)
+ $vc=Verdict $ca; $vl=Verdict $cl
+ $history+= "Round $round : Codex=$vc ; Claude=$vl"
+ Say "ROUND $round | Codex=$vc | Claude=$vl"
+ # Approval of arguments is not document approval; still require full-document review below.
+ if($round -ge 5 -and $vc -eq 'APPROVED' -and $vl -eq 'APPROVED') { $agreed=$true; break }
+}
+$summary=@"
+# TEAM FINDINGS — $runId
+
+Question: $Question
+
+Status: $(if($agreed){'PRELIMINARY CONVERGENCE'}else{'NOT CONVERGED'})
+
+$($history -join "`n")
+
+Codex latest: runs/$runId/$("round{0:D2}-codex.txt" -f $round)
+Claude latest: runs/$runId/$("round{0:D2}-claude.txt" -f $round)
+
+See complete transcripts in runs/$runId. Neither agent may implement changes.
+"@
+[IO.File]::WriteAllText((Join-Path $run 'TEAM_FINDINGS.md'),$summary)
+if(-not $agreed) { Say 'STOP: No consensus. No final document approved.'; exit 2 }
+# Draft is a proposal, not a final approved contract.
+$draft=@"
+# FINAL TECHNICAL REVIEW — DRAFT
+
+Run: $runId
+Question: $Question
+
+## Codex evidence and proposal
+$ca
+
+## Claude evidence and proposal
+$cl
+
+## Required before approval
+- Consolidate exact root cause, alternative hypotheses, evidence and unknowns.
+- Detail proposed code diffs by file/method; test plan; rollback; DB, Replay and Production effects.
+- Independently verify the SAME complete revision by BOTH agents.
+- Obtain explicit user approval before any implementation.
+
+Implementation authorization: NOT AUTHORIZED
+"@
+$doc=Join-Path $run 'FINAL_TECHNICAL_REVIEW.md'
+[IO.File]::WriteAllText($doc,$draft)
+$reviewPrompt="$policy`nReview the ENTIRE technical document below against the project. A document missing exact code changes, testing, rollback or material evidence MUST be REJECTED. Do not modify anything. Your VERDICT applies only to this exact document revision.`nDOCUMENT:`n$draft"
+$rc=Invoke-Agent 'Codex' $reviewPrompt 'document-review-codex'
+$rl=Invoke-Agent 'Claude' $reviewPrompt 'document-review-claude'
+$cv=Verdict $rc; $lv=Verdict $rl
+Say "DOCUMENT GATE | Codex=$cv | Claude=$lv"
+if($cv -eq 'APPROVED' -and $lv -eq 'APPROVED') {
+ Add-Content -LiteralPath $doc -Value "`n## Dual-agent review`nCodex: APPROVED`nClaude: APPROVED`nStatus: READY FOR USER REVIEW`nImplementation authorization: NOT AUTHORIZED"
+ Say 'READY FOR USER REVIEW. NO CODE CHANGES. USER APPROVAL REQUIRED.'
+} else {
+ Add-Content -LiteralPath $doc -Value "`n## Dual-agent review`nCodex: $cv`nClaude: $lv`nStatus: NOT APPROVED`nImplementation authorization: NOT AUTHORIZED"
+ Say 'DOCUMENT NOT APPROVED. Review feedback and revise in a subsequent run.'
+ exit 3
+}

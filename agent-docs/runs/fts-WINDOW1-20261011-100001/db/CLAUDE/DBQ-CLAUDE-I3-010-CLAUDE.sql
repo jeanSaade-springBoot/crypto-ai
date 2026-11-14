@@ -1,0 +1,1 @@
+SELECT DATE_FORMAT(created_at,'%H:%i') AS raw_minute, COUNT(*) AS events, COUNT(DISTINCT symbol) AS symbols, MIN(created_at) AS first_raw, MAX(created_at) AS last_raw FROM market_price_event WHERE id BETWEEN 1350000 AND 1362000 AND created_at BETWEEN '2026-10-10 17:55:00' AND '2026-10-10 18:08:00' GROUP BY raw_minute ORDER BY raw_minute

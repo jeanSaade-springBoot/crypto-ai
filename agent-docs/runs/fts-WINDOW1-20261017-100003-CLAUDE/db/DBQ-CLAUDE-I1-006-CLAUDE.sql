@@ -1,0 +1,1 @@
+SELECT p.id AS position_id, w.* FROM crypto_ai.paper_position p JOIN crypto_ai.wallet_trade w ON w.symbol = p.symbol AND w.executed_at BETWEEN p.opened_at - INTERVAL 60 SECOND AND p.closed_at + INTERVAL 60 SECOND WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, w.executed_at LIMIT 200;

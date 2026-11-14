@@ -1,0 +1,46 @@
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+symbol	varchar(30)	NO	MUL	NULL	
+direction	varchar(10)	NO		NULL	
+status	varchar(30)	NO		NULL	
+started_at	timestamp(6)	NO		NULL	
+last_evidence_at	timestamp(6)	NO		NULL	
+anchor_entry_price	decimal(30,12)	YES		NULL	
+best_entry_price	decimal(30,12)	YES		NULL	
+latest_signal_id	bigint	YES	MUL	NULL	
+evidence_count	int	NO		0	
+buy_count	int	NO		0	
+watch_count	int	NO		0	
+neutral_count	int	NO		0	
+bearish_count	int	NO		0	
+evidence_score	int	NO		0	
+opportunity_health	int	NO		50	
+health_momentum	int	NO		0	
+evidence_momentum	int	NO		0	
+last_bearish_at	timestamp(6)	YES		NULL	
+average_signal_score	int	NO		0	
+average_confidence	int	NO		0	
+peak_score	int	NO		0	
+peak_confidence	int	NO		0	
+peak_decision	varchar(30)	YES		NULL	
+peak_regime	varchar(40)	YES		NULL	
+peak_btc_status	varchar(30)	YES		NULL	
+peak_liquidity_status	varchar(30)	YES		NULL	
+peak_observed_at	timestamp(6)	YES		NULL	
+five_minute_decision	varchar(30)	YES		NULL	
+one_hour_decision	varchar(30)	YES		NULL	
+execution_source	varchar(40)	YES		NULL	
+recommended_position_percent	int	NO		0	
+decision_code	varchar(80)	YES		NULL	
+decision_explanation	varchar(2000)	YES		NULL	
+executed_at	timestamp(6)	YES		NULL	
+created_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+updated_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+id	symbol	direction	status	started_at	last_evidence_at	anchor_entry_price	best_entry_price	latest_signal_id	evidence_count	buy_count	watch_count	neutral_count	bearish_count	evidence_score	opportunity_health	health_momentum	evidence_momentum	last_bearish_at	average_signal_score	average_confidence	peak_score	peak_confidence	peak_decision	peak_regime	peak_btc_status	peak_liquidity_status	peak_observed_at	five_minute_decision	one_hour_decision	execution_source	recommended_position_percent	decision_code	decision_explanation	executed_at	created_at	updated_at
+36433	EGLDUSDT	BUY	CANCELLED	2026-10-11 22:30:01.686096	2026-10-11 22:30:01.686096	3.974000000000	3.974000000000	159158	1	0	0	0	1	0	17	-33	0	2026-10-11 22:30:01.686096	0	0	9	80	STRONG_SELL	RANGE	NEUTRAL	BALANCED	2026-10-11 22:30:01.686096	SELL	NEUTRAL	OPPORTUNITY_MEMORY	0	BEARISH_REVERSAL	BUY opportunity cancelled because bearish evidence is strong or confirmed by 5m/1h context.	NULL	2026-10-11 22:30:03.075692	2026-10-11 22:30:03.075692
+36444	EGLDUSDT	BUY	CANCELLED	2026-10-11 22:31:00.163272	2026-10-11 22:31:00.163272	3.974000000000	3.974000000000	159194	1	0	0	0	1	0	17	-33	0	2026-10-11 22:31:00.163272	0	0	9	80	STRONG_SELL	RANGE	NEUTRAL	BALANCED	2026-10-11 22:31:00.163272	SELL	NEUTRAL	OPPORTUNITY_MEMORY	0	BEARISH_REVERSAL	BUY opportunity cancelled because bearish evidence is strong or confirmed by 5m/1h context.	NULL	2026-10-11 22:31:01.504951	2026-10-11 22:31:01.504951
+36453	EGLDUSDT	BUY	CANCELLED	2026-10-11 22:32:00.173563	2026-10-11 22:32:00.173563	3.973000000000	3.973000000000	159215	1	0	0	0	1	0	17	-33	0	2026-10-11 22:32:00.173563	0	0	9	80	STRONG_SELL	RANGE	NEUTRAL	BALANCED	2026-10-11 22:32:00.173563	SELL	NEUTRAL	OPPORTUNITY_MEMORY	0	BEARISH_REVERSAL	BUY opportunity cancelled because bearish evidence is strong or confirmed by 5m/1h context.	NULL	2026-10-11 22:32:01.533065	2026-10-11 22:32:01.533065
+36464	EGLDUSDT	BUY	CANCELLED	2026-10-11 22:33:00.325344	2026-10-11 22:33:00.325344	3.972000000000	3.972000000000	159233	1	0	0	0	1	0	17	-33	0	2026-10-11 22:33:00.325344	0	0	9	81	STRONG_SELL	RANGE	NEUTRAL	BULLISH_SUPPORT	2026-10-11 22:33:00.325344	SELL	NEUTRAL	OPPORTUNITY_MEMORY	0	BEARISH_REVERSAL	BUY opportunity cancelled because bearish evidence is strong or confirmed by 5m/1h context.	NULL	2026-10-11 22:33:02.875763	2026-10-11 22:33:02.875763
+36473	EGLDUSDT	BUY	CANCELLED	2026-10-11 22:34:00.166306	2026-10-11 22:34:00.166306	3.975000000000	3.975000000000	159257	1	0	0	0	1	0	17	-33	0	2026-10-11 22:34:00.166306	0	0	15	81	STRONG_SELL	RANGE	NEUTRAL	BULLISH_SUPPORT	2026-10-11 22:34:00.166306	SELL	NEUTRAL	OPPORTUNITY_MEMORY	0	BEARISH_REVERSAL	BUY opportunity cancelled because bearish evidence is strong or confirmed by 5m/1h context.	NULL	2026-10-11 22:34:01.527253	2026-10-11 22:34:01.527253
+36481	EGLDUSDT	BUY	EXECUTED	2026-10-11 22:35:01.544745	2026-10-11 22:36:00.257836	3.986000000000	3.986000000000	159321	3	1	1	0	1	4	85	45	11	2026-10-11 22:34:00.166306	78	62	80	49	BUY	RANGE	CONFIRMED	BULLISH_SUPPORT	2026-10-11 22:35:01.544745	BUY	NEUTRAL	SETUP_TIMEFRAME_ATR	25	REDUCED_POSITION_ALLOWED	The current 1m signal is ATR-extended, but the fresh 5m BUY remains the setup-risk authority and its ATR plan explicitly allows immediate entry at 100%. Execution is therefore allowed at a conservative 30% allocation instead of permanently rejecting the opportunity. A neutral 1m candle is treated as timing-neutral; explicit bearish 1m/1h context still vetoes. Entry Quality is evaluated with the authoritative 5m ATR so a tiny 1m ATR cannot manufacture a false late-stage chase classification. Entry Quality 50/100 (LATE_ENTRY) capped the initial allocation at 25% so confirmation can add later instead of committing full size at once.	2026-10-11 22:36:04.641196	2026-10-11 22:35:02.993188	2026-10-11 22:36:04.641196
+36524	EGLDUSDT	BUY	EXECUTED	2026-10-11 22:40:01.633945	2026-10-11 22:40:01.633945	4.032000000000	4.032000000000	159408	7	1	5	0	1	8	95	45	2	2026-10-11 22:34:00.166306	74	71	73	78	WATCH	BREAKOUT	NEUTRAL	BULLISH_SUPPORT	2026-10-11 22:40:01.633945	BUY	NEUTRAL	SETUP_TIMEFRAME_ATR	25	REDUCED_POSITION_ALLOWED	The current 1m signal is ATR-extended, but the fresh 5m BUY remains the setup-risk authority and its ATR plan explicitly allows immediate entry at 100%. Execution is therefore allowed at a conservative 30% allocation instead of permanently rejecting the opportunity. A neutral 1m candle is treated as timing-neutral; explicit bearish 1m/1h context still vetoes. Entry Quality is evaluated with the authoritative 5m ATR so a tiny 1m ATR cannot manufacture a false late-stage chase classification. Entry Quality 60/100 (ACCEPTABLE_ENTRY) capped the initial allocation at 25% so confirmation can add later instead of committing full size at once.	2026-10-11 22:40:04.857700	2026-10-11 22:40:03.051128	2026-10-11 22:40:04.857700

@@ -1,0 +1,54 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No Codex-owned DB result files exist under the permitted `db/CODEX/` directory. Trade-specific timelines, latency, and exit causes for frozen IDs **182, 172, 162, 158, 143, 137** remain unverified.
+
+- **PROJECT EVIDENCE:** Stage timing is observational, not a complete ledger. `fix129_stage_timing` records correlation ID, symbol, interval, candle/observation times, stage timing, outcome, and thread—but no paper-position, wallet-position, or signal ID. It also logs/persists only failures or stages ≥1 second (unless forced), and async persistence may be dropped. Therefore, its absence cannot prove a fast or nonexistent protection stage.
+
+- **PROJECT EVIDENCE:** The runtime order is input transaction → protection transaction → observer transaction → close-dispatch transaction. Protection timing can be correlated only indirectly through symbol and `observed_at`; it cannot by itself attribute latency to one frozen paper position. [KlineTransactionCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:35)
+
+- **PROJECT EVIDENCE:** A `paper_position` is saved closed before the wallet-exit attempt; a caught wallet exception does not reopen it. Thus a closed negative-P&L row is not proof of a financially committed wallet exit. The corresponding managed-position and wallet-trade evidence is required. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:501)
+
+- **PROJECT EVIDENCE:** `production_exit_audit` is the best terminal-cause record when present: it preserves the real close trigger separately from the signal used for context. It still does not by itself prove wallet execution. [ProductionExitAuditService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:31)
+
+- **PROJECT EVIDENCE:** Current uncompressed `logs/*.log` contain no exact `positionId=<182|172|162|158|143|137>` or `paperPositionId=<…>` match. This is not negative evidence for the trades: protection logs often use the separate managed-wallet position ID, trade dates are unknown, and archived gzip logs were not attributable without that linkage.
+
+- **AGENT INFERENCE:** No frozen trade can yet be classified as a valid strategy loss, execution-delay issue, protection defect, or accounting defect.
+
+- **AGENT INFERENCE:** The supplied snapshot pair is inconsistent: `2026-10-30 12:24:16 UTC` would be `2026-10-30 15:24:16 KSA`, not the declared `2026-10-29 20:47:57 KSA`. I retain the six frozen IDs as authoritative and do not infer a clock-bounded dataset from that pair.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `KlineTiming` emits `INPUT_TRANSACTION`, `PROTECTION_TRANSACTION`, `OBSERVER_TRANSACTION`, and `CLOSE_DISPATCH_TRANSACTION` timing with a UUID correlation context that includes symbol and timestamps only. [KlineTiming.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTiming.java:17)
+
+- **PROJECT EVIDENCE:** The stage-timing migration has no foreign key or ID field for `paper_position`, `wallet_managed_position`, or `trade_signal`. [V87__fix_129_stage_timing.sql](/C:/workspace/crypto-ai-trader-mysql/src/main/resources/db/migration/V87__fix_129_stage_timing.sql:2)
+
+- **PROJECT EVIDENCE:** Accepted `market_price_event` states (`LEGACY`/`APPLIED`) are required before using a price observation as successful protection evidence; pending/non-canonical outcomes are not substitutes.
+
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- For each frozen ID: symbol; entry/exit UTC timestamps and KSA conversions; entry/exit signal IDs; realized P&L reconciliation; terminal trigger; wallet and managed-position linkage.
+- Whether an accepted price event crossed stop, target, profit lock, or another exit threshold.
+- Whether timing rows exist near the entry/exit and whether they indicate slow/failing input or protection work.
+- Whether the available logs cover the relevant dates and managed-position IDs.
+- Replay comparability.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Verify the actual `crypto_ai` schemas needed to join each frozen paper position to exit, wallet, accepted-price, and timing evidence before issuing bounded trade-specific timing queries.  
+SQL:
+```sql
+SHOW CREATE TABLE paper_position;
+SHOW CREATE TABLE trade_signal;
+SHOW CREATE TABLE production_exit_audit;
+SHOW CREATE TABLE wallet_managed_position;
+SHOW CREATE TABLE wallet_trade;
+SHOW CREATE TABLE market_price_event;
+SHOW CREATE TABLE fix129_stage_timing;
+SHOW CREATE TABLE signal_processing_work;
+SHOW CREATE TABLE position_management_event;
+```
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation state was changed. Documentation updates are not required because this iteration is analysis-only.

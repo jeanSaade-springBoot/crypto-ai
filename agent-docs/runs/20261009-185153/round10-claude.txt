@@ -1,0 +1,112 @@
+I didn't change anything in this round: no source, config, database, git or runtime changes. I can't write files or exit plan mode in this session, so this report is the only output. The verdict stays **REJECTED**.
+
+# Round 7: candle ingestion, as implemented vs. the pending local-candle direction
+
+## FINDINGS
+
+### Correction 1: the duplicate `local-candle:` YAML key does not exist
+I was wrong in round 6.
+- A search for top-level keys in `application.yml` finds `local-candle:` only once, at `:40`.
+- Line 447 is `fix150:`, which sits inside `shared-market:` (`:432-451`).
+- The configuration is valid on that point. I withdraw that objection, the related unknown, and the follow-up idea of a context-load test for it.
+- Reconciliation is still off by default, both in config (`application.yml:56`) and in the code default.
+
+### Correction 2: I described the token-loss mechanism wrongly
+Round 6 blamed MySQL's left-to-right evaluation. Actually, left-to-right evaluation is what makes a *normal* close work:
+- The token check at `CandleRepository.java:201` reads `closed=0` before `:203` sets it to 1.
+
+The real race happens across two separate statements:
+1. Ordinary import (`upsert` → `BACKFILL` branch, `:173-188`) has already set `closed=1` on the open runtime row.
+2. When the WebSocket's final kline arrives, the check at `:201` sees `closed=1` and keeps the token NULL.
+3. The read-back at `:120` therefore returns `transitionedToClosed=false`, and nothing is dispatched.
+
+The conclusion holds. The comment at `:205` ("backfill inserts missing identities only") is still contradicted by the clause at `:173-188`.
+
+### Correction 3: dropped closes are usually recovered — I overstated the risk
+- A close dropped by 1m replacement or queue overflow (`CandleAnalysisDispatcher.java:74-81, 91-97`) keeps its token and has no outcome or signal. The detector's `missing()` check (`LocalClosedCandleDetector.java:135-139`) therefore treats it as unanalysed.
+- So the detector picks it up again once the lane goes idle within the lookback (`:46-51`).
+- After more than 6 attempts it writes a durable `ANALYSIS_EXPIRED` outcome (`:99-104, 113-119, 140-142`).
+- What remains of my round-6 objection:
+  - The lane stays busy for the whole lookback (at least 180 s; `:46` skips the lane without counting an attempt).
+  - Or the process restarts: the `retries`/`analysedUntil` maps are in memory (`:28-29`).
+  - In either case the candle drops out of the SQL window with no outcome.
+
+### New 1: the detector's deadline-based expiry practically never fires
+This is derived from the code, not tested.
+- **The query:** a candle is a candidate only while `open_time >= now - interval - lookback` (`:49-50`).
+- **Binance convention:** `closeTime = openTime + interval - 1 ms`. This comes from Binance's public convention; I did not re-check it in this repo.
+- So a candidate always has `closeTime + lookback >= now - 1 ms`.
+- **The expiry test:** it fires when `!retryDeadline.isAfter(now)` with `retryDeadline = closeTime + lookback` (`:97-99, 111-113`). That is true only in a window of about 1 ms. A detector pass runs every 2 s, so it almost never lands there.
+- **Effect:** a durable terminal outcome comes, in practice, only from the attempt count (`attempts>6`). A candle that gets fewer than 7 counted attempts ages out silently. That matches Codex's point 8, but the cause is more specific than "bounded lookback".
+
+### New 2: the import endpoint needs a login, but not an admin role (round-6 unknown resolved)
+- `/api/market-data/import` falls under `.anyRequest().authenticated()` (`SecurityConfig.java:37`). Only `/api/fix142/**` and `/api/local/drain` require ADMIN (`:34-36`). CSRF protection is turned off (`:24`).
+- So any logged-in dashboard session can start the import race against a symbol that is already streaming.
+
+### New 3: a signal row alone counts as "analysed"
+- `missing()` returns false as soon as a `trade_signal` row exists (`:137`).
+- The worker saves the signal (`CandleClosedAnalysisWorker.java:170`) before it calls `processSignal` (`:175`).
+- If `processSignal` throws, the worker returns `"REVIEW_REQUIRED"` without writing a terminal outcome (`:186-204`), yet the detector considers the candle done.
+- **Unknown:** whether `processSignal` writes durable `signal_processing_work` before it can fail. I did not trace it.
+
+### Rechecked and still standing
+- **Ordinary import:**
+  - It skips only candles where `closeTime > exchangeNow` and has no close grace period (`MarketDataService.java:37,45`).
+  - It writes through the `BACKFILL` duplicate-key update (`:46` → `CandleRepository.java:99-106`). That update closes an open row with no audit, outcome or provenance change.
+  - Reconciliation, by contrast, uses update-only and insert-if-absent paths (`:132-168`).
+- **Historical-only work:** it is separated from execution only by a branch (`:160-166`) inside the class that also calls `paperTradingService` (`:175`). It is not structurally separated.
+- **Mode guards:** only LIVE disables direct ingestion (`MarketDataService.java:19`). The detector runs only in OFF mode (`LocalClosedCandleDetector.java:36`).
+
+### Challenging Codex
+- **Point 8** is correct about the effect but misses that the detector *does* write `ANALYSIS_EXPIRED` based on attempt count. The real gap is New 1 plus the busy-lane and restart cases.
+- **Points 4 and 5:** confirmed, with the mechanism corrected as in Correction 2. Codex also missed the endpoint and re-enable triggers (round 6) and the missing grace period.
+- **Its remaining points** (OBSERVE runs both paths, reconciliation off by default, no 429/418 rate-limit or ban handling, Replay selects only by `closed` and time, documentation drift) were established in earlier rounds. I did not re-test them this round.
+
+## EVIDENCE
+- `CandleRepository.java:99-124, 132-168, 169-212`
+- `MarketDataService.java:19, 31-56`
+- `CandleAnalysisDispatcher.java:25-125`
+- `LocalClosedCandleDetector.java:28-142`
+- `CandleClosedAnalysisWorker.java:150-205`
+- `SecurityConfig.java:20-38`
+- `MarketDataController.java:10,16`
+- `application.yml:40-63, 422-451`
+
+## OBJECTIONS (unresolved, material)
+1. **Ordinary import:**
+   - It closes open runtime rows without audit, outcome or close grace period, so a live close can be lost.
+   - Any authenticated user can trigger it, as can adding or re-enabling a coin.
+   - The comment at `CandleRepository.java:205` is false.
+2. **Detector terminal outcomes:**
+   - Deadline-based expiry practically never fires.
+   - A lane that stays busy, or a restart, lets a tokened candle age out with no outcome.
+   - A saved signal alone counts as completion.
+3. **Reconciliation:**
+   - It is off by default.
+   - Its `LIMIT 50` is applied before filtering.
+   - It has no proven terminal outcome when candidates age out.
+   - It has no shared Binance REST rate-limit or ban handling.
+4. **Historical-only work** is separated from execution only by a code branch.
+5. **OBSERVE mode** runs both ingestion paths.
+6. **Replay parity** for admission and recovery is not shown.
+7. **Documentation drift:**
+   - AGENTS.md treats the V103 blocker as unconditional, despite B105.
+   - claude-docs misdescribes OBSERVE.
+   - Source comments contradict their own SQL.
+
+## UNKNOWNS
+- Whether Binance REST can return non-final values for a candle at the close boundary.
+- Whether `processSignal` failures leave durable work evidence.
+- How often lanes stay busy in practice.
+- Whether `LocalCandleMySqlIT` has ever passed.
+- The Binance `closeTime` convention, which New 1 relies on, has not been checked in this repo.
+- Everything about production (artifact, mode, overrides, Flyway history, logs) and how open positions are protected during replacement.
+
+**Candidates for a later solution review only (not authorised):**
+- Route ordinary import through `insertAuthoritativeGapBackfill`, or exclude `closed=0 RUNTIME` rows, and apply the reconciliation grace period.
+- Have the detector write a terminal outcome based on the SQL eligibility boundary, not on the attempt count.
+- Define completion in `missing()` as an outcome or completed work, not just a signal row.
+- Restrict `/api/market-data/import` to ADMIN.
+
+## VERDICT
+REJECTED

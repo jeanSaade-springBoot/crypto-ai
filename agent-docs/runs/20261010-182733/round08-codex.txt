@@ -1,0 +1,61 @@
+## FINDINGS
+
+- **[PROJECT EVIDENCE]** RPR-0.6 is not the canonical implementation contract required by governance. The required path remains [`agent-docs/FINAL_CHANGE_SPECIFICATION.md`](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:3), currently RPR-0.4, while RPR-0.6 explicitly supersedes only “for review.” It cannot receive governing dual-agent approval as-is.
+
+- **[PROJECT EVIDENCE]** The “complete” registry and data boundary are inaccurate. Current Replay creates `analysis_test_run`, writes `fix122_replay_revision` before starting the worker, and incrementally writes several Replay tables. RPR-0.6 names `regression_test_run` and omits `RegressionTestService`.
+
+- **[PROJECT EVIDENCE]** M04 does not define a safe staging design. Existing per-candle writes occur during the run, and `StopLossEvidenceStore.append()` uses `REQUIRES_NEW`, deliberately surviving an outer rollback. The specification lacks staging schema, publication transition, independent-write disposition, cancellation/crash recovery, and terminal-run recovery.
+
+- **[PROJECT EVIDENCE]** Strict `ANALYSIS_PARITY` remains under-specified and unsafe. Replay currently builds a timeline from every loaded candle, whereas Production gates candle quality before indicators. The new contract does not define the as-of quality algorithm, candle finality convention, or a complete dependency-specific no-look-ahead rule.
+
+- **[PROJECT EVIDENCE]** Sentiment prevents the proposed generic “historical recomputation” from proving parity. Historical analysis reads today’s mutable provider enablement, weights, and health state; it also uses a different availability rule from live analysis. No configuration history exists in the shown code. The artifact must require stored contemporaneous sentiment outcomes for an oracle, and either a versioned declared profile or refusal for simulation.
+
+- **[PROJECT EVIDENCE]** The analysis oracle is not a sufficient approval control. `ReplayParityValidator` has no production caller or test caller and compares only 13 selected fields. RPR-0.6 does not define oracle eligibility, deliberate-difference classification, coverage, or tests demonstrating both false-pass and false-alarm detection.
+
+- **[PROJECT EVIDENCE]** Price-event ordering cannot meet §3 as written. SQL orders by `id`, but the returned `PriceEvent` discards both `id` and `ordering_slot`; it also carries no durable commit-visibility time. RPR-0.6 requires those values yet does not register `MarketPriceEventService`/projection changes or define the refusal rule for unknown visibility.
+
+- **[PROJECT EVIDENCE]** Isolation is not structurally complete. Current Replay and shared validation read `wallet_settings`; shared minimum-notional evaluation can call Binance HTTP and converts failure to an ordinary policy outcome. M05’s named exception does not specify propagation through current catches, async execution, or policy result handling.
+
+- **[PROJECT EVIDENCE]** RPR-0.6’s “Production policy unchanged” claim conflicts with modifying shared execution classes. Those classes now include FIX-154 higher-timeframe assessment and asynchronous audit suppression during Replay, but the registry omits the assessment service, audit store, metrics, schema checks, and policy-version treatment.
+
+- **[PROJECT EVIDENCE]** Resource safety is not actionable. The worker uses unqualified `@Async`; configuration defines scheduler capacity and a shared 15-connection Hikari pool, but RPR-0.6 supplies neither a named Replay executor nor measurable CPU/database/freshness budgets.
+
+## EVIDENCE
+
+- **[PROJECT EVIDENCE]** Governance requires the exact contract at [`AGENTS.md:328`](/C:/workspace/crypto-ai-trader-mysql/AGENTS.md:328); RPR-0.6 identifies itself as a review-only draft at [`FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:3`](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:3).
+
+- **[PROJECT EVIDENCE]** Run creation and the pre-worker FIX-122 write: [`RegressionTestService.java:213`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:213), [`RegressionTestService.java:230`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:230). Incremental signal persistence: [`RegressionTestWorker.java:683`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:683). Independent audit transaction: [`StopLossEvidenceStore.java:48`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/StopLossEvidenceStore.java:48).
+
+- **[PROJECT EVIDENCE]** Replay timeline construction: [`RegressionTestWorker.java:550`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:550). Production data-quality gate: [`CandleClosedAnalysisWorker.java:117`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java:117).
+
+- **[PROJECT EVIDENCE]** Mutable sentiment configuration and historical/live split: [`SentimentService.java:180`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/SentimentService.java:180), [`SentimentService.java:195`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/SentimentService.java:195), [`SentimentProviderConfigService.java:69`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/SentimentProviderConfigService.java:69), [`AnalysisService.java:1021`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:1021).
+
+- **[PROJECT EVIDENCE]** Comparator scope: [`ReplayParityValidator.java:17`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ReplayParityValidator.java:17). Price projection loses identity: [`MarketPriceEventService.java:118`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118).
+
+- **[PROJECT EVIDENCE]** Wallet/HTTP isolation gaps: [`TradeExecutionValidationService.java:400`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:400), [`BinanceMinimumExecutionPolicy.java:38`](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/BinanceMinimumExecutionPolicy.java:38).
+
+## OBJECTIONS
+
+- **[AGENT INFERENCE]** Replace the canonical contract with a new hash-identified revision, then re-review that exact file.
+
+- **[AGENT INFERENCE]** Add ID-mapped contracts for all writes, staging/publication, independent transactions, cancellation, crash recovery, stuck-run recovery, archive compatibility, and terminal evidence.
+
+- **[AGENT INFERENCE]** Specify strict as-of rules per dependency—especially sentiment configuration/health, candle quality, price visibility, order book, derivatives, BTC/HTF, and FIX-154—and mandate refusal where durable evidence cannot establish parity.
+
+- **[AGENT INFERENCE]** Define the two actual execution routes separately: live-price protection ordering and candle/signal ordering, including TP extension, stop, rebase floor, profit-lock, SELL/add suppression, Near-TP, virtual daily limits, reason codes, and virtual fill clock.
+
+- **[AGENT INFERENCE]** Add oracle tests for known matches, every compared-field divergence, final-decision divergence, and deliberate exclusions. A bounded read-only historical comparison must measure mismatch rates before any `ANALYSIS_PARITY` label is issued.
+
+- **[AGENT INFERENCE]** Require a named bounded Replay executor and measurable production-safety thresholds. State whether shared-class changes are permitted; if so, enumerate methods and require Production equivalence/rollback validation.
+
+- **[AGENT INFERENCE]** I agree with the corrected peer point that absence of a frozen PDF is not yet a blocker: freezing follows dual approval. I do not treat the claimed runtime `SimpleAsyncTaskExecutor` selection as independently proven without runtime evidence; the absence of a specified Replay executor and budgets is nevertheless source-proven.
+
+## UNKNOWNS
+
+- **[PROJECT EVIDENCE]** No database, runtime logs, production systems, builds, tests, or migrations were accessed in this review.
+
+- **[AGENT INFERENCE]** The baseline commit matches current `HEAD`, but the worktree is materially dirty; a future approval requires an exact reviewed source/config snapshot, not only the commit ID.
+
+- **[AGENT INFERENCE]** Historical sentiment configuration and health cannot currently be reconstructed from the inspected source; the prevalence of eligible strict-parity windows is therefore unknown.
+
+VERDICT: REJECTED

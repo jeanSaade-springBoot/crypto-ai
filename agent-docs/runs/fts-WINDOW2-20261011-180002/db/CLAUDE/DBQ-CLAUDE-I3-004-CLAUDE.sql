@@ -1,0 +1,1 @@
+SELECT symbol, interval_code, candle_open_time, outcome, reason_code, signal_id, origin, created_at FROM candle_analysis_outcome WHERE candle_open_time IN ('2026-10-10 17:55:00','2026-10-10 17:00:00','2026-10-10 17:59:00') AND interval_code IN ('1m','5m','1h') ORDER BY interval_code, symbol LIMIT 200; DESCRIBE local_reconciliation_audit;

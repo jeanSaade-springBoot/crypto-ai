@@ -1,0 +1,182 @@
+# Claude: FTS WINDOW2, Iteration 3 (log and timing forensics, self-review)
+
+The timing evidence clears the protection logic for trade 143 and raises one new entry-logic suspect (trade 182).
+
+- **143 was not a protection defect.** The price fell 1.78% between two ticks 8 seconds apart, and the hard-floor exit fired on the first tick below the lock.
+- **143 did reach its original target and the system moved it up instead of exiting.** The target-extension path turned a winning trade into a loss.
+- **Exit timing depends on price ticks.** Confirmed exits fire only when a new price tick arrives. After the confirming signal, exits waited 3 to 39 seconds, but the price had not moved, so this cost nothing in these six trades.
+- **182 is a new suspect.** The "5m NEUTRAL" reading that allowed its entry was originally a STRONG_SELL (score 25).
+- **I'm downgrading my iteration-2 finding F8** (risk/reward below 1 means a structurally losing setup). Across all trades, the low risk/reward entries actually did best.
+
+**What I read:** my iteration-2 output, CHARTER.md, the I2-001 to I2-007 results, and code: `PositionExitPolicy.java`, `LivePositionProtectionService.java:95-249`, `FinalDecisionService.java:30-180`, `AnalysisService.java:320-420`, and the migrations V61/V65.
+
+**What I didn't do:** no writes, no git, no deploy. Plan mode is on, but the Write tool is disabled in this session, so I created no plan file. I did not open LIVE_TEAM_STATUS.md, LIVE_EVENTS.log or any Codex file.
+
+**Logs:** I found no application logs for 10-11/10-12 locally (searching `logs/` for `2026-10-1[12]` gave 0 matches), and I can't reach the production logs over SSH. **Every timing in this iteration comes from DB timestamps, not log lines.**
+
+All times are KSA (UTC+3), converted from the stored UTC values.
+
+---
+
+## EVIDENCE
+
+### E9: Exit latency (PROJECT EVIDENCE: I2-001, I2-003, I2-007, and code)
+
+Confirmed live exits (SELL_CONFIRMED, HTF_SELL_CONFIRMED and profit-lock) are only checked inside the price-tick callback. In `LivePositionProtectionService.java:95-97` the callback reads the newest 1m/5m/1h signal, with no age check. `:235-243` then runs `evaluateNormalExit`. Nothing checks for an exit when a new signal arrives.
+
+| id | when the exit condition was met (last required signal) | previous tick | tick that fired the exit | wallet SELL | wait | price at condition → exit |
+|---|---|---|---|---|---|---|
+| 137 | 5m SELL #156852, 10-12 00:00:02.921 | 00:00:01.023 | created 00:00:08.877 | 00:00:08.935 | 6.0 s | 3.987 → 3.987 |
+| 158 | 5m SELL #166821, 06:30:01.464 | **created 06:30:02.192, did not exit** | created 06:30:04.188 | 06:30:04.217 | 2.8 s | 1.4090 → 1.4090 |
+| 162 | 1m STRONG_SELL #168277, 07:26:02.794 (signal path) | n/a | n/a | 07:26:04.134 | 1.3 s | 0.08675 |
+| 172 | 5m NEUTRAL #172588, 10:15:04.578 (1h SELL since 10:00:06) | outside the queried window | created 10:15:43.473 | 10:15:43.492 | ≈38.9 s* | 548 → 548 (×1e-8) |
+| 182 | 5m STRONG_SELL #176934, 13:05:03.926 | 13:05:02.431 | 13:05:18.446 (a 16 s gap) | 13:05:18.504 | 14.6 s | 0.1880 → 0.1880 |
+
+*I2-003 for 172 only started 35 s before the close. I3-004 checks whether there was an earlier tick.
+
+The 158 row is an anomaly. The tick created at 06:30:02.192 came after both signals' `generated_at`, yet it did not fire the exit. The likely explanation is that `generated_at` is set before the signal transaction commits, so the callback could not yet see the signals. That is unverified (U14).
+
+### E10: Trade 143 tick sequence at the exit (PROJECT EVIDENCE: I2-003, I2-007, I2-004, code)
+
+- 01:43:27.038: price 4.100, above the lock (4.07579). No trigger.
+- 01:43:35.021: price 4.027, 7.98 s later, **−1.78%**. This was the first tick at or below the lock, and it was also below the hard floor 4.035017 (entry × 1.0005).
+- The branch at `LivePositionProtectionService.java:207-216` produced PROFIT_LOCK_HARD_EXIT. The wallet SELL committed at 01:43:35.046, **25 ms after the tick**.
+- 01:43:37: 4.018. 01:43:41.047: the stop (4.0102) is breached. The low over the next 60 minutes was 3.940.
+- Every tick has delivery status `APPLIED` / `PROTECTION_CALLBACK_COMPLETED`. Over the lock window the ticks arrive roughly every 2 s, with 4–14 s gaps when the price did not change.
+
+### E11: Trade 143's target was reached and then extended (PROJECT EVIDENCE: iteration-1 E6, I2-003, code `:100-170`)
+
+- 01:40:41: price 4.067, at or above the original target 4.0647. Instead of a TAKE_PROFIT exit, `continuationPolicy.extendTarget()` extended the target to 4.0805, adding 50% of the original distance.
+- 01:41:13: price 4.081. Extended again to 4.1043.
+- The peak was 4.101, which never reached 4.1043.
+- **AGENT INFERENCE:** if the original target had been taken, the trade would have closed at about +0.84% gross instead of −0.15%.
+
+### E12: Trade 182's 5m context at entry (PROJECT EVIDENCE: I2-001, I2-002, I2-006, I2-007)
+
+- The entry approval was `BALANCED_NEUTRAL_5M_WATCH_1H`, i.e. 5m NEUTRAL and 1h WATCH.
+- The 5m signal it relied on, #176655, has `decision=NEUTRAL` but **`original_decision=STRONG_SELL`, score 25**.
+- The three 5m signals before it also scored 22–25 and were stored as NEUTRAL.
+- The decision is overwritten in order by the confluence, BTC, derivatives and order-book stages (`FinalDecisionService.java:122-148`). `safeNeutral` only applies when data quality is invalid, and here `data_quality_valid=1`.
+- So a downstream stage turned the bearish 5m reading into NEUTRAL, and the entry gate read the overwritten value.
+- ACE was illiquid: the 1m candles at 12:51 and 12:53 had 0 trades and 0 volume.
+- The position exited 8 minutes later on a 5m STRONG_SELL that was **not** overwritten.
+
+### E13: Data freshness (PROJECT EVIDENCE: I2-001, I2-006)
+
+- Every signal used at entry and exit has `data_quality_valid=1`.
+- Candle rows are created 0.4–3.6 s after their open time and closed afterwards. No staleness.
+- Delay from candle close to 5m signal by symbol: EGLD and XRP about 1.5 s, ACE about 3 s, SHIB about 4.4 s, DOGE 5.7–9.8 s. The longest was at the 07:00 KSA hour boundary.
+- 1h signal ages fit the closed 1h candle each time (none older than 59 minutes).
+- **No stale input at entry or exit.**
+
+### E14: Price after exit, judged separately from the entry (PROJECT EVIDENCE: I2-004)
+
+| id | first after exit (within 60 min) | effect of the exit |
+|---|---|---|
+| 137 | stop hit 00:01:07 | **avoided** a −0.5% stop |
+| 143 | stop hit 01:43:41 (6 s later); low 3.94 | **avoided** about −2.3% |
+| 158 | target hit 06:41:38; stop never hit | gave up a +0.17% target (about 0 after fees) |
+| 162 | stop hit 07:29:22 before target at 08:18:26 | **avoided** the stop |
+| 172 | target hit 10:37:05; stop never hit | gave up a +0.37% target |
+| 182 | neither hit | no effect |
+
+### E15: Risk/reward across the population (PROJECT EVIDENCE: I2-005)
+
+| R:R bucket | n | wins | losses (of which stopped) | average gross % | sum P&L |
+|---|---|---|---|---|---|
+| < 0.5 | 12 | 9 | 3 (0) | +0.072 | +0.226 |
+| 0.5 – 1 | 17 | 11 | 5 (3) | +0.039 | +0.119 |
+| 1 – 1.5 | 31 | 17 | 14 (13) | +0.035 | +0.148 |
+| ≥ 1.5 | 35 | 11 | 24 (21) | −0.150 | −2.049 |
+
+---
+
+## FINDINGS (Iteration 3; I have reviewed only my own work)
+
+- **F10, resolved: not a protection defect.** PROJECT EVIDENCE (E10).
+  - On the first tick that breached the lock, the exit committed in 25 ms. The loss came from a −1.78% market move between ticks.
+  - It is a design limitation: a "hard floor" cannot guarantee a price through a gap, and paper fills do not model slippage.
+  - The exit avoided an immediate stop and a further −2.3%.
+- **F13, new: on trade 143 the target extension turned a winner into a loser.** PROJECT EVIDENCE (E11) + INFERENCE.
+  - This is behavior as designed (continuation policy), so it is a trading-rule question, not a code defect.
+  - It is the single biggest swing in the frozen set: about +0.84% versus −0.15%.
+  - After an extension, the protected floor is only entry × 1.0005, which is far below the original target. Proposed for the root-cause phase.
+- **F14, new: confirmed exits wait for the next price tick.** PROJECT EVIDENCE (E9).
+  - The wait was 2.8–38.9 s, and is longest on illiquid symbols (ACE, SHIB).
+  - The cost was zero in all six trades, because missing ticks here mean the price had not moved.
+  - Severity: low. It is a latency and observability gap, not a cause of loss.
+  - 158 shows a possible gap between a signal's `generated_at` and when it becomes visible (U14).
+- **F15, new, possible entry-logic defect (not yet confirmed): a bearish 5m reading was masked as NEUTRAL at entry (182).** PROJECT EVIDENCE (E12).
+  - The exploratory route treated a 5m whose original decision was STRONG_SELL with score 25 as "NEUTRAL".
+  - The entry happened in an illiquid market and never went above the entry price.
+  - Whether this is a defect depends on which stage did the overwrite and why (I3-001).
+  - I will also check whether 137's 5m NEUTRAL (#156721) was overwritten the same way.
+- **F8, downgraded: low risk/reward does not lose more.** PROJECT EVIDENCE (E15).
+  - Low risk/reward buckets had the best gross results. The ≥1.5 bucket held most of the stopped trades and the largest losses, which is consistent with higher-volatility entries.
+  - What stands: there is no risk/reward gate, and with `fee_usdt=0` the small targets (+0.17–0.37%) are close to break-even after typical round-trip fees. The fee level is an external assumption, not fetched this session.
+  - The "structurally negative edge" claim is withdrawn as a confirmed defect.
+- **F3, closed: no stale signals in the live exit path.** PROJECT EVIDENCE (E13). Every exit used signals from the current candle. 172's 15-minute HTF wait is the documented rule (1h SELL while 5m is still WATCH means hold).
+- **F11, refined: exits limited every loss to below the stop.** PROJECT EVIDENCE (E14). Of the six exits, three avoided a stop, two gave up small targets (158, 172) and one had no effect.
+
+**Classification so far, per trade:**
+
+| id | classification |
+|---|---|
+| 137 | valid loss |
+| 143 | valid loss under the rules; design concern F13 |
+| 158 | valid loss; the exit was early in hindsight |
+| 162 | valid loss |
+| 172 | valid loss; the exit was early in hindsight |
+| 182 | **pending F15** |
+
+## UNKNOWNS
+
+- **U14:** whether a signal's `generated_at` is earlier than the moment it becomes visible to the protection callback (158 at 06:30:02.192).
+- **U15:** which FinalDecision stage turned 182's 5m STRONG_SELL into NEUTRAL, and whether the same happened to 137, 158, 162 or 172.
+- **U16:** whether 172 had any tick between 10:15:04.6 and 10:15:43.4. Also the 1m candle extremes for EGLD at 01:43 KSA, to confirm the gap was real rather than sampling.
+- **U17:** the reason text for 143's TP extensions, and whether the lock state was ACTIVE or REBASE when it triggered.
+- **U7:** the build running at trade time.
+- Production log lines are unavailable to Claude, so no log-timestamp corroboration was possible.
+
+---
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-001
+Purpose: For U15/F15, the full decision path for the 5m signals used at entry, plus 182's 5m series.
+SQL:
+SELECT s.id, s.symbol, s.interval_code, s.candle_open_time, s.generated_at, s.original_decision, s.decision, s.total_score, s.confluence_status, s.confluence_entry_allowed, s.confluence_higher_decision, s.primary_blocking_stage, LEFT(s.final_decision_explanation,1500) AS fde, LEFT(CAST(s.decision_path AS CHAR),6000) AS path FROM trade_signal s WHERE s.id IN (156721,159407,165415,167616,171559,176403,176529,176655,176792,176934,176710) ORDER BY s.symbol, s.generated_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-002
+Purpose: For U17/F13, position-management events (TP extensions, profit lock) and the immutable exit audit for the six positions.
+SQL:
+SELECT p.id AS position_id, e.id, e.wallet_position_id, e.event_type, e.old_value_usdt, e.new_value_usdt, e.market_price_usdt, e.occurred_at, LEFT(e.reason,800) AS reason FROM paper_position p JOIN position_management_event e ON e.symbol=p.symbol AND e.occurred_at BETWEEN p.opened_at - INTERVAL 10 SECOND AND p.closed_at + INTERVAL 10 SECOND WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, e.occurred_at LIMIT 200;
+SELECT a.paper_position_id, a.wallet_position_id, a.close_trigger, a.source_signal_id, a.source_signal_decision, a.source_signal_original_decision, a.exit_price_usdt, a.stop_loss_usdt, a.take_profit_usdt, a.audited_at, LEFT(a.close_explanation,800) AS expl FROM production_exit_audit a WHERE a.paper_position_id IN (182,172,162,158,143,137) ORDER BY a.paper_position_id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-003
+Purpose: For U14, the timestamp columns of the timing-relevant tables, to find a commit or created timestamp for signals.
+SQL:
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME IN ('trade_signal','signal_processing_work','wallet_managed_position','market_price_event') AND (COLUMN_NAME LIKE '%\_at' OR COLUMN_NAME LIKE '%time%') ORDER BY TABLE_NAME, ORDINAL_POSITION
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-004
+Purpose: For U16, the complete tick gaps for 172 and 158 at the exit, and the EGLD 1m candles at 143's gap, to tell a real move from sparse sampling.
+SQL:
+SELECT e.symbol, e.id, e.observed_at, e.created_at, e.price, e.delivery_status FROM market_price_event e WHERE (e.symbol='SHIBUSDT' AND e.observed_at BETWEEN '2026-10-12 07:14:55' AND '2026-10-12 07:15:45') OR (e.symbol='XRPUSDT' AND e.observed_at BETWEEN '2026-10-12 03:30:00' AND '2026-10-12 03:30:05') ORDER BY e.symbol, e.observed_at LIMIT 100;
+SELECT c.symbol, c.open_time, c.open_price, c.high_price, c.low_price, c.close_price, c.volume, c.number_of_trades, c.closed, c.ingestion_source, c.created_at, c.updated_at FROM candle c WHERE c.symbol='EGLDUSDT' AND c.interval_code='1m' AND c.open_time BETWEEN '2026-10-11 22:40:00' AND '2026-10-11 22:44:00' ORDER BY c.open_time
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-005
+Purpose: For F15, how widespread the overwrite is. Among production BUY entries since 10-11, count how many approved routes relied on a 5m signal stored as NEUTRAL/WATCH whose original decision was SELL/STRONG_SELL, and their outcomes.
+SQL:
+SELECT s5.original_decision AS five_orig, s5.decision AS five_final, COUNT(*) AS n, SUM(p.realized_pnl>0) AS wins, SUM(p.realized_pnl<0) AS losses, ROUND(AVG((p.exit_price-p.entry_price)/p.entry_price*100),4) AS avg_gross_pct FROM paper_position p JOIN trade_signal s5 ON s5.id=(SELECT x.id FROM trade_signal x WHERE x.symbol=p.symbol AND x.interval_code='5m' AND x.generated_at<=p.opened_at ORDER BY x.generated_at DESC LIMIT 1) WHERE p.opened_at>='2026-10-11 00:00:00' AND p.status IN ('CLOSED','STOPPED') GROUP BY s5.original_decision, s5.decision ORDER BY n DESC
+### END_DB_REQUEST
+
+---
+
+**Next (iteration 4):** use I3-001 and I3-005 to rule on F15 (decide whether a downstream stage masking a bearish 5m reading is a defect). Use I3-002 to finish F13 (the target-extension rule and the floor that remains after an extension). Use I3-003 and I3-004 to close U14 and U16. Then start checking each finding for Replay reproducibility.

@@ -5,10 +5,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 
 import com.crypto.client.config.binance.BinanceMarketDataProperties;
 import com.crypto.client.binance.dto.BinanceKline;
@@ -18,16 +20,35 @@ import com.crypto.client.binance.dto.BinanceOrderBook;
 public class BinanceMarketDataClient {
 
     private final RestClient restClient;
+    private final RestClient timeClient;
+    private final RestClient reconciliationClient;
     private final BinanceMarketDataProperties properties;
+    private final BinanceRestAdmissionGate admissionGate;
 
     public BinanceMarketDataClient(
         RestClient.Builder restClientBuilder,
-        BinanceMarketDataProperties properties
+        BinanceMarketDataProperties properties,
+        BinanceRestAdmissionGate admissionGate
     ) {
         this.properties = properties;
+        this.admissionGate = admissionGate;
+        int requestTimeoutMs=Math.max(1_000,properties.getRequestTimeoutSeconds()*1_000);
+        var marketFactory=new SimpleClientHttpRequestFactory();
+        marketFactory.setConnectTimeout(requestTimeoutMs);marketFactory.setReadTimeout(requestTimeoutMs);
         this.restClient = restClientBuilder
-            .baseUrl(properties.getBaseUrl())
+            .baseUrl(properties.getBaseUrl()).requestFactory(marketFactory)
             .build();
+        // Clock sampling must not delay application startup for the general
+        // historical-request timeout. This client is used only for /api/v3/time.
+        int clockTimeoutMs=Math.max(1_000,Math.min(5_000,properties.getRequestTimeoutSeconds()*1_000));
+        var clockFactory=new SimpleClientHttpRequestFactory();
+        clockFactory.setConnectTimeout(clockTimeoutMs);clockFactory.setReadTimeout(clockTimeoutMs);
+        this.timeClient=restClientBuilder.baseUrl(properties.getBaseUrl()).requestFactory(clockFactory).build();
+        // Recovery is bounded by the drain window.  It must not spend the
+        // general 30-second historical-request timeout per candidate.
+        var recoveryFactory=new SimpleClientHttpRequestFactory();
+        recoveryFactory.setConnectTimeout(clockTimeoutMs);recoveryFactory.setReadTimeout(clockTimeoutMs);
+        this.reconciliationClient=restClientBuilder.baseUrl(properties.getBaseUrl()).requestFactory(recoveryFactory).build();
     }
 
     public List<BinanceKline> getKlines(
@@ -37,7 +58,7 @@ public class BinanceMarketDataClient {
     ) {
         validateRequest(symbol, interval, limit);
 
-        List<List<Object>> response = restClient.get()
+        List<List<Object>> response = request(() -> restClient.get()
             .uri(uriBuilder -> uriBuilder
                 .path("/api/v3/klines")
                 .queryParam("symbol", symbol.toUpperCase())
@@ -46,7 +67,7 @@ public class BinanceMarketDataClient {
                 .build())
             .retrieve()
             .body(new ParameterizedTypeReference<>() {
-            });
+            }));
 
         if (response == null || response.isEmpty()) {
             return List.of();
@@ -61,6 +82,50 @@ public class BinanceMarketDataClient {
         return candles;
     }
 
+    /** Exact historical lookup used only by the local reconciliation fallback.
+     * The kline payload does not carry symbol/interval, so caller context is
+     * authoritative and returned open/close timestamps are validated by the
+     * reconciliation service. */
+    public List<BinanceKline> getKlines(String symbol, String interval, Instant startTime, Instant endTime) {
+        if (startTime == null || endTime == null || endTime.isBefore(startTime))
+            throw new IllegalArgumentException("Valid kline time range is required");
+        validateRequest(symbol, interval, 2);
+        List<List<Object>> response = request(() -> reconciliationClient.get()
+            .uri(uriBuilder -> uriBuilder.path("/api/v3/klines")
+                .queryParam("symbol", symbol.toUpperCase())
+                .queryParam("interval", interval)
+                .queryParam("startTime", startTime.toEpochMilli())
+                .queryParam("endTime", endTime.toEpochMilli())
+                .queryParam("limit", 2).build())
+            .retrieve().body(new ParameterizedTypeReference<>() {}));
+        if (response == null || response.isEmpty()) return List.of();
+        List<BinanceKline> candles = new ArrayList<>(response.size());
+        for (List<Object> row : response) candles.add(mapKline(row));
+        return candles;
+    }
+
+    /** Bounded probe used only to distinguish a pre-listing identity from a
+     * transient empty exact-range response. */
+    public List<BinanceKline> getKlinesAtOrAfter(String symbol, String interval, Instant startTime) {
+        if(startTime==null)throw new IllegalArgumentException("startTime is required");
+        validateRequest(symbol,interval,1);
+        List<List<Object>> response=request(()->reconciliationClient.get().uri(uriBuilder->uriBuilder.path("/api/v3/klines")
+            .queryParam("symbol",symbol.toUpperCase()).queryParam("interval",interval)
+            .queryParam("startTime",startTime.toEpochMilli()).queryParam("limit",1).build())
+            .retrieve().body(new ParameterizedTypeReference<>() {}));
+        if(response==null||response.isEmpty())return List.of();
+        return response.stream().map(this::mapKline).toList();
+    }
+
+    /** Exchange time is required when deciding whether a REST kline is final. */
+    public Instant getServerTime() {
+        Map<String,Object> response=request(()->timeClient.get().uri("/api/v3/time").retrieve()
+            .body(new ParameterizedTypeReference<>() {}));
+        if(response==null || !(response.get("serverTime") instanceof Number serverTime))
+            throw new IllegalStateException("Binance time response did not contain serverTime");
+        return Instant.ofEpochMilli(serverTime.longValue());
+    }
+
     public BinanceOrderBook getOrderBook(String symbol, int limit) {
         if (symbol == null || symbol.isBlank()) {
             throw new IllegalArgumentException("Symbol is required");
@@ -69,14 +134,14 @@ public class BinanceMarketDataClient {
             throw new IllegalArgumentException("Depth limit must be between 1 and 1000");
         }
 
-        BinanceOrderBook response = restClient.get()
+        BinanceOrderBook response = request(() -> restClient.get()
             .uri(uriBuilder -> uriBuilder
                 .path("/api/v3/depth")
                 .queryParam("symbol", symbol.toUpperCase())
                 .queryParam("limit", limit)
                 .build())
             .retrieve()
-            .body(BinanceOrderBook.class);
+            .body(BinanceOrderBook.class));
 
         if (response == null) {
             throw new IllegalStateException("Empty Binance order-book response for " + symbol);
@@ -96,14 +161,14 @@ public class BinanceMarketDataClient {
             throw new IllegalArgumentException("Symbol is required");
         }
 
-        Map<String, Object> response = restClient.get()
+        Map<String, Object> response = request(() -> restClient.get()
             .uri(uriBuilder -> uriBuilder
                 .path("/api/v3/exchangeInfo")
                 .queryParam("symbol", symbol.toUpperCase())
                 .build())
             .retrieve()
             .body(new ParameterizedTypeReference<>() {
-            });
+            }));
 
         if (response == null) {
             throw new IllegalStateException("Empty Binance exchangeInfo response for " + symbol);
@@ -185,5 +250,11 @@ public class BinanceMarketDataClient {
                 "Limit must be between 1 and 1000"
             );
         }
+    }
+
+    private <T> T request(Supplier<T> call) {
+        admissionGate.admit();
+        try { return call.get(); }
+        catch (RuntimeException failure) { admissionGate.recordFailure(failure); throw failure; }
     }
 }

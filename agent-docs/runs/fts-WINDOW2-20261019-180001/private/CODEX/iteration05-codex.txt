@@ -1,0 +1,85 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen cohort remains exactly positions `182, 172, 162, 158, 143, 137`; no substitutions.
+
+- **PROJECT EVIDENCE:** Five entries explicitly record modest entry-quality scores (`50, 60, 50, 60, 58`). Current source permits score `50` as `LATE_ENTRY`, blocks only below `50`, and caps allowed initial allocation at 25%. This is route-compatible—not proof of the October 12 deployed revision. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1171)
+
+| Position | Entry UTC → KSA | Persisted entry assessment | Stored reward:risk* | Iteration-5 assessment |
+|---:|---|---|---:|---|
+| 182 ACE | 2026-10-12 09:57:06.476246 → 12:57:06.476246 | `LATE_ENTRY` 50; 5m NEUTRAL, 1h WATCH; 15% effective allocation | 0.48 | Weak/marginal timing, but deliberately reduced exposure. |
+| 172 SHIB | 06:36:05.087117 → 09:36:05.087117 | `ACCEPTABLE_ENTRY` 60; 5m BUY, 1h NEUTRAL; 25% | 0.74 | Best documented HTF alignment in this cohort, though stored reward:risk is still below 1. |
+| 162 DOGE | 04:02:06.414818 → 07:02:06.414818 | `LATE_ENTRY` 50; breakout, 5m/1h WATCH; 15% | 0.44 | Weak timing: already 2.82 ATR above SMA20, accumulated evidence was only 1 BUY / 9 WATCH. |
+| 158 XRP | 02:35:04.811478 → 05:35:04.811478 | 5m-BUY wake-up, latest 1m #165412; 25%; no explicit score captured | 0.35 | Entry-quality classification is unproven; stored reward:risk is the weakest of the cohort. |
+| 143 EGLD | 2026-10-11 22:40:04.857700 → 2026-10-12 01:40:04.857700 | `ACCEPTABLE_ENTRY` 60; 1m said wait for retracement, but fresh 5m BUY wake-up allowed 25% | 3.13 | Material timing exception: execution proceeded despite a 1m ATR-extension/retracement warning. |
+| 137 EGLD | 2026-10-11 20:55:04.510238 → 23:55:04.510238 | `ACCEPTABLE_ENTRY` 58; 5m NEUTRAL, 1h WATCH; 25% | 0.64 | Modest exploratory entry, not a high-conviction multi-timeframe setup. |
+
+\*Calculated from the currently stored `paper_position` entry, stop, and take-profit fields. It is not yet proven that these are each position’s original, unmodified entry-time geometry.
+
+- **PROJECT EVIDENCE:** The five positions with recorded scores average **55.6/100**, all below the current `GOOD_ENTRY` threshold of 70. This is a cohort of intentionally constrained entries, not a cohort of high-quality initial setups.
+
+- **PROJECT EVIDENCE:** Position #143 is the clearest entry-quality concern. Its persisted reason records `WAIT_FOR_RETRACEMENT` and a 4.35-ATR distance from SMA20, while a 5m setup-wakeup path allowed the trade at 25%. Current source confirms that a fresh 5m trigger can re-evaluate a deferred 1m opportunity, but it remains the 1m signal that supplies the execution price, stop, and target. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:292)
+
+- **PROJECT EVIDENCE:** Each stored realized loss exactly equals `(exit_price − entry_price) × quantity` to the shown precision. The captured position rows therefore show no additional fee amount in `realized_pnl`; whether fees were absent, zero by paper policy, or stored elsewhere remains unproven.
+
+- **AGENT INFERENCE:** #143 and #162 merit priority in later root-cause work: #143 because it is an explicit timing exception, #162 because it was a late breakout entry with predominantly WATCH evidence. This is not a confirmed defect or a hindsight judgment.
+
+- **EXTERNAL RESEARCH:** None.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Authoritative position evidence: `DBQ-CODEX-I2-001-CODEX-result.txt`.
+- **PROJECT EVIDENCE:** Current source persists a position only after wallet BUY execution and uses a fresh canonical execution price for sizing/revalidation. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:340)
+- **PROJECT EVIDENCE:** Current source can update a live paper position’s take-profit from the managed-position state and can update protection fields on progressive adds. Thus current position geometry alone cannot prove immutable original geometry. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:150)
+- **PROJECT EVIDENCE:** Current entry-quality scoring penalizes reward:risk below 1, ATR/price extension, stale opportunity age, recent rejection, volatility, and stop exposure. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:976)
+
+## UNKNOWNS
+
+- The actual six entry `trade_signal` rows: generated/candle-close timestamps, freshness, `data_quality_valid`, final/original decision, exact stop/TP, and the entry-quality inputs calculated at execution price.
+- Entry-time wallet execution price, fee, balance/risk-limit outcome, and whether position geometry changed after initial entry.
+- Whether the October 12 runtime revision/configuration contained the current entry-quality thresholds and wake-up rules.
+- The #143 triggering 5m signal identity and exact contemporaneous relationship to its 1m timing signal.
+- Whether any entry used stale, incomplete, or non-canonical market evidence.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Inspect the actual schema required to retrieve bounded entry-quality, signal, wallet-execution, opportunity, and processing evidence for the six frozen positions without assuming columns.  
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    c.extra
+FROM information_schema.columns AS c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'execution_opportunity',
+      'signal_processing_work',
+      'paper_position'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I5-002  
+Purpose: Retrieve bounded raw entry-signal and wallet BUY-execution evidence for the six frozen positions, including XRP’s recorded 5m wake-up trigger #165415. This will prove or refute the persisted narratives; it must not be treated as a current-state substitute for the frozen snapshot.  
+SQL:
+```sql
+SELECT ts.*
+FROM crypto_ai.trade_signal AS ts
+WHERE ts.id IN (176710, 171589, 167668, 165412, 165415, 159408, 156723)
+ORDER BY FIELD(ts.id, 176710, 171589, 167668, 165412, 165415, 159408, 156723);
+
+SELECT wt.*
+FROM crypto_ai.wallet_trade AS wt
+WHERE wt.signal_id IN (176710, 171589, 167668, 165412, 159408, 156723)
+ORDER BY wt.signal_id, wt.executed_at, wt.id;
+```
+### END_DB_REQUEST

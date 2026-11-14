@@ -1,0 +1,69 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No executed DB evidence is present in the permitted `db/CODEX` folder. The frozen cohort remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No per-trade root-cause or rule-compliance conclusion is supportable yet.
+
+- **PROJECT EVIDENCE — live protection route:** A canonical 1m Binance receipt first persists the candle and a `market_price_event` in `PENDING`; only afterward does a separate protection transaction run. Protection exits the wallet first, then closes the matching `paper_position`; the price event becomes `APPLIED` in that same effects transaction. [BinanceKlineService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BinanceKlineService.java:101), [KlineTransactionCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:40), [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:165), [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:82)
+
+- **PROJECT EVIDENCE — accepted trigger evidence:** Only `market_price_event` records with `delivery_status` `LEGACY` or `APPLIED` are accepted price evidence. `PENDING`, `NON_CANONICAL`, and `PROTECTION_NOT_APPLIED` cannot prove the exit trigger. An `APPLIED` event proves the protection callback committed, but may still be a no-op if no position was open. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118)
+
+- **PROJECT EVIDENCE — signal-driven route:** Closed-candle analysis is asynchronous. A persisted signal is registered as durable work, locked, freshness-checked after normal locks, then processed; a completed work record does not necessarily mean a position opened or closed. [AnalysisService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:109), [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:97), [CandleClosedAnalysisWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java:175)
+
+- **PROJECT EVIDENCE — ordinary entry route:** In normal automated entry, the wallet BUY is attempted before `paper_position` is created. The persisted position stores the entry signal, initial stop/target, entry price, quantity, and application-side `opened_at`. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:375), [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:45)
+
+- **PROJECT EVIDENCE — signal-close accounting hazard:** The signal route saves the `paper_position` closure before calling `executeSignalLinkedExit`; that wallet method can return early without a SELL if its managed position is absent or has no sellable quantity. Its return is `void`, so the caller does not verify execution. This is a code-level reconciliation risk, not evidence that it occurred for any frozen trade. The live-price mechanical route is stronger because it closes the paper row only after `executeMechanicalExit(...)` returns `true`. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487), [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:211), [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:475)
+
+- **PROJECT EVIDENCE:** `paper_position.closed_at` is assigned with application `Instant.now()`; it is not the Binance observation timestamp. For a protection exit, the accepted `market_price_event.observed_at` is the trigger-time evidence; `wallet_trade.executed_at` and `paper_position.closed_at` establish persistence timing. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:391)
+
+- **PROJECT EVIDENCE:** `production_exit_audit` is the intended immutable bridge for close trigger, context signal, exit price, stop, and target. It is useful but not, by itself, proof of a wallet SELL; that still requires the corresponding `wallet_trade`. [ProductionExitAuditService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:32)
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Read all required shared/Codex context, charter, iterations 1–3, and permitted Codex DB directory.
+- **EXTERNAL RESEARCH:** None.
+- **AGENT INFERENCE:** The six losses may have resulted from valid stops, signal exits, profit-lock/HTF exits, or accounting divergence. The source alone cannot identify which route applied to any selected ID.
+- **PROJECT EVIDENCE:** The supplied snapshot UTC (`2026-10-20 15:00:04`) arithmetically converts to **18:00:04 KSA**, while the charter states **18:00:02 KSA**. This does not affect the frozen cohort.
+
+## UNKNOWNS
+
+For each frozen position, still unverified:
+
+- Symbol; entry and exit signal IDs; UTC/KSA lifecycle times; stop/target; close reason and explanation.
+- Whether closure used live protection, a signal route, manual closure, or another route.
+- Accepted price-event ID and observation timestamp, if any.
+- Wallet BUY/SELL rows, quantities, execution prices, fees, and reconciliation against `paper_position.realized_pnl`.
+- Whether any position followed the unverified signal-close no-op route.
+- Signal-work state, candle freshness/data quality, strategy gates, and applicable runtime mode/version.
+- Whether the code currently in this workspace was the version operating for these trades.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Obtain actual `crypto_ai` schema evidence for the complete entry, protection, exit, and financial-reconciliation routes before selecting trade-specific columns or joins.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    data_type,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'signal_processing_work',
+      'position_management_event',
+      'candle'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation changes were made.

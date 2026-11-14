@@ -1,0 +1,106 @@
+## FINDINGS
+
+### PROJECT EVIDENCE
+
+- Frozen cohort remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitution occurred.
+
+- No Codex-scoped DB result exists yet; `agent-docs/runs/fts-WINDOW1-20261019-120809/db/CODEX/` remains empty. No individual frozen trade can yet be linked to a symbol, signal, managed position, exit, or accepted price event.
+
+- Archived logs contain numeric matches for all six IDs, but they are **not valid frozen-trade matches**. Current source emits `positionId` from `WalletManagedPosition.id` / `walletPositionId`, whereas the frozen cohort is `paper_position.id`. The two identifiers require an evidence-backed bridge. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:202)
+
+- The required bridge is designed to be `production_exit_audit`: current code records both `paper_position_id` and the managed `wallet_position_id`, resolved through the paper position’s entry signal. This is source evidence only until the deployed schema and rows are read. [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java) [ProductionExitAuditService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java)
+
+- Numeric-overlap log candidates only:
+
+  | Numeric log ID | Candidate symbol | First observed UTC / KSA | Later evidence |
+  |---|---|---|---|
+  | 137 | AEROUSDT | 2026-10-11 06:54:10.696 UTC / 09:54:10.696 KSA | One profit-lock evaluation |
+  | 143 | AEROUSDT | 2026-10-11 11:49:07.796 UTC / 14:49:07.796 KSA | Profit-lock trigger and signal-path close flow |
+  | 158 | ENAUSDT | 2026-10-11 16:43:06.523 UTC / 19:43:06.523 KSA | Inactive profit-lock evaluations only in inspected range |
+  | 162 | DOGEUSDT | 2026-10-11 17:31:22.460 UTC / 20:31:22.460 KSA | Profit-lock trigger at 17:33:38.455 UTC / 20:33:38.455 KSA |
+  | 172 | EGLDUSDT | 2026-10-11 19:40:15.044 UTC / 22:40:15.044 KSA | Profit-lock trigger at 19:43:35.036 UTC / 22:43:35.036 KSA |
+  | 182 | ICPUSDT | 2026-10-11 22:41:05.405 UTC / 2026-10-12 01:41:05.405 KSA | Inactive profit-lock evaluations only in inspected range |
+
+  These are `wallet_managed_position`-style candidates, not findings about the frozen `paper_position` rows.
+
+- The clearest candidate timing sequence is numeric `positionId=143`, which is useful only as a logging-forensics example:
+
+  - Candle close: `2026-10-11 11:50:59.999 UTC` / `14:50:59.999 KSA`.
+  - Signal generated: `11:51:03.066980200 UTC` / `14:51:03.066980200 KSA` — 3,067 ms after close.
+  - Signal row created: `11:51:04.382915 UTC` / `14:51:04.382915 KSA` — 4,383 ms after close. The log explicitly says this is row-creation time, not commit time.
+  - Signal-profit-lock trigger: `11:51:04.408 UTC` / `14:51:04.408 KSA`.
+  - Processing committed: `11:51:05.924 UTC` / `14:51:05.924 KSA` — about 4.925 s after candle close.
+  - A direct-price event was committed `APPLIED` at `11:51:05.927 UTC` / `14:51:05.927 KSA`, for observation `11:51:05.719 UTC` / `14:51:05.719 KSA`.
+
+  The log-prefix timestamps are inferred UTC here because they align with the same records’ explicitly labelled `...Utc` fields; the prefix itself has no offset suffix.
+
+- Current source has two materially different profit-lock paths:
+
+  - Direct-price protection checks the profit-lock breach against `PositionExitPolicy` and may hold rather than exit. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:219)
+  - A qualifying signal-price profit-lock trigger closes the paper position immediately. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:176)
+
+  This is a current-source observation, not proof of the deployed behavior or any frozen trade’s exit.
+
+- The price-event state machine commits an `APPLIED` outcome only after the protection transaction returns successfully; it records the event ID, symbol, observation time, and outcome—but not the paper-position ID in its log line. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:82)
+
+- Log rotation filenames are not reliable event dates: `crypto-ai-trader.2026-10-12.0.log.gz` contains events dated `2026-10-11`. Timeline reconstruction must use each log line’s timestamp, never the rotation filename.
+
+### AGENT INFERENCE
+
+- The numeric overlap is a high-risk false-correlation trap. In particular, the `positionId=143` candidate had a positive price move between the logged entry and signal trigger, while frozen `paper_position` 143 is stipulated as loss-making. This reinforces that no paper-position attribution may be made without the DB bridge.
+
+- Current logs are insufficient to prove entry-to-exit latency for any frozen paper position because the terminal “Live … executed” logs do not include the paper-position ID or direct price-event ID.
+
+### EXTERNAL RESEARCH
+
+- None.
+
+## EVIDENCE
+
+- Searched 13 archived logs for 2026-10-10, 13 for 2026-10-11, 11 for 2026-10-12, plus the current log.
+- Exact numeric candidate matches: 0 on 2026-10-10; 214 on 2026-10-11; 11 on 2026-10-12; 0 in the current log.
+- Key log records: `crypto-ai-trader.2026-10-11.7.log.gz` lines 76546–76585; `crypto-ai-trader.2026-10-11.10.log.gz`; `.11.log.gz`; `.12.log.gz`; and `crypto-ai-trader.2026-10-12.0.log.gz`.
+- Current source establishes that paper close writes use the open paper row by symbol, while the protection log IDs are managed-wallet IDs. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:391)
+
+## UNKNOWNS
+
+- The actual symbol, entry/exit timestamps, reasons, P&L, fees, signal IDs, managed-wallet IDs, and accepted price-event IDs for all six frozen paper positions.
+- Whether `production_exit_audit` exists and has a row for each frozen trade.
+- Whether the current source version/configuration was deployed for those events.
+- Exit-trigger-to-commit latency, because the relevant rows are absent and logs lack durable cross-entity correlation.
+- Replay comparability.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Read the actual deployed schema needed to build a six-`paper_position`-only linkage query from position to entry/exit signal, managed wallet position, immutable exit audit, price events, and timing records. This avoids assuming that current source mappings equal the database.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    ordinal_position,
+    column_type,
+    is_nullable,
+    column_key,
+    column_default
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_managed_position',
+      'wallet_trade',
+      'production_exit_audit',
+      'position_analysis',
+      'position_management_event',
+      'market_price_event',
+      'signal_processing_work'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST
+
+No implementation occurred; documentation updates are not required for this analysis-only iteration.

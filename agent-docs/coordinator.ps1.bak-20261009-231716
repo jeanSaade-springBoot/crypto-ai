@@ -1,0 +1,298 @@
+param(
+ [Parameter(Mandatory=$true)][string]$Question,
+ [string]$ProjectRoot = (Get-Location).Path,
+ [int]$MaxRounds = 12,
+ [int]$ProcessTimeoutSeconds = 1800
+)
+$ErrorActionPreference='Stop'
+if($ProcessTimeoutSeconds -lt 1) { throw "ProcessTimeoutSeconds must be >= 1" }
+$root=(Resolve-Path $ProjectRoot).Path
+$docs=Join-Path $root 'agent-docs'
+New-Item -ItemType Directory -Force -Path $docs | Out-Null
+$runId=Get-Date -Format 'yyyyMMdd-HHmmss'
+$run=Join-Path $docs "runs\$runId"
+New-Item -ItemType Directory -Force -Path $run | Out-Null
+$log=Join-Path $run 'PROGRESS.log'
+$memory=Join-Path $docs 'memory'
+New-Item -ItemType Directory -Force -Path $memory | Out-Null
+$utf8=New-Object System.Text.UTF8Encoding $false
+function Say($s) { $line="[$(Get-Date -Format HH:mm:ss)] $s"; Write-Host $line; Add-Content -LiteralPath $log -Value $line }
+function Read-OptionalText([string]$path) {
+ if(-not (Test-Path -LiteralPath $path)) { return '' }
+ return [IO.File]::ReadAllText($path)
+}
+function Save-PeerMemory {
+ param(
+  [string]$Status,
+  [int]$CompletedRound,
+  [string]$CodexBody,
+  [string]$ClaudeBody,
+  [string]$HistoryText
+ )
+ $stamp=Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+ $codexPath=Join-Path $memory 'CODEX_LATEST.md'
+ $claudePath=Join-Path $memory 'CLAUDE_LATEST.md'
+ $indexPath=Join-Path $memory 'PEER_INDEX.md'
+ $codexDoc=@"
+# Codex standing position
+Updated: $stamp
+Run: $runId
+Round: $CompletedRound
+Status: $Status
+Peer: Claude / Cursor ChatGPT coordinator must treat this as Codex's last known position.
+This is prior-claim memory, not proof and not dual-agreed knowledge.
+
+$CodexBody
+"@
+ $claudeDoc=@"
+# Claude standing position
+Updated: $stamp
+Run: $runId
+Round: $CompletedRound
+Status: $Status
+Peer: Codex / Cursor ChatGPT coordinator must treat this as Claude's last known position.
+This is prior-claim memory, not proof and not dual-agreed knowledge.
+
+$ClaudeBody
+"@
+ $index=@"
+# Peer memory index
+Updated: $stamp
+Last run: $runId
+Last completed round: $CompletedRound
+Status: $Status
+Round history:
+$HistoryText
+
+Files:
+- agent-docs/memory/CODEX_LATEST.md
+- agent-docs/memory/CLAUDE_LATEST.md
+- agent-docs/memory/PEER_INDEX.md
+- agent-docs/AGREED_KNOWLEDGE.md (dual-agreed facts only; do not confuse with standing positions)
+
+Rules:
+- Codex and Claude (and the ChatGPT/Cursor coordinator) must read these files every investigation.
+- Standing positions are how the agents remember each other across runs.
+- They are claims. Re-verify against current code.
+- Do not copy standing positions into AGREED_KNOWLEDGE.md unless both agents approve the exact text.
+- Round 1 of a new question remains independent of the other agent's THIS-run output.
+"@
+ [IO.File]::WriteAllText($codexPath, $codexDoc, $utf8)
+ [IO.File]::WriteAllText($claudePath, $claudeDoc, $utf8)
+ [IO.File]::WriteAllText($indexPath, $index, $utf8)
+ Say "PEER MEMORY saved | round $CompletedRound | $Status"
+}
+function LatestBinary($pattern,$relative) {
+ $ext=Join-Path $env:USERPROFILE '.cursor\extensions'
+ $d=Get-ChildItem $ext -Directory | Where-Object Name -Like $pattern | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+ if (-not $d) { throw "Extension not found: $pattern" }
+ $exe=Join-Path $d.FullName $relative
+ if (-not (Test-Path $exe)) { throw "Executable missing: $exe" }
+ return $exe
+}
+function ConvertTo-ProcessArgumentString([string[]]$ArgumentList) {
+ $parts=@()
+ foreach($a in $ArgumentList) {
+  if($null -eq $a) { continue }
+  if($a -eq '') { $parts += '""'; continue }
+  if($a -notmatch '[ \t"]') { $parts += $a; continue }
+  $escaped=[regex]::Replace($a, '(\\*)"','$1$1\"')
+  $escaped=[regex]::Replace($escaped, '(\\+)$','$1$1')
+  $parts += '"' + $escaped + '"'
+ }
+ return ($parts -join ' ')
+}
+function Invoke-NativeCapturedProcess {
+ param(
+  [Parameter(Mandatory=$true)][string]$FileName,
+  [Parameter(Mandatory=$true)][string[]]$ArgumentList,
+  [Parameter(Mandatory=$true)][string]$WorkingDirectory,
+  [Parameter(Mandatory=$true)][string]$StdoutPath,
+  [Parameter(Mandatory=$true)][string]$StderrPath,
+  [string]$StdinText,
+  [Parameter(Mandatory=$true)][int]$TimeoutMs
+ )
+ $utf8=New-Object System.Text.UTF8Encoding $false
+ $psi=New-Object System.Diagnostics.ProcessStartInfo
+ $psi.FileName=$FileName
+ $psi.Arguments=(ConvertTo-ProcessArgumentString $ArgumentList)
+ $psi.WorkingDirectory=$WorkingDirectory
+ $psi.UseShellExecute=$false
+ $psi.RedirectStandardInput=$true
+ $psi.RedirectStandardOutput=$true
+ $psi.RedirectStandardError=$true
+ $psi.CreateNoWindow=$true
+ $psi.StandardOutputEncoding=$utf8
+ $psi.StandardErrorEncoding=$utf8
+ $p=New-Object System.Diagnostics.Process
+ $p.StartInfo=$psi
+ $stdout=''
+ $stderr=''
+ $timedOut=$false
+ try {
+  if(-not $p.Start()) { throw "Failed to start process: $FileName" }
+  $outTask=$p.StandardOutput.ReadToEndAsync()
+  $errTask=$p.StandardError.ReadToEndAsync()
+  $stdinWriter=New-Object System.IO.StreamWriter($p.StandardInput.BaseStream, $utf8, 1024, $true)
+  $stdinWriter.NewLine="`n"
+  try {
+   if($null -ne $StdinText -and $StdinText -ne '') {
+    $stdinWriter.Write($StdinText)
+    $stdinWriter.Flush()
+   }
+  } finally {
+   $stdinWriter.Dispose()
+   $p.StandardInput.Close()
+  }
+  if(-not $p.WaitForExit($TimeoutMs)) {
+   $timedOut=$true
+   try { if(-not $p.HasExited) { $p.Kill() } } catch { }
+   try { $p.WaitForExit() } catch { }
+  }
+  try { $stdout=$outTask.GetAwaiter().GetResult() } catch { $stdout='' }
+  try { $stderr=$errTask.GetAwaiter().GetResult() } catch { $stderr='' }
+  if($null -eq $stdout) { $stdout='' }
+  if($null -eq $stderr) { $stderr='' }
+  if($timedOut) {
+   $stderr=("TIMEOUT after {0} ms. Process killed.`r`n{1}" -f $TimeoutMs, $stderr)
+  }
+  [IO.File]::WriteAllText($StdoutPath, $stdout, $utf8)
+  [IO.File]::WriteAllText($StderrPath, $stderr, $utf8)
+  if($timedOut) {
+   return @{ ExitCode=$null; TimedOut=$true; Stdout=$stdout; Stderr=$stderr }
+  }
+  return @{ ExitCode=[int]$p.ExitCode; TimedOut=$false; Stdout=$stdout; Stderr=$stderr }
+ } finally {
+  $p.Dispose()
+ }
+}
+$codex=LatestBinary 'openai.chatgpt-*' 'bin\windows-x86_64\codex.exe'
+$claude=LatestBinary 'anthropic.claude-code-*' 'resources\native-binary\claude.exe'
+$policy=@'
+You are conducting an independent, adversarial, READ-ONLY investigation of crypto-ai-trader.
+Never modify source, configuration, DB, git, or runtime. No implementation or deployment.
+Inspect actual code when relevant; do not treat README or other agent opinions as proof.
+Use relevant AGENTS.md, codex-docs and claude-docs without assuming they are correct.
+You MUST also read standing peer memory if present:
+- agent-docs/memory/PEER_INDEX.md
+- agent-docs/memory/CODEX_LATEST.md
+- agent-docs/memory/CLAUDE_LATEST.md
+- agent-docs/AGREED_KNOWLEDGE.md
+Standing peer memory is how Codex and Claude remember each other across runs. Treat it as prior claims, not proof. Re-verify against current code. Do not treat it as dual-agreed knowledge unless the statement is in AGREED_KNOWLEDGE.md with both AGREED marks.
+Do not disclose credentials or secrets. Do not access production systems.
+Respond with clear sections: FINDINGS, EVIDENCE (file paths and lines), OBJECTIONS, UNKNOWNS, VERDICT.
+The verdict line MUST be exactly: VERDICT: APPROVED  or  VERDICT: REJECTED  or  VERDICT: INSUFFICIENT_EVIDENCE
+APPROVED means no unresolved material objection to the specific question/document reviewed; not authorization to change code.
+'@
+function Invoke-Agent([string]$who,[string]$prompt,[string]$name) {
+ $out=Join-Path $run "$name.txt"
+ $err=Join-Path $run "$name.stderr.txt"
+ $inputFile=Join-Path $run "$name.prompt.txt"
+ [IO.File]::WriteAllText($inputFile,$prompt,[Text.UTF8Encoding]::new($false))
+ Say "START $who / $name"
+ $timeoutMs=$ProcessTimeoutSeconds * 1000
+ if($who -eq 'Codex') {
+  # Prompt via stdin to avoid PowerShell quoting/length problems. Sandbox stays read-only.
+  $result=Invoke-NativeCapturedProcess -FileName $codex -ArgumentList @('exec','--sandbox','read-only','-C',$root,'-') -WorkingDirectory $root -StdoutPath $out -StderrPath $err -StdinText $prompt -TimeoutMs $timeoutMs
+ } else {
+  # No shell/edit tools, only project-local read tools. Plan mode is non-editing.
+  $result=Invoke-NativeCapturedProcess -FileName $claude -ArgumentList @('-p','--permission-mode','plan','--permission-prompts','none','--tools','Read,Glob,Grep','--output-format','text',$prompt) -WorkingDirectory $root -StdoutPath $out -StderrPath $err -TimeoutMs $timeoutMs
+ }
+ if($result.TimedOut) {
+  Say "TIMEOUT $who / $name after ${ProcessTimeoutSeconds}s"
+  throw "TIMEOUT: $who / $name exceeded $ProcessTimeoutSeconds seconds. Process killed. See $err"
+ }
+ if($result.ExitCode -ne 0) { throw "$who failed (ExitCode=$($result.ExitCode)). See $err" }
+ $body=$result.Stdout
+ if([string]::IsNullOrWhiteSpace($body)) { throw "$who returned empty output. See $err" }
+ Say "DONE $who / $name"
+ return $body
+}
+function Verdict($body) {
+ $m=[regex]::Matches($body,'(?im)^\s*VERDICT\s*:\s*(APPROVED|REJECTED|INSUFFICIENT_EVIDENCE)\s*$')
+ if($m.Count -ne 1) { return 'INSUFFICIENT_EVIDENCE' }
+ return $m[0].Groups[1].Value.ToUpperInvariant()
+}
+$peerIndex=Read-OptionalText (Join-Path $memory 'PEER_INDEX.md')
+$memoryNote= if([string]::IsNullOrWhiteSpace($peerIndex)) { 'No prior peer memory yet.' } else { "Prior peer memory exists. Read agent-docs/memory/PEER_INDEX.md, CODEX_LATEST.md and CLAUDE_LATEST.md. Do not treat those files as proof of current code." }
+$intro="$policy`nQUESTION:`n$Question`nNo code changes.`nSTANDING PEER MEMORY:`n$memoryNote"
+Say "RUN $runId | ROOT $root | READ-ONLY | timeout ${ProcessTimeoutSeconds}s"
+$ca=Invoke-Agent 'Codex' "$intro`nIndependently investigate this question. Do not assume Claude's findings from THIS run. You may read standing peer memory from previous runs as claims to challenge, not as proof." 'round01-codex'
+$cl=Invoke-Agent 'Claude' "$intro`nIndependently investigate this question. Do not assume Codex's findings from THIS run. You may read standing peer memory from previous runs as claims to challenge, not as proof." 'round01-claude'
+$history=@()
+$lastRound=1
+Save-PeerMemory -Status 'ROUND 1 INDEPENDENT' -CompletedRound 1 -CodexBody $ca -ClaudeBody $cl -HistoryText 'Round 1 independent'
+$agreed=$false
+for($round=2;$round -le $MaxRounds;$round++) {
+ Say "ROUND $round | mutual challenge"
+ $crossC="$intro`nOTHER AGENT (CLAUDE) SAID:`n$cl`nYOUR PRIOR FINDINGS:`n$ca`nChallenge the other findings with code evidence. Correct your own mistakes. Identify unresolved issues. Do not rubber-stamp."
+ $crossL="$intro`nOTHER AGENT (CODEX) SAID:`n$ca`nYOUR PRIOR FINDINGS:`n$cl`nChallenge the other findings with code evidence. Correct your own mistakes. Identify unresolved issues. Do not rubber-stamp."
+ $ca=Invoke-Agent 'Codex' $crossC ("round{0:D2}-codex" -f $round)
+ $cl=Invoke-Agent 'Claude' $crossL ("round{0:D2}-claude" -f $round)
+ $vc=Verdict $ca; $vl=Verdict $cl
+ $history+= "Round $round : Codex=$vc ; Claude=$vl"
+ $lastRound=$round
+ Save-PeerMemory -Status "ROUND $round Codex=$vc Claude=$vl" -CompletedRound $round -CodexBody $ca -ClaudeBody $cl -HistoryText ($history -join "`n")
+ Say "ROUND $round | Codex=$vc | Claude=$vl"
+ # Approval of arguments is not document approval; still require full-document review below.
+ if($round -ge 5 -and $vc -eq 'APPROVED' -and $vl -eq 'APPROVED') { $agreed=$true; break }
+}
+$summary=@"
+# TEAM FINDINGS — $runId
+
+Question: $Question
+
+Status: $(if($agreed){'PRELIMINARY CONVERGENCE'}else{'NOT CONVERGED'})
+
+$($history -join "`n")
+
+Codex latest: runs/$runId/$("round{0:D2}-codex.txt" -f $lastRound)
+Claude latest: runs/$runId/$("round{0:D2}-claude.txt" -f $lastRound)
+Standing peer memory: agent-docs/memory/
+
+See complete transcripts in runs/$runId. Neither agent may implement changes.
+"@
+[IO.File]::WriteAllText((Join-Path $run 'TEAM_FINDINGS.md'),$summary)
+if(-not $agreed) {
+ Save-PeerMemory -Status 'NOT CONVERGED' -CompletedRound $lastRound -CodexBody $ca -ClaudeBody $cl -HistoryText ($history -join "`n")
+ Say 'STOP: No consensus. No final document approved.'
+ exit 2
+}
+# Draft is a proposal, not a final approved contract.
+$draft=@"
+# FINAL TECHNICAL REVIEW — DRAFT
+
+Run: $runId
+Question: $Question
+
+## Codex evidence and proposal
+$ca
+
+## Claude evidence and proposal
+$cl
+
+## Required before approval
+- Consolidate exact root cause, alternative hypotheses, evidence and unknowns.
+- Detail proposed code diffs by file/method; test plan; rollback; DB, Replay and Production effects.
+- Independently verify the SAME complete revision by BOTH agents.
+- Obtain explicit user approval before any implementation.
+
+Implementation authorization: NOT AUTHORIZED
+"@
+$doc=Join-Path $run 'FINAL_TECHNICAL_REVIEW.md'
+[IO.File]::WriteAllText($doc,$draft)
+$reviewPrompt="$policy`nReview the ENTIRE technical document below against the project. A document missing exact code changes, testing, rollback or material evidence MUST be REJECTED. Do not modify anything. Your VERDICT applies only to this exact document revision.`nDOCUMENT:`n$draft"
+$rc=Invoke-Agent 'Codex' $reviewPrompt 'document-review-codex'
+$rl=Invoke-Agent 'Claude' $reviewPrompt 'document-review-claude'
+$cv=Verdict $rc; $lv=Verdict $rl
+Say "DOCUMENT GATE | Codex=$cv | Claude=$lv"
+if($cv -eq 'APPROVED' -and $lv -eq 'APPROVED') {
+ Add-Content -LiteralPath $doc -Value "`n## Dual-agent review`nCodex: APPROVED`nClaude: APPROVED`nStatus: READY FOR USER REVIEW`nImplementation authorization: NOT AUTHORIZED"
+ Save-PeerMemory -Status 'DOCUMENT GATE APPROVED (implementation NOT AUTHORIZED)' -CompletedRound $lastRound -CodexBody $rc -ClaudeBody $rl -HistoryText ($history -join "`n")
+ Say 'READY FOR USER REVIEW. NO CODE CHANGES. USER APPROVAL REQUIRED.'
+} else {
+ Add-Content -LiteralPath $doc -Value "`n## Dual-agent review`nCodex: $cv`nClaude: $lv`nStatus: NOT APPROVED`nImplementation authorization: NOT AUTHORIZED"
+ Save-PeerMemory -Status "DOCUMENT GATE NOT APPROVED Codex=$cv Claude=$lv" -CompletedRound $lastRound -CodexBody $rc -ClaudeBody $rl -HistoryText ($history -join "`n")
+ Say 'DOCUMENT NOT APPROVED. Review feedback and revise in a subsequent run.'
+ exit 3
+}

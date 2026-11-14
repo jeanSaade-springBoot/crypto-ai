@@ -1,0 +1,61 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No trade-specific database evidence exists in the permitted `db/CODEX` directory. Therefore no timing, log, protection, or causation conclusion is supportable for frozen trades `182, 172, 162, 158, 143, 137`.
+
+- **PROJECT EVIDENCE:** The live input path is ordered: input commit → protection transaction → observer transaction → closed-candle dispatch. The input commit is deliberately separate from protection. A protection failure after input commit requires durable price-event evidence; it is not disproved by callback completion alone. [KlineTransactionCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:36)
+
+- **PROJECT EVIDENCE:** Timing persistence is incomplete by design. `fix129_stage_timing` records only failed or ≥1-second stages, is asynchronously written through a bounded queue, and may be dropped or fail to persist. Absence of a timing row cannot prove that a stage did not run or completed quickly. [KlineTiming.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTiming.java:35) [KlineTimingStore.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTimingStore.java:13)
+
+- **PROJECT EVIDENCE:** Two independent correlation IDs exist: WebSocket receipt correlation and `KlineTiming` context correlation are each newly generated UUIDs. They cannot be joined to each other by ID. Cross-stage reconstruction instead requires symbol, interval, candle-open time, observed time, and subsequently persisted signal/position links. [KlineReceipt.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/client/binance/websocket/KlineReceipt.java:13) [KlineTiming.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTiming.java:32)
+
+- **PROJECT EVIDENCE:** Signal-save logs contain signal ID, candle close time, generated/created timestamps, and calculated close-to-generation/insertion delay. The log explicitly warns that row-created time is not database commit time and a saved signal is not evidence of a wallet trade. [CandleClosedAnalysisWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java:215)
+
+- **PROJECT EVIDENCE:** The locally retained active application log covers only `2026-10-19 14:32:18.902` through `14:32:36.235`; its prefix has no stated timezone, so it is not labelled as UTC or KSA. It contains no match for the six IDs in position-id style log fields. This does not establish that no relevant events occurred. The retained compressed application archives are dated 12–17 October; no 28 October application log is present locally.
+
+- **PROJECT EVIDENCE:** Accepted protection evidence remains `market_price_event` rows with delivery status `LEGACY` or `APPLIED`; candle OHLC cannot replace those observations. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118)
+
+- **EXTERNAL RESEARCH:** None.
+
+- **AGENT INFERENCE:** Because none of the six position IDs has a confirmed symbol, entry/exit time, or signal link, attempting broad log attribution would risk associating unrelated events.
+
+## EVIDENCE
+
+- Frozen scope preserved: `182, 172, 162, 158, 143, 137`.
+- Snapshot: `2026-10-28 15:00:05 UTC` / `2026-10-28 18:00:02 KSA`.
+- The source records `Instant` timing fields and explicitly describes them as UTC wall timestamps; KSA conversion is logged separately only where named. [KlineTiming.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTiming.java:12)
+
+## UNKNOWNS
+
+- Each position’s symbol, lifecycle timestamps, entry/exit signals, close reason, and execution records.
+- Whether relevant local logs exist for the actual trade intervals.
+- Whether a timing row was absent because it was fast, dropped, persistence failed, or the stage never executed.
+- Whether accepted price observations reached an exit threshold and committed the corresponding wallet/paper-position mutation.
+- The configured runtime mode/version and database schema for the study period.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Establish the actual forensic timing and linkage schema before querying timing or protection records for the six frozen positions. This repeats the schema gate because no prior Codex DB result is available.  
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.data_type,
+    c.column_type,
+    c.is_nullable,
+    c.column_key
+FROM information_schema.columns AS c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'signal_processing_work',
+      'market_price_event',
+      'fix129_stage_timing'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+### END_DB_REQUEST

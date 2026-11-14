@@ -1,0 +1,147 @@
+# Round 9: candle ingestion, as implemented vs. the pending local-candle direction
+
+**Verdict: REJECTED.** The architecture as implemented doesn't meet the local-candle direction in AGENTS.md, and several gaps are confirmed in code.
+
+I didn't change any source, config, database, git state or runtime, and I didn't touch production. Plan mode is on, but this session has no tool to write the plan file or exit plan mode, so this report is the only output. Everything below comes from re-reading the code this round, unless I say otherwise.
+
+## FINDINGS
+
+### Ownership and data flow (rechecked)
+
+| # | Topic | What the code does |
+|---|---|---|
+| 1 | Kline WebSocket | The trader owns it whenever the mode is not `LIVE`. The guard is SpEL `== 'LIVE'`, and the stream starts on `ApplicationReadyEvent`. |
+| 2 | REST, backfill and recovery | Three separate paths, all writing to `crypto_ai.candle`: (a) `MarketDataService.importCandles`, used by the import endpoint, startup bootstrap and coin activation; (b) `LocalCandleReconciliationService`, **off by default**; (c) `LocalClosedCandleDetector`, which re-admits analysis only and writes no candles. |
+| 3 | Persistence | Local `candle`. `LIVE` mode uses the collector tables in `crypto_ai_v2`, and `OBSERVE` connects to them as well. |
+| 5 | Configuration | Defaults: `shared-market.mode` is `OFF`, `fix142` and `acknowledgment-enabled` are `false`, `scheduled-analysis-enabled` is `false`, and `local-candle.reconciliation.enabled` is `false`. Each can be overridden by environment variable (except reconciliation). |
+
+### Corrections to my round-8 claims
+
+**C1: New A was too narrow.** `REVIEW_REQUIRED` isn't only reached by crash quarantine.
+- `SignalProcessingCoordinator.java:126-128` puts **every** processing exception that isn't an initial-lock failure into `REVIEW_REQUIRED` straight away (stage `PROCESSING_OR_COMMIT`). Initial-lock failures reach it on their second attempt.
+- Neither path writes a `candle_analysis_outcome`. Only `complete()` (`:113`) and `EXPIRED` (`:121`) call `recordOutcome`.
+- The only way out I found is manual: `OperatorWorkCancellation` (`OPERATOR_CANCELLED` plus a named operator and a review reference).
+- In OFF mode this blocks nothing. `UNATTRIBUTED_BLOCKERS` and `APPROVAL_BLOCKERS` are only used by the `LIVE` cutover and approval code (`SharedMarketConsumer.java:170`, `CutoverApprovalService.java:98`, `SharedAutomaticActivation.java:72`).
+- So the gap is that OFF-mode failures never reach a terminal outcome. It is not a persisted trading fence. This closes my round-8 unknown.
+
+**C2: my round-8 New C was incomplete.** Startup is still excluded by lifecycle order. But coin activation makes the race concrete:
+- `DynamicCoinActivationService.activate` calls `webSocketManager.reload()` **first** and then `bootstrapSymbol` (`:21`, `:28`).
+- So the new symbol's stream is already live when the 300+ candle import runs.
+
+**C3: correction to my round-8 point about restricting the import endpoint to ADMIN.** `/api/market-data/import` isn't public. It falls under `anyRequest().authenticated()` (`SecurityConfig.java:37`), so any logged-in user can trigger the import race. That makes it a minor hardening candidate, not a defect.
+
+### New findings this round
+
+**N1: reconciliation `PENDING` records never age out.**
+- `pending()` has no attempt cap and no terminal transition (`LocalCandleReconciliationService.java:194-197`). Neither does `LocalReconciliationAuditRepository`.
+- Once a candidate's `open_time` drops below `exchangeNow − 210×interval` (`:126`, `:131`), it is never selected again. Its audit row stays `PENDING` and the candle stays `closed=0`, with no outcome.
+- A row that keeps returning `REST_MISMATCH` or `REST_EMPTY` therefore stays stuck. That breaks AGENTS.md's "age out to a durable explicit outcome".
+
+**N2: stuck `PENDING` rows starve newer recovery candidates.** This strengthens Codex point 8.
+- The open-candidate query uses `ORDER BY open_time ASC LIMIT 50` per interval, across all symbols, before the `audit.due` filter (`:133`, `:139`).
+- Fifty old rows that are in backoff or permanently mismatched therefore fill the slots on every pass. Newer open rows aren't selected until the old ones leave the window, which takes up to 210 minutes on 1m (and 210 days on 1d).
+
+**N3: Binance REST rate-limit and ban handling is absent, not just "unproven".**
+- A case-insensitive search for `429|418|Retry-After|rateLimit|banned` across `src/main/java` finds nothing.
+- `BinanceMarketDataClient` has no `catch` or status handling at all.
+- Reconciliation turns any failure into a `REST_FAILURE` retry with a delay (`:191`). Bootstrap catches errors and only logs them (`MarketDataBootstrapService.java:145`).
+
+**N4: replaced 1m work is the case the detector is least likely to recover.**
+- When newer 1m work arrives, the dispatcher drops the older pending task and records no outcome (`CandleAnalysisDispatcher.java:74-79`).
+- Replacement only happens when the lane is busy. But the detector skips any lane that isn't idle (`LocalClosedCandleDetector.java:46`), and skipping doesn't count as an attempt.
+- So sustained backpressure, which is exactly what causes replacement, also prevents rediscovery. The candle leaves the roughly 180 s lookback with no outcome.
+
+**N5: more comments contradict the code.**
+- The `MarketDataBootstrapService` Javadoc (`:22-24`) says "Existing candles are preserved and only missing Binance rows are inserted". That's false: `upsert` goes through the BACKFILL duplicate-key update.
+- `CandleRepository.java:175-176` ("finish an interrupted open candle") directly contradicts `:205` ("inserts missing identities only"). The first comment matches the SQL.
+
+**N6: the two Replay modes select source signals inconsistently.**
+- `sourceSignals` is selected by `generatedAt` (`RegressionTestWorker.java:143`).
+- The DATASET lineage deliberately uses `candleOpenTime`, with the comment "generatedAt MUST NOT define this preload window" (`:492-496`).
+- So recovered or late-generated signals are scoped differently depending on the mode. I didn't trace the downstream effect.
+
+### Rechecked and still standing
+- **Ordinary import finalises an open row.** `upsert` → `write(...,"BACKFILL",null)` → `closed=GREATEST(...)`, with no token, audit or outcome (`CandleRepository.java:99-106`, `:173-188`).
+- **No path recovers that candle afterwards:**
+  - The detector requires a token (`LocalClosedCandleDetector.java:50`).
+  - Reconciliation requires `closed=0` (`LocalCandleReconciliationService.java:131`).
+  - Gap detection skips identities that are present (`:150-154`).
+- **Detector expiry by deadline is effectively dead.** The arithmetic checks out: the candidate filter is `open ≥ now − interval − lookback` and `retryDeadline = close + lookback`, so the deadline is always within about 1 ms of now (`:49`, `:97-99`, `:111-113`). In practice, expiry is driven by `attempts>6`. The retry state lives in in-process maps (`:28-29`), so a restart loses it.
+- **What a successful detector expiry does:** it writes a durable `ANALYSIS_EXPIRED` outcome (`:140-141`, conditional on `outcomes` being present). Codex didn't mention this. The silent cases are a busy lane and a restart.
+- **OBSERVE mode** runs direct ingestion and can execute a `STARTUP` paper signal from imported candles (`MarketDataBootstrapService.java:107-136`).
+- **Historical-only work is separated by a branch, not structurally:**
+  - Recovered work takes `analyzeRecovered` in the same worker that calls `paperTradingService.processSignal` (`CandleClosedAnalysisWorker.java:160-176`).
+  - The dispatcher always passes `liveSource=true` (`CandleAnalysisDispatcher.java:110`). So a detector re-admission inside the close grace period goes to live execution. That is intended for crash recovery, but it is still one class.
+- **Worker failure before the signal is saved** returns `"REVIEW_REQUIRED"` as a string and writes nothing (`:186-204`). The detector can still see it (`missing()` stays true), so it falls under the attempt-count and age-out limits above.
+
+### Challenging Codex
+- **Point 7** ("closer to the pending direction") overlooks N1, N2 and N3: no age-out, starvation, and no rate-limit handling at all.
+- **Point 8** says rate limiting is "not demonstrated". It is absent (N3).
+- **Point 9** misses N4 (replacement and detector idleness interact) and doesn't mention that the detector's expiry does write `ANALYSIS_EXPIRED`.
+- **Point 10:** the mechanism is wrong, but the conclusion is right.
+  - Wrong: a signal row is never saved without its work row (`AnalysisService` registers both in one transaction).
+  - Right: generic processing failures end in a durable but non-terminal `REVIEW_REQUIRED` that needs a human (C1).
+- **Point 13 and the V103/B105 drift point:** I agree.
+
+## EVIDENCE
+
+| Area | Location |
+|---|---|
+| Defaults | `application.yml:40-59`, `:124`, `:429-456` |
+| Mode guards and WebSocket start | `BinanceWebSocketManager.java:28`, `:95-105`, `:126-127`, `:200` |
+| Import | `MarketDataService.java:19`, `:31-56` |
+| Bootstrap | `MarketDataBootstrapService.java:21-24`, `:30-153` |
+| Coin activation | `DynamicCoinActivationService.java:19-33` |
+| Import endpoint | `MarketDataController.java:16-24` |
+| Security | `SecurityConfig.java:26-37` |
+| Candle writes | `CandleRepository.java:99-213` |
+| Reconciliation | `LocalCandleReconciliationService.java:92-207` |
+| Reconciliation audit | `LocalReconciliationAuditRepository.java:35-78` |
+| Detector | `LocalClosedCandleDetector.java:34-142` |
+| Dispatcher | `CandleAnalysisDispatcher.java:32-125` |
+| Worker | `CandleClosedAnalysisWorker.java:117-205` |
+| Signal processing | `SignalProcessingCoordinator.java:107-133`; `SignalProcessingStore.java:101-123`, `:155-186` |
+| Manual cancellation | `OperatorWorkCancellation.java:8-37` |
+| Replay | `RegressionTestWorker.java:129-143`, `:159-170`, `:469-512` |
+| Rate-limit search | `429\|418\|Retry-After\|rateLimit\|banned` → no matches in `src/main/java` |
+
+## OBJECTIONS (unresolved, material)
+
+1. **Ordinary import** (activation, the endpoint, or OBSERVE bootstrap) can finalise an open runtime candle with no grace period, token, audit or outcome. Afterwards no path can recover it. Coin activation makes this a concrete trigger (C2).
+2. **OBSERVE** runs both ingestion paths and executes `STARTUP` paper signals from imports.
+3. **No terminal outcome is guaranteed:**
+   - The detector misses busy lanes and loses state on restart (N4).
+   - Reconciliation `PENDING` rows never age out (N1).
+   - `REVIEW_REQUIRED` work can only be concluded by an operator (C1).
+
+   All three conflict with AGENTS.md's automation direction.
+4. **Reconciliation:**
+   - It is off by default.
+   - `LIMIT` is applied before filtering, so stuck rows starve newer ones (N2).
+   - It has no symbol filter on open candidates.
+   - There is no shared REST rate-limit or ban handling at all (N3).
+5. **Historical-only work** is not structurally isolated from execution.
+6. **Replay parity** for ingestion, recovery and admission is not modelled. The two Replay modes also select source signals differently (N6).
+7. **Documentation drift:**
+   - Code comments contradict the code (N5).
+   - V103 is still described as a blocker, although B105 claims to resolve it.
+   - claude-docs is ambiguous about OBSERVE.
+
+## UNKNOWNS
+- Whether Binance REST can return a non-final kline at the server-time boundary. Import relies on `closeTime ≤ serverTime` with no grace period.
+- Whether `LocalCandleMySqlIT` or the B105 fresh-baseline path has ever passed.
+- Whether any symbol has actually been activated at runtime while its stream was live, and whether the race has ever happened.
+- How often lanes stay busy and how often 1m work is replaced in practice.
+- The downstream effect of N6.
+- Everything about production: artifact, mode and overrides, Flyway state, logs, and how open positions are protected during replacement.
+
+## Candidates for a later solution review (not authorised)
+- Make ordinary import insert-if-absent only (reuse `insertAuthoritativeGapBackfill`), or skip open non-BACKFILL rows and apply the reconciliation grace period. Then fix the comments.
+- Give reconciliation `PENDING` an age-out that writes an `EXPIRED` audit row and an outcome. Filter by due status and enabled symbol inside the SQL, before `LIMIT`.
+- Add one shared Binance REST admission and back-off component for 429/418 and `Retry-After`.
+- Make detector expiry follow the SQL eligibility boundary, persist its retry state, and record a `REPLACED` outcome when 1m work is dropped.
+- Define an automatic, effect-evidence-based conclusion for `REVIEW_REQUIRED` signal work.
+- Make bootstrap analysis-free in every non-LIVE mode, or reject OBSERVE outright.
+
+## VERDICT
+REJECTED

@@ -1,0 +1,210 @@
+I couldn't do a full Iteration 1 reconstruction. I have no database access, and no query results exist yet for this run: `agent-docs/runs/fts-WINDOW1-20261107-171817/db/CLAUDE/` is empty. So below I record what I read, what is unknown, and the bounded read-only queries the coordinator needs to run. Nothing was changed. Plan mode was active, but the plan file couldn't be written because no write tool was available, so this report is the deliverable.
+
+# CLAUDE — FTS WINDOW1 — ITERATION 1: TRADE RECONSTRUCTION (self-review)
+
+## Scope confirmation
+- **Application/DB:** `crypto_ai` on localhost:3307, read-only account `ai_investigator`. Not `crypto_ai_v2`.
+- **Authoritative entity:** `crypto_ai.paper_position`.
+- **Frozen trades, unchanged:** 182, 172, 162, 158, 143, 137.
+- **Snapshot:** 2026-11-07 14:18:23 UTC is 17:18:23 KSA. The charter gives 17:18:17 KSA, 6 seconds off. That is probably a different clock source, but I can't tell which. Also logged under U-08.
+
+## FINDINGS
+
+| ID | Finding | Label |
+|---|---|---|
+| F-I1-01 | None of the 6 trades can be reconstructed yet: I have no rows and no result files for this run. | PROJECT EVIDENCE (empty `db/CLAUDE/` folder) |
+| F-I1-02 | `paper_position` has these columns: `id, symbol, side, status, quantity, entry_price, stop_loss, take_profit, exit_price, realized_pnl, signal_id, exit_signal_id, close_reason, entry_reason, exit_reason, opened_at, closed_at`. The entry signal is `signal_id` (required). The exit signal is `exit_signal_id` (can be NULL). | PROJECT EVIDENCE: `src/main/java/com/crypto/domain/PaperPosition.java:13-69` |
+| F-I1-03 | The close trigger is recorded separately in `production_exit_audit`, keyed by a unique `paper_position_id`. It has `close_trigger`, `source_signal_*`, and SL/TP/entry/exit prices. | PROJECT EVIDENCE: `src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:29-72` |
+| F-I1-04 | `wallet_trade` has no `paper_position_id` column. It can only be linked through `signal_id`, `execution_key`, or symbol plus a time window. That makes the linkage ambiguous for progressive adds and partial harvests, so I won't assert a link without an `execution_key` match. | PROJECT EVIDENCE: `src/main/java/com/crypto/wallet/domain/WalletTrade.java:16-62` |
+| F-I1-05 | `wallet_trade.fee_usdt` is 0 for automatic trades. Any P&L in these tables is therefore gross. Fees must be computed separately before deciding whether the realized loss came from fees. | PROJECT EVIDENCE: `claude-docs/TRADING_RULES.md` §6 |
+| F-I1-06 | Rules I'll check entries and exits against: data quality (210 candles, 0 gaps); 1m freshness 90s; fill from a price event at most 15s old; SL/TP priority in live protection; profit lock at 70% progress to TP. These come from my docs dated 2026-10-09 and must be re-checked against current code before they're used as evidence. | PROJECT EVIDENCE (docs), AGENT INFERENCE (may be out of date) |
+| F-I1-07 | `AGREED_KNOWLEDGE.md`, `DECISIONS.md` and `DATABASE_ENTITY_REGISTRY.md` have no entries. No shared facts constrain this study. | PROJECT EVIDENCE |
+
+## EVIDENCE read
+- `AGENTS.md`, `agent-docs/AGREED_KNOWLEDGE.md`, `agent-docs/DECISIONS.md`, `agent-docs/DATABASE_INVESTIGATION_RULES.md`, `agent-docs/DATABASE_ENTITY_REGISTRY.md`
+- `claude-docs/TRADE_INVESTIGATION_AGENT.md`, `claude-docs/TRADING_RULES.md`, `claude-docs/INVESTIGATION_LOG.md` (headings only; one entry from 2026-10-09, not relevant here)
+- The run `CHARTER.md`
+- Entity classes: `PaperPosition`, `WalletTrade`, `WalletManagedPosition`, `ProductionExitAudit`, `TradeSignal` (column names only)
+- Migration `B105__fix_153_trader_only_baseline.sql`: `candle` (line 15), `market_price_event` (line 1442), `position_management_event` (line 1457)
+- Not read, to keep isolation: the other agent's private/db folders, `codex-docs/`, `LIVE_TEAM_STATUS.md`, `LIVE_EVENTS.log`
+
+## UNKNOWNS
+- **U-01:** Symbol, side, entry/exit price, SL/TP, quantity, P&L, close reason, and open/close times for all 6 trades.
+- **U-02:** The exact current columns of `market_price_event`. The baseline only shows `id, symbol, observed_at, price, source, created_at`. Later status/protection columns (`LEGACY`/`APPLIED`/`PENDING`) are probably added by later migrations; DESCRIBE will confirm.
+- **U-03:** Whether `wallet_managed_position` rows still exist after a position closes, or are deleted.
+- **U-04:** How `wallet_trade` links to each paper position (see F-I1-04).
+- **U-05:** Per trade, the gap between candle close and `generated_at`, and the gap between the signal and the fill. This checks freshness and execution delay.
+- **U-06:** Whether each trade was opened in `shared-market.mode=OFF` (local candles) or the earlier mode. Needs the runtime config or logs at each `opened_at`.
+- **U-07:** How many accepted price events exist between open and close. Needed to confirm the first observation that crossed the exit threshold.
+- **U-08:** Where the 6-second gap between the charter's KSA snapshot time and the UTC time + 3h comes from.
+
+## DB_REQUEST blocks
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-001
+Purpose: Read the actual schema before choosing columns (AGENTS.md trade-investigation rule).
+SQL:
+SHOW COLUMNS FROM paper_position;
+SHOW COLUMNS FROM wallet_trade;
+SHOW COLUMNS FROM wallet_managed_position;
+SHOW COLUMNS FROM production_exit_audit;
+SHOW COLUMNS FROM market_price_event;
+SHOW COLUMNS FROM position_management_event;
+SHOW COLUMNS FROM signal_processing_work;
+SHOW COLUMNS FROM candle_analysis_outcome;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-002
+Purpose: Core lifecycle of the 6 frozen positions (identity, prices, SL/TP, P&L, close reason, duration). Long text is truncated.
+SQL:
+SELECT id, symbol, side, status, quantity, entry_price, stop_loss, take_profit,
+       exit_price, realized_pnl, signal_id, exit_signal_id, close_reason,
+       opened_at, closed_at,
+       TIMESTAMPDIFF(SECOND, opened_at, closed_at) AS hold_seconds,
+       (exit_price - entry_price) / entry_price * 100 AS move_pct,
+       (entry_price - stop_loss) / entry_price * 100 AS sl_dist_pct,
+       (take_profit - entry_price) / entry_price * 100 AS tp_dist_pct,
+       LEFT(entry_reason, 1500) AS entry_reason_head,
+       LEFT(exit_reason, 1500) AS exit_reason_head
+FROM paper_position
+WHERE id IN (182,172,162,158,143,137)
+ORDER BY closed_at DESC;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-003
+Purpose: The recorded close trigger for each position, separate from the context signal.
+SQL:
+SELECT id, paper_position_id, wallet_position_id, symbol, close_trigger,
+       source_signal_id, source_signal_decision, source_signal_original_decision,
+       position_analysis_id, position_recommendation, entry_price_usdt,
+       exit_price_usdt, stop_loss_usdt, take_profit_usdt,
+       LEFT(close_explanation, 1000) AS close_explanation_head, audited_at
+FROM production_exit_audit
+WHERE paper_position_id IN (182,172,162,158,143,137);
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-004
+Purpose: Entry and exit signals: decision chain, freshness, data quality, BTC/MTF context, and risk/reward available at decision time. Large JSON is excluded.
+SQL:
+SELECT p.id AS position_id, 'ENTRY' AS role, s.id AS signal_id, s.symbol,
+       s.interval_code, s.candle_open_time, s.generated_at, s.created_at,
+       s.decision, s.original_decision, s.signal_mode, s.selected_strategy, s.market_regime,
+       s.confirmed_regime, s.total_score, s.confidence_score, s.effective_confidence_score,
+       s.final_entry_allowed, s.primary_blocking_stage, s.data_quality_valid,
+       s.confluence_status, s.confluence_entry_allowed, s.confluence_higher_decision,
+       s.btc_context_status, s.btc_context_entry_allowed, s.btc_correlation,
+       s.btc_context_age_seconds, s.liquidity_status, s.derivatives_status,
+       s.latest_price, s.stop_loss, s.take_profit, s.atr_percent, s.risk_reward_ratio,
+       s.atr_entry_type, s.atr_overextended, s.entry_authority
+FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id
+WHERE p.id IN (182,172,162,158,143,137)
+UNION ALL
+SELECT p.id, 'EXIT', s.id, s.symbol, s.interval_code, s.candle_open_time, s.generated_at,
+       s.created_at, s.decision, s.original_decision, s.signal_mode, s.selected_strategy,
+       s.market_regime, s.confirmed_regime, s.total_score, s.confidence_score,
+       s.effective_confidence_score, s.final_entry_allowed, s.primary_blocking_stage,
+       s.data_quality_valid, s.confluence_status, s.confluence_entry_allowed,
+       s.confluence_higher_decision, s.btc_context_status, s.btc_context_entry_allowed,
+       s.btc_correlation, s.btc_context_age_seconds, s.liquidity_status, s.derivatives_status,
+       s.latest_price, s.stop_loss, s.take_profit, s.atr_percent, s.risk_reward_ratio,
+       s.atr_entry_type, s.atr_overextended, s.entry_authority
+FROM paper_position p JOIN trade_signal s ON s.id = p.exit_signal_id
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY position_id DESC, role;
+### END_DB_REQUEST
+(Note: I haven't confirmed that a `signal_mode` column exists. If it errors, drop it and rerun; DBQ-CLAUDE-I1-001 will confirm.)
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-005
+Purpose: Wallet executions inside each position's lifetime (entry, adds, partial harvests, exit), for fill authority, fill delay, and P&L recomputation.
+SQL:
+SELECT p.id AS position_id, w.id AS wallet_trade_id, w.signal_id, w.execution_key,
+       w.side, w.quantity, w.price_usdt, w.decision_price_usdt,
+       w.execution_price_observed_at, w.executed_at,
+       TIMESTAMPDIFF(MICROSECOND, w.execution_price_observed_at, w.executed_at)/1e6 AS fill_age_s,
+       w.gross_amount_usdt, w.fee_usdt, w.net_amount_usdt, w.cost_basis_usdt,
+       w.realized_pnl_usdt, w.realized_pnl_percent, w.execution_type,
+       w.execution_reason, w.status, LEFT(w.notes, 300) AS notes_head
+FROM paper_position p
+JOIN wallet_trade w
+  ON w.symbol = p.symbol
+ AND w.executed_at BETWEEN p.opened_at - INTERVAL 2 MINUTE AND p.closed_at + INTERVAL 2 MINUTE
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC, w.executed_at
+LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-006
+Purpose: Managed-position state (SL/TP changes, highest price, profit lock, near-TP harvest) if the row still exists, plus management events during each position's lifetime.
+SQL:
+SELECT p.id AS position_id, m.id AS wallet_position_id, m.entry_signal_id,
+       m.average_entry_price_usdt, m.stop_loss_usdt, m.take_profit_usdt,
+       m.highest_price_usdt, m.profit_lock_active, m.profit_lock_price_usdt,
+       m.profit_lock_progress_percent, m.profit_lock_activated_at, m.profit_lock_state,
+       m.entry_stage, m.allocated_position_percent, m.entry_quality_score,
+       m.near_tp_state, m.near_tp_best_price, m.near_tp_harvest_used,
+       m.near_tp_harvested_quantity, m.opened_at, m.updated_at
+FROM paper_position p
+JOIN wallet_managed_position m ON m.entry_signal_id = p.signal_id
+WHERE p.id IN (182,172,162,158,143,137);
+
+SELECT p.id AS position_id, e.id, e.wallet_position_id, e.event_type,
+       e.old_value_usdt, e.new_value_usdt, e.market_price_usdt,
+       LEFT(e.reason, 400) AS reason_head, e.occurred_at
+FROM paper_position p
+JOIN position_management_event e
+  ON e.symbol = p.symbol
+ AND e.occurred_at BETWEEN p.opened_at AND p.closed_at + INTERVAL 1 MINUTE
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC, e.occurred_at
+LIMIT 300;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-007
+Purpose: Summary of price observations during each position's lifetime (count, range, first/last, biggest gap between observations) to find protection gaps and the max favourable/adverse move. Per-row detail comes in iteration 2.
+SQL:
+SELECT p.id AS position_id, p.symbol, COUNT(*) AS events,
+       MIN(e.price) AS min_price, MAX(e.price) AS max_price,
+       MIN(e.observed_at) AS first_obs, MAX(e.observed_at) AS last_obs,
+       (MAX(e.price) - p.entry_price) / p.entry_price * 100 AS mfe_pct,
+       (MIN(e.price) - p.entry_price) / p.entry_price * 100 AS mae_pct
+FROM paper_position p
+JOIN market_price_event e
+  ON e.symbol = p.symbol
+ AND e.observed_at BETWEEN p.opened_at AND p.closed_at
+WHERE p.id IN (182,172,162,158,143,137)
+GROUP BY p.id, p.symbol, p.entry_price
+ORDER BY p.id DESC;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-008
+Purpose: Freshness and admission of each entry signal: the persisted 1m candle and its provenance/closed flag, compared with the signal time.
+SQL:
+SELECT p.id AS position_id, c.id AS candle_id, c.symbol, c.interval_code,
+       c.open_time, c.close_time, c.closed, c.open_price, c.high_price,
+       c.low_price, c.close_price, c.volume, c.created_at,
+       s.generated_at,
+       TIMESTAMPDIFF(MICROSECOND, c.close_time, s.generated_at)/1e6 AS close_to_signal_s,
+       TIMESTAMPDIFF(MICROSECOND, s.generated_at, p.opened_at)/1e6 AS signal_to_open_s
+FROM paper_position p
+JOIN trade_signal s ON s.id = p.signal_id
+JOIN candle c ON c.symbol = s.symbol AND c.interval_code = s.interval_code
+             AND c.open_time = s.candle_open_time
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC;
+### END_DB_REQUEST
+
+## How the timeline will be built once results arrive
+- **Times:** every stored timestamp is reported as `UTC: <raw>` and `KSA: <raw + 3h>`.
+- **Per-trade stages:** candle close → signal saved → work claimed → entry → protection observations → exit trigger → exit.
+- **Entry quality:** judged only from fields available at `generated_at`.
+- **Outcome:** judged separately from max favourable/adverse move (DBQ-CLAUDE-I1-007).
+- **Classification of each loss:** a valid losing trade, a logic defect, stale data, execution delay, a configuration issue, or missing evidence.
+
+**Status: ITERATION 1 BLOCKED, waiting on DBQ-CLAUDE-I1-001 to 008.** No findings about any trade are claimed yet.

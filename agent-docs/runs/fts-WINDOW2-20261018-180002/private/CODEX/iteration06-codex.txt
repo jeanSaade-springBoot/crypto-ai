@@ -1,0 +1,101 @@
+## Iteration 6 — Root Cause + Research
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+- Frozen subjects remain exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**.
+- The permitted `db/CODEX/` folder has no query artifacts. Thus no trade-specific root cause, symbol, lifecycle, entry/exit price, close reason, or P&L reconciliation is proven.
+- The current position record is designed to hold the required primary evidence: entry/exit prices, realized P&L, entry/exit signal links, close reason, and UTC open/close times. [PaperPosition.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:12)
+- Current entry logic obtains a canonical price at or before execution, accepting it only when no more than 15 seconds old; it then revalidates the proposed BUY at that price. [ExecutionPriceAuthorityService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionPriceAuthorityService.java:24) [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:340)
+- Current entry-quality scoring penalizes chase/extension, ATR extension, opportunity age, inadequate reward/risk, rejection-zone proximity, high volatility, and stop-exposed liquidity. It is applied to the execution price rather than merely the signal snapshot. [ExecutionIntelligenceService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:865)
+- Current live exit priority is take-profit, absolute stop-loss, profit-lock, normal multi-timeframe exit, then near-TP handling. A paper close records the protection price, reason, explanation, and application close time. [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:173)
+- The project has documented a historical reconnect-boundary failure mode: a missing final closed-kline event can leave candle evidence incomplete and block later analysis. That is a known system risk, **not evidence that any of the six frozen trades was affected**.
+
+**EXTERNAL RESEARCH**
+
+- Binance’s official kline stream documentation describes updates to the current candle and an explicit `x` flag denoting whether the candle is closed; its payload timestamps are UTC. This supports the project’s need to distinguish an observed closed candle from a merely updating candle, but does not establish any historical condition for these trades. [Binance kline stream documentation](https://developers.binance.com/zh-CN/docs/products/spot/testnet/web-socket-streams)
+
+**AGENT INFERENCE**
+
+- No individual loss can be attributed to a strategy defect, late/chase entry, stale-data event, missed protection trigger, fee/accounting issue, or exit-policy decision without the authoritative row and linked evidence.
+- Each loss needs this causal test, in order:
+
+  `paper_position lifecycle → linked entry/exit signal → wallet BUY/SELL reconciliation → accepted price-event/protection evidence → contemporaneous candles/signals`
+
+- A negative `realized_pnl` alone proves only that the row belongs to the frozen failed-trade selection.
+- The supplied snapshot metadata remains internally inconsistent: `2026-10-18 15:00:04 UTC` converts to `18:00:04 KSA`, whereas the supplied snapshot states `18:00:02 KSA`. I retain both supplied values; no trade timestamp is presently available to report in KSA.
+
+### EVIDENCE
+
+| Potential root-cause category | Status for IDs 182, 172, 162, 158, 143, 137 |
+|---|---|
+| Entry violated current fresh-price / quality controls | Unverifiable |
+| Valid loss after a rules-compliant stop-loss | Unverifiable |
+| Profit-lock or multi-timeframe exit closed too early | Unverifiable |
+| Stale/missing data or reconnect impact | Unverifiable |
+| Execution/protection delay | Unverifiable |
+| Wallet/paper accounting discrepancy | Unverifiable |
+
+### UNKNOWNS
+
+- All six symbols, entry and close UTC timestamps, and their KSA conversions.
+- The entry/exit signal IDs, decisions, entry-quality inputs, data-quality state, stop, target, risk/reward, and execution-price age.
+- Exact close reason and whether each loss was a stop-loss, signal exit, profit-lock exit, manual close, or mixed partial-harvest lifecycle.
+- Matching wallet executions, quantities, prices, timestamps, and any fee/accounting impact.
+- Canonical price-event and protection evidence around every close.
+- Whether the documented candle-close/reconnect failure mode overlapped any selected trade.
+- Replay comparability and deployed version/configuration at trade time.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Obtain the deployed schema and authoritative lifecycle rows for exactly the six frozen positions, while independently re-proving the frozen selection. This is prerequisite evidence for root-cause classification; all reads are bounded and confined to `crypto_ai`.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'position_management_event',
+      'signal_processing_work',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position
+LIMIT 1000;
+
+SELECT p.*
+FROM crypto_ai.paper_position p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137)
+LIMIT 6;
+
+SELECT
+    id,
+    status,
+    closed_at,
+    realized_pnl
+FROM crypto_ai.paper_position
+WHERE status = 'CLOSED'
+  AND closed_at IS NOT NULL
+  AND realized_pnl < 0
+ORDER BY closed_at DESC
+LIMIT 6;
+```
+### END_DB_REQUEST
+
+No documentation update was made: this was analysis-only, with no confirmed new project finding and writes prohibited.

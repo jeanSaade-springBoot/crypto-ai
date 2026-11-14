@@ -53,10 +53,13 @@ public class PaperPosition {
     @Column(name = "close_reason", length = 40)
     private String closeReason;
 
-    @Column(name = "entry_reason", length = 2000)
+    // FIX-144: Full signal/execution explanations and progressive additions exceed 2,000 chars.
+    // Preserve audit text without truncation; V100 widens the existing physical columns.
+    @Column(name = "entry_reason", columnDefinition = "MEDIUMTEXT")
     private String entryReason;
 
-    @Column(name = "exit_reason", length = 2000)
+    // FIX-144: Exit audit explanations use the same expanded storage contract.
+    @Column(name = "exit_reason", columnDefinition = "MEDIUMTEXT")
     private String exitReason;
 
     @Column(name = "opened_at", nullable = false)

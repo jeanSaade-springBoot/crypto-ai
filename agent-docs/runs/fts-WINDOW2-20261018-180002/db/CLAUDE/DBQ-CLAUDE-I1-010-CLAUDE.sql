@@ -1,0 +1,1 @@
+SELECT installed_rank, version, description, type, installed_on, success FROM crypto_ai.flyway_schema_history WHERE installed_rank >= (SELECT MAX(installed_rank) - 15 FROM crypto_ai.flyway_schema_history) ORDER BY installed_rank;

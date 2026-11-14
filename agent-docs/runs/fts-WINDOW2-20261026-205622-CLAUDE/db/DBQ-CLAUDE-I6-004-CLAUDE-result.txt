@@ -1,0 +1,4 @@
+hidden_bear_5m	blocked_bull_5m	n	wins	pnl	notional
+0	0	181	83	-3.7049	5785.00
+0	1	4	2	0.0928	140.00
+1	0	8	5	-0.5586	270.00

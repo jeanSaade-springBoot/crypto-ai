@@ -1,0 +1,1 @@
+Warning: this sign-in can end at any time from now until 2026-11-08. Renewing it does not move that date. Run claude auth login now, or use claude setup-token for unattended jobs.

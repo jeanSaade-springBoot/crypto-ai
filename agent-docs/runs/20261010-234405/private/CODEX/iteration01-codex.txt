@@ -1,0 +1,71 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Trade lifecycle evidence is persisted across `paper_position`, `wallet_trade`, `trade_signal`, `signal_processing_work`, and exit/management audit tables. A negative P/L alone is insufficient to establish a defect.
+- **AGENT INFERENCE:** I will select losses by settled position exit time, not entry time: the failure outcome is known at `paper_position.closed_at`.
+- **AGENT INFERENCE:** Initial fixed windows are 2026-10-10, ±30 minutes:
+  - Window A: 09:30–10:30 KSA = 06:30–07:30 UTC.
+  - Window B: 17:30–18:30 KSA = 14:30–15:30 UTC.
+  
+  This is a bounded, symmetric tolerance. It will not be expanded silently.
+- **PROJECT EVIDENCE:** Current source maps entry/exit price, realized P/L, signal links, reasons, and UTC timestamps on `paper_position`; `wallet_trade` supplies execution-level price, fee, realized P/L, reason, and time.
+
+## EVIDENCE
+
+- `CODE-I1-001` — `PaperPosition.java`, `WalletTrade.java`, `TradeSignal.java`, and relevant migrations inspected.
+- `LOG-I1-001` — repository-local logs for 2026-10-10 exist, including archived application logs. No target-trade identifier is available yet, so no loss-specific log claim is made.
+- `DOC-I1-001` — trade-investigation guidance requires actual-schema verification and durable lifecycle reconstruction before diagnosis.
+
+## UNKNOWNS
+
+- Actual database schema and whether the required tables/columns are present.
+- Count of settled losing positions in each fixed window.
+- Trade IDs, symbols, routes, P/L reconciliation, and exit reasons.
+- Whether any selected loss is a normal market loss, execution issue, protection issue, or data/timing defect.
+
+## NEXT_DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001
+Purpose: Verify actual position and execution schema before selecting loss candidates.
+SQL:
+SHOW COLUMNS FROM paper_position
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-002
+Purpose: Verify actual wallet execution schema before reconstructing P/L and route.
+SQL:
+SHOW COLUMNS FROM wallet_trade
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-003
+Purpose: Verify actual signal and processing-work schema before linking position entries to decision evidence.
+SQL:
+SHOW COLUMNS FROM trade_signal
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-004
+Purpose: Verify actual protection and exit-audit schema before reconstructing exit paths.
+SQL:
+SHOW COLUMNS FROM production_exit_audit
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-005
+Purpose: Verify actual position-management event schema before reconstructing protection activity.
+SQL:
+SHOW COLUMNS FROM position_management_event
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-006
+Purpose: Verify actual signal-processing lifecycle schema before reconstructing signal-to-entry processing.
+SQL:
+SHOW COLUMNS FROM signal_processing_work
+### END_DB_REQUEST
+
+## SELECTED_TRADE_COUNT
+
+Not yet established. Candidate selection is intentionally deferred until the actual schema results are available.

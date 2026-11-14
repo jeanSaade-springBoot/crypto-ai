@@ -1,0 +1,50 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The supplied review question is only `Perform`; it identifies neither an artifact nor an acceptance criterion. An approval/rejection cannot be tied to a defined subject.
+
+- **PROJECT EVIDENCE:** FIX-154 implementation code and focused tests exist in the local working tree, but that does not prove deployment. `AGENTS.md` and older portions of `codex-docs/ARCHITECTURE.md` say it is pending, while later architecture/changelog/investigation entries describe an implementation and, once, “deployment.” These records conflict.
+
+- **PROJECT EVIDENCE:** The current FIX-154 code conflicts with the pending rules in `AGENTS.md`:
+  - Unknown/invalid-quality bearish 1h evidence rejects the BUY.
+  - A quality-valid `STRONG_SELL` 1h at confidence ≥70 rejects even when the fresh 5m is non-bearish; bearish 5m confirmation is not required.
+  - No recovery-specific path exists; a trusted soft 1h simply permits a capped entry when 5m is non-bearish.
+  The focused tests explicitly assert these behaviours.
+
+- **PROJECT EVIDENCE:** Claude’s Replay finality concern is substantiated and sharper than initially stated: the default Replay mode is `DATABASE`; its timeline admits `closed=0` candles, while snapshot calculation reads only closed candles. Such a row can cause a later evaluation of the preceding closed-candle identity. `analysis_test_signal` records the open candle identity, whereas `trade_signal_test` follows the generated signal’s preceding closed-candle identity. This can inflate or misattribute Replay output without using future candle data.
+
+- **PROJECT EVIDENCE:** The direct Binance ingestion path only publishes `CandleClosedEvent` after a persisted open-to-closed transition. Therefore this Replay behaviour is not equivalent to that production close-transition path.
+
+- **AGENT INFERENCE:** The documented confidence threshold of 70 is a policy boundary, not demonstrated predictive validation. A count of signals above/below 70 does not establish outcomes, false-veto rate, slippage/fees impact, or out-of-sample robustness.
+
+- **PROJECT EVIDENCE:** The earlier FIX-122 objection should remain withdrawn: Production reads `trading.fix122.enabled`; Replay substitutes its run-local setting only while its scope is active.
+
+## EVIDENCE
+
+- Undefined question: `agent-docs/runs/20261010-104802/round01-codex.prompt.txt:15-17`.
+- No shared approved facts or decisions: `agent-docs/AGREED_KNOWLEDGE.md:19`; `agent-docs/DECISIONS.md:7`.
+- Pending FIX-154 instruction: `AGENTS.md:202-225`.
+- Local implementation status conflict: `codex-docs/ARCHITECTURE.md:17-18, 181-203, 255-274`; `codex-docs/FIX-154_IMPLEMENTATION_HANDOFF.md:4, 101-112`; `codex-docs/INVESTIGATION_LOG.md:69-84`.
+- Actual FIX-154 rules: `src/main/java/com/crypto/service/HigherTimeframeBuyAssessmentService.java:15-51`.
+- Caller freshness uses signal generation time, not persisted candle-close time: `TradeExecutionValidationService.java:81-96, 381-385`; `OpportunityConsolidationService.java:55-67, 222-226`.
+- Tests codify the divergent policy: `HigherTimeframeBuyAssessmentServiceTest.java:12-16, 35-39, 49-64`.
+- Quality boolean’s actual definition: `MarketContextService.java:74-75`; persistence: `AnalysisService.java:406-424`.
+- Default Replay source: `RegressionTestService.java:173-204`; `RegressionTestController.java:45-50`.
+- Replay all-candle timeline and closed-only snapshot: `RegressionTestWorker.java:128-134, 509-512, 550-616, 636-683`; `TechnicalIndicatorService.java:186-200, 318-322`; `CandleRepository.java:51-52, 60-61`.
+- Dataset Replay excludes unclosed forward candles, unlike default database Replay: `RegressionTestWorker.java:159-174, 469-485`.
+- Production close admission: `BinanceKlineService.java:89-111`; `CandleRepository.java:109-124`.
+
+## OBJECTIONS
+
+- **AGENT INFERENCE:** No review may be approved while its subject remains `Perform`.
+- **PROJECT EVIDENCE:** No document is currently safe to treat as authoritative for FIX-154’s intended trading rule; `AGENTS.md`, the current code, and project documentation disagree materially.
+- **PROJECT EVIDENCE:** Default database Replay has a finality/identity-parity defect. Any claim that its signal counts or candle lineage match production is unsupported until this is addressed and regression-tested.
+- **AGENT INFERENCE:** The 70 threshold must not be represented as performance-validated without an appropriately controlled outcome analysis that includes transaction costs, slippage, selection bias, and out-of-sample evidence.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** Whether FIX-154 was deployed cannot be established from this working tree or its documentation; no production access was used.
+- **PROJECT EVIDENCE:** Whether V107’s current checksum matches the database-recorded checksum was not verified.
+- **AGENT INFERENCE:** The operational frequency and realised impact of unclosed Replay rows require bounded database evidence or deterministic tests.
+- **PROJECT EVIDENCE:** No immutable source baseline exists for this review: the working tree contains extensive modified and untracked files.
+
+VERDICT: INSUFFICIENT_EVIDENCE

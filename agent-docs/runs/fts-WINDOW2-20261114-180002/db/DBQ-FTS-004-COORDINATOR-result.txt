@@ -1,0 +1,2 @@
+Tables_in_crypto_ai (wallet_position_test)
+wallet_position_test

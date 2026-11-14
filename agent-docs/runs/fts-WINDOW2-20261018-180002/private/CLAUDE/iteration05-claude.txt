@@ -1,0 +1,206 @@
+# Claude: FTS WINDOW2, Iteration 5 (entry quality, self-review)
+
+**Scope.** This covers the six frozen trades only: 182, 172, 162, 158, 143 and 137, all Production rows in `crypto_ai.paper_position`. It is analysis only, with no code, config, database, git or deploy changes. I did not open Codex's files, `LIVE_*` or `DATABASE_QUERY_LOG.md`. Plan mode was on, but neither Write nor ExitPlanMode was available, so this report is inline, as in Iterations 3–4.
+
+**Time zone.** The prompt says database timestamps are UTC. That conflicts with T1, which I confirmed in I3-001/002: our query wrapper shows `TIMESTAMP` columns in **KSA** time, so UTC is the shown value minus 3 h. I keep T1 and give both zones. The conflict still needs review by both agents.
+
+**Bottom line**
+- **Entry quality (EQ) is the 0–100 score the trader gives each entry.** It treats a poor risk/reward (R:R) as a size reduction, not a block. Five of the six entries had a planned R:R of 0.35–0.74 and still passed.
+- **Three of the six entered at exactly 50,** the lowest score that may still buy (the "chase cutoff").
+- **Trade 143's score was inflated twice.** Under the route's own authority signal, it would have scored no more than 40 and been blocked.
+- **Entry quality, judged only on what was known at entry:**
+  - Poor: 143, 182, 162.
+  - Weak: 158 and 137.
+  - Acceptable signal but a near-noise price plan: 172.
+
+---
+
+## EVIDENCE: entry-quality table (PROJECT EVIDENCE)
+
+Sources:
+- **Fill, stop and target:** I1-004 and I1-006.
+- **Score at signal time:** wallet messages (I2-004).
+- **Score at execution:** `wallet_managed_position.entry_quality_score` (I1-004).
+- **Highest progress toward target:** `profit_lock_progress_percent`.
+
+How to read the columns:
+- **R:R** is (target − fill) ÷ (fill − stop), at the fill price.
+- **Break-even win rate** is 1 ÷ (1 + R:R).
+
+| Trade | Entry time (KSA / UTC) | 1m signal | Distance from 20-period average (ATR) | R:R at fill | Break-even win rate | EQ at signal → at execution | Size | Highest progress toward target (outcome only) |
+|---|---|---|---|---|---|---|---|---|
+| 137 EGLD | 10-11 20:55:03 / 17:55:03 | STRONG_BUY 91, range mean-reversion | 0.61 | 0.644 | 60.8% | 58 → 58 | 25% | 46.6% |
+| 143 EGLD | 22:40:03 / 19:40:03 | **WATCH** 73, breakout; its own plan said wait for a pullback, 0% size | 4.35 (1m ATR) | 1.39 vs the 1m plan; **0 vs the 5m authority** | n/a | **60 → 70** | 25% | 95.3% |
+| 158 XRP | 10-12 02:35:03 / 10-11 23:35:03 | **WATCH** 64, trend-following | 1.31 | **0.346** | 74.3% | n/a → **50** | 25% | 33.2% |
+| 162 DOGE | 04:02:04 / 01:02:04 | **WATCH** 76, breakout, flagged overextended | 2.82 | 0.438 | 69.5% | 50 → **50** | 15% | 31.5% |
+| 172 SHIB | 06:36:03 / 03:36:03 | BUY 77, trend-following | 1.18 | 0.744; 1.0 after rounding to the price tick | 57% (50% after rounding) | 60 → 60 | 25% | 49.0% |
+| 182 ACE | 09:57:04 / 06:57:04 | BUY 75, trend-following in a weak downtrend, timeframes in conflict, flagged overextended | 2.15 | 0.482; 0.5 after rounding to the price tick | 67.5% | 50 → **50** | 15% | 0% |
+
+Sizes of 15% come from the ATR plan's 60% multiplied by the route's 25% (`PaperTradingService.java:328-333`, `:358-360`).
+
+## FINDINGS
+
+### Q1. The EQ score can never block a poor risk/reward on its own (PROJECT EVIDENCE: code; design weakness)
+
+- **How the score works** (`ExecutionIntelligenceService.java:976-1022`):
+  - It starts at 100.
+  - An R:R below 1 costs a flat 30 points (`:991`).
+  - Only a score below 50 blocks the entry (`:1173`).
+- **Result:** an entry with R:R 0.35 and no other penalty scores **70, labelled "GOOD_ENTRY"**, and the size cap rises to 40% (`:1183`).
+- **The six trades:** five of the six had R:R below 1 at the fill. A grep in earlier iterations found no separate minimum-R:R gate.
+- **The underlying cause** is the stop/target geometry from F1: the stop is never closer than 0.5%, and the target is 3 ATR. On low-volatility coins that makes R:R below 1 structural.
+- **Caution:** T6 showed that across the population, stop-outs had an average planned R:R of 1.94. So I don't claim low R:R is the population's main source of losses. I5-003 will measure it by R:R band and score band.
+
+### Q2. Three of six entries were at exactly the cutoff of 50, and the late-entry guard covers almost none of them (PROJECT EVIDENCE)
+
+- **The cutoff counts 50 as passing** (`:1021`, `:1173`).
+- **The project already knows 50–54 entries are often badly timed.** The FIX-119 comment (`:1232-1237`) says this, citing BTCUSDT #1701, EDU #1716 and UNI #1731.
+- **But FIX-119 defers only a narrow case:** accumulated-evidence entries with no BUY observations and no fresh 5m BUY (`:1265-1280`).
+- **How each 50-point trade got past it:**
+  - **162:** it had one BUY among its observations, so the guard was skipped (R7).
+  - **158** (5m-confirmation wake-up) and **182** (the FIX-11G route): FIX-119 does not apply to these routes at all.
+  - **182:** the FIX-11G rule asks for a score of at least 50 (`TradeExecutionValidationService.java:49`, `:266`). The stronger alternative rule for the same situation asks for at least 70 plus confidence of at least 72 (`:234-236`).
+- **Why it matters:** the same score of 50 is treated very differently by route, and three of the six losses sit exactly on that line.
+
+### Q3. Trade 143's score was inflated twice; under its authority signal it would have been blocked (PROJECT EVIDENCE + AGENT INFERENCE)
+
+**(a) R:R was measured against the wrong plan (code + arithmetic).**
+- `currentRewardRisk` (`:1811-1817`) uses the 1m signal's stop and target, 4.0102 / 4.0647. At 4.032 that gives R:R 1.50, so no penalty.
+- The route says its authority is the 5m BUY 159285. That signal's target was 4.01322, which the price was already above, so R:R would be 0 and cost 30 points.
+- **Counterfactual (AGENT INFERENCE):** 60 − 30 = 30, which is below 50, so the entry would have been blocked as a chase. The execution-time "price above target" check (`:1163`) would also have rejected it against the 5m target.
+
+**(b) The execution-time recheck switched ATR and raised the score.**
+- At signal time the score used the 5m ATR of 0.009073 (`:634`) and came out at 60.
+- At execution, `assessEntryQualityAtPrice` (`:857-859`) used the 1m ATR of 0.010899, and the stored score is **70, labelled GOOD_ENTRY** (I1-004).
+- This confirms R2 with data: the final safety check rated the entry *better* than the decision did.
+
+**(c) The route's own assumption was false here (PROJECT EVIDENCE).**
+- The route's comment justifies switching to the 5m ATR because the 1m ATR is "much smaller" (`:631-633`, `:1510-1511`).
+- Here the 1m ATR (0.010899) was *larger* than the 5m authority's ATR (0.009073). The 5m ATR came from the candle before the spike; the newer 5m signal 159407 had an ATR of 0.013497.
+- `setupTimeframeAtrAuthoritySignal` (`:1472-1492`) never compares the two ATRs, and never checks that the price is still inside the 5m plan.
+
+**Score breakdown (AGENT INFERENCE, consistent at both stages).**
+- Signal time, 60: −30 because the move from the reference low exceeded 6 ATR (5m ATR), and −10 because the price had risen more than 1.5% from that low.
+- Execution, 70: −20 because the ATR distance was 4–6 ATR (1m ATR), and −10 for the same price rise.
+- This only fits if the reference low was between 3.9676 and 3.9724. EGLD would then have risen about 1.5–1.6% within 30 minutes before the entry. I5-001 and I5-002 will check this.
+
+### Q4. Trade 137's score of 58 implies it bought back into a recently rejected high (AGENT INFERENCE from arithmetic, high confidence)
+
+- With R:R 0.644 the −30 penalty is certain. The only possible penalty that adds up to 42 points is the recent-rejection penalty of 12 (`:236`, `:971-1003`).
+- **What that means:** the entry was within 0.5% of a recent high that at least two later 1m signals closed below.
+- **Context available at entry:**
+  - The strategy is range mean-reversion, yet the price was in the upper part of the Bollinger band (68%). It passed only through the strict expansion-transition exception, right after nine straight 1m STRONG_SELL signals (Iteration 2).
+  - 5m was NEUTRAL and 1h was WATCH, so it used the FIX-11G 25% route.
+- **Why the wallet message doesn't mention it:** the cap reason is added only when the cap actually reduces size (`:1213-1214`), and here the size was already 25%.
+- I5-002 will verify this.
+
+### Q5. The score ignores regime and timeframe contradictions, and the "overextended" flag (PROJECT EVIDENCE)
+
+- **What the score does penalise:** only the HIGH_VOLATILITY regime (`:1005`) and the STOP_EXPOSED liquidity state (`:1010`).
+- **Trade 182 had three contradictions, none penalised:**
+  - a trend-following BUY in a weak downtrend;
+  - timeframes in CONFLICT;
+  - a 5m signal that was STRONG_SELL before the multi-timeframe step downgraded it to NEUTRAL (R6).
+- **Trades 162 and 182 were both flagged overextended.** The flag only reduced size through the ATR plan's 60% (the ATR stage says "Immediate entry remains allowed").
+
+### Q6. The score has no awareness of the exchange's price tick (PROJECT EVIDENCE, arithmetic)
+
+- **172 SHIB:**
+  - One price tick is 0.182% of price, larger than the ATR of 0.12%.
+  - After rounding to the tick, the target was +3 ticks and the stop −3 ticks, so the real R:R was 1.0, not 0.744.
+  - The ATR itself is mostly an artefact of that rounding.
+- **182 ACE:** after rounding, the target was +5 ticks and the stop −10 ticks.
+- **Effect:** the R:R and ATR terms in the score are close to noise on these coins.
+
+### Q7. Three of six entries executed on a 1m WATCH, not a BUY (PROJECT EVIDENCE)
+
+- 143, 158 and 162 each bought on a 1m WATCH, authorised by a 5m signal or by accumulated evidence.
+- The two with the weakest current signal, 158 (score 64) and 162 (WATCH, overextended), also had the two lowest R:R values.
+
+### Q8. The score can't be fully rebuilt from the database (PROJECT EVIDENCE; observability gap)
+
+- **Only the final score is stored.** It is in `wallet_managed_position.entry_quality_score`, and sometimes in the message text.
+- **Nothing that produced it is stored:**
+  - how far the price had risen from its reference low, in percent and in ATR;
+  - the R:R used;
+  - the opportunity's age;
+  - which reference price was used (the FIX-105 source is a DEBUG log line only, `:931`);
+  - whether the rejection penalty applied.
+- **Consequence:** Q3 and Q4 are worked out by arithmetic, not read from records.
+- **Replay:** the score is computed by shared code, so 137, 158, 162, 172 and 182 should come out the same in Replay, provided the stored signals and opportunity state match. Trade 143 still cannot be reproduced in Replay (R4).
+
+## Entry assessment, using only what was known at entry (AGENT INFERENCE on PROJECT EVIDENCE)
+
+| Trade | Grade | Main problem at entry | Contributing defect or weak rule |
+|---|---|---|---|
+| 143 | **F** | Bought 1.2% above the authority signal's close and above its own target; the 1m plan said wait | R1/R4 defect; Q3 score inflation |
+| 182 | **D−** | BUY against a downtrend, conflicting timeframes and a hidden bearish 5m; score 50; R:R 0.48 | R6; Q2; Q5 |
+| 162 | **D−** | Late breakout on a WATCH at 2.82 ATR above average; score 50; R:R 0.44 | R7; Q2 |
+| 158 | **D** | Weak 1m WATCH (64); R:R 0.35 needs a 74% win rate; score 50 | Q1; Q2 |
+| 137 | **C−** | Range buy in the upper band, near an inferred rejection high, through an exception; R:R 0.64 | Q1; Q4 |
+| 172 | **C** | Best signal of the six and not overextended, but the price plan is close to tick-size noise | Q6; F4 |
+
+**Outcome, kept separate from the entry assessment:**
+- No trade reached its target.
+- Highest progress toward target was 0–49% for all except 143, which reached 95% before the gap-through (T3).
+- Only 143 can be traced directly to its entry-quality defect.
+- 162 and 182 are mostly explained by poor entries; 137, 158 and 172 mostly by the stop/target geometry (F1).
+
+## UNKNOWNS
+
+- **U-I5-1:** the reference price and opportunity age behind each score, needed to confirm Q3 and Q4 (I5-001, I5-002).
+- **U-I5-2:** 158's score at signal time. The wake-up route's message doesn't include it.
+- **U-I5-3:** across the population, profit and loss by R:R band and score band, to decide whether Q1/Q2 are a significant population effect or specific to these trades (I5-003).
+- **U-I5-4:** where each entry sat in its prior 30-minute range (I5-004).
+- **Carried over:** T1 time-zone rule conflict; U-T3 (exchange-side vs app-side cause of the EGLD gaps; needs the gzip logs); U8 (why trading stopped).
+
+## DB_REQUESTS
+
+All time literals below are in the wrapper's session zone, which is KSA (T1).
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: Opportunity reference and age behind each entry's score (Q3, Q4, Q8)
+SQL:
+SELECT id, symbol, status, started_at, last_evidence_at, anchor_entry_price, best_entry_price, latest_signal_id, evidence_count, buy_count, watch_count, neutral_count, bearish_count, evidence_score, opportunity_health, five_minute_decision, one_hour_decision, execution_source, recommended_position_percent, decision_code, executed_at FROM crypto_ai.execution_opportunity WHERE (symbol = 'EGLDUSDT' AND last_evidence_at BETWEEN '2026-10-11 20:00:00' AND '2026-10-11 22:41:00') OR (symbol = 'XRPUSDT' AND last_evidence_at BETWEEN '2026-10-12 01:30:00' AND '2026-10-12 02:36:00') OR (symbol = 'DOGEUSDT' AND last_evidence_at BETWEEN '2026-10-12 03:00:00' AND '2026-10-12 04:03:00') OR (symbol = 'SHIBUSDT' AND last_evidence_at BETWEEN '2026-10-12 05:30:00' AND '2026-10-12 06:37:00') OR (symbol = 'ACEUSDT' AND last_evidence_at BETWEEN '2026-10-12 09:00:00' AND '2026-10-12 09:58:00') ORDER BY symbol, last_evidence_at LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: The 30-minute 1m signal price history behind each score's reference low and rejected high (Q3, Q4)
+SQL:
+SELECT symbol, id, signal_mode, generated_at, decision, latest_price FROM crypto_ai.trade_signal WHERE interval_code = '1m' AND ((symbol = 'EGLDUSDT' AND generated_at BETWEEN '2026-10-11 20:25:00' AND '2026-10-11 20:55:02') OR (symbol = 'EGLDUSDT' AND generated_at BETWEEN '2026-10-11 22:10:00' AND '2026-10-11 22:40:02') OR (symbol = 'XRPUSDT' AND generated_at BETWEEN '2026-10-12 02:05:00' AND '2026-10-12 02:35:02') OR (symbol = 'DOGEUSDT' AND generated_at BETWEEN '2026-10-12 03:32:00' AND '2026-10-12 04:02:03') OR (symbol = 'SHIBUSDT' AND generated_at BETWEEN '2026-10-12 06:06:00' AND '2026-10-12 06:36:02') OR (symbol = 'ACEUSDT' AND generated_at BETWEEN '2026-10-12 09:27:00' AND '2026-10-12 09:57:02')) ORDER BY symbol, generated_at LIMIT 400;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: Population profit and loss since 10-11 by R:R band and execution-time score band (Q1, Q2)
+SQL:
+SELECT CASE WHEN (pp.take_profit - pp.entry_price) / NULLIF(pp.entry_price - pp.stop_loss, 0) < 0.5 THEN 'a_lt0.5' WHEN (pp.take_profit - pp.entry_price) / NULLIF(pp.entry_price - pp.stop_loss, 0) < 1 THEN 'b_0.5-1' WHEN (pp.take_profit - pp.entry_price) / NULLIF(pp.entry_price - pp.stop_loss, 0) < 1.5 THEN 'c_1-1.5' ELSE 'd_ge1.5' END AS rr_band, CASE WHEN wmp.entry_quality_score IS NULL THEN 'unknown' WHEN wmp.entry_quality_score >= 70 THEN 'ge70' WHEN wmp.entry_quality_score >= 55 THEN '55-69' WHEN wmp.entry_quality_score >= 51 THEN '51-54' WHEN wmp.entry_quality_score = 50 THEN 'eq50' ELSE 'lt50' END AS eq_band, COUNT(*) AS n, SUM(pp.realized_pnl > 0) AS wins, SUM(pp.realized_pnl < 0) AS losses, ROUND(SUM(pp.realized_pnl), 6) AS sum_pnl, ROUND(AVG(pp.realized_pnl), 6) AS avg_pnl FROM crypto_ai.paper_position pp LEFT JOIN crypto_ai.wallet_managed_position wmp ON wmp.entry_signal_id = pp.signal_id WHERE pp.opened_at >= '2026-10-11 00:00:00' AND pp.status IN ('CLOSED', 'STOPPED') GROUP BY rr_band, eq_band ORDER BY rr_band, eq_band;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: Where each entry sat in its prior 30-minute 1m range (Q4, Q5, U-I5-4)
+SQL:
+SELECT '137' AS trade, MIN(low_price) AS lo30, MAX(high_price) AS hi30, COUNT(*) AS n FROM crypto_ai.candle WHERE symbol = 'EGLDUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-11 20:24:00' AND '2026-10-11 20:54:00' UNION ALL SELECT '143', MIN(low_price), MAX(high_price), COUNT(*) FROM crypto_ai.candle WHERE symbol = 'EGLDUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-11 22:09:00' AND '2026-10-11 22:39:00' UNION ALL SELECT '158', MIN(low_price), MAX(high_price), COUNT(*) FROM crypto_ai.candle WHERE symbol = 'XRPUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-12 02:04:00' AND '2026-10-12 02:34:00' UNION ALL SELECT '162', MIN(low_price), MAX(high_price), COUNT(*) FROM crypto_ai.candle WHERE symbol = 'DOGEUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-12 03:31:00' AND '2026-10-12 04:01:00' UNION ALL SELECT '172', MIN(low_price), MAX(high_price), COUNT(*) FROM crypto_ai.candle WHERE symbol = 'SHIBUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-12 06:05:00' AND '2026-10-12 06:35:00' UNION ALL SELECT '182', MIN(low_price), MAX(high_price), COUNT(*) FROM crypto_ai.candle WHERE symbol = 'ACEUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-12 09:26:00' AND '2026-10-12 09:56:00';
+### END_DB_REQUEST
+
+## Self-review (Iteration 5)
+
+- **Evidence labels:**
+  - Code citations are from lines I read this iteration (`ExecutionIntelligenceService.java:848-1030, 1150-1324, 425-457, 620-649, 1472-1514, 1807-1817`; `TradeExecutionValidationService.java:225-298`; `PaperTradingService.java:290-415`).
+  - The score breakdowns in Q3 and Q4 are inference, pending I5-001/002.
+  - No external research was used.
+- **Corrections to earlier iterations:**
+  - **Trade 143's execution-time score is 70, not 60.** Iteration 4 showed only the signal-time score of 60.
+  - **Trade 172's size:** Iteration 4 called its approval BALANCED_STRONG. The actual message says "Balanced profile approved 75%", capped to 25% by the score.
+- **Classification unchanged:** 143 is a defect; 162 and 182 followed the rules but the rules are weak; 137, 158 and 172 are valid losses. Iteration 5 adds that 162, 182 and 158 were low-quality entries that the scoring system allowed by design.
+- **Plan for Iteration 6:**
+  - Apply the I5 results.
+  - Measure Q1/Q2 across the population.
+  - Draft correction proposals (proposals only), each with a regression check against #1702 and #1696, the FIX-119 good controls:
+    - Compute R:R against the authority signal's plan.
+    - Use one ATR source for both the decision and the execution recheck.
+    - Make the cutoff exclusive at 50, or extend FIX-119 to all routes.
+    - Adjust stop/target for the price tick.

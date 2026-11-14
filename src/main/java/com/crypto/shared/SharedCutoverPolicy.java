@@ -3,13 +3,17 @@ package com.crypto.shared;
 import java.util.Map;
 import java.util.Objects;
 
-/** Approval is deliberately separate from operational readiness. Observation can
+/** Approval is deliberately separate from operational readiness. FIX-148 permits separately audited system validation. Observation can
  * advance checkpoints, but can never manufacture execution authority. */
 public final class SharedCutoverPolicy {
     private SharedCutoverPolicy() {}
     public static boolean approved(Map<String,Object> row) {
         return "READY".equals(row.get("status"))
-            && "OPERATOR_APPROVED".equals(row.get("cutover_source"))
+            && ("OPERATOR_APPROVED".equals(row.get("cutover_source"))
+                || ("SYSTEM_VALIDATED".equals(row.get("cutover_source"))
+                    && "FIX148_SYSTEM".equals(row.get("approved_by"))
+                    && row.get("approval_reference") instanceof String reference
+                    && reference.startsWith("FIX-148-AUTO-")))
             && text(row.get("approved_by")) && text(row.get("approval_reference"))
             && row.get("approved_at") != null && row.get("approved_sequence") instanceof Number
             && row.get("cutover_sequence") instanceof Number

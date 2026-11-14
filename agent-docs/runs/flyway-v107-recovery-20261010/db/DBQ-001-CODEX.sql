@@ -1,0 +1,1 @@
+SELECT installed_rank,version,description,type,script,checksum,installed_on,success FROM flyway_schema_history WHERE version IN ('107','108') ORDER BY installed_rank

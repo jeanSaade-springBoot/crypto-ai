@@ -105,6 +105,30 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
             @Param("to") Instant to,
             org.springframework.data.domain.Pageable pageable);
 
+    // FIX-143: Read-only visibility for allowed BUY signals with no executed wallet BUY.
+    // Match by immutable signal identity, not nearby symbol/time or an unrelated position.
+    // Apply all predicates before pagination so executed rows cannot hide unexecuted signals.
+    @Query("""
+            select s from TradeSignal s
+            where s.finalEntryAllowed = true
+              and s.decision in (:buy, :strongBuy)
+              and (:symbol is null or s.symbol = :symbol)
+              and s.generatedAt between :from and :to
+              and not exists (
+                  select wt.id from WalletTrade wt
+                  where wt.signal.id = s.id
+                    and wt.side = 'BUY' and wt.status = 'EXECUTED'
+              )
+            order by s.generatedAt desc, s.id desc
+            """)
+    List<TradeSignal> findAllowedUnexecutedBuys(
+            @Param("buy") SignalDecision buy,
+            @Param("strongBuy") SignalDecision strongBuy,
+            @Param("symbol") String symbol,
+            @Param("from") Instant from,
+            @Param("to") Instant to,
+            org.springframework.data.domain.Pageable pageable);
+
     // A blocked SELL means the isolated/base SELL or STRONG_SELL candidate was persisted,
     // but the final decision pipeline changed it to a non-SELL state. This is audit-only.
     @Query("""

@@ -1,0 +1,245 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No trade-specific database result is available: `agent-docs/runs/fts-WINDOW1-20261012-100002/db/CODEX/` contains zero files. Therefore timing cannot yet be measured for frozen paper positions 172, 162, 158, 143, 137, or 131.
+
+- **PROJECT EVIDENCE:** Runtime timing instrumentation is present for the required path:
+  `INPUT_TRANSACTION → PROTECTION_TRANSACTION → OBSERVER_TRANSACTION → CLOSE_DISPATCH_TRANSACTION`; worker logs then cover analysis start, stages, and completion. `fix129_stage_timing` persists only failures or stages lasting at least one second, so it is diagnostic—not a complete ledger.
+
+- **PROJECT EVIDENCE:** Direct price protection records a `PENDING` price event in the input transaction, then atomically marks it `APPLIED` only when protection returns successfully. An `APPLIED` row proves the protection callback committed, but not that an exit occurred; position/wallet mutation must be separately proven.
+
+- **PROJECT EVIDENCE:** Protection logs identify `wallet_managed_position.id` as `positionId`, while the frozen IDs are `paper_position.id`. No direct attribution of logs is valid until the entry-signal linkage between the two is returned.
+
+- **PROJECT EVIDENCE:** The active application log was searched for the six frozen IDs in paper/position-ID log forms; no matches were found. This does not prove absence of their events because historical compressed archives were not successfully searchable in this constrained shell.
+
+- **AGENT INFERENCE:** No execution-delay, analysis-delay, protection-delay, or exit-latency defect can be assigned to any frozen trade yet.
+
+- **PROJECT EVIDENCE:** Snapshot metadata has a one-second inconsistency: `2026-10-12 07:00:03 UTC` converts to `2026-10-12 10:00:03 KSA`, not the supplied `10:00:02 KSA`. The frozen selection remains unchanged; do not use the supplied KSA snapshot second for latency arithmetic.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `KlineTransactionCoordinator` preserves the ordered transactions and uses `KlineTiming`.
+- **PROJECT EVIDENCE:** `KlineTiming` emits/persists timing only for failures or elapsed time ≥1,000 ms.
+- **PROJECT EVIDENCE:** `CandleClosedAnalysisWorker` logs `WORKER_START`, per-stage elapsed time, failures, and `WORKER_END`.
+- **PROJECT EVIDENCE:** `SignalProcessingCoordinator` logs claim/attempt/completion and performs freshness validation after normal locks.
+- **PROJECT EVIDENCE:** `MarketPriceEventService` and `LivePositionProtectionService` define the direct price-event/protection outcome boundary.
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- Symbol, entry/exit UTC timestamps, and entry/exit signal IDs for each frozen paper position.
+- Whether each paper position maps uniquely to a managed wallet position.
+- Candle-close-to-signal, signal-to-entry, observation-to-protection, and trigger-to-exit latencies.
+- The first accepted threshold-crossing price event and whether it caused the recorded exit.
+- Any transaction stage exceeding one second or failing during the six lifecycles.
+- Whether archived logs contain relevant correlated records.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Establish the six frozen trade identities and their paper-to-managed-position linkage, then return bounded durable timing, processing, protection, and exit evidence. All returned timestamps are UTC; KSA is report-only as UTC+03:00.
+
+SQL:
+```sql
+SELECT table_name, column_name, column_type
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND table_name IN (
+    'paper_position',
+    'trade_signal',
+    'wallet_managed_position',
+    'wallet_trade',
+    'signal_processing_work',
+    'market_price_event',
+    'position_management_event',
+    'production_exit_audit',
+    'fix129_stage_timing'
+  )
+ORDER BY table_name, ordinal_position;
+
+SELECT
+  p.id AS paper_position_id,
+  p.symbol,
+  p.status,
+  p.signal_id AS entry_signal_id,
+  p.exit_signal_id,
+  p.quantity,
+  p.entry_price,
+  p.stop_loss,
+  p.take_profit,
+  p.exit_price,
+  p.realized_pnl,
+  p.close_reason,
+  p.opened_at,
+  p.closed_at
+FROM paper_position p
+WHERE p.id IN (172, 162, 158, 143, 137, 131)
+ORDER BY FIELD(p.id, 172, 162, 158, 143, 137, 131)
+LIMIT 6;
+
+SELECT
+  ts.id,
+  ts.symbol,
+  ts.interval_code,
+  ts.candle_open_time,
+  ts.generated_at,
+  ts.created_at,
+  ts.decision,
+  ts.original_decision,
+  ts.final_entry_allowed,
+  ts.latest_price,
+  ts.stop_loss,
+  ts.take_profit,
+  ts.risk_reward_ratio,
+  ts.data_quality_valid,
+  ts.signal_mode
+FROM trade_signal ts
+WHERE ts.id IN (
+  SELECT signal_id FROM paper_position
+  WHERE id IN (172, 162, 158, 143, 137, 131)
+  UNION
+  SELECT exit_signal_id FROM paper_position
+  WHERE id IN (172, 162, 158, 143, 137, 131)
+    AND exit_signal_id IS NOT NULL
+)
+ORDER BY ts.generated_at, ts.id
+LIMIT 24;
+
+SELECT
+  p.id AS paper_position_id,
+  wmp.id AS wallet_managed_position_id,
+  wmp.entry_signal_id,
+  wmp.symbol,
+  wmp.status,
+  wmp.opened_at,
+  wmp.updated_at,
+  wmp.average_entry_price_usdt,
+  wmp.stop_loss_usdt,
+  wmp.take_profit_usdt,
+  wmp.highest_price_usdt,
+  wmp.profit_lock_active,
+  wmp.profit_lock_price_usdt,
+  wmp.profit_lock_activated_at
+FROM paper_position p
+LEFT JOIN wallet_managed_position wmp
+  ON wmp.entry_signal_id = p.signal_id
+WHERE p.id IN (172, 162, 158, 143, 137, 131)
+ORDER BY p.id, wmp.id
+LIMIT 12;
+
+SELECT
+  w.id,
+  w.signal_id,
+  w.position_analysis_id,
+  w.symbol,
+  w.side,
+  w.quantity,
+  w.price_usdt,
+  w.decision_price_usdt,
+  w.execution_price_observed_at,
+  w.gross_amount_usdt,
+  w.fee_usdt,
+  w.realized_pnl_usdt,
+  w.execution_type,
+  w.execution_reason,
+  w.status,
+  w.executed_at
+FROM wallet_trade w
+WHERE w.signal_id IN (
+  SELECT signal_id FROM paper_position
+  WHERE id IN (172, 162, 158, 143, 137, 131)
+  UNION
+  SELECT exit_signal_id FROM paper_position
+  WHERE id IN (172, 162, 158, 143, 137, 131)
+    AND exit_signal_id IS NOT NULL
+)
+ORDER BY w.executed_at, w.id
+LIMIT 48;
+
+SELECT
+  spw.id,
+  spw.signal_id,
+  spw.symbol,
+  spw.interval_code,
+  spw.candle_open_time,
+  spw.status,
+  spw.attempts,
+  spw.claimed_at,
+  spw.completed_at,
+  spw.next_attempt_at,
+  spw.failure_stage,
+  spw.paper_position_id
+FROM signal_processing_work spw
+WHERE spw.signal_id IN (
+  SELECT signal_id FROM paper_position
+  WHERE id IN (172, 162, 158, 143, 137, 131)
+)
+ORDER BY spw.signal_id, spw.id
+LIMIT 24;
+
+SELECT
+  p.id AS paper_position_id,
+  f.correlation_id,
+  f.symbol,
+  f.interval_code,
+  f.candle_open_time,
+  f.observed_at,
+  f.stage,
+  f.started_at,
+  f.finished_at,
+  f.elapsed_ms,
+  f.outcome,
+  f.thread_name
+FROM paper_position p
+JOIN fix129_stage_timing f
+  ON f.symbol = p.symbol
+ AND f.observed_at BETWEEN DATE_SUB(p.opened_at, INTERVAL 10 MINUTE)
+                       AND DATE_ADD(p.closed_at, INTERVAL 10 MINUTE)
+WHERE p.id IN (172, 162, 158, 143, 137, 131)
+ORDER BY p.id, f.observed_at, f.started_at, f.id
+LIMIT 1000;
+
+SELECT
+  p.id AS paper_position_id,
+  mpe.id AS market_price_event_id,
+  mpe.symbol,
+  mpe.observed_at,
+  mpe.price,
+  mpe.source,
+  mpe.delivery_status,
+  mpe.outcome_reason,
+  mpe.created_at
+FROM paper_position p
+JOIN market_price_event mpe
+  ON mpe.symbol = p.symbol
+ AND mpe.observed_at BETWEEN p.opened_at AND p.closed_at
+WHERE p.id IN (172, 162, 158, 143, 137, 131)
+ORDER BY p.id, mpe.observed_at, mpe.id
+LIMIT 5000;
+
+SELECT
+  p.id AS paper_position_id,
+  wmp.id AS wallet_managed_position_id,
+  pme.id AS management_event_id,
+  pme.event_type,
+  pme.old_value_usdt,
+  pme.new_value_usdt,
+  pme.market_price_usdt,
+  pme.reason,
+  pme.occurred_at
+FROM paper_position p
+JOIN wallet_managed_position wmp
+  ON wmp.entry_signal_id = p.signal_id
+JOIN position_management_event pme
+  ON pme.wallet_position_id = wmp.id
+WHERE p.id IN (172, 162, 158, 143, 137, 131)
+ORDER BY p.id, pme.occurred_at, pme.id
+LIMIT 500;
+
+SELECT *
+FROM production_exit_audit
+WHERE paper_position_id IN (172, 162, 158, 143, 137, 131)
+ORDER BY paper_position_id, audited_at
+LIMIT 12;
+```
+
+### END_DB_REQUEST

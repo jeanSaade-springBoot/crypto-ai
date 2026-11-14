@@ -1,0 +1,3 @@
+SELECT UTC_TIMESTAMP(6) AS db_utc_now, NOW(6) AS db_session_now, @@global.time_zone AS global_tz, @@session.time_zone AS session_tz, @@system_time_zone AS system_tz,
+       (SELECT MAX(observed_at) FROM crypto_ai.market_price_event WHERE observed_at >= UTC_TIMESTAMP() - INTERVAL 30 MINUTE) AS latest_event_observed,
+       (SELECT MAX(created_at) FROM crypto_ai.market_price_event WHERE observed_at >= UTC_TIMESTAMP() - INTERVAL 30 MINUTE) AS latest_event_created;

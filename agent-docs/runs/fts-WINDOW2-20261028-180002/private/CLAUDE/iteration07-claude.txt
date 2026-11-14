@@ -1,0 +1,226 @@
+# Claude, FTS WINDOW2, iteration 7 of 8 (self-challenge)
+
+**Main result:** none of the six losses is a confirmed defect yet, but this pass raised two **candidate defects**. Arithmetic shows each one decided its trade: 143 was approved on a 5-minute BUY that the same-boundary 5m signal had already replaced, and 162 avoided an age penalty only because of processing delay. It also corrected several errors in my iteration-6 output and closed U-I6-1, U-I6-2 and U-I6-3.
+
+- **Run:** `fts-WINDOW2-20261028-180002`. Analysis only, and I reviewed only my own work.
+- **Isolation:** I did not open any Codex folder, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or Codex memory.
+- **Writes:** none. Write was disabled in this session, so this report exists only as this message.
+- **Times:** all times come from epoch values, shown as UTC → KSA (UTC+3).
+
+**What I read:**
+- CHARTER, my iteration-6 output, and the I6-001..003 results.
+- Rows from I2-002, I2-003, I4-001 and I5-002 again.
+- `ExecutionIntelligenceService.java` lines 596–685, 848–1030, 1472–1492, 1807–1817, 2455–2462 and 2601–2604.
+- `PaperTradingService.java` lines 330–394, `WalletAutoExecutionService.java` lines 90–149, and a search for fee handling.
+
+## FINDINGS
+
+### F7-1. 143: the decision score was 60 and the stored score 70; the only cause is which ATR was used (closes U-I6-1) (PROJECT EVIDENCE)
+
+**Inputs:**
+- Signal 159408: price 4.032, stop-loss 4.010202321104, take-profit 4.064696518344, 1m ATR 0.010898839448 (I2-002).
+- Fill price 4.033 (I2-003, order 358).
+- Lowest price among the last 20 one-minute signals: 3.972 (#159233, 19:33:00 UTC → 22:33:00 KSA).
+- Opportunity 36524: anchor and best price 4.032. Neither is below 3.972, so the reference is the rolling low. Opportunity age is 0.
+
+| Score part | At decision (`:634`, 5m ATR) | At fill (`PaperTradingService:377-378`, 1m ATR) |
+|---|---|---|
+| Rise above 3.972 | 1.511% → −10 | 1.536% → −10 |
+| ATR used | 5m BUY #159285, 0.009073 | 1m #159408, 0.010899 |
+| Distance from 3.972 in ATRs | 6.61 → **−30** | 5.60 → **−20** |
+| Reward-to-risk (R:R) | 1.50 → 0 | 1.39 → **0** (1.25–2.0 has no penalty, `:991-993`) |
+| Score | **60** (matches the fill message) | **70** (matches the stored score) |
+
+**Corrections to my iteration-6 F6-3:**
+- I said R:R 1.39 takes −15. That is **wrong**: −15 applies only below 1.25.
+- I said the 1m ATR was smaller. That is **wrong**: during the spike the 1m ATR (0.0109) was larger than the 5-minute-old 5m ATR (0.0091).
+- My `saveOpportunity` explanation is withdrawn.
+- The code comment at `:631-633` assumes the 1m ATR is "much smaller". That does not hold during a breakout.
+
+**Audit gap (still stands):** the stored score of 70 ("good entry") is not the 60 ("acceptable entry") that made the decision.
+
+### F7-2. 143 was approved on a 5m BUY that the same-boundary 5m signal had already replaced (PROJECT EVIDENCE + AGENT INFERENCE) — CANDIDATE DEFECT
+
+**The two signals:**
+- 1m signal #159408 was generated at 19:40:01.633945 UTC (22:40:01 KSA).
+- 5m signal #159407 closed on the same 19:40 boundary and was already **WATCH**. It was generated at 19:40:01.635944, which is **2 ms later**, yet it has the **lower id** (I6-003).
+
+**What the code did:**
+- `latestAtOrBefore` only accepts signals generated at or before the current one (`:2455-2462`), so #159407 was not visible.
+- The code therefore used 5m BUY #159285 instead (19:35:01 UTC → 22:35:01 KSA). It was 300 s old, which is within the 20-minute freshness limit.
+
+**What would have happened otherwise:**
+- This route only accepts a bullish 5m signal (`:1486`). With the WATCH signal visible, the route returns nothing.
+- #159408 has `atr_immediate_entry_allowed=0`, so the next check rejects with `ATR_ENTRY_BLOCKED` (`:644-648`).
+- **AGENT INFERENCE (moderate confidence):** 143 would most likely not have opened. This is not proven, because `deferredContinuationDecision` (`:598`) runs earlier and I have not re-evaluated it (U-I7-4).
+
+**Other context at entry:** price jumped from 3.990 to 4.032 in two 1-minute candles (+1.05%), and the 1m ATR grew about 5× in 7 minutes.
+
+**Classification:** the 5m BUY was stale because of the order in which signals on the same boundary were processed. It is still within the coded freshness rule, so this is a candidate defect, not a confirmed one. How often it happens is requested in I7-003.
+
+### F7-3. 162: whether the age penalty applied came down to 24 ms of processing delay (PROJECT EVIDENCE + AGENT INFERENCE) — CANDIDATE DEFECT
+
+**The timing:**
+- Signal 167668's candle closed at 01:02:00 UTC. The signal was generated at 01:02:02.813, a delay of 2.813 s.
+- Opportunity 37952 started at 00:41:02.837 UTC (03:41:02 KSA), which means a 2.837 s delay after its own candle closed.
+- An opportunity's start time equals the generation time of the signal that opened it. This is proven for 40290 (#176654), 36524 (#159408) and 35535 (#156695). DOGE still needs confirming (I7-001).
+
+**The effect:**
+- Measured by generation time, the age is 1259.976 s. `toMinutes()` makes that 20, so no penalty applied (`:948-951,987-989`).
+- Measured by candle close, the age is 1260 s, which is **21 minutes**. That gives −5, so the score would have been **45** and the entry blocked as CHASE_ENTRY at both the decision and the fill check.
+- The FIX-105 comment at `:894-897` says age is measured "exclusively from … candle-time evidence, never wall-clock". In practice the generation time includes 1.4–2.9 s of processing delay.
+
+**Correction:** the margin is **24 ms**, not the 30 ms I gave in iteration 6.
+
+**Classification:** the code does not do what its comment says, and on this trade that decided the outcome. It is a candidate defect (non-deterministic timing), not a confirmed one.
+
+### F7-4. 182's score of 50, broken down (closes half of U-I6-2) (PROJECT EVIDENCE)
+
+**Reference price:** the lowest of the last 20 one-minute signals was 0.1875 (#176528, 06:50:03 UTC → 09:50:03 KSA). That is below the opportunity anchor of 0.1879, so the rolling low was used. My iteration-6 "3.31 ATR from the anchor" used the wrong reference.
+
+**Score:**
+- Rise above the reference: 0.48% → 0.
+- Distance in ATRs: **5.952 → −20**. The −30 band starts above 6.0, so the margin was 0.0000073, about **7% of one price tick**.
+- R:R 0.48 → −30.
+- That gives 50.
+- A rejection zone **was present**: a high of 0.1888 at 06:38:01 UTC (09:38:01 KSA), with the entry 0.21% below it. The −12 penalty took the score to 38, and the code raised it back to the floor of 50 (`:995-1002`). So the rejection penalty had no effect.
+
+**One tick higher:** a fill at 0.1885 would score 28 and the fill check would have blocked it.
+
+**Context available at entry:** there were 17 SELL or STRONG_SELL 1m signals in a row from 06:38 to 06:54 UTC (09:38–09:54 KSA), then NEUTRAL, BUY, and the BUY that entered. That run happened before the opportunity opened, so it is outside the opportunity's evidence counts.
+
+### F7-5. 158's score of 50, broken down (closes the other half of U-I6-2) (PROJECT EVIDENCE)
+
+**Reference price:** the opportunity's best price of 1.4082 was below the lowest of the last 20 signals (1.4084), so it was used.
+
+**Score:**
+- Rise above the reference: 0.18% → 0.
+- Distance in ATRs: 3.38 → −10.
+- **Opportunity age: 53 minutes → −10.** The opportunity started at 22:42:00 UTC, which is 01:42:00 KSA on 10-12.
+- R:R 0.346 → −30.
+- Rejection zone: no, because only one lower price followed the high.
+- That gives **50**. The age penalty only applies while the opportunity is active, so landing exactly on 50 confirms the breakdown.
+
+**Still unknown:** the fill check passed with zero margin. The decision-time score, which used the ATR of 5m trigger #165415, is not known yet (I7-002).
+
+### F7-6. 137 checked against the raw prices (PROJECT EVIDENCE)
+
+- Lowest recent price: 3.992 at 17:42:00 UTC (20:42:00 KSA).
+- Distance in ATRs: 1.63 → 0.
+- R:R 0.644 → −30.
+- Recently rejected high: **4.005** at 17:40:01 UTC (20:40:01 KSA). The entry was 0.15% below it, so −12 applies and the score is **58**.
+- My iteration-6 finding F6-4 is now proven from the actual prices, not just by ruling out other penalties.
+
+### F7-7. Fees (PROJECT EVIDENCE; corrects F6-8 and closes U-I6-3)
+
+- A fee field does exist: `wallet_trade.fee_usdt` (V28 migration, `WalletTrade.java:40-41`). Only the manual path in `WalletService:554-581` uses it.
+- Every automatic path sets `.feeUsdt(ZERO)` (`WalletAutoExecutionService.java:173,260,349,443,540,653`).
+- So paper P&L leaves out fees by design. The external estimate is unchanged: about 0.1% per side at Binance's base tier, from secondary sources only.
+
+### F7-8. The 30-minute price window is really about 20 minutes (PROJECT EVIDENCE)
+
+- In production, `recentSignals` returns the 20 most recent signals (`findTop20…`, `:2601-2604`). Replay uses `replayScope.recent(…,20)`.
+- So the 30-minute `EVIDENCE_WINDOW` actually covers about 20 one-minute signals in both modes. Production and Replay behave the same way. All the breakdowns above use this 20-signal limit.
+
+### Earlier findings re-checked and kept
+
+- **F6-1:** kept, with sharper wording. Entry quality has a *soft* R:R penalty (−30 below 1.0), not a hard floor.
+- **F6-6:** kept. 143 was an overbought re-entry with no cooldown, and a price gap went through the profit lock.
+- **F6-7:** kept. The October stop-loss losses are outside the frozen set.
+- **F6-9:** F7-2 and F7-3 depend only on the order of stored generation times. Replay should reproduce them if it runs on the stored production signals; if it generates new timestamps, the results may flip (U-I7-3).
+
+## Per-trade report (AGENTS.md five-part format, condensed)
+
+| ID | Entry (UTC → KSA) | Why it entered and exited | Followed the rules? | Defects or missing evidence | Recommendation (no implementation) |
+|---|---|---|---|---|---|
+| 137 EGLD | 10-11 17:55:04 → 20:55:04 | Immediate validation, score 58 (R:R 0.64, rejected high 4.005); closed by a bearish exit signal | Yes | None. The EGLD log is missing (U-I3-1) | R:R floor; target that covers fees |
+| 143 EGLD | 19:40:04 → 22:40:04 | Approved on an outdated 5m BUY at score 60; the profit lock was gapped through | Coded rules, yes | **Candidate defect F7-2.** Audit gap: 60 at decision vs 70 stored (F7-1) | Make same-boundary higher-timeframe signals visible; store the decision score; add a cooldown |
+| 158 XRP | 23:35:04 → 10-12 02:35:04 | Confirmation wake-up; the fill check scored exactly 50; closed by a bearish exit signal | Yes | Decision-time score unknown (I7-002) | Target that covers fees; policy for scores of exactly 50 |
+| 162 DOGE | 10-12 01:02:06 → 04:02:06 | Accumulated evidence, late entry at 50; FIX-119 deferral lifted by one BUY | Coded rules, yes | **Candidate defect F7-3:** measured by candle close, the age would have blocked it | Measure opportunity age from candle close |
+| 172 SHIB | 03:36:05 → 06:36:05 | Immediate validation at score 60, with an ATR smaller than one price tick; closed by HTF_SELL_CONFIRMED | Yes | Nothing new | Tick-aware ATR and target floor |
+| 182 ACE | 06:57:06 → 09:57:06 | Immediate validation at 50 (5.95 ATR; the rejection penalty was cancelled by the floor) after a 17-minute selling run; closed by a bearish exit signal | Yes | None, but the result sat right on a scoring boundary (F7-4) | Let the rejection penalty go below the floor; remember bearish context from before the opportunity opened |
+
+**Regression checks to propose (no implementation):**
+- Re-run 143 and 162 in Replay on the stored signals and assert the decision code.
+- A unit test for the score-50 floor combined with a rejection zone.
+- A test for 1m and 5m signals closing on the same boundary in either order.
+
+## UNKNOWNS
+
+- **U-I7-1:** which signal opened DOGE opportunity 37952, and its candle (I7-001).
+- **U-I7-2:** 158's decision-time score, which used the ATR of 5m signal #165415 (I7-002).
+- **U-I7-3:** whether Replay uses the stored production generation times or creates new ones. This decides whether F7-2 and F7-3 reproduce.
+- **U-I7-4:** whether `deferredContinuationDecision` would still have admitted 143 if the 5m WATCH had been visible.
+- **U-I7-5:** why 5m signal #159407 has a lower id but a later generation time than #159408.
+- **Still open:**
+  - U-New3: the intent behind the 0.50% stop floor.
+  - U-I5-3: whether "0% ATR size becomes 100%" is intended.
+  - U-I3-1: the EGLD log.
+  - U8: which build was deployed.
+- **Closed:** U-I6-1, U-I6-2 and U-I6-3. U-I6-4 is replaced by U-I7-3.
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-001
+Purpose: Find the signal that opened DOGE opportunity 37952 and its candle time, to compare age by candle close with age by generation time (F7-3)
+SQL:
+SELECT id, symbol, interval_code, decision, UNIX_TIMESTAMP(candle_open_time) AS candle_open_epoch,
+       UNIX_TIMESTAMP(generated_at) AS gen_epoch
+FROM trade_signal
+WHERE symbol='DOGEUSDT'
+  AND generated_at BETWEEN FROM_UNIXTIME(1791765600) AND FROM_UNIXTIME(1791765700)
+ORDER BY generated_at
+LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-002
+Purpose: Gate fields of the 5m signals that could have set ATR for 143 (#159285, #159407) and 158 (#165415), plus EGLD and XRP 1h context (F7-2, F7-5)
+SQL:
+SELECT id, symbol, interval_code, decision, original_decision, latest_price, stop_loss, take_profit,
+       risk_reward_ratio, atr_at_signal, atr_recommended_position_percent, atr_immediate_entry_allowed,
+       final_entry_allowed, UNIX_TIMESTAMP(candle_open_time) AS candle_open_epoch,
+       UNIX_TIMESTAMP(generated_at) AS gen_epoch
+FROM trade_signal
+WHERE id IN (159285,159407,165415)
+   OR (symbol IN ('EGLDUSDT','XRPUSDT') AND interval_code='1h'
+       AND ((symbol='EGLDUSDT' AND generated_at BETWEEN FROM_UNIXTIME(1791740000) AND FROM_UNIXTIME(1791747602))
+         OR (symbol='XRPUSDT'  AND generated_at BETWEEN FROM_UNIXTIME(1791754000) AND FROM_UNIXTIME(1791761702))))
+ORDER BY symbol, interval_code, generated_at
+LIMIT 30;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-003
+Purpose: How often F7-2 happens: October paper positions whose 1m entry signal was generated before the same-boundary 5m signal, with that 5m decision and the outcome
+SQL:
+SELECT p.id, p.symbol, p.close_reason, p.realized_pnl,
+       s1.id AS s1_id, s1.decision AS s1_decision, UNIX_TIMESTAMP(s1.generated_at) AS s1_gen,
+       s5.id AS s5_id, s5.decision AS s5_decision, UNIX_TIMESTAMP(s5.generated_at) AS s5_gen
+FROM paper_position p
+JOIN trade_signal s1 ON s1.id = p.signal_id AND s1.interval_code = '1m'
+JOIN trade_signal s5 ON s5.symbol = s1.symbol AND s5.interval_code = '5m'
+     AND s5.candle_open_time = s1.candle_open_time - INTERVAL 240 SECOND
+WHERE p.closed_at >= FROM_UNIXTIME(1790812800)
+  AND s5.generated_at > s1.generated_at
+ORDER BY p.id DESC
+LIMIT 200;
+### END_DB_REQUEST
+
+## SELF-REVIEW (iteration 7)
+
+**Coverage:** all six frozen trades are covered. None was substituted.
+
+**Errors I found in my own iteration 6:**
+- F6-3 used the wrong R:R penalty band.
+- F6-3 assumed the 1m ATR was smaller; it was larger.
+- 182's ATR distance was measured from the wrong reference price.
+- 162's margin was given as 30 ms; it is 24 ms.
+- "No fee model" was too strong. The field exists, but automatic trades set it to zero.
+
+**Defects:** none confirmed. Two candidate defects (F7-2 on 143, F7-3 on 162) are backed by arithmetic showing they decided the outcome. Both need the I7-001..003 results and review by both agents before their status changes.
+
+**Labels:** every claim is tagged. I searched no logs and did no new external research this iteration.
+
+**Next (iteration 8):** add the I7 results, decide how to classify F7-2 and F7-3, and freeze the final report.

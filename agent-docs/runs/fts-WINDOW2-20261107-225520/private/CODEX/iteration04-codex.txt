@@ -1,0 +1,69 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Frozen population remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. The permitted `db/CODEX` directory has no result artifacts; no trade-specific DB fact is available.
+
+- **PROJECT EVIDENCE:** Current entry route is:
+
+  `trade_signal` → `signal_processing_work` claim/freshness check → execution validation → canonical fresh price (≤15 seconds) → wallet BUY → `paper_position` OPEN.
+
+  A completed processing-work record does not prove entry; the durable `paper_position` and corresponding executed wallet BUY are required. [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:48), [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:340), [ExecutionPriceAuthorityService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionPriceAuthorityService.java:30).
+
+- **PROJECT EVIDENCE:** For a new BUY, wallet execution occurs before the `paper_position` is created. The position uses the canonical execution price but timestamps itself with a separate `Instant.now()`. Therefore, entry timing must be reconciled against `wallet_trade.executed_at`; `paper_position.opened_at` alone is not necessarily the exact wallet execution instant. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:375).
+
+- **PROJECT EVIDENCE:** Current mechanical-exit priority is: take-profit checkpoint/extension, stop loss, profit-lock hard floor, profit-lock policy exit, normal signal-driven exit, then near-TP partial harvest. A loss therefore requires particular scrutiny of stop-loss evidence and any earlier price events; candle OHLC is not a substitute for accepted live price evidence. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:99).
+
+- **PROJECT EVIDENCE:** In the direct-price route, a canonical price event is first persisted as `PENDING`; protection then atomically records `APPLIED` or `NON_CANONICAL`. `APPLIED` proves completion of the protection callback, but may still be a no-op when no open position exists. `PENDING` is unresolved, and `PROTECTION_NOT_APPLIED` is not exit evidence. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:45), [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:53).
+
+- **PROJECT EVIDENCE:** The two closing routes have materially different evidence ordering:
+  - Signal-route `completeClose` persists `paper_position` first, then attempts a wallet exit and catches wallet exceptions.
+  - Live protection executes the mechanical wallet exit first, then closes `paper_position`.
+  
+  Thus a paper/wallet mismatch cannot be interpreted without checking both tables and the exit audit. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487), [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:165).
+
+- **PROJECT EVIDENCE:** A current-code audit limitation: `LivePositionProtectionService.closePaper` records `close_reason` and immutable `production_exit_audit`, but does not populate `paper_position.exit_signal_id`. Consequently, a null exit signal cannot prove that a live mechanical close had no signal context. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:391).
+
+- **AGENT INFERENCE:** None of the above establishes which route closed any frozen trade. The running/deployed code and configuration at each historical entry/exit are also unproven.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `paper_position` records entry and exit links, prices, lifecycle times, close reason, and P&L. [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:10)
+- **PROJECT EVIDENCE:** `production_exit_audit` is intended as immutable terminal-route evidence keyed to `paper_position_id`.
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- For each frozen ID: symbol; entry/exit signals; UTC/KSA lifecycle; close route; stop/target state; partial-harvest history; wallet BUY/SELL legs; fees; price-event status; and P&L reconciliation.
+- Whether the current direct-price/FIX-153 route was deployed when these trades occurred.
+- Whether an absence of `exit_signal_id` is historical data absence or expected live-protection behavior.
+- Snapshot discrepancy remains: `2026-11-07 19:55:22 UTC` converts to `22:55:22 KSA`, not the supplied `22:55:20 KSA`.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Establish the actual schema for the complete current entry/exit evidence route before issuing trade-specific joins for frozen positions 182, 172, 162, 158, 143, and 137.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'position_management_event',
+      'position_analysis',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

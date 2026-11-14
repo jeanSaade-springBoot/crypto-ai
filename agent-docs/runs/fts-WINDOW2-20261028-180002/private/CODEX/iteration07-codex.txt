@@ -1,0 +1,65 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No trade-specific DB result exists in the permitted `db/CODEX` folder. For frozen IDs `182, 172, 162, 158, 143, 137`, root cause, entry quality, exit correctness, P&L reconciliation, and Replay parity remain **unverifiable**.
+
+- **AGENT INFERENCE — correction:** Earlier source-based statements must not be treated as proof of the historical runtime for any frozen trade. Current code can define what evidence is needed, but cannot prove its version, configuration, or behavior at the trade time.
+
+- **PROJECT EVIDENCE — correction:** `market_price_event` rows with `LEGACY` or `APPLIED` status are accepted by current evidence readers, but a row alone does not associate a protection decision with a particular `paper_position`. Attribution still needs symbol, time interval, open-position/wallet evidence, and the committed exit record. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118)
+
+- **PROJECT EVIDENCE — refinement:** Current mechanical-protection code runs within a protection transaction and calls wallet mechanical exit before closing the paper position. This is stronger than the signal-close route, which saves `paper_position` before attempting its wallet exit. It still cannot establish which route any frozen trade took. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:53) [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487)
+
+- **PROJECT EVIDENCE — correction:** Negative `paper_position.realized_pnl` alone is not a full execution reconciliation. Current logic can preserve prior partial-harvest P&L, so the final position row must be reconciled against all relevant `wallet_trade` rows before classifying accounting or execution behavior. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:495)
+
+- **PROJECT EVIDENCE:** There is a documentation/version contradiction: some project text describes FIX-154 as pending while the changelog and current source describe implementation. This does not establish which behavior applied to these trades; historical deployed-version evidence is required.
+
+- **PROJECT EVIDENCE:** Supplied snapshot metadata has an arithmetic mismatch: `2026-10-28 15:00:05 UTC` converts to `2026-10-28 18:00:05 KSA`, while the supplied snapshot KSA is `2026-10-28 18:00:02`. The frozen selection has no snapshot-time predicate, so scope is unchanged; no latency analysis should rely on this metadata until reconciled.
+
+- **EXTERNAL RESEARCH:** None.
+
+## EVIDENCE
+
+- Frozen scope preserved exactly: `182, 172, 162, 158, 143, 137`.
+- Permitted Codex DB evidence directory: empty.
+- No proof-query results `DBQ-FTS-001`–`DBQ-FTS-005` were available.
+- No trade timestamp has been obtained; therefore no trade-level UTC/KSA conversion is asserted.
+
+## UNKNOWNS
+
+- Whether the frozen IDs still match the authoritative query result.
+- Per trade: symbol, entry/exit UTC time, quantity, prices, P&L components, close/exit reason, signals, wallet BUY/SELL, and accepted protection observations.
+- Historical application version, runtime mode, and configuration.
+- Whether any loss was a valid strategy loss, stale-entry effect, protection issue, wallet/paper mismatch, or data-quality defect.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Schema and key verification before any trade-specific forensic joins; prior requested evidence is unavailable.  
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    k.referenced_table_name,
+    k.referenced_column_name
+FROM information_schema.columns AS c
+LEFT JOIN information_schema.key_column_usage AS k
+  ON k.table_schema = c.table_schema
+ AND k.table_name = c.table_name
+ AND k.column_name = c.column_name
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'wallet_managed_position',
+      'trade_signal',
+      'market_price_event',
+      'production_exit_audit',
+      'signal_processing_work'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+### END_DB_REQUEST

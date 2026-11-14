@@ -1,0 +1,170 @@
+# FIX-156 RPR-0.9.4: what remains before Replay can reach 98–99% non-wallet parity with Production
+
+**Short answer:** none of the FIX-156 work exists in the code yet. Two register rows are wrong as written, and one requirement cannot be met while Production classes stay unchanged. The spec needs one more revision before it can be frozen.
+
+I did not edit the spec or any code, and I did not touch the database. I also could not write the plan file because no Write tool was available in this session.
+
+**Scope note:** `agent-docs/AGREED_KNOWLEDGE.md` and `DECISIONS.md` contain nothing about Replay or FIX-156, so shared memory adds no constraints here. I did not open `FINAL_CHANGE_SPECIFICATION_RPR-0.9.1.md` itself. I reviewed the RPR-0.9.4 text in the handoff against the current working tree. I did not read the other agent's memory or findings.
+
+## FINDINGS
+
+**F-A — Nothing from FIX-156 has been built.** [PROJECT EVIDENCE]
+- None of these names appear anywhere in `src`: `ReplayEvidenceQualifier`, `replay_profile`, `replay_run_certificate`, `replay_price_coverage`, `ReplayForbiddenDependencyException`, `ANALYSIS_PARITY`. The only hit is the UI registry `fix-registry.js:4`, which says "NOT IMPLEMENTED".
+- Every Replay-side behaviour in D12, D13, D25, D26, D27, S13 and S14 is still in the current source.
+
+**F-B — D01 is wrong as written; the outcome is already the same.** [PROJECT EVIDENCE]
+- Production does pass 5m and 1h SELL signals to `validateSell`.
+- But `validateSell` first calls `validateBaseSignal(signal, false)`, which rejects any non-1m signal with `NON_EXECUTION_TIMEFRAME`.
+- So in Production only a 1m SELL can close a position, exactly as in Replay. D01 should be "Production-proven equivalent" (one fixture), not "Replay change".
+
+**F-C — D08 is largely closed by the code.** [PROJECT EVIDENCE]
+- Both wake-up methods return `none()` unless the signal interval is 5m.
+- When no position is open, `evaluateBuy` on a 5m or 1h signal returns `CONTEXT_ONLY` before touching opportunity memory.
+- So Production trying wake-ups on every signal gives the same entry outcome as Replay trying them only on 5m.
+- Still to check: whether the FIX-122 `stopLossEvidence` wrappers have side effects that later change a 1m decision.
+
+**F-D — Material gap: Replay cannot stop reading `wallet_settings` without changing a Production class.** [PROJECT EVIDENCE]
+- Replay calls the shared `evaluateBuy` → `validateBuy`.
+- `validateBuy` reads `wallet_settings` row 1 for `requireNewBuyTransition` (line 66) and `executionProfile` (line 152), through `settings()` at line 400. That method has no Replay branch.
+- This contradicts three things in the spec:
+  - Stage 1 says "remove all `wallet_settings` reads" (§2/§4).
+  - RPR7-06 says Replay must never call a service that reads an account table.
+  - §5 says no Production class may be modified.
+- E10 / §3.6 also leave out these two settings, and both change BUY decisions.
+- The spec must choose one of:
+  - (a) treat these two values as permitted, versioned configuration evidence, captured per decision;
+  - (b) declare those decisions non-comparable;
+  - (c) reopen the design to allow a scope-aware settings source in Production.
+
+**F-E — D02 has an extra condition the fixtures must cover.** [PROJECT EVIDENCE]
+- Production only suppresses a SELL if `profitLock.active()` is true.
+- But `profitLock` is forced inactive when `canUseSignalPrice(signal, openedAt)` is false.
+- So a SELL whose signal price predates the entry is **not** suppressed even while a lock is active. The Replay mirror and the F3 fixtures need this case.
+
+**F-F — D23 adds an exit class the metrics don't list.** [PROJECT EVIDENCE]
+- `PositionManagementService.analyze` can run `executePositionStopLoss` and record `POSITION_STOP_LOSS`.
+- Replay never calls it.
+- That exit class is missing from the §7.1 per-exit-class list and from the §7.2 critical-safety classes.
+
+**F-G — Price-event ordering in Production is a guess.** [PROJECT EVIDENCE + AGENT INFERENCE]
+- `market_price_event` rows are only accepted if `LEGACY`/`APPLIED`, and the query orders by `(observed_at, id)`. The `PriceEvent` record keeps only `observedAt`, `price` and `source`, so the id is lost.
+- Production protection runs from `BinanceKlineService:108` (canonical events only) and from `SharedMarketConsumer:513/728` for collector-era data.
+- **Inference:** `LEGACY` rows from the collector era may not have been processed by protection in the same order, so the `(observed_at, id)` = processing-order question (F6) is a real risk for collector-era windows.
+
+**F-H — Two things that should be per-span or per-decision are still run-wide.** [PROJECT EVIDENCE]
+- `assertReplayEvidence` throws for the whole run if any `PENDING` event exists anywhere in the window (`MarketPriceEventService:151-154`). The spec wants a per-span refusal instead.
+- The `fix122_replay_revision` read sets one FIX-122 on/off flag per run (`ShadowProductionReplayService:113-116`). That needs a per-decision policy fingerprint (F8).
+
+**F-I — The UI title contradicts the spec.** [PROJECT EVIDENCE]
+- `fix-registry.js:4` titles FIX-156 "…with isolated virtual account".
+- §1 of the spec forbids any account simulation. This is a documentation fix only.
+
+**F-J — The rest of the register matches the current code.** [PROJECT EVIDENCE] Confirmed rows:
+- **D02:** no profit-lock suppression before the SELL check.
+- **D03 / D04:** with price events present, no signal-price TP, stop-loss or lock check runs.
+- **D07:** entry price uses `resolve(symbol, generatedAt)`; Production uses `Instant.now()`.
+- **D09:** add path has no `!profitLock.active()` guard.
+- **D12:** zero-event fallback still at line 183.
+- **D13:** `walletSettings()`, `INITIAL_CAPITAL`, sizing and daily budget still used.
+- **D15:** `intervalOrder` sort.
+- **D20:** entry time is `executionSignal.getGeneratedAt()`.
+- **D21:** `markExecuted(signal, decision)` is called with the revalidated decision.
+- **D25:** price events are only drained before each signal (line 126); no tail drain.
+- **D26:** `allTradesChart` queries `wallet_trade` (`RegressionTestService:553`).
+- **D27:** an open position is marked at the last signal price (lines 371-374).
+- **S14:** pass flag `livePriceParityPass = !productionPriceEvents.isEmpty()`.
+- **Price-path order is the same in both:** take profit → stop loss → rebase floor → lock trigger/floor → lock breach → normal exit → near-TP.
+
+## EVIDENCE
+- `regression/service/ShadowProductionReplayService.java`
+  - 79–82, 296–321, 351–354: wallet settings and sizing (D13)
+  - 89–95: run-wide exact/fallback flag
+  - 126–161: price events drained only before each signal (D25)
+  - 183–230: zero-event fallback (D12/D16)
+  - 232: 1m-only SELL with no lock check (D02)
+  - 263–283: entry and wake-up routing
+  - 310–311, 345–346: entry/add price resolved at `generatedAt` (D07)
+  - 333: entry time (D20)
+  - 348–360: add path with no lock guard (D09/D21)
+  - 371–374: open position marked at last signal price (D27)
+  - 726, 757, 777, 999–1006: `wallet_settings` reads (D22/D24)
+- `service/PaperTradingService.java`
+  - 115–121: position management runs first (D23)
+  - 133–137: lock evaluation tied to signal-price authority (F-E)
+  - 170–195: signal-path order TP → lock → SL → floor (D03/D04)
+  - 197–203: SELL suppressed while lock active
+  - 217: add path only on 1m without an active lock
+  - 238, 343: `Instant.now()` price resolution
+  - 298–311: wake-ups then `evaluateBuy`
+- `service/TradeExecutionValidationService.java`: 63–66, 152, 165–166, 350–357, 400–403.
+- `execution/service/ExecutionIntelligenceService.java`: 293–298, 397–405, 470–471.
+- `market/service/MarketPriceEventService.java`: 118–124, 151–162, 173–175.
+- `position/service/LivePositionProtectionService.java`: 165–248.
+- `position/service/PositionManagementService.java`: 130–135.
+- `regression/service/RegressionTestWorker.java`: 99 (plain `@Async`), 195–201, 322–323.
+- `regression/service/RegressionTestService.java`: 512, 553.
+
+## OBJECTIONS
+1. **F-D blocks the freeze.** As written, the spec requires removing `wallet_settings` reads and also forbids modifying Production classes. Both cannot hold, because the shared BUY validation Replay calls reads `wallet_settings` directly.
+2. **D01 is misclassified** (F-B). Fixing it doesn't change scope, but the register has to be correct before the freeze.
+3. **The 98–99% target has no numbers behind it.**
+   - The coverage threshold, minimum comparable count and confidence-interval method in §7 are all still unset.
+   - With n comparable lifecycles and a 99% target, the lower bound only clears 98% if n is in the low hundreds and nearly every case matches.
+   - The real risk is that strict exclusions (S01–S03, S09, S12, F7, F10) shrink the denominator until "99%" is measured on a hand-picked subset. Coverage has to be a hard gate, not just something reported next to the rate.
+4. **Seeding from recorded entries hides entry divergence.** Lifecycle parity only starts after entry. So BUY-decision parity is the only evidence about entry quality, and S02, S03 and S09 make many live 1m signals non-comparable. The spec should require a reported BUY-decision coverage rate.
+5. **POSITION_STOP_LOSS is missing** from the exit classes in §7.1 and §7.2 (F-F).
+
+## UNKNOWNS
+- Whether the FIX-122 `stopLossEvidence.evaluate/wakeup` wrappers have side effects on non-1m signals that change later decisions (affects D08 and D18).
+- Whether `market_price_event.id` order matches the order Production actually processed events, especially for `LEGACY` / collector-era rows (F6).
+- Whether `DynamicProfitLockService.evaluate` and Replay's `profitLockState` produce identical state across the TP-extension rebase (D14). I did not check this here.
+- Whether any history exists for `wallet_settings` or other configuration (E10). I did not query the database, so all coverage and rate figures remain unmeasured: E03, E06, E07 and E08.
+
+## REMAINING WORK
+**A. Spec revision (needed before freeze; no code)**
+1. **Settle F-D** (`validateBuy` reads `wallet_settings`): pick (a) per-decision captured configuration evidence, (b) non-comparable, or (c) reopen the Production-change boundary. Then add `requireNewBuyTransition` and `executionProfile` to §3.6 and E10.
+2. **Fix the register:**
+   - D01 → Production-proven equivalent.
+   - D08 → equivalent, pending the wrapper side-effect check.
+   - D02 → add the signal-price-predates-entry condition and its fixture.
+3. **Add POSITION_STOP_LOSS** as an exit class in §7.1, in the §7.2 critical-safety gate, and in the D23 closure.
+4. **Make the run-wide gates per-span or per-decision:** the `PENDING` check (F-H) and the FIX-122 revision flag (F8).
+5. **Set and approve the numbers:** coverage minimum, minimum comparable count, confidence-interval method, and a separate final window. Add BUY-decision coverage as a gate.
+6. **Freeze the source package SHA-256** and re-verify D01–D27 and S01–S14 against it.
+
+**B. Read-only evidence package (E01–E10, plus D25)**
+- E01: dependency audit, including F-D and the FIX-122 wrappers.
+- E02: decision-order matrix that closes D01–D27, including D23.
+- E03: price-event coverage per span, including the final tail and ordering by origin (direct vs collector).
+- E04: policy fingerprint contract.
+- E05: resource budget.
+- E06: pilot measurement.
+- E07: signal availability gap.
+- E08: S01–S14 reconstructability.
+- E09: entry-fixture dataset with its content hash.
+- E10: configuration history.
+
+**C. Implementation (after dual approval and your explicit approval; Replay output tables only)**
+- **Stage 1:**
+  - RPR7-06: remove the fallback, FIX-11K/FIX-11Q and wallet sizing; add lock suppression, the signal-path TP/lock/SL/floor order, the add-path lock guard, Production's entry time and `markExecuted` decision, and the D25 tail drain.
+  - D27: classify a position still open at window end as censored.
+  - RPR7-07: profit-lock and position-management mirrors with fixtures.
+  - An id-preserving price-event projection.
+  - RPR7-09: new comparison component.
+  - Per-span coverage replacing S14.
+  - D26: chart endpoint fed from fixtures instead of `wallet_trade`.
+- **Stage 2:**
+  - RPR7-01/02/05: guard against forbidden account/HTTP dependencies, and a named bounded executor instead of plain `@Async`.
+  - RPR7-03: qualifier and certificate.
+  - RPR7-10: staging, promotion, archive and purge.
+  - RPR7-11: Flyway migration chosen after a preflight check.
+  - Load validation.
+- **Docs:** the four docs, plus correcting the FIX-156 title in `fix-registry.js`.
+
+**D. Acceptance**
+- Separate signal, BUY-decision and lifecycle rates, each judged on its confidence lower bound in the frozen final window.
+- Zero unexplained critical mismatches.
+- First-divergence report for every mismatch.
+- Registry reconciliation, then Claude's full code review.
+
+VERDICT: REJECTED

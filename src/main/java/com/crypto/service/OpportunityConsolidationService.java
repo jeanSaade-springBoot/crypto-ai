@@ -38,8 +38,11 @@ public class OpportunityConsolidationService {
     private static final int MIN_AVERAGE_CONFIDENCE = 70;
 
     private final TradeSignalRepository signalRepository;
+    private final HigherTimeframeBuyAssessmentService htfAssessment;
     @Autowired(required = false)
     private ExecutionReplayScope replayScope;
+    @Autowired(required = false)
+    private BuyHtfAssessmentAuditStore htfAuditStore;
 
     public Assessment evaluate(TradeSignal currentSignal) {
         if (currentSignal == null || currentSignal.getGeneratedAt() == null) {
@@ -58,12 +61,13 @@ public class OpportunityConsolidationService {
         if (!isFresh(oneHour, currentSignal.getGeneratedAt(), ONE_HOUR_MAX_AGE)) {
             return Assessment.reject("MISSING_1H_CONTEXT", "No fresh 1h context is available for consolidation.");
         }
-        if (isBearish(fiveMinute.getDecision())) {
-            return Assessment.reject("5M_BEARISH_VETO", "Consolidated BUY cancelled because 5m is " + fiveMinute.getDecision() + ".");
+        HigherTimeframeBuyAssessmentService.Assessment htf=htfAssessment.assess(fiveMinute,true,oneHour,true);
+        if(!htf.allowed()) {
+            audit(currentSignal, htf, htf.code(), "FIX-154 higher-timeframe assessment rejected consolidation.");
+            return Assessment.reject(htf.code(), "FIX-154 higher-timeframe assessment rejected consolidation.");
         }
-        if (isBearish(oneHour.getDecision())) {
-            return Assessment.reject("1H_BEARISH_VETO", "Consolidated BUY cancelled because 1h is " + oneHour.getDecision() + ".");
-        }
+        SignalDecision fiveDecision=htf.effectiveFiveMinute();
+        SignalDecision oneDecision=htf.effectiveOneHour();
 
         List<TradeSignal> recent = replayScope != null && replayScope.active()
                 ? replayScope.recent(currentSignal.getSymbol(), EXECUTION_INTERVAL, currentSignal.getGeneratedAt(), 20)
@@ -72,18 +76,20 @@ public class OpportunityConsolidationService {
 
         int count = consecutive.size();
         if (count < MIN_CONSECUTIVE_BUYS) {
-            return Assessment.building(
+            Assessment result = Assessment.building(
                     count,
                     averageScore(consecutive),
                     averageConfidence(consecutive),
                     firstScore(consecutive),
                     currentSignal.getTotalScore(),
-                    fiveMinute.getDecision(),
-                    oneHour.getDecision(),
+                    fiveDecision,
+                    oneDecision,
                     "BUILDING",
                     "Bullish opportunity is building: " + count + "/" + MIN_CONSECUTIVE_BUYS
                             + " consecutive fresh 1m BUY signals."
             );
+            audit(currentSignal, htf, result.code(), result.explanation());
+            return result;
         }
 
         int averageScore = averageScore(consecutive);
@@ -93,58 +99,75 @@ public class OpportunityConsolidationService {
         boolean scoreStableOrImproving = latestScore >= firstScore - 3;
 
         if (averageScore < MIN_AVERAGE_SCORE || averageConfidence < MIN_AVERAGE_CONFIDENCE || !scoreStableOrImproving) {
-            return Assessment.rejectDetailed(
+            Assessment result = Assessment.rejectDetailed(
                     "QUALITY_DECAY",
                     count,
                     averageScore,
                     averageConfidence,
                     firstScore,
                     latestScore,
-                    fiveMinute.getDecision(),
-                    oneHour.getDecision(),
+                    fiveDecision,
+                    oneDecision,
                     "Persistent BUY signals exist, but quality is not stable enough. Average score=" + averageScore
                             + ", average confidence=" + averageConfidence + ", first/latest score=" + firstScore + "/" + latestScore + "."
             );
+            audit(currentSignal, htf, result.code(), result.explanation());
+            return result;
         }
 
         // Fully neutral 5m + 1h needs stronger persistence; this avoids treating repeated 1m noise as confirmation.
-        if (fiveMinute.getDecision() == SignalDecision.NEUTRAL
-                && oneHour.getDecision() == SignalDecision.NEUTRAL
+        if (fiveDecision == SignalDecision.NEUTRAL
+                && oneDecision == SignalDecision.NEUTRAL
                 && count < STRONG_CONSECUTIVE_BUYS) {
-            return Assessment.building(
+            Assessment result = Assessment.building(
                     count,
                     averageScore,
                     averageConfidence,
                     firstScore,
                     latestScore,
-                    fiveMinute.getDecision(),
-                    oneHour.getDecision(),
+                    fiveDecision,
+                    oneDecision,
                     "BUILDING_STRONGER_CONFIRMATION",
                     "1m BUY persistence is valid, but both 5m and 1h are NEUTRAL. Waiting for "
                             + STRONG_CONSECUTIVE_BUYS + " consecutive BUY signals or improving higher-timeframe context."
             );
+            audit(currentSignal, htf, result.code(), result.explanation());
+            return result;
         }
 
-        int positionPercent = consolidatedPositionPercent(count, fiveMinute.getDecision(), oneHour.getDecision());
+        int positionPercent = consolidatedPositionPercent(count, fiveDecision, oneDecision);
+        if(htf.maxInitialPercent()!=null) positionPercent=Math.min(positionPercent,htf.maxInitialPercent());
         String state = count >= STRONG_CONSECUTIVE_BUYS ? "CONFIRMED" : "BUILDING_CONFIDENCE";
         String explanation = "Consolidated opportunity approved from the current signal #" + currentSignal.getId()
                 + ": " + count + " consecutive fresh 1m BUY signals, average score=" + averageScore
                 + ", average confidence=" + averageConfidence + ", score path=" + firstScore + "→" + latestScore
-                + ", 5m=" + fiveMinute.getDecision() + ", 1h=" + oneHour.getDecision()
+                + ", 5m=" + fiveDecision + ", 1h=" + oneDecision
                 + ". Reduced execution size=" + positionPercent + "%. No second trade signal was generated.";
 
-        return Assessment.allow(
+        Assessment result = Assessment.allow(
                 positionPercent,
                 count,
                 averageScore,
                 averageConfidence,
                 firstScore,
                 latestScore,
-                fiveMinute.getDecision(),
-                oneHour.getDecision(),
+                fiveDecision,
+                oneDecision,
                 state,
                 explanation
         );
+        audit(currentSignal, htf, result.code(), result.explanation());
+        return result;
+    }
+
+    private void audit(TradeSignal reference, HigherTimeframeBuyAssessmentService.Assessment assessment,
+                       String finalResult, String reason) {
+        if (htfAuditStore == null) return;
+        try {
+            htfAuditStore.record(reference, "CONSOLIDATION", assessment, finalResult, reason);
+        } catch (RuntimeException ignored) {
+            // Best-effort evidence must never alter consolidation authority.
+        }
     }
 
     private List<TradeSignal> consecutiveFreshBuys(List<TradeSignal> recent, Instant reference) {

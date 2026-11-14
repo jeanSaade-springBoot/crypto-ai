@@ -1,0 +1,62 @@
+## FINDINGS
+
+- **[PROJECT EVIDENCE]** The required CODEX database-evidence directory is empty. No executed database result is available for any frozen trade: `104, 101, 96, 91, 82, 78`.
+- **[AGENT INFERENCE]** No trade-specific entry, exit, protection, timing, or P&L conclusion is presently supportable.
+- **[PROJECT EVIDENCE]** `paper_position` is the stated authoritative selection entity; source maps its lifecycle fields to entry/exit signals, prices, reasons, quantities, realized P&L, and open/close instants.
+- **[PROJECT EVIDENCE]** Source-level behavior requires financial reconciliation: a paper-position close may be saved before a wallet-exit exception is caught. Therefore a closed `paper_position` alone does not prove a matching wallet execution.
+- **[PROJECT EVIDENCE]** Accepted `market_price_event` evidence can establish a completed protection callback, but cannot alone prove a position was closed; the position/wallet mutation must also be present.
+- **[AGENT INFERENCE]** Snapshot metadata has a two-second inconsistency: `2026-10-11 15:00:04 UTC` converts to `2026-10-11 18:00:04 KSA`, not the supplied `18:00:02 KSA`. The frozen IDs remain authoritative and unchanged.
+
+## EVIDENCE
+
+- **[PROJECT EVIDENCE]** `PaperPosition.java`, `WalletTrade.java`, and `ProductionExitAudit.java` define the relevant audit relationships and lifecycle fields.
+- **[PROJECT EVIDENCE]** `LivePositionProtectionService.java` shows protection uses live observations and can record canonical outcome state; candle OHLC must not substitute for absent price-event evidence.
+- **[PROJECT EVIDENCE]** `TRADE_INVESTIGATION_AGENT.md` requires actual schema confirmation, bounded reads, UTC/KSA separation, and reconciliation of position, wallet, signal, and price-event evidence.
+- **[EXTERNAL RESEARCH]** None.
+
+## UNKNOWNS
+
+For every frozen trade, still unknown:
+
+- Symbol; entry/exit timestamps; entry/exit signal IDs.
+- Stop, target, close reason, exit trigger, and protection-event evidence.
+- Wallet fill linkage, quantity/price/fee reconciliation, and any discrepancy.
+- Signal/work timing, freshness, quality, retry, or execution-delay evidence.
+- Environment/mode and historically active configuration.
+- Whether each loss was valid strategy behavior, an execution/protection defect, or unsupported by retained evidence.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Establish actual `crypto_ai.paper_position` schema and the database session’s timestamp-rendering context before interpreting the frozen records.  
+SQL:
+```sql
+SELECT
+    @@session.time_zone AS session_time_zone,
+    @@global.time_zone AS global_time_zone,
+    @@system_time_zone AS system_time_zone;
+
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name = 'paper_position'
+ORDER BY ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-002  
+Purpose: Obtain the authoritative lifecycle records for exactly the six frozen paper positions without assuming unverified physical column names. Interpret timestamps only after DBQ-CODEX-I2-001.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (104, 101, 96, 91, 82, 78)
+ORDER BY FIELD(id, 104, 101, 96, 91, 82, 78);
+```
+### END_DB_REQUEST

@@ -1,6 +1,14 @@
+# LOCAL TEST CONFIGURATION ONLY - both database defaults target localhost:3307.
+# Change log FIX-153: default OFF, disable FIX-142 scheduling, preserve local UTC datasource
+# and historical threads at 1; normalize pasted Markdown into valid YAML.
 spring:
   application:
     name: crypto-ai-trader
+  task:
+    scheduling:
+      # Clock sampling must not delay the detector/resolver scheduled work.
+      pool:
+        size: 4
   datasource:
     url: ${DB_URL:jdbc:mysql://localhost:3307/crypto_ai?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
     username: root
@@ -29,6 +37,31 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
+local-candle:
+  # Exchange-clock correction is observed out-of-band; no HTTP occurs under execution locks.
+  clock-max-observation-age-seconds: 120
+  clock-warn-skew-seconds: 2
+  schema: ${LOCAL_TRADER_SCHEMA:crypto_ai}
+  # Required in OFF mode. Do not provide a relative fallback: different working
+  # directories would create different locks for the same trader database.
+  instance-lock-path: ${LOCAL_TRADER_INSTANCE_LOCK:}
+  price-max-age-seconds: ${LOCAL_PRICE_MAX_AGE_SECONDS:15}
+  price-future-skew-seconds: ${LOCAL_PRICE_FUTURE_SKEW_SECONDS:2}
+  detector-delay-ms: 2000
+  resolver-delay-ms: 5000
+  diagnostics-summary-ms: 60000
+  reconciliation:
+    # Automatic, token-free repair of verified local-candle gaps. Recovery runs
+    # only in OFF mode, never dispatches recovered candles, and never weakens
+    # the data-quality gate with invented price data.
+    enabled: true
+    initial-delay-ms: 15000
+    scan-delay-ms: 5000
+    executor-size: 1
+    request-budget-per-pass: 10
+    # Provisional defaults; release requires measured live-final-event grace.
+    live-close-grace-seconds: 10
+    safety-margin-seconds: 2
 server:
   port: ${SERVER_PORT:8080}
   servlet:
@@ -394,12 +427,31 @@ crypto:
 # This protects the DB pool from duplicate global-health polling; it does not affect trading logic.
 system-health:
   daily-cache-ms: ${SYSTEM_HEALTH_DAILY_CACHE_MS:45000}
-# FIX-132: OBSERVE reads collector events without collector-driven trading.
+# FIX-153: trader-owned ingestion by default; activate shared rollback flags together only after reconciliation.
 # Set SHARED_MARKET_USERNAME and SHARED_MARKET_PASSWORD in the service/Jenkins environment.
-# Deploy-Trader.ps1 must also use --shared-market.mode=OBSERVE; CLI overrides this YAML.
+# OFF starts direct ingestion; shared rollback requires reconciliation and explicit flags. Environment/CLI overrides still apply.
 shared-market:
-  mode: ${SHARED_MARKET_MODE:OBSERVE}
-  activation-approved: ${SHARED_MARKET_ACTIVATION_APPROVED:false}
+  mode: ${SHARED_MARKET_MODE:OFF}
+  activation-approved: ${SHARED_MARKET_ACTIVATION_APPROVED:true}
+  # FIX-148: automatic validated first activation, no operator per-signal approval.
+  automatic-first-cutover-enabled: ${SHARED_MARKET_AUTOMATIC_FIRST_CUTOVER:true}
+  # FIX-149 correction: trader/history stay in crypto_ai; collector source reads use crypto_ai_v2.
+  source-schema: ${SHARED_MARKET_SOURCE_SCHEMA:crypto_ai_v2}
   jdbc-url: ${SHARED_MARKET_JDBC_URL:jdbc:mysql://localhost:3307/crypto_ai_v2?serverTimezone=UTC}
   username: ${SHARED_MARKET_USERNAME:root}
   password: ${SHARED_MARKET_PASSWORD:root}
+  fix142:
+    enabled: ${SHARED_MARKET_FIX142_ENABLED:false}
+    acknowledgment-enabled: ${SHARED_MARKET_FIX142_ACK_ENABLED:false}
+    manual-resolution-enabled: false
+  # FIX-150: automatic no-replay retirement; uncertain attempts with open positions stay fenced.
+  fix150:
+    automatic-recovery-enabled: ${SHARED_MARKET_FIX150_AUTOMATIC_RECOVERY:true}
+  analysis:
+    historical-enabled: true
+    historical-threads: 1
+
+# FIX-142: capture JDBC timing for local latency investigation.
+diagnostics:
+  jdbc:
+    enabled: true

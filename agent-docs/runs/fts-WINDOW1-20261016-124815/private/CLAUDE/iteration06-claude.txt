@@ -1,0 +1,224 @@
+# FTS WINDOW1 · Claude · Iteration 6: root cause and research
+
+I made no writes of any kind (code, config, DB, git or files) and read no Codex, LIVE or other-agent files. **Times:** the DB session displays stored UTC as KSA (proven in I3-001). Every time below is KSA, with UTC = KSA − 3 h.
+
+## Iteration 5 results and self-corrections
+
+| Item | Result | Evidence |
+|---|---|---|
+| **F-I5-01: R:R < 1 causes the losses** | **REFUTED as a cause.** Of the 190 positions since 10-05, the 68 with R:R < 1 won 59% and netted −0.164 USDT. The 122 with R:R ≥ 1 won 41% and netted −3.992. The worst cell is R:R ≥ 1 with entry quality ≥ 70: 71 trades, 35% wins, −3.541. I keep F-I5-01 only as a fee-viability observation (F-I6-03). | I5-001 |
+| **F-I2-01: "each loss was 1–4 ticks"** | **WRONG.** Using exact exit prices, the losses were 4 / 1 / 30 / 18 / 6 / 12 ticks (182/172/162/158/143/137). In multiples of the 1m ATR that is 2.6 / 1.5 / 4.7 / 2.3 / 0.55 / 2.8. | I1-002 exit prices; Binance tick sizes (E-I6-02) |
+| **F-I2-03 fee estimate** | **Corrected** from about 0.28 to **about 0.26 USDT** round trip. Total notional was about 130 USDT (15 + 25 + 15 + 25 + 25 + 25). | I1-002 quantity × entry price |
+| **F-I5-06: `execution_opportunity` is one mutable row per symbol** | **WRONG.** I5-005 shows a separate row for each opportunity (ACE ids 46537 … 47372). The I5-005 query was inconclusive only because ACE rows used up the whole `LIMIT 50`. It is re-requested per symbol in I6-004. | I5-005 |
+| **F-I4-05: the 143 boundary race depends on commit order** | **Refined.** `latestAtOrBefore` filters on `generated_at` (`ExecutionIntelligenceService.java:2455-2461`). The 1m (22:40:01.633945) was generated 2 ms before the 5m (…635944), so the stale 5m BUY 159285 was chosen because of generation order, not commit order. Generation order depends on thread scheduling, so it is nondeterministic in Production. Replay reproduces the recorded order (F-I6-06). | Code; I4-001 |
+| **143 entry quality** | **Contradiction.** The `entry_reason` text says "Entry Quality 60/100 (ACCEPTABLE_ENTRY)", but in I5 I cited 70 from `wallet_managed_position`. I6-006 checks which is right. | I1-002 row 143 |
+
+## FINDINGS
+
+### F-I6-01: The common root cause is single-candle 1m BUY flips inside micro-volatility ranges, closed by the symmetric confirmation exit (AGENT INFERENCE on PROJECT EVIDENCE)
+
+**Volatility at entry (I5-003; tick sizes from E-I6-02):**
+
+| Pos | 1m ATR % | ATR in ticks | Price at entry vs its 2-min range |
+|---|---|---|---|
+| 182 ACE | 0.080 | 1.5 | 100% (bought the 2-min high) |
+| 172 SHIB | 0.124 | 0.68 (below one tick) | 100% |
+| 162 DOGE | 0.073 | 6.4 | 83% |
+| 158 XRP | 0.055 | 7.7 | 36% |
+| 137 EGLD | 0.107 | 4.3 | 58% |
+| 143 EGLD | 0.27 | 10.9 | 78%, and +1.15% above the 2-min low |
+
+- **Range position source:** I5-004, `pre120_min` / `pre120_max`.
+- **The signal itself was a one-candle flip with no persistence (I5-003):**
+  - ACE: 16 consecutive SELL/STRONG_SELL (09:38–09:54), then NEUTRAL (raw STRONG_SELL), then BUY, BUY.
+  - EGLD 137: 15 bearish signals out of 16 from 20:39 to 20:53, then a blocked STRONG_BUY, then STRONG_BUY.
+  - XRP: an earlier BUY, 164880 at 02:14, was followed at once by three SELLs.
+  - SHIB and DOGE: NEUTRAL, SELL and WATCH oscillating around isolated BUYs.
+- **No measurable edge after entry (I5-004, outcome only):** the 5-minute maximum favourable excursion was below entry for 182, 0% for 172, +0.07% for 162, +0.035% for 158 and +0.15% for 137. All five are below the 0.2% round-trip fee.
+- **Exit mechanism:** no position touched its stop or target (I2-003). Five exits were bearish-confirmation exits (`PositionExitPolicy.evaluateNormalExit` :20-50; 162 via `validateSell`) at 1.5–4.7 × the 1m ATR below entry. That is ordinary 1m noise.
+- **No production veto on recent bearish history:** the direct BUY path does not check the recent 1m bearish streak. Recent bearish history is used only to *enable* reversal probes (`recentBearishReversalAnchor`, `:2442-2453`, used at `:1359`).
+- **Classification:** a strategy and entry-filter design gap. It is not a runtime defect: every gate passed as written.
+
+### F-I6-02: Contributing causes per trade, and final classification (PROJECT EVIDENCE + AGENT INFERENCE)
+
+**182 ACE: valid by code, entered under a logic inconsistency.**
+- FIX-11G's premise is that "neither timeframe is bearish". The 5m was effectively NEUTRAL but raw STRONG_SELL, after 16 bearish 1m signals (F-I4-01).
+- The first attempt (176692) rolled back, so the entry came 1 minute later and 1 tick higher (F-I5-05).
+
+**172 SHIB: authority defect.**
+- An entry-blocked 5m (171559, blocked by `RANGE_ENTRY_LOCATION`) granted BALANCED_STRONG authority (F-I5-04).
+- The 1m ATR was below one tick, so its ATR-based levels were meaningless.
+
+**162 DOGE: guard-scope gap.**
+- The direct-path FIX-041 block can be turned into an ACCUMULATED_EVIDENCE entry one minute later (F-I5-06).
+- Whether FIX-041 actually fired on 167646 is still unproven (I6-004).
+
+**158 XRP: valid loss with no edge.** It was a SETUP_CONFIRMATION_WAKEUP entry on a 1m WATCH. No defect.
+
+**143 EGLD: entry and exit compounded.**
+- Entry was a chase: +1.15% in 2 minutes, 22 s after the previous EGLD exit, with no re-entry cooldown (F-I4-07).
+- The 5m authority was stale because of the boundary ordering.
+- On exit, the price reached +1.69%. The target was then extended twice (`LivePositionProtectionService.java:100-164`), and a 177 ms flash drop jumped past the lock and the hard floor (F-I3-02).
+- The direction was right; the exit policy turned a +0.84% target hit into −0.15%.
+
+**137 EGLD: valid loss with no edge.**
+- Counter-trend mean reversion after a 15-signal bearish run, entered through the expansion exception after the range-location veto (F-I5-08).
+- The target sat just under a persistent ask wall at 4.012.
+
+**Ruled out for all six:** stale data, execution delay, ingestion loss, and a stop/target-geometry cause (I2–I5).
+
+### F-I6-03: Low-ATR entries cannot cover fees (EXTERNAL RESEARCH + AGENT INFERENCE)
+
+- **Fees:** third-party sources put Binance's regular-tier spot fee at 0.1% maker/taker, or 0.075% when paid in BNB. I could not reach Binance's own fee page, so the figure is unverified against the primary source.
+- **Targets vs fees:** at 0.2% round trip, the targets of 0.16–0.24% (158, 162, 182) clear fees by at most about 0.04%, and 158's target is below the fee.
+- **Paper P&L excludes fees:** `fee_usdt = 0` (I1-006). That hides this, so the near-break-even result of the R:R < 1 group (I5-001) would be net-negative live. That claim is quantified in I6-001.
+
+### F-I6-04: Systemic concern outside the frozen sample (PROJECT EVIDENCE, context only)
+
+- **Entry quality does not predict wins:** the bucket with entry quality ≥ 70 and R:R ≥ 1 loses the most (I5-001). The scoring does not separate good entries from bad ones.
+- **Scope:** this is not part of the frozen-six root cause. I record it so the larger loss population is not attributed to the study pattern.
+
+### F-I6-05: Processing failures send work straight to terminal review (PROJECT EVIDENCE; reliability defect, not a loss cause)
+
+- **What happened:** since 10-05 there were 14 5m work items that ended in REVIEW_REQUIRED on `QueryTimeoutException`, plus the ACE rollback (I5-002).
+- **When:** they cluster 7–10 s after 5m boundaries (for example PEPE 01:40:07, 02:50:08, 04:05:07, 06:15:07), which matches the boundary slowdown in F-I3-08.
+- **Why they never resolve:** every such failure goes straight to REVIEW_REQUIRED with no retry (`SignalProcessingCoordinator.java:127`). That conflicts with AGENTS.md's no-manual-resolution direction.
+- **Effect on the six:** none of these failures touched a frozen trade except 176692 (ACE). PEPE BUY 450 executed at 09:56:04.898, 2.03 s before the ACE failure at 09:56:06.932. Contention between them is still a hypothesis (I6-005).
+
+### F-I6-06: Replay reproducibility (PROJECT EVIDENCE for the code; nothing was executed)
+
+- **Replay inputs:** Replay orders stored signals by `generatedAt`, then interval (`ShadowProductionReplayService.java:68-72`). It drives protection from stored ticks (`:91-143`), so exact-price parity is possible because ticks exist for all windows (I5-004).
+- **Expected to reproduce:**
+  - 143's stale 5m selection, because the generation order is recorded.
+  - The TP extensions and the flash-drop exit.
+  - The confirmation exits for 137 and 158.
+- **Expected to diverge:**
+  - 182: Replay uses a simulated wallet, so the rollback of 176692 cannot happen there. Replay would likely enter one minute earlier, at 0.1883.
+  - 162, if any accumulated-evidence state differs.
+- **No Replay evidence exists:** `wallet_position_test` and the `replay_*` tables show `TABLE_ROWS = 0` (I2-001; that figure is an estimate, verified in I6-006). Running Replay creates state, which this study does not allow, so **Replay parity is unverified**.
+
+## EVIDENCE
+
+| ID | Label | Source |
+|---|---|---|
+| E-I6-01 | PROJECT | I5-001/002/003/004/005; I1-002; I2-001/003; I3-001; I4-001 |
+| E-I6-02 | EXTERNAL | Binance `api/v3/exchangeInfo`, fetched 2026-10-16 (serverTime 1792162633370). Tick sizes: XRP 0.0001, DOGE 0.00001, EGLD 0.001, SHIB 0.00000001, ACE 0.0001. |
+| E-I6-03 | EXTERNAL (third-party, unverified) | Binance regular-tier spot fee of 0.1%, or 0.075% with BNB |
+| E-I6-04 | PROJECT | `ExecutionIntelligenceService.java:1350-1369, 2442-2461`; `ShadowProductionReplayService.java:64-143`; `PositionExitPolicy.java:20-50`; `SignalProcessingCoordinator.java:127` |
+
+## UNKNOWNS
+
+- **U-I6-01:** The actual Execution Intelligence result for 167646. Re-requested in I6-004.
+- **U-I6-02:** The cause of 176692's rollback-only transaction (I6-005).
+- **U-I6-03:** The real Replay row counts, and whether any Replay covered 10-11/10-12 (I6-006).
+- **U-I6-04:** Whether 143's entry quality was 60 or 70 (I6-006).
+- **U-I6-05:** Whether fee-adjusted P&L for low-ATR entries and the prior-bearish-streak pattern hold across the 190-trade population (I6-001, I6-003).
+- **U-I6-06:** Server logs. I have no access.
+
+---
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: Gross vs estimated fee-adjusted outcome by 1m ATR% bucket since 2026-10-05 KSA (F-I6-01/03).
+SQL:
+SELECT CASE WHEN s1.atr_percent < 0.08 THEN 'a_<0.08' WHEN s1.atr_percent < 0.15 THEN 'b_0.08-0.15'
+            WHEN s1.atr_percent < 0.30 THEN 'c_0.15-0.30' ELSE 'd_>=0.30' END AS atr_bucket,
+       COUNT(*) AS trades, SUM(pp.realized_pnl < 0) AS losses,
+       ROUND(SUM(pp.realized_pnl), 6) AS gross_pnl,
+       ROUND(SUM(0.001 * pp.quantity * (pp.entry_price + COALESCE(pp.exit_price, pp.entry_price))), 6) AS est_fee_0_1pct,
+       ROUND(AVG(pp.realized_pnl / (pp.quantity * pp.entry_price) * 100), 4) AS avg_pnl_pct,
+       SUM(pp.close_reason IN ('STOP_LOSS','TAKE_PROFIT')) AS sl_tp_exits
+FROM crypto_ai.paper_position pp
+JOIN crypto_ai.trade_signal s1 ON s1.id = pp.signal_id
+WHERE pp.status IN ('CLOSED','STOPPED') AND pp.opened_at >= '2026-10-05 00:00:00'
+GROUP BY atr_bucket ORDER BY atr_bucket;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: Exit-reason mix and average P&L% since 2026-10-05 KSA (do confirmation exits dominate over SL/TP?).
+SQL:
+SELECT pp.close_reason, COUNT(*) AS trades, SUM(pp.realized_pnl < 0) AS losses,
+       ROUND(SUM(pp.realized_pnl), 6) AS pnl_usdt,
+       ROUND(AVG(pp.realized_pnl / (pp.quantity * pp.entry_price) * 100), 4) AS avg_pnl_pct,
+       ROUND(AVG(TIMESTAMPDIFF(SECOND, pp.opened_at, pp.closed_at))) AS avg_hold_s
+FROM crypto_ai.paper_position pp
+WHERE pp.status IN ('CLOSED','STOPPED') AND pp.opened_at >= '2026-10-05 00:00:00'
+GROUP BY pp.close_reason ORDER BY trades DESC LIMIT 50;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: Outcome by count of bearish 1m signals (effective or raw) in the 10 minutes before the entry signal (F-I6-01 streak pattern).
+SQL:
+SELECT CASE WHEN x.bear10 >= 6 THEN 'a_6+' WHEN x.bear10 >= 3 THEN 'b_3-5' ELSE 'c_0-2' END AS bear_bucket,
+       COUNT(*) AS trades, SUM(x.realized_pnl < 0) AS losses, ROUND(SUM(x.realized_pnl), 6) AS pnl_usdt,
+       GROUP_CONCAT(CASE WHEN x.id IN (182,172,162,158,143,137) THEN x.id END) AS study_ids
+FROM (SELECT pp.id, pp.realized_pnl,
+             (SELECT COUNT(*) FROM crypto_ai.trade_signal t
+               WHERE t.symbol = s1.symbol AND t.interval_code = '1m'
+                 AND t.generated_at >= s1.generated_at - INTERVAL 10 MINUTE AND t.generated_at < s1.generated_at
+                 AND (t.decision IN ('SELL','STRONG_SELL') OR t.original_decision IN ('SELL','STRONG_SELL'))) AS bear10
+      FROM crypto_ai.paper_position pp
+      JOIN crypto_ai.trade_signal s1 ON s1.id = pp.signal_id
+      WHERE pp.status IN ('CLOSED','STOPPED') AND pp.opened_at >= '2026-10-05 00:00:00') x
+GROUP BY bear_bucket ORDER BY bear_bucket;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-004
+Purpose: Opportunity rows in each entry's pre-entry window, bounded per symbol (fixes the I5-005 LIMIT issue; U-I6-01).
+SQL:
+SELECT id, symbol, status, started_at, last_evidence_at, latest_signal_id, evidence_count, buy_count, watch_count,
+       bearish_count, five_minute_decision, one_hour_decision, execution_source, decision_code,
+       LEFT(decision_explanation, 400) AS expl, executed_at, updated_at
+FROM crypto_ai.execution_opportunity
+WHERE (symbol='DOGEUSDT' AND updated_at BETWEEN '2026-10-12 03:50:00' AND '2026-10-12 04:03:00')
+   OR (symbol='ACEUSDT'  AND updated_at BETWEEN '2026-10-12 09:54:00' AND '2026-10-12 09:58:00')
+   OR (symbol='SHIBUSDT' AND updated_at BETWEEN '2026-10-12 06:30:00' AND '2026-10-12 06:37:00')
+   OR (symbol='XRPUSDT'  AND updated_at BETWEEN '2026-10-12 02:25:00' AND '2026-10-12 02:36:00')
+   OR (symbol='EGLDUSDT' AND updated_at BETWEEN '2026-10-11 20:50:00' AND '2026-10-11 20:56:00')
+   OR (symbol='EGLDUSDT' AND updated_at BETWEEN '2026-10-11 22:34:00' AND '2026-10-11 22:41:00')
+ORDER BY symbol, updated_at LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-005
+Purpose: Slow stages and concurrent work around the 176692 rollback (09:56:02–09:56:08 KSA) (U-I6-02).
+SQL:
+SELECT 'TIMING' AS src, symbol, interval_code AS iv, stage AS detail, started_at AS ts, finished_at, elapsed_ms, outcome, thread_name
+FROM crypto_ai.fix129_stage_timing
+WHERE started_at BETWEEN '2026-10-12 09:56:00' AND '2026-10-12 09:56:10'
+UNION ALL
+SELECT 'WORK', symbol, interval_code, status, created_at, completed_at, attempts, failure_stage, CAST(signal_id AS CHAR)
+FROM crypto_ai.signal_processing_work
+WHERE created_at BETWEEN '2026-10-12 09:56:00' AND '2026-10-12 09:56:10'
+ORDER BY ts LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-006
+Purpose: Exact Replay row counts (U-I6-03), and entry quality for the six entry signals (U-I6-04).
+SQL:
+SELECT 'wallet_position_test' AS t, COUNT(*) AS n FROM crypto_ai.wallet_position_test
+UNION ALL SELECT 'analysis_test_run', COUNT(*) FROM crypto_ai.analysis_test_run
+UNION ALL SELECT 'replay_run_output', COUNT(*) FROM crypto_ai.replay_run_output
+UNION ALL SELECT 'replay_decision_trace', COUNT(*) FROM crypto_ai.replay_decision_trace
+UNION ALL SELECT CONCAT('wmp_eq_', entry_signal_id), entry_quality_score FROM crypto_ai.wallet_managed_position
+          WHERE entry_signal_id IN (176710,171589,167668,165412,159408,156723);
+### END_DB_REQUEST
+
+---
+
+**Self-review**
+- I refuted my own leading hypothesis from Iteration 5 using I5-001 and replaced it with an evidence-backed common cause (F-I6-01). Three earlier factual errors are corrected and disclosed.
+- Entries are judged only on what was knowable at entry. The excursions after entry are labelled as outcome.
+- Only the code facts and DB facts are stated as confirmed. The root-cause synthesis is labelled AGENT INFERENCE, and its generalisation depends on I6-001 and I6-003.
+
+**Plan for Iteration 7:** validate F-I6-01 and F-I6-03 at population level with I6-001 to I6-003. Close U-I6-01 to U-I6-04. Then draft recommended corrections and regression checks; no implementation.
+
+Sources:
+- [Binance exchangeInfo (public REST)](https://api.binance.com/api/v3/exchangeInfo)
+- [QuantConnect – Transaction Fees (Binance model)](https://quantconnect.com/docs/v2/writing-algorithms/reality-modeling/transaction-fees/supported-models)
+- [Binance Trading Fees Explained (CryptoPotato)](https://cryptopotato.com/binance-fees/)
+- [Finhay – Binance fees](https://www.finhay.com.vn/en/phi-giao-dich-binance)

@@ -1,0 +1,1 @@
+SELECT p.id AS paper_id, p.symbol, p.entry_price, m.id AS wallet_id, m.stop_loss_usdt, m.take_profit_usdt, m.entry_stage, m.last_scale_in_at, m.profit_lock_state, m.profit_lock_price_usdt FROM paper_position p JOIN wallet_managed_position m ON m.entry_signal_id = p.signal_id AND m.symbol = p.symbol WHERE p.id IN (104,101,96,91,82,78) ORDER BY p.id

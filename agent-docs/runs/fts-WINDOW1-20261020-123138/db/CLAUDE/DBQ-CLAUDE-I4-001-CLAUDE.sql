@@ -1,0 +1,2 @@
+SELECT installed_rank, version, description, installed_on, success FROM crypto_ai.flyway_schema_history ORDER BY installed_rank DESC LIMIT 15;
+SELECT TABLE_NAME, CREATE_TIME FROM information_schema.TABLES WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME IN ('buy_htf_assessment_audit');

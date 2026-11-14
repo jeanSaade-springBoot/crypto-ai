@@ -1,0 +1,81 @@
+## FINDINGS — Iteration 1
+
+1. **Scope is frozen:** only `paper_position` IDs **182, 172, 162, 158, 143, 137** will be analysed. No substitutions will be made.
+
+2. **No trade-specific DB evidence is available in this Codex-isolated evidence folder yet.** Therefore, no claim can presently be made about any trade’s symbol, entry, exit, loss cause, execution correctness, or protection behavior.
+
+3. **The supplied snapshot timestamps conflict.**  
+   - Supplied UTC: `2026-10-25 10:08:57`  
+   - UTC + 3h would be KSA: `2026-10-25 13:08:57`  
+   - Supplied KSA instead says: `2026-10-23 11:36:38`  
+   
+   These cannot represent the same instant. The six IDs remain authoritative despite this conflict; the study must not use the snapshot clock as a precise selection cutoff.
+
+4. The source establishes the evidence path, pending verification against the actual DB schema:
+   - `paper_position` records entry/exit prices, SL/TP, realized P&L, entry/exit signal links, close reason, and UTC lifecycle timestamps.
+   - `production_exit_audit` is designed to preserve the actual close trigger separately from the market-context signal.
+   - `wallet_trade` carries execution quantities, prices, fees, cost basis, and realized P&L.
+   - `market_price_event` is required to evaluate intrabar protection; candle OHLC must not be substituted for absent accepted price-event evidence.
+
+## EVIDENCE
+
+### PROJECT EVIDENCE
+
+- [PaperPosition.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:10) maps the authoritative `paper_position` entity and its signal links, exit fields, reasons, and timestamps.
+- [ProductionExitAudit.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:12) defines immutable diagnostic evidence for the terminal trigger and related position/signal context.
+- [ProductionExitAuditService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:23) records the close trigger separately from the source signal.
+- [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:483) computes paper-position terminal P&L from remaining quantity and preserves any prior partial-harvest P&L.
+- [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:392) writes live protection closures back to `paper_position` and records their audit evidence.
+- [WalletTrade.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletTrade.java:11) defines fee, cost-basis, execution-price-observation, and realized-P&L evidence.
+- The study charter designates `crypto_ai.paper_position` as authoritative and fixes the six position IDs.
+
+### AGENT INFERENCE
+
+- `paper_position.realized_pnl` alone cannot establish net financial P&L, because paper-position calculation does not itself include wallet trade fees. Wallet execution records are required for reconciliation.
+- The current source cannot establish what release/configuration was active when these historical positions closed. That needs durable DB/log evidence.
+
+### EXTERNAL RESEARCH
+
+None.
+
+## UNKNOWNS
+
+- Actual DB schema/version and whether each required table and column exists.
+- Identity, symbol, UTC/KSA entry and exit times, SL/TP, close reason, and realized P&L for all six positions.
+- Entry signal, exit signal, processing-work state, wallet executions, audit record, price-event sequence, and whether any execution was partial.
+- Whether the recorded loss was a valid strategy loss, protection/execution defect, data-quality issue, or irreconcilable evidence gap.
+- Runtime mode/version and applicable historic configuration.
+- Whether a bounded Replay comparison is possible without violating evidence-parity constraints.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual `crypto_ai` schema before selecting trade-reconstruction columns or joining the frozen positions to their execution, protection, and signal evidence.  
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'wallet_managed_position',
+      'production_exit_audit',
+      'market_price_event',
+      'position_analysis',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+Self-review: no trade-specific conclusion has been overstated; no UTC timestamp has been labelled KSA; no code, configuration, DB, Git, or deployment state was changed.

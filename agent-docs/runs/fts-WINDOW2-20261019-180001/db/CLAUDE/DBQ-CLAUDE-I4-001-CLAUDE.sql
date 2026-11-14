@@ -1,0 +1,3 @@
+EXPLAIN SELECT c.close_price FROM crypto_ai.candle c WHERE c.symbol = 'EGLDUSDT' AND c.interval_code = '1m' AND c.closed = 1 ORDER BY c.close_time DESC LIMIT 1;
+SELECT index_name, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = 'crypto_ai' AND table_name = 'candle' ORDER BY index_name, seq_in_index LIMIT 40;
+SELECT COUNT(*) AS egld_1m_closed FROM crypto_ai.candle WHERE symbol = 'EGLDUSDT' AND interval_code = '1m' AND closed = 1;

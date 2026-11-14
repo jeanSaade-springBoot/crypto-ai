@@ -1,0 +1,90 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen cohort remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitution was made.
+
+- **PROJECT EVIDENCE:** Current source establishes the authoritative linkage route as `paper_position.signal_id` → `wallet_managed_position.entry_signal_id`, with `production_exit_audit.paper_position_id` recording the terminal paper-position audit and its `wallet_position_id`. Numeric equality between a frozen `paper_position.id` and a logged `wallet_managed_position.id` is not a valid join.
+
+- **PROJECT EVIDENCE:** Entry route:
+
+```text
+closed candle → TradeSignal → signal_processing_work claim/freshness
+→ buy validation + canonical execution price
+→ wallet BUY / managed position → paper_position OPEN
+```
+
+  `PaperTradingService` obtains a fresh canonical execution price, executes the wallet BUY, then creates `paper_position` with that price and the execution signal. `wallet_trade.execution_price_observed_at` is the entry-price timing evidence.
+
+- **PROJECT EVIDENCE:** Live-price protection route:
+
+```text
+market_price_event PENDING → managed-position lock/freshness/order check
+→ TP / SL / profit-lock / confirmed signal-exit policy
+→ mechanical wallet exit + paper close + exit audit
+→ market_price_event APPLIED on transaction commit
+```
+
+  `APPLIED` proves the protection callback committed; it does not alone prove that a particular frozen paper position changed, because a no-position callback can also complete.
+
+- **PROJECT EVIDENCE:** Signal-driven and live-price exits are distinct. Signal processing can close from a fresh authoritative signal price; live protection acts on accepted observed prices. Their priority order is not identical, so a close reason cannot be inferred from a candle or from a later signal.
+
+- **PROJECT EVIDENCE:** A live-price closure updates `paper_position` but does not set `exit_signal_id`; its source signal is retained in `production_exit_audit`. Therefore a null `exit_signal_id` must not be interpreted as “no exit context” or “manual close.”
+
+- **PROJECT EVIDENCE:** `paper_position.realized_pnl` is calculated from entry/exit and remaining quantity, preserving prior partial-harvest P&L. Fee reconciliation must use `wallet_trade`; paper-wallet routes currently persist `fee_usdt=0`, but that is still evidence to verify rather than assume.
+
+- **AGENT INFERENCE:** The prior candidate logs for wallet position IDs 137, 143, 158, 162, 172, and 182 remain unlinked to the frozen paper-position cohort. They cannot support a cause, exit route, symbol, or timeline conclusion until the durable joins below confirm them.
+
+- **EXTERNAL RESEARCH:** None.
+
+## EVIDENCE
+
+- `PaperPosition.java`: durable paper lifecycle, entry/exit signal references, close reason, P&L, UTC open/close fields.
+- `PaperTradingService.java`: entry creation at lines 340–414; signal-path close logic at lines 442–533.
+- `LivePositionProtectionService.java`: direct-price acceptance/commit at lines 53–71; exit routing at lines 99–240; paper close at lines 391–411.
+- `MarketPriceEventService.java`: PENDING → APPLIED/NON_CANONICAL lifecycle and committed-outcome logging.
+- `ProductionExitAuditService.java`: audit linkage uses the paper entry signal to resolve the managed position; audit preserves trigger separately from context signal.
+- No DB result files exist in the permitted `db/CODEX/` folder.
+
+## UNKNOWNS
+
+For each frozen ID: authoritative symbol, entry and close UTC/KSA times, entry/exit price, exact close trigger, source signal, managed-position identity, accepted trigger observation, wallet executions, partial exits, and P&L reconciliation.
+
+Current-worktree source is not proof of the version/configuration active during these trades. The supplied snapshot clock discrepancy also remains: `20:59:44 UTC` converts to `23:59:44 KSA`, not the supplied `23:59:41 KSA`.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Confirm actual schema before using source-derived joins for the six frozen paper positions.  
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key
+FROM information_schema.columns AS c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'production_exit_audit',
+      'wallet_managed_position',
+      'wallet_trade',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I4-002  
+Purpose: Retrieve the authoritative frozen paper-position rows without assuming any non-primary-key values; provides the durable entry/exit signal IDs and UTC lifecycle bounds for subsequent bounded joins.  
+SQL:
+```sql
+SELECT pp.*
+FROM crypto_ai.paper_position AS pp
+WHERE pp.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(pp.id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST

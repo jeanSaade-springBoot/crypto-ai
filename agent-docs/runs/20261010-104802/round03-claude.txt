@@ -1,0 +1,193 @@
+My verdict stays **INSUFFICIENT_EVIDENCE**, because the question is still the single word "Perform".
+
+This round:
+- I accepted two of Codex's corrections.
+- I confirmed in code a Replay flaw that I had previously only inferred.
+- I found new issues:
+  - a REST candle import that can swallow a live candle close;
+  - three coordinator defects;
+  - a second `AGENTS.md` section that the code and logs contradict.
+
+Everything was read-only. I did not read `round03-codex.txt`. I made no plan file, because this session has no Write or ExitPlanMode tool.
+
+Labels: **[PE]** project evidence · **[ER]** external research · **[AI]** agent inference.
+
+## FINDINGS
+
+### A. Codex's round-2 claims
+1. **FIX-122: Codex is right, and I retract my round-1 wording [PE].**
+   - My round-1 phrase "Production's own setting is never read" (`round01-claude.txt:35`) is wrong as written.
+   - Production reads `trading.fix122.enabled` (default `true`) and uses it whenever no Replay scope is active (`StopLossEvidenceService.java:32, 41, 49`).
+   - What is true: inside a Replay scope the value comes only from `fix122_replay_revision`, never from the Production property (`:41`; `ShadowProductionReplayService.java:113-116`; `RegressionTestService.java:229-231`).
+   - The real defect is unchanged: the run is always labelled `PRODUCTION_PARITY` (`ShadowProductionReplayService.java:99, 103`), even when it selects the old FIX-122 revision. Nothing in the main code opens the `EXPERIMENTAL` scope; only tests do.
+2. **Replay analyses unclosed candles: agreed, with one citation fix [PE].** Codex's `RegressionTestWorker.java:543-548` is the method's parameter list. The timeline is actually built at `:550-556`.
+3. **PENDING versus REJECTED: I withdraw my objection [PE].** The specification's header already says "DRAFT — NOT APPROVED — IMPLEMENTATION FORBIDDEN" (`FINAL_CHANGE_SPECIFICATION.md:3-4`). So the stale PENDING rows (`:313-317`) cannot open any approval gate.
+4. **Truncation is unproven: agreed [PE + AI].**
+   - `$Question` is a plain, non-mandatory string with no `[CmdletBinding()]` or `[Parameter()]` (`coordinator.ps1:1-7`). So PowerShell never prompted for it interactively, and no prompt could have kept only one line of a longer question.
+   - A missing question throws (`:10-11`). "Perform" therefore arrived as an explicit argument. The cause is still unknown.
+
+### B. Replay can create a stale duplicate signal that Production cannot [PE]
+In round 2 this was partly inference. I have now traced both paths.
+
+**Production checks candle identity twice.**
+- The live worker calls `calculateAndPersist(…, event.openTime())` (`CandleClosedAnalysisWorker.java:130-137`). That call returns nothing when the newest closed candle is not the expected one (`TechnicalIndicatorService.java:102-106`), and the work ends as `HISTORY_UNAVAILABLE`.
+- It then skips any candle that already has a signal (`CandleClosedAnalysisWorker.java:142-158`).
+- The recovery path does the same (`ScheduledAnalysisService.java:158-175`) and scans closed candles only (`CandleRepository.java:76-88`).
+
+**Replay has neither check.**
+- Neither Replay snapshot method takes an expected candle (`TechnicalIndicatorService.java:118-145`).
+- The worker never compares the snapshot's candle with the timeline candle. It also never checks for an existing signal before persisting (`RegressionTestWorker.java:590-616, 636-683`).
+
+**The code comment is wrong.** The comment at `:575-577` says Replay analyses "EVERY closed candle in the timeline". The timeline actually comes from a loader with no "closed" filter (`:509-512`, `CandleRepository.java:60-61`).
+
+**The duplicate is used downstream.**
+- It is added to the as-of context (`:620`) and to shadow execution (`:622`, `:199-201`).
+- Replay's "latest signal" lookups select by `generatedAt` (`ExecutionReplayScope.java:106-120`). So the stale duplicate becomes the latest 1m signal one interval later.
+
+**Impact [AI].**
+- Suppose the original BUY was not executed. The duplicate is then re-evaluated against newer context and can open a shadow trade that Production could not.
+- If the original BUY was executed, `BUY_CONTINUATION` likely blocks the duplicate (`TradeExecutionValidationService.java:67-78`).
+- How often this happens needs the database.
+
+### C. New: a REST candle import can swallow a live candle close [PE + AI]
+**What happens.**
+- `importCandles` writes each REST candle whose close time has passed as `closed=1` (`MarketDataService.java:37-50`).
+- That write uses an upsert that finalises an existing `closed=0` row without a close token (`CandleRepository.java:173-188`). The comment at `:175-176` says this is intended.
+
+**Where it can run while the live stream is active.**
+- Coin activation reloads the WebSocket streams first (`DynamicCoinActivationService.java:21`) and then runs the import (`:28` → `MarketDataBootstrapService.java:72-96`).
+- `POST /api/market-data/import` runs it directly (`MarketDataController.java:16-24`).
+
+**Result if the import commits before the live final kline arrives.**
+- The live update finds the candle already closed, so no `CandleClosedEvent` is published. The only trace is an INFO `DUPLICATE_CLOSE` log line (`BinanceKlineService.java:110-117`).
+- The follow-up audit call only updates candles that reconciliation recovered (`LocalReconciliationAuditRepository.java:51-57`), so nothing durable is recorded.
+- Scheduled analysis is switched off (`application.yml:125`).
+- So that candle gets no analysis and no recorded outcome.
+
+**Scope and status.**
+- Startup is probably not exposed [AI]. The startup import runs as an ApplicationRunner, which in Spring Boot should finish before `ApplicationReadyEvent` starts the WebSocket (`BinanceWebSocketManager.java:95-96`). I did not test this.
+- It has not been observed: the current log has no `DUPLICATE_CLOSE`, activation or import lines.
+- It conflicts with two `AGENTS.md` local-candle rules: backfill must never finalise a live row through a duplicate-key update, and every candle needs one durable outcome. Whether those rules cover this import path, and not only the reconciliation insert (`CandleRepository.java:147-168`, which never overwrites), is for the user to decide.
+
+### D. Coordinator defects [PE]
+1. **The round labels never change.**
+   - The cross-examination template hard-codes "CURRENT ROUND-1 FINDINGS" (`coordinator.ps1:155, 160, 163, 178, 183, 186`). The loop actually passes the previous round's output (`:452-457`).
+   - In this round, the block labelled round 1 is Codex's round-2 text (`round03-claude.prompt.txt:35, 51` match `round02-codex.txt:3, 19`). Codex's prompt likewise carries my round-2 text under a round-1 label (`round03-codex.prompt.txt:32-33`).
+   - The only check, `Assert-Round2PeerExposure` (`:207-214`), tests that fixed label, and it runs only in the synthetic test (`:224-226`).
+2. **Same-round access is one-sided.**
+   - Codex always runs first, and its output file is written before Claude starts (`:404-405, 456-457`).
+   - The independence rule appears only in the round-1 prompts (`:120-122, 139-141`).
+   - So Claude can always read Codex's current-round answer, and Codex never sees Claude's.
+3. **Read-only is not enforced by tools for Claude [AI, from this session's tool list].**
+   - `:429` restricts Claude to Read, Glob, Grep, WebSearch and WebFetch, and disallows Bash, Edit and Write.
+   - This session still exposes claude.ai Docs tools that can create, update, delete and export external documents. I did not use them.
+   - So the rule against uploading private data depends only on the agent complying.
+
+### E. More documentation contradictions [PE]
+1. **FIX-154 rules.**
+   - I re-checked the round-2 findings line by line. The code (`HigherTimeframeBuyAssessmentService.java:22-35`) follows the policy in Codex's handoff (`codex-docs/FIX-154_IMPLEMENTATION_HANDOFF.md:16-30`) and changelog (`codex-docs/CHANGELOG_AI.md:184-194`), not `AGENTS.md`.
+   - New detail: every caller passes "fresh = true" for both timeframes (`TradeExecutionValidationService.java:93, 145, 427`; `OpportunityConsolidationService.java:64`). So the service's own freshness branches (`:17-18`) can never run.
+   - Freshness is checked earlier by the callers, using `generatedAt` (`TradeExecutionValidationService.java:81-91, 381-386`).
+2. **The FIX-154 handoff is out of date on migrations as well as deployment.**
+   - It says V107 adds the `trade_signal_test` columns and the hard-confirmation marker (`:34-43`).
+   - Current V107 has neither (`V107…sql:3, 8`; it has no `hard_confirmation` column). V109 adds both and says V107 "was already applied" (`V109…sql:1-12`).
+   - `codex-docs/CHANGELOG_AI.md:278-280` records an earlier V107 version that did contain those columns. If any database applied that version, V109 would fail there with duplicate columns, and Flyway's checksum check on V107 would fail.
+3. **`AGENTS.md`'s "pending implementation" local-candle section is also contradicted.**
+   - `application.yml:430-434` makes trader-owned ingestion the default.
+   - `logs/crypto-ai-trader.log` has 21,035 `[FIX-153]` markers, including `[FIX-153][SIGNAL_SAVED] mode=LIVE` from the live analysis worker. Here `mode=LIVE` is the signal mode, not the market-data mode.
+   - `codex-docs/CHANGELOG_AI.md:317-325` records "FIX-153 automatic reconciliation enabled". `codex-docs/INVESTIGATION_LOG.md:69-84` describes live candle-close processing "after FIX-154 deployment".
+   - [AI] Whatever runtime writes that log is running FIX-153 code. I could not establish whether it is Production or which market-data mode it uses.
+4. **Correction to my own round-2 inference [PE + AI].**
+   - Glob does list files oldest first: this run's listing ends with the round-3 prompt and then `PROGRESS.log`, in the order `:420-421` writes them.
+   - But modification times only show that `AGENTS.md` was last saved before the code was. They do not show which policy came first. I am downgrading that inference to weak.
+
+### F. Research and statistics [PE + AI]
+- Neither agent made a trading-performance claim this round.
+- The confidence-70 threshold is still justified only by a near-even split of rows (`CHANGELOG_AI.md:192-193`). There is no outcome, out-of-sample, false-veto or cost analysis.
+- Paper trades use zero fees (`RPR-0.4_REVIEW_RESPONSE.md:59-60`; `application.yml` has no fee key). So no Replay or paper comparison of FIX-154 reflects real net results.
+- I did no new external research.
+
+## EVIDENCE (file paths and lines)
+- **Coordinator and runs:**
+  - `agent-docs/coordinator.ps1:1-13, 105-194, 207-226, 404-405, 416-440, 452-463, 480-481`
+  - Run `20261010-104802`: `PROGRESS.log:1-15`, `round03-claude.prompt.txt:16, 32, 35, 51`, `round03-codex.prompt.txt:32-33`, `round02-codex.txt:3, 19, 21`, `round01-claude.txt:35`
+- **FIX-122:**
+  - `StopLossEvidenceService.java:32, 41, 49`
+  - `ExecutionReplayScope.java:29-44, 61-62, 184`
+  - `ShadowProductionReplayService.java:99, 103, 113-116`
+  - `RegressionTestService.java:229-231`
+  - `EntryAuthorityService.java:48`, `RegimeStateService.java:35`
+- **Replay compared with Production:**
+  - `RegressionTestWorker.java:128-134, 174-178, 199-201, 475-480, 509-533, 550-560, 575-622, 636-683`
+  - `TechnicalIndicatorService.java:84-111, 118-145, 186-200, 318-322`
+  - `CandleRepository.java:51-52, 60-61, 76-88`
+  - `ReplayDataset.java:33-46`
+  - `AnalysisService.java:183-190, 409, 550`
+  - `CandleClosedAnalysisWorker.java:112-163`
+  - `ScheduledAnalysisService.java:146-189`
+- **Import race:**
+  - `MarketDataService.java:31-56`
+  - `CandleRepository.java:99-124, 147-213`
+  - `MarketDataBootstrapService.java:26-30, 48-110`
+  - `DynamicCoinActivationService.java:18-33`
+  - `MarketDataController.java:16-24`
+  - `BinanceKlineService.java:95-125`
+  - `LocalReconciliationAuditRepository.java:51-57`
+  - `BinanceWebSocketManager.java:95-96`
+  - `application.yml:53-63, 125, 430-445`
+- **FIX-154:**
+  - `HigherTimeframeBuyAssessmentService.java:13-51`
+  - `TradeExecutionValidationService.java:81-98, 133-150, 381-386, 413-452`
+  - `OpportunityConsolidationService.java:64`
+  - `BuyHtfAssessmentAuditStore.java:97`
+  - `V107…sql:3, 4, 8, 19, 26`; `V109…sql:1-12`
+  - `codex-docs/FIX-154_IMPLEMENTATION_HANDOFF.md:4, 16-43`
+  - `codex-docs/CHANGELOG_AI.md:184-216, 240-291, 305-325`
+  - `codex-docs/INVESTIGATION_LOG.md:69-84`
+- **Specification:** `FINAL_CHANGE_SPECIFICATION.md:3-4, 306-317`; `RPR-0.4_REVIEW_RESPONSE.md:4, 11-12, 24, 33-34, 59-60, 66-78`
+- **Log searches (`logs/crypto-ai-trader.log`):**
+  - `[FIX-153]`: 21,035
+  - FIX-154 decision codes: 0
+  - `DUPLICATE_CLOSE`, import, activation, Flyway and startup lines: 0
+  - Line 283: `[FIX-153][SIGNAL_SAVED] mode=LIVE`
+- **Shared memory:** `AGREED_KNOWLEDGE.md:19` and `DECISIONS.md:7` have no entries.
+
+## OBJECTIONS
+- **O1 (material; blocks any verdict).** The question is undefined. I recommend stopping the run.
+  - Each further round costs up to 2×1200 s and ends the same way.
+  - The run's end will overwrite both standing memory files (`CODEX_LATEST.md`, `CLAUDE_LATEST.md`) with positions on "Perform" (`coordinator.ps1:480-481`).
+- **O2 (material to project state; needs your decision).**
+  - Two `AGENTS.md` sections, FIX-154 and the local-candle direction, describe as pending what the code and logs show as implemented and probably running.
+  - FIX-154's rules in the code also differ from `AGENTS.md`.
+  - `DECISIONS.md` records no approval for either.
+- **O3 (to register in the next specification, RPR-0.5):**
+  - (a) the missing candle-identity check in Replay (B);
+  - (b) the `PRODUCTION_PARITY` label on runs using the old FIX-122 revision;
+  - (c) a frozen code baseline that includes the uncommitted FIX-153/FIX-154 work and identifies which V107 version was applied;
+  - (d) a measured live-close grace period;
+  - (e) the import path that can swallow a live close (C), with a test that runs an import alongside a live final kline.
+- **O4 (process; does not affect this verdict).**
+  - Fix the round labels.
+  - Prevent or delay access to the other agent's same-round output.
+  - Block the claude.ai Docs write tools for Claude.
+- **Withdrawn:** my earlier objection about the PENDING approval table, and my "never read" wording.
+
+## UNKNOWNS
+1. The intended question, and the command used to launch the coordinator.
+2. **The runtime behind `logs/crypto-ai-trader.log`:**
+   - whether it is Production;
+   - which market-data mode it uses;
+   - whether FIX-154 is deployed;
+   - whether you approved the FIX-154 policy recorded in `codex-docs`.
+3. Which version of V107 was applied, and its Flyway checksum. A read-only query of `flyway_schema_history` would settle it.
+4. How often unclosed candles fall inside Replay windows, and whether an import has ever swallowed a live close.
+5. Whether Spring Boot runs the startup import before the WebSocket starts. I assumed this and did not test it.
+6. **Not re-checked this round:**
+   - my round-2 citations for runs 095027, 185153 and 010943;
+   - the `claude-docs` line numbers.
+   - Nothing was compiled, run or queried.
+
+## VERDICT
+"Perform" names no target and no acceptance criterion, so it cannot be approved or rejected. I accept Codex's FIX-122 correction and withdraw my PENDING-table objection. The findings in B, C, D and E3 are for you and the next specification, not an answer to "Perform".
+
+VERDICT: INSUFFICIENT_EVIDENCE

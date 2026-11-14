@@ -1,0 +1,49 @@
+## ITERATION 1 — TRADE RECONSTRUCTION
+
+### FINDINGS
+
+- Scope confirmed: local `crypto_ai`, authoritative entity `paper_position`, frozen failed-trade IDs only: **182, 172, 162, 158, 143, 137**. Replay `wallet_position_test` is excluded.
+- No trade-specific database results are available in the permitted `db/CODEX/` evidence location. Therefore no entry, exit, P&L, timestamp, symbol, or defect conclusion can yet be made for any frozen trade.
+- The current source maps `paper_position` to entry signal, optional exit signal, fixed entry/stop/target, close reason, audit reasons, and UTC open/close timestamps. `wallet_trade` is linked to signals, not directly to `paper_position`; linkage must be proven from actual records.
+- Current protection evidence requires accepted `market_price_event` rows (`LEGACY` or `APPLIED`) for a price-trigger conclusion. Candle OHLC must not substitute for missing intrabar protection evidence.
+- Current code is not proof of the version/configuration active when these six trades occurred.
+
+### EVIDENCE
+
+**PROJECT EVIDENCE**
+
+- [PaperPosition.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java) defines `paper_position` as the position lifecycle record, including `signal_id`, `exit_signal_id`, `entry_price`, `stop_loss`, `take_profit`, `exit_price`, `realized_pnl`, `close_reason`, `opened_at`, and `closed_at`.
+- [WalletTrade.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletTrade.java) exposes execution-side quantities, prices, fees, realized P&L, reason, and observed execution-price time.
+- [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java) treats only `LEGACY`/`APPLIED` price events as accepted Replay/protection evidence.
+- [PositionExitPolicy.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java) defines current normal-exit and profit-lock decision paths. Historical applicability remains unproven.
+- [TRADE_INVESTIGATION_AGENT.md](C:/workspace/crypto-ai-trader-mysql/codex-docs/TRADE_INVESTIGATION_AGENT.md) requires actual schema confirmation, UTC/KSA dual reporting, and separate entry/execution/exit conclusions.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+**AGENT INFERENCE**
+
+- None asserted. Trade-level reconstruction is deferred pending bounded database evidence.
+
+### UNKNOWNS
+
+For every frozen ID: symbol, side, entry/exit UTC timestamps, KSA conversions, linked signals, entry authority, candle context, execution records, fee treatment, protection observations, exit trigger, position-management linkage, data-quality state, and Replay reproducibility.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual local schema before selecting columns or constructing the six-trade reconstruction queries; identify the supported position/execution/evidence tables without accessing Replay tables.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+SHOW CREATE TABLE crypto_ai.trade_signal;
+SHOW CREATE TABLE crypto_ai.wallet_trade;
+SHOW CREATE TABLE crypto_ai.market_price_event;
+SHOW CREATE TABLE crypto_ai.signal_processing_work;
+SHOW TABLES FROM crypto_ai LIKE 'wallet_managed_position';
+SHOW TABLES FROM crypto_ai LIKE 'position_analysis';
+SHOW TABLES FROM crypto_ai LIKE 'candle';
+SHOW TABLES FROM crypto_ai LIKE 'technical_indicator';
+```
+### END_DB_REQUEST

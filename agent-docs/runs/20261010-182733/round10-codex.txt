@@ -1,0 +1,61 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** RPR-0.6 is not the canonical approval contract required by governance. Governance names `agent-docs/FINAL_CHANGE_SPECIFICATION.md`, which remains RPR-0.4; RPR-0.6 says it supersedes earlier revisions “for review only.” Its approval therefore cannot authorize the specified design process.
+
+- **PROJECT EVIDENCE:** The “complete” registry is incorrect. It names nonexistent `regression_test_run` rather than `analysis_test_run`, and omits `RegressionTestService`, which creates runs and owns cancellation, purge, archive, and ID-reset behavior.
+
+- **PROJECT EVIDENCE:** M02 does not prevent historical look-ahead. It only requires a candle be `closed=1`; it does not require that the candle was closed when Production made the decision. Current reconciliation can later close an open row or add a closed backfill. The `Candle` projection does not expose `created_at`, `updated_at`, provenance, or reconciliation resolution time needed to establish historical visibility.
+
+- **PROJECT EVIDENCE:** The present Replay timeline is not even restricted to closed candles: it loads all candles by identity. Snapshot queries then apply the row’s current `closed=1` state. Production data quality likewise evaluates currently closed rows. The proposed qualifier must define and enforce one decision-time finality rule across every Replay and shared candle read.
+
+- **PROJECT EVIDENCE:** Isolation is specified as an outcome, not an enforceable design. Current Replay reads `wallet_settings`; minimum-notional evaluation may call Binance HTTP; the existing wallet guard only protects writes and locking reads. RPR-0.6 does not define dependency wiring, propagation across async work, or a complete interception boundary.
+
+- **PROJECT EVIDENCE:** RPR-0.6 requires retained price-event ID/order data, but the current `PriceEvent` query orders by `id` while discarding it from the returned record. `MarketPriceEventService`/`PriceEvent` are absent from the change registry, so the required behavior is unregistered.
+
+- **PROJECT EVIDENCE:** M04’s staging requirement is not implementable as specified. Current Replay writes output incrementally during processing. The artifact does not define staging table names, promotion transaction, cancellation/restart/purge behavior, or treatment of independently committed diagnostics/audits.
+
+- **PROJECT EVIDENCE:** The artifact conflicts with the requested “Production code unchanged” boundary: it authorizes modifications to shared Production services, while omitting existing shared dependencies such as `ExecutionIntelligenceService` and `ExecutionPriceAuthorityService`. It must explicitly choose Replay-local adapters only, or authorize narrowly defined shared refactors with equivalence proof.
+
+- **PROJECT EVIDENCE:** `ANALYSIS_PARITY` is not presently grounded in a version/config identity source. The artifact acknowledges missing deployed JAR/config lineage but defines no evidence source or refusal algorithm that makes this claim safely attainable.
+
+- **AGENT INFERENCE:** These are material design omissions, not implementation details. The specification is not complete or safe for dual-agent technical-design approval.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Governance requires the exact canonical artifact and a complete registry/method contract: [AGENTS.md](/C:/workspace/crypto-ai-trader-mysql/AGENTS.md:327).
+
+- **PROJECT EVIDENCE:** RPR-0.6 calls for closed identity only, declares generic staging, and lists its incomplete registry: [FINAL_CHANGE_SPECIFICATION_RPR-0.6.md](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:5), [line 53](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:53), [line 64](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:64), [line 87](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:87).
+
+- **PROJECT EVIDENCE:** Current run creation/purge use `analysis_test_run`: [RegressionTestService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:173), [line 362](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:362).
+
+- **PROJECT EVIDENCE:** Replay loads unfiltered candle identities and persists output mid-run: [RegressionTestWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:509), [line 550](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:550), [line 636](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:636).
+
+- **PROJECT EVIDENCE:** Current and reconciled candle reads rely on current `closed` state; late recovery updates/inserts closed rows: [CandleRepository.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:51), [line 132](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:132), [line 152](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:152). Reconciliation also records resolution/outcome evidence: [LocalCandleReconciliationService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/local/LocalCandleReconciliationService.java:182).
+
+- **PROJECT EVIDENCE:** Production data-quality evaluation selects the latest currently closed candles: [CandleDataQualityService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/CandleDataQualityService.java:25).
+
+- **PROJECT EVIDENCE:** Wallet and HTTP isolation failures are directly present: [ShadowProductionReplayService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:999), [BinanceMinimumExecutionPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/BinanceMinimumExecutionPolicy.java:29), [WalletMutationRepositoryGuard.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletMutationRepositoryGuard.java:15).
+
+- **PROJECT EVIDENCE:** Price ordering loses the required identifier after SQL ordering: [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118).
+
+## OBJECTIONS
+
+- **AGENT INFERENCE:** Create one canonical, hash-identified revision in `agent-docs/FINAL_CHANGE_SPECIFICATION.md`; freeze the reviewed workspace snapshot before approval.
+
+- **AGENT INFERENCE:** Add a decision-time candle-finality evidence matrix and require it in all candle reads. Refuse strict parity when visibility cannot be proved; test a reconnect-boundary recovery/backfill case.
+
+- **AGENT INFERENCE:** Define concrete staging schemas, atomic promotion, diagnostics, crash/restart, cancellation, archive, and purge semantics.
+
+- **AGENT INFERENCE:** Register every required source change, including run lifecycle, price-event projection/ordering, all shared dependencies, and isolation ports/guards.
+
+- **AGENT INFERENCE:** Resolve whether shared Production source changes are allowed. If yes, specify each method’s unchanged Production behavior and exact regression proof.
+
+- **AGENT INFERENCE:** Define the historical code/config identity source required for `ANALYSIS_PARITY`, or remove that label from Release 1.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No database, runtime, production system, or test execution was accessed in this review.
+
+- **AGENT INFERENCE:** Historical eligibility and mismatch rates remain unmeasured; they cannot support a parity claim until the revised qualifier and evidence model are specified and validated.
+
+VERDICT: REJECTED

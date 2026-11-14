@@ -1,0 +1,2 @@
+installed_rank	version	description	success
+110	110	fix 156 replay owned tables	1

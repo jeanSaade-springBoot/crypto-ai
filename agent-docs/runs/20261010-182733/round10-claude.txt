@@ -1,0 +1,167 @@
+I still reject RPR-0.6, and so does Codex in its round-10 output. Neither spec file has changed: RPR-0.6 is as handed off, and the canonical `agent-docs/FINAL_CHANGE_SPECIFICATION.md` is still RPR-0.4. I checked Codex's actual `round10-codex.txt`, not the round-1 text embedded in the prompt. All nine of its claims hold against the code; one is loosely worded.
+
+New this round:
+- **Four corrections to my own claims (C30–C33).** The most important one narrows N48: Production already writes a durable outcome row for each skipped candle, so N48 applies less often than I said. It still stands. I'm also merging objection 32 into objection 13, which it duplicated.
+- **One moderate finding (N51):** an existing Replay endpoint reads Production's `wallet_trade`, which §1 and §3 forbid.
+- **One minor finding (N52):** neither path that starts a run, including the Investigation Queue, can carry the profile and mode the spec requires.
+- **New evidence for N48:** the project's own candle-read contract (FIX-136) says it does not support as-of reconstruction.
+
+Everything was read-only. Plan mode is on, but this session has no Write or ExitPlanMode tool, so the review is below.
+
+## FINDINGS
+
+### A. Codex's round-10 claims, checked against the code
+
+| Codex claim | Result |
+|---|---|
+| RPR-0.6 isn't the canonical contract | **[PROJECT EVIDENCE]** Confirmed. AGENTS.md names `FINAL_CHANGE_SPECIFICATION.md`, which is still `RPR-0.4-DRAFT`. |
+| `regression_test_run` doesn't exist, and `RegressionTestService` (runs, cancel, purge, archive, ID reset) is missing | **[PROJECT EVIDENCE]** Confirmed. That class also owns the Investigation Queue start path (N52) and the `wallet_trade` overlay (N51). |
+| M02 doesn't stop historical look-ahead; recovery closes or inserts rows later; the `Candle` projection has no `created_at`, `updated_at`, provenance or resolution time | **[PROJECT EVIDENCE]** Confirmed. The shared row mapper reads none of them. This is the same point as my objection 19 entry "`CandleRepository`'s provenance reads", so we agree. |
+| The timeline includes open candles; snapshot reads and Production's quality gate use today's `closed=1` | **[PROJECT EVIDENCE]** Confirmed. Codex's wording is more accurate than mine in round 9 (see C30). |
+| Isolation is stated as an outcome, not a mechanism | **[PROJECT EVIDENCE]** Confirmed. `walletSettings()` reads `wallet_settings`. The minimum-notional check calls Binance and turns a failure into an ordinary "not executable" result. The existing guard covers only writes and locking reads. |
+| The price query "orders by `id`" but drops it; `MarketPriceEventService` isn't registered | **[PROJECT EVIDENCE]** Substance confirmed; the actual sort is `observed_at ASC, id ASC`. My objection 19 has listed this class since round 5. |
+| M04 staging can't be implemented as written | **[PROJECT EVIDENCE]** Confirmed. |
+| Conflicts with "Production code unchanged"; omits `ExecutionIntelligenceService` and `ExecutionPriceAuthorityService` | **[PROJECT EVIDENCE]** Confirmed for `ExecutionIntelligenceService`. `ExecutionPriceAuthorityService` needs a change only if fill evidence must carry event IDs (as I said in round 9). |
+| `ANALYSIS_PARITY` has no source for code or config identity | **[PROJECT EVIDENCE]** Confirmed; this is my N50, and I re-checked it:<br>• the strategy version is an environment default of `1.0`;<br>• the build version is `0.0.1-SNAPSHOT`;<br>• the deploy record keeps the JAR hash and command-line overrides, but not the external `application.yml`, which loads from the deploy working directory;<br>• Jenkins keeps only 10 builds. |
+
+### B. Codex objections dropped without being withdrawn
+
+- **[PROJECT EVIDENCE]** Codex's round 9 raised four items that its round 10 omits without saying they're withdrawn:
+  - §3 permits evidence derived from Production account state (my objection 31);
+  - sentiment settings are mutable (29);
+  - the comparator has no caller and checks only 13 fields (5 and 30);
+  - executor and resource limits (26).
+- **[PROJECT EVIDENCE]** FIX-154, which Codex raised in round 8, is also absent.
+- **[AGENT INFERENCE]** An omitted objection isn't a withdrawn one. I treat all of these as open and ask Codex to confirm in round 11.
+- Codex still hasn't taken a position on:
+  - N27: the order book after a restart;
+  - N30/C23: the default `wallet_settings` save;
+  - N40: the FIX-156 entry in `fix-registry.js`.
+
+### C. Corrections to my own claims
+
+**C30 (corrects my round-9 wording in N48).** I said every Replay candle read filters on the row's current `closed` flag, "including the timeline". That's wrong for the timeline.
+- **[PROJECT EVIDENCE]** The timeline loader has no `closed` condition, so open rows enter the timeline, as RPR-0.6 §2 itself says.
+- **[PROJECT EVIDENCE]** Two kinds of read do use today's flag:
+  - the indicator snapshot reads (`closed=1 AND open_time<=t`);
+  - the four shared-service reads (`closed=1 AND close_time<=t`).
+- **[PROJECT EVIDENCE]** Production's event path also rejects a snapshot whose latest candle isn't the one it expected. Replay's versions of that method don't.
+
+**C31 (minor).** **[PROJECT EVIDENCE]** The recovery retry delay tops out at 240 s, not 300 s. The sequence is 5, 15, 60, 120, then 240 s repeating; the 300 s cap is never reached.
+
+**C32 (narrows N48's consequence).** In round 9 I said that replaying the 2026-10-09 outage window would produce about three hours of 1m/5m signals that Production couldn't produce. That only holds under conditions I didn't state.
+- **[PROJECT EVIDENCE]** In the current code, Production records a durable `candle_analysis_outcome` row when it skips a candle:
+  - an analysis blocked by the data-quality gate writes `SKIPPED_DATA_UNAVAILABLE`;
+  - a candle closed later by recovery writes `SKIPPED_NOT_LIVE`.
+
+  Migration V108 allows one row per candle.
+- **[PROJECT EVIDENCE]** §7 already says skipped work "is reproduced from durable outcome evidence or analysis parity is refused".
+- **[AGENT INFERENCE]** So for windows where V108 was running, a qualifier that applies §7 to every candle wouldn't produce those phantom signals in `ANALYSIS_PARITY` mode.
+- N48 still stands, for four reasons:
+  1. **[PROJECT EVIDENCE]** M02 is the method contract an implementer works from, and it admits a candle on `closed=1` plus matching identity alone. That contradicts §7.
+  2. **[PROJECT EVIDENCE]** For the default simulation mode, the spec doesn't say whether Production's skips are reproduced (objection 7).
+  3. At the time of the outage, V108 was probably not running:
+     - **[PROJECT EVIDENCE: documented]** automatic recovery was still waiting on its deployment gate, and the FIX-153 work was uncommitted.
+     - **[AGENT INFERENCE]** That window therefore probably has no outcome rows, so Replay must either refuse it or recompute it with a decision-time rule.
+  4. **[AGENT INFERENCE]** Context reads have no per-candle outcome evidence at all. These are the BTC reference candles and the other-interval candles read by four shared services.
+
+**C33 (merges objection 32 into 13).** **[PROJECT EVIDENCE]** My round-5 objection 13 already required admitting candles "by close token, backfill status and era, not by `closed=1` alone", including BTC reference candles. N48 adds the decision-time dimension. I'm folding 32 into 13 so it isn't counted twice.
+
+### D. New findings
+
+**N48, strengthened: the project's own candle-read contract rules out what `ANALYSIS_PARITY` needs.**
+- **[PROJECT EVIDENCE]** FIX-136's `CandleInputAudit` describes its contract as "Approved current-committed input contract. Hashes detect corrected inputs; they do not reconstruct a previous candle version or claim bitemporal Replay."
+- **[AGENT INFERENCE]** Parity over a historical window needs exactly that: knowing which candles were closed when Production made its decision. The revision must register a decision-time rule as a deliberate extension of an approved contract, not leave it to the implementer.
+- **[PROJECT EVIDENCE]** Such a rule can be built for most OFF-mode rows:
+  - `candle.updated_at` refreshes automatically on any update (`ON UPDATE CURRENT_TIMESTAMP(6)`, in both V1 and B105);
+  - every insert-or-update path leaves it unchanged once a row is closed.
+- **[AGENT INFERENCE]** A rule such as "a candle counts as closed at time *t* only if `closed=1` and `updated_at ≤ t − tolerance`" errs toward refusal, not look-ahead.
+  - If the manual repair didn't deliberately preserve `updated_at`, this rule would treat the 42 repaired rows as open until about 07:28Z. That reproduces Production's block.
+  - The spec must state which clock each timestamp uses. `updated_at` is database time at statement start (R3, R4); `generated_at` is JVM time.
+- **[PROJECT EVIDENCE]** For the collector-era windows, `shared_candle_input_audit` holds a hash of every candle read made by Production's LIVE and HISTORY analyses.
+- **[AGENT INFERENCE]** That could serve as a check that Replay used identical candle inputs, with three limits:
+  - any difference in read order (N32, N47, N49) would raise false alarms;
+  - query parameter values aren't stored;
+  - reading it in OFF mode needs an explicit decision, because AGENTS.md bars OFF-mode admin endpoints from querying retired shared-market tables.
+
+**N51 (moderate). An existing Replay endpoint reads Production's `wallet_trade`.**
+- **[PROJECT EVIDENCE]** `RegressionTestService.allTradesChart` (FIX-11S) selects executed `wallet_trade` rows for the run's symbol and window.
+  - It is served at `/runs/{id}/all-trades-chart`.
+  - `proven-analyzed-trades.js` overlays these as "Production trades in window" on the Replay executions.
+- **[PROJECT EVIDENCE]** §1 says Replay "must never read Production account state", and §3 forbids `wallet_trade`. §4 registers neither the method nor the endpoint.
+- **[AGENT INFERENCE]** Consequences:
+  - The spec must choose. Either it limits §1 and §3 to the qualification and simulation pipeline and registers this endpoint as a display-only exemption (never a simulation input, never certificate evidence), or it removes the overlay.
+  - A source-scan guard (N45) would flag this query. Without an explicit decision, the implementer must either break the build or quietly weaken the guard.
+  - The chart puts a virtual-account simulation next to real Production fills with no mode label, which invites reading it as parity evidence. The run's earned label belongs on that view (objection 11).
+
+**N52 (minor). Neither path that starts a run can carry a profile or mode.**
+- **[PROJECT EVIDENCE]** `RegressionTestController.start` accepts a `RegressionTestRunRequest` (name, symbol, window, `fix122Enabled`) plus a `replayDataSource` parameter.
+- **[PROJECT EVIDENCE]** The FIX-065 Investigation Queue builds a four-argument request and hard-codes `DATABASE`. Its table, `regression_investigation_case` (V68), stores no profile or mode.
+- **[AGENT INFERENCE]** §1 step 1 and C03 (`replay.profile.required=true`, no fallback) need both values on both paths, yet none of these classes or the V68 table is registered.
+  - With C03 as written, every queued case would fail or need a default the spec doesn't define.
+  - The spec also doesn't say how the new mode relates to the existing DATABASE/DATASET selector. RPR-0.4 had a DATASET-equivalence clause; RPR-0.6 dropped it.
+
+### E. Hypotheses I tested and rejected (no objection)
+
+- **[PROJECT EVIDENCE]** `DerivativesPositioningService.priceChange` reads the latest two closed candles with no time bound, which looked like a look-ahead.
+  - It runs only on the live path. Replay calls `evaluateHistorical`, which reads no candles and returns UNAVAILABLE with the decision unchanged, so there is no look-ahead.
+  - It does confirm objection 23: Production's live result can veto an entry, and Replay's historical result never does.
+- **[PROJECT EVIDENCE]** Production's event-path indicator calculation is bounded to the analysed candle and checks its identity. So it isn't another case of "latest instead of as-of", unlike the quality gate, `recentSignals` and the BTC relationship.
+
+No new external research this round. R3 and R4 (MySQL timestamp behaviour) still apply, and nothing here says anything about trading performance.
+
+## EVIDENCE
+
+All entries are **[PROJECT EVIDENCE]** unless marked otherwise.
+
+| ID | Location |
+|---|---|
+| A | `AGENTS.md:330`<br>`FINAL_CHANGE_SPECIFICATION.md:3`<br>RPR-0.6 `:5-6, 41-58, 64-80, 87-89`<br>`CandleRepository.java:23-31`; `Candle.java:37-79`<br>`RegressionTestWorker.java:509-512, 550-556`<br>`TechnicalIndicatorService.java:126, 186-200`<br>`CandleDataQualityService.java:25-29`<br>`ShadowProductionReplayService.java:999-1007`<br>`BinanceMinimumExecutionPolicy.java:29, 38-46`<br>`MarketPriceEventService.java:118-129, 173-175`<br>`RegressionTestService.java:81-93, 342-407`<br>`application.yml:347`; `pom.xml:15`<br>`Deploy-Trader.ps1:84-93, 123-142`; `Jenkinsfile:6-9` |
+| B | `round10-codex.txt` compared with `round09-codex.txt:9, 13, 21, 23` |
+| C30 | `RegressionTestWorker.java:509-512, 550-556`<br>`TechnicalIndicatorService.java:102-106, 118-127, 135-145, 194-199`<br>`CandleRepository.java:51-56` |
+| C31 | `LocalCandleReconciliationService.java:194-196` |
+| C32 | `CandleClosedAnalysisWorker.java:117-126, 251-253`<br>`LocalCandleReconciliationService.java:182-190, 208-212`<br>`V108__fix_153_local_candle_reconciliation.sql:31-44`<br>RPR-0.6 `:87, 116-117`<br>`codex-docs/INVESTIGATION_LOG.md:15, 17-21, 31`<br>`claude-docs/INVESTIGATION_LOG.md:39-40` |
+| C33 | `round05-claude.txt:173, 179-182` |
+| N48 strengthened | `CandleInputAudit.java:12-13, 40-48`<br>`B105…sql:41-43, 2043-2048`; `V1__initial_schema.sql:35-37`<br>`CandleRepository.java:137-144, 158-164, 187, 202`<br>`RegressionTestWorker.java:117`<br>`AGENTS.md:185` |
+| N51 | `RegressionTestService.java:505-569` (`wallet_trade` query at `:549-558`)<br>`RegressionTestController.java:106-113`<br>`proven-analyzed-trades.js:1304-1324`<br>RPR-0.6 `:10-12, 52` |
+| N52 | `RegressionTestController.java:33-38, 44-51`<br>`RegressionTestRunRequest.java:5-13`<br>`RegressionTestService.java:81-93`<br>RPR-0.6 `:14, 103` |
+| E | `DerivativesPositioningService.java:38-50, 75-86, 143-148`<br>`AnalysisService.java:327-335`<br>`TechnicalIndicatorService.java:83-111` |
+| R3, R4 | **[EXTERNAL RESEARCH]** MySQL 8.0 Reference Manual (pages carry no date):<br>• "Automatic Initialization and Updating for TIMESTAMP and DATETIME", https://dev.mysql.com/doc/refman/8.0/en/timestamp-initialization.html<br>• "Date and Time Functions", https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html<br>Findings: the column auto-updates when another column changes unless the statement assigns it explicitly, and `CURRENT_TIMESTAMP` is the time the statement started, not when it committed.<br>Limitations: I didn't check Production's MySQL version or the repair SQL.<br>Relevance: the decision-time rule in objection 13. |
+
+## OBJECTIONS
+
+**Carried forward unchanged (the spec wasn't revised): objections 1–31.** Objection 32 is merged into 13 (C33).
+
+**Objection 13, restated.** Define one decision-time rule for when a candle counts as closed, and apply it to every Replay and shared candle read. That covers the timeline, the indicator snapshot, the data-quality gate, and BTC and other-interval context. The rule must:
+- treat a candle's Production outcome row as authoritative wherever one exists;
+- refuse the parity claim, or declare a simulation assumption, where neither an outcome row nor a trustworthy `updated_at` exists;
+- state the clock domains and the tolerance;
+- register the candle projection change or a Replay-only candle reader;
+- be recorded as an extension of the FIX-136 contract;
+- come with a §8 test fixture for a reconnect at a candle boundary followed by recovery.
+
+**New, moderate:**
+- **N51:** limit the account-read ban to the simulation pipeline and register the overlay as a display-only exemption, or remove it. Show the run's earned label on that chart.
+
+**New, minor:**
+- **N52:** register the start-run inputs: the controller, the request DTO, the Investigation Queue and its V68 table. Also define how the new mode relates to the DATABASE/DATASET selector.
+
+**[AGENT INFERENCE]** Codex and I still have no material disagreement. The blocker is the artifact, and the next steps are unchanged:
+1. You decide N39: no edits to shared Production code, or edits allowed as long as Production behaviour doesn't change.
+2. Codex writes the canonical revision, with the reviewed source snapshot frozen.
+3. Both agents review that exact revision in full.
+
+## UNKNOWNS
+
+- **[AGENT INFERENCE]** Whether V108 was applied during the 2026-10-09 window. Two bounded read-only checks would settle it: `flyway_schema_history.installed_on` for version 108, and the earliest `created_at` in `candle_analysis_outcome`.
+- **[AGENT INFERENCE]** Whether the manual repair changed `updated_at` on the 42 rows. A bounded read of those rows would settle it.
+- **[AGENT INFERENCE]** Still unmeasured:
+  - how often candles are closed late by recovery or backfill;
+  - which executor Replay actually runs on;
+  - the oracle's mismatch rate on real signals;
+  - whether the V109 archive tables have drifted;
+  - past sentiment provider settings;
+  - which JAR and configuration Production actually runs.
+- **Not done:** no database, logs, build, tests, git commands or production access.
+
+VERDICT: REJECTED

@@ -1,0 +1,80 @@
+## FINDINGS — Iteration 7 self-challenge
+
+1. **[PROJECT EVIDENCE] No trade-specific conclusion is established.** The permitted `db/CODEX` evidence directory is empty. For frozen `paper_position` IDs `182, 172, 162, 158, 143, 137`, root cause, entry quality, exit correctness, and P&L reconciliation remain unproven.
+
+2. **[PROJECT EVIDENCE] The ICPUSDT stop-loss material is only an unattributed candidate, not evidence for frozen trade 182.** The logs identify `WalletManagedPosition` ID `182`, while the frozen entity is `paper_position` ID `182`. Current source links them through entry-signal identity, not matching numeric IDs. The stop log itself does not identify a paper-position ID.
+
+3. **[PROJECT EVIDENCE] Prior timing wording needs correction.** For event `1837489`:
+   - Observation: `2026-10-11 22:49:33.460 UTC` / `2026-10-12 01:49:33.460 KSA`
+   - committed `APPLIED`: `2026-10-11 22:49:36.974 UTC` / `2026-10-12 01:49:36.974 KSA`
+   - exact observed-to-commit interval: **3.514 seconds**, not 3.513.
+
+   The logged protection transaction duration is `2438 ms`, and symbol-coordination wait is `0 ms`. This does **not** establish 3.514 seconds of processing delay: `observedAt` is an exchange observation time, while the remainder can include transport, callback scheduling, and uninstrumented work.
+
+4. **[PROJECT EVIDENCE] `APPLIED` alone is insufficient to prove an executed close.** It proves the protection callback committed; source guidance says it may also represent a successful no-op. The nearby `Live STOP_LOSS executed` line makes an ICPUSDT stop plausible, but only a durable position/wallet/paper linkage can attribute it to a frozen trade.
+
+5. **[AGENT INFERENCE] The earlier broad wallet-trade join is not conclusive enough for forensic attribution.** Joining `wallet_trade` through either signal IDs or an execution-key pattern can return multiple rows and must not alone establish a one-to-one lifecycle. First prove the paper-position → entry-signal → managed-position relationship, then reconcile each wallet row by its durable identifiers and chronology.
+
+6. **[PROJECT EVIDENCE] Symbol-level log matching is particularly weak here.** The archived logs contain several ICPUSDT stop-loss/profit-lock/take-profit messages. A matching symbol, approximate time, or same numeric ID cannot replace the required durable linkage.
+
+7. **[PROJECT EVIDENCE] The supplied snapshot clock remains internally inconsistent.** `2026-10-25 10:08:57 UTC` converts to `2026-10-25 13:08:57 KSA`, not the supplied `2026-10-23 11:36:38 KSA`. The six frozen IDs remain authoritative; no precise historical selection cutoff can be inferred.
+
+## EVIDENCE
+
+### PROJECT EVIDENCE
+
+- `ProductionExitAuditService` finds a managed position by the paper position’s entry-signal ID; it does not use equal position IDs.
+- `LivePositionProtectionService` records an `APPLIED` direct-price outcome after protection processing, while `PaperTradingService` has a distinct paper-first signal-close path.
+- `WalletAutoExecutionService` overwrites `entryQualityScore` on each BUY, so a current managed-position score cannot alone establish original-entry quality.
+- `TRADE_INVESTIGATION_AGENT.md` requires accepted price evidence, durable linkage, fee/quantity reconciliation, and UTC/KSA conversion for factual conclusions.
+- Archived log sequence for ICPUSDT event `1837489` supports only the candidate timing stated above.
+
+### EXTERNAL RESEARCH
+
+None. General market research cannot establish the historical behavior of these six system records.
+
+## UNKNOWNS
+
+- All six positions’ symbols, lifecycle timestamps, loss amounts, reasons, SL/TP, and signal IDs.
+- Whether any frozen position corresponds to managed position `182` or ICPUSDT.
+- Executed BUY/SELL quantities, fees, partial exits, and net P&L.
+- Whether each exit was a valid strategy loss, protection behavior, accounting discrepancy, data issue, or defect.
+- Historical release/configuration and any applicable latency requirement.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I7-001  
+Purpose: Verify the actual `paper_position` schema, preserve the frozen rows as the only study subjects, and test the stated selection rule without assuming a historical snapshot can be recreated. Returned timestamps are UTC.
+
+SQL:
+```sql
+SHOW COLUMNS FROM crypto_ai.paper_position;
+
+SELECT
+    id,
+    symbol,
+    status,
+    realized_pnl,
+    opened_at,
+    closed_at
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+
+SELECT
+    id,
+    symbol,
+    status,
+    realized_pnl,
+    closed_at
+FROM crypto_ai.paper_position
+WHERE status = 'CLOSED'
+  AND closed_at IS NOT NULL
+  AND realized_pnl < 0
+ORDER BY closed_at DESC
+LIMIT 6;
+```
+
+### END_DB_REQUEST
+
+Self-review: no source, configuration, database, Git, deployment, or documentation state was changed.

@@ -1,0 +1,1 @@
+SELECT table_name, column_name, data_type, column_type FROM information_schema.columns WHERE table_schema = 'crypto_ai' AND (data_type = 'datetime' OR (table_name = 'flyway_schema_history' AND column_name = 'installed_on')) ORDER BY table_name, column_name;

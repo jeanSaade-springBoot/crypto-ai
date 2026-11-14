@@ -1,0 +1,185 @@
+## FINDINGS
+
+### PROJECT EVIDENCE
+
+- All six frozen `paper_position` records remain in scope. The archived production logs for 2026-10-12 are present and cover their lifecycle times.
+
+- Every close has a nearby accepted (`APPLIED`) price observation, but log proximity alone does not prove that event caused the close. Nearest logged observation versus persisted close:
+
+| Position | Close UTC → KSA | Nearest `APPLIED` observation UTC → KSA | Difference |
+|---:|---|---|---:|
+| 182 ACEUSDT | 10:05:20.486 → 13:05:20.486 | 10:05:20.431 → 13:05:20.431 | 55 ms |
+| 172 SHIBUSDT | 07:15:45.484 → 10:15:45.484 | 07:15:39.465 → 10:15:39.465 | 6.019 s |
+| 162 DOGEUSDT | 04:26:04.116 → 07:26:04.116 | 04:26:02.579 → 07:26:02.579 | 1.537 s |
+| 158 XRPUSDT | 03:30:06.638 → 06:30:06.638 | 03:30:06.322 → 06:30:06.322 | 316 ms |
+| 143 EGLDUSDT | 2026-10-11 22:43:36.229 → 2026-10-12 01:43:36.229 | 22:43:35.042 → 01:43:35.042 | 1.187 s |
+| 137 EGLDUSDT | 21:00:12.122 → 2026-10-12 00:00:12.122 | 21:00:09.066 → 00:00:09.066 | 3.056 s |
+
+- Position 182 has the strongest timing alignment: accepted price event `2007194` observed at `10:05:20.431 UTC`, followed by persisted close at `10:05:20.486 UTC`. This is consistent with a fast price-driven decision, but requires the durable exit-audit/wallet linkage to establish causation.
+
+- Position 158’s contemporaneous 1m `STRONG_SELL` and 5m `SELL` signals were saved at `03:30:02.807 UTC` and `03:30:02.816 UTC`; the position closed at `03:30:06.638 UTC` with `SELL_CONFIRMED`. This is temporally consistent with a signal/policy exit, but the close label is not enough to identify the actual exit signal.
+
+- Positions 162 and 182 closed before the newly produced signals in their respective close-minute pipelines were saved:
+  - 162 closed at `04:26:04.116 UTC`; the shown 1m signal was saved at `04:26:04.275 UTC`, with `NEUTRAL`.
+  - 182 closed at `10:05:20.486 UTC`; its shown 1m/5m signals were saved around `10:05:30.288 UTC`, both `WATCH`.
+
+  Therefore those particular new signals cannot have caused those closes. A prior signal, live price protection, or another recorded path must be examined.
+
+- Position 172 closed as `HTF_SELL_CONFIRMED` at `07:15:45.484 UTC`, while the close-minute 1m/5m signals were `NEUTRAL` and `WATCH`. This is compatible with use of prior 1h evidence, but is not proof without `exit_signal_id` and the audit record.
+
+- Current source supports durable audit evidence through `production_exit_audit`, wallet execution timestamps, `trade_signal` timestamps, and `market_price_event` outcome records. The current source must not be treated as the exact deployed version on 2026-10-12 without deployment/version evidence.
+
+### AGENT INFERENCE
+
+- No timing defect is confirmed. The observed close-to-price intervals range from 55 ms to roughly 6 seconds and do not, by themselves, prove an unacceptable delay.
+- The primary forensic gap is lineage, not lack of nearby market activity: the available logs do not directly state `paper_position.id`, exit-signal ID, wallet execution ID, and price-event ID in one record.
+
+### EXTERNAL RESEARCH
+
+- None.
+
+## EVIDENCE
+
+- `logs/crypto-ai-trader.2026-10-12.*.log.gz`
+  - `FIX-153][PRICE_OUTCOME_COMMITTED]` records accepted price-event IDs, exchange observation UTC/KSA, and outcome.
+  - `FIX-131][CANDLE_INPUT_COMMITTED]` records closed-candle receipt/commit timing.
+  - `FIX-153][SIGNAL_SAVED]` records candle-close-to-signal timing and explicitly warns that signal persistence does not prove a wallet trade.
+- `PaperPosition.java`: `closed_at`, `exit_signal_id`, close reason, exit reason.
+- `WalletTrade.java`: `executed_at`, `execution_price_observed_at`, execution reason, immutable pricing/P&L fields.
+- `ProductionExitAudit.java` / `ProductionExitAuditService.java`: one audit row per paper position with close trigger, source signal, wallet position, price, explanation, and `audited_at`.
+- `MarketPriceEventService.java`: accepted price evidence is `LEGACY`/`APPLIED`; observation timestamps are UTC instants.
+- `logs/crypto-ai-trader.2026-10-12.7.log.gz` shows a significant analysis delay for ACE close-minute candles: approximately 20.24 seconds to signal generation and 30.28 seconds to insertion. Position 182 nevertheless closed roughly 10 seconds before those signals were saved, further excluding them as its immediate cause.
+
+## UNKNOWNS
+
+- The exact `exit_signal_id`, decision, interval, candle timestamp, and explanation for each frozen position.
+- Whether each nearby accepted price event was the event that produced the close.
+- Wallet execution time/price/reason and whether it reconciles to each position close.
+- `production_exit_audit` rows, including `close_trigger`, source signal, and audit timestamp.
+- Whether a 1h signal used for position 172 was fresh and valid at the exit moment.
+- Runtime deployment revision/configuration on 2026-10-11/12.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Retrieve durable exit lineage and signal timing for only the six frozen positions.  
+SQL:
+
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.status,
+    p.signal_id AS entry_signal_id,
+    p.exit_signal_id,
+    p.close_reason,
+    p.entry_price,
+    p.exit_price,
+    p.opened_at,
+    p.closed_at,
+    es.interval_code AS entry_interval,
+    es.decision AS entry_decision,
+    es.candle_open_time AS entry_candle_open_utc,
+    es.generated_at AS entry_generated_utc,
+    xs.interval_code AS exit_interval,
+    xs.decision AS exit_decision,
+    xs.original_decision AS exit_original_decision,
+    xs.candle_open_time AS exit_candle_open_utc,
+    xs.generated_at AS exit_generated_utc,
+    xs.created_at AS exit_row_created_utc,
+    xs.latest_price AS exit_signal_price,
+    xs.data_quality_valid AS exit_data_quality_valid,
+    xs.explanation AS exit_signal_explanation,
+    a.id AS exit_audit_id,
+    a.close_trigger AS audit_close_trigger,
+    a.source_signal_id AS audit_source_signal_id,
+    a.source_signal_decision AS audit_source_signal_decision,
+    a.exit_price_usdt AS audit_exit_price,
+    a.close_explanation AS audit_close_explanation,
+    a.audited_at AS audit_created_utc
+FROM paper_position p
+LEFT JOIN trade_signal es ON es.id = p.signal_id
+LEFT JOIN trade_signal xs ON xs.id = p.exit_signal_id
+LEFT JOIN production_exit_audit a ON a.paper_position_id = p.id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-002  
+Purpose: Obtain bounded wallet and accepted-price timing evidence nearest each frozen close, including event IDs needed to reconcile the archived logs.  
+SQL:
+
+```sql
+WITH frozen AS (
+    SELECT id, symbol, signal_id, exit_signal_id, opened_at, closed_at
+    FROM paper_position
+    WHERE id IN (182, 172, 162, 158, 143, 137)
+),
+near_price AS (
+    SELECT
+        f.id AS paper_position_id,
+        e.id AS market_price_event_id,
+        e.symbol,
+        e.observed_at,
+        e.price,
+        e.source,
+        e.delivery_status,
+        e.outcome_reason,
+        ROW_NUMBER() OVER (
+            PARTITION BY f.id
+            ORDER BY ABS(TIMESTAMPDIFF(MICROSECOND, e.observed_at, f.closed_at)), e.id
+        ) AS proximity_rank
+    FROM frozen f
+    JOIN market_price_event e
+      ON e.symbol = f.symbol
+     AND e.observed_at BETWEEN f.closed_at - INTERVAL 90 SECOND
+                           AND f.closed_at + INTERVAL 90 SECOND
+)
+SELECT
+    'PRICE_EVENT' AS evidence_type,
+    paper_position_id,
+    market_price_event_id AS evidence_id,
+    symbol,
+    observed_at AS evidence_time_utc,
+    price,
+    source,
+    delivery_status,
+    outcome_reason,
+    proximity_rank
+FROM near_price
+WHERE proximity_rank <= 6
+ORDER BY paper_position_id, proximity_rank;
+
+SELECT
+    f.id AS paper_position_id,
+    wt.id AS wallet_trade_id,
+    wt.symbol,
+    wt.side,
+    wt.status,
+    wt.execution_type,
+    wt.execution_reason,
+    wt.price_usdt,
+    wt.decision_price_usdt,
+    wt.execution_price_observed_at,
+    wt.executed_at,
+    wt.realized_pnl_usdt,
+    wt.fee_usdt,
+    wt.execution_message
+FROM frozen f
+JOIN wallet_trade wt
+  ON wt.symbol = f.symbol
+ AND (
+        wt.signal_id IN (f.signal_id, f.exit_signal_id)
+        OR wt.executed_at BETWEEN f.opened_at - INTERVAL 5 SECOND
+                              AND f.closed_at + INTERVAL 5 SECOND
+     )
+ORDER BY f.id, wt.executed_at;
+```
+
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation change was made.

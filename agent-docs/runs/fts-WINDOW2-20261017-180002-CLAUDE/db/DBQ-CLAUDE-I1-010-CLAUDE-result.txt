@@ -1,0 +1,8 @@
+last_fill	fills
+2026-10-15 03:15:14.445776	445
+interval_code	last_signal	signals_after_last_fill
+1h	2026-10-15 03:00:11.523803	0
+1m	2026-10-17 03:26:02.908197	525
+5m	2026-10-17 03:25:06.997772	105
+last_price_event
+2026-10-17 03:26:34.612000

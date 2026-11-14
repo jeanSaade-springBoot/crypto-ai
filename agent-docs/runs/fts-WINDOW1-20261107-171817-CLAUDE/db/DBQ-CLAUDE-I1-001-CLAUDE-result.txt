@@ -1,0 +1,148 @@
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+symbol	varchar(30)	NO	MUL	NULL	
+side	varchar(10)	NO		NULL	
+status	varchar(20)	NO		NULL	
+quantity	decimal(30,12)	NO		NULL	
+entry_price	decimal(30,12)	NO		NULL	
+stop_loss	decimal(30,12)	NO		NULL	
+take_profit	decimal(30,12)	NO		NULL	
+exit_price	decimal(30,12)	YES		NULL	
+realized_pnl	decimal(30,12)	YES		NULL	
+close_reason	varchar(40)	YES		NULL	
+entry_reason	mediumtext	YES		NULL	
+exit_reason	mediumtext	YES		NULL	
+signal_id	bigint	NO	MUL	NULL	
+exit_signal_id	bigint	YES	MUL	NULL	
+opened_at	timestamp(6)	NO	MUL	NULL	
+closed_at	timestamp(6)	YES		NULL	
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+signal_id	bigint	YES	MUL	NULL	
+position_analysis_id	bigint	YES	MUL	NULL	
+execution_key	varchar(100)	YES	UNI	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+side	varchar(10)	NO		NULL	
+quantity	decimal(30,12)	NO		NULL	
+price_usdt	decimal(30,12)	NO		NULL	
+decision_price_usdt	decimal(30,12)	YES		NULL	
+execution_price_observed_at	timestamp(6)	YES		NULL	
+gross_amount_usdt	decimal(30,12)	NO		NULL	
+fee_usdt	decimal(30,12)	NO		0.000000000000	
+net_amount_usdt	decimal(30,12)	NO		NULL	
+cost_basis_usdt	decimal(30,12)	YES		NULL	
+realized_pnl_usdt	decimal(30,12)	YES		NULL	
+realized_pnl_percent	decimal(20,8)	YES		NULL	
+execution_type	varchar(20)	NO		MANUAL	
+execution_reason	varchar(40)	YES	MUL	NULL	
+status	varchar(20)	NO		EXECUTED	
+executed_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+notes	varchar(500)	YES		NULL	
+execution_message	mediumtext	YES		NULL	
+created_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+entry_signal_id	bigint	YES	MUL	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+quantity	decimal(30,12)	NO		0.000000000000	
+average_entry_price_usdt	decimal(30,12)	NO		0.000000000000	
+total_cost_usdt	decimal(30,12)	NO		0.000000000000	
+entry_confidence	int	YES		NULL	
+entry_total_score	int	YES		NULL	
+entry_trend_score	int	YES		NULL	
+entry_structure_score	int	YES		NULL	
+entry_momentum_score	int	YES		NULL	
+entry_volume_score	int	YES		NULL	
+entry_sentiment_score	int	YES		NULL	
+entry_fundamental_score	int	YES		NULL	
+entry_decision	varchar(30)	YES		NULL	
+entry_decision_path_json	json	YES		NULL	
+entry_analysis_snapshot_json	json	YES		NULL	
+stop_loss_usdt	decimal(30,12)	YES		NULL	
+take_profit_usdt	decimal(30,12)	YES		NULL	
+status	varchar(20)	NO		OPEN	
+opened_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+updated_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+highest_price_usdt	decimal(30,12)	YES		NULL	
+profit_lock_active	tinyint(1)	NO		0	
+profit_lock_price_usdt	decimal(30,12)	YES		NULL	
+profit_lock_progress_percent	decimal(12,6)	YES		NULL	
+profit_lock_activated_at	timestamp(6)	YES		NULL	
+profit_lock_state	varchar(40)	NO		INACTIVE	
+profit_lock_rebase_started_at	timestamp(6)	YES		NULL	
+entry_stage	varchar(30)	NO		NONE	
+allocated_position_percent	int	NO		0	
+entry_quality_score	int	NO		0	
+last_scale_in_at	timestamp(6)	YES		NULL	
+near_tp_state	varchar(40)	NO		INACTIVE	
+near_tp_best_price	decimal(30,12)	YES		NULL	
+near_tp_bearish_streak	int	NO		0	
+near_tp_last_1m_signal_id	bigint	YES		NULL	
+near_tp_harvest_used	tinyint(1)	NO		0	
+near_tp_harvested_quantity	decimal(30,12)	YES		NULL	
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+paper_position_id	bigint	YES	UNI	NULL	
+wallet_position_id	bigint	YES	MUL	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+close_trigger	varchar(40)	NO		NULL	
+source_signal_id	bigint	YES	MUL	NULL	
+source_signal_decision	varchar(30)	YES		NULL	
+source_signal_original_decision	varchar(30)	YES		NULL	
+position_analysis_id	bigint	YES		NULL	
+position_recommendation	varchar(20)	YES		NULL	
+entry_price_usdt	decimal(30,12)	YES		NULL	
+exit_price_usdt	decimal(30,12)	NO		NULL	
+stop_loss_usdt	decimal(30,12)	YES		NULL	
+take_profit_usdt	decimal(30,12)	YES		NULL	
+close_explanation	varchar(2000)	YES		NULL	
+audited_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+symbol	varchar(32)	NO	MUL	NULL	
+observed_at	timestamp(6)	NO		NULL	
+price	decimal(30,12)	NO		NULL	
+source	varchar(64)	NO	MUL	BINANCE_KLINE_LIVE_CLOSE	
+created_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+source_event_id	bigint	YES	UNI	NULL	
+source_sequence	bigint	YES		NULL	
+source_received_at	timestamp(6)	YES		NULL	
+delivery_status	varchar(40)	NO		LEGACY	
+ordering_slot	tinyint	YES		NULL	
+outcome_reason	varchar(64)	YES		NULL	
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+wallet_position_id	bigint	NO	MUL	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+event_type	varchar(40)	NO		NULL	
+old_value_usdt	decimal(30,12)	YES		NULL	
+new_value_usdt	decimal(30,12)	YES		NULL	
+market_price_usdt	decimal(30,12)	YES		NULL	
+reason	varchar(2000)	YES		NULL	
+occurred_at	timestamp(6)	NO		NULL	
+Field	Type	Null	Key	Default	Extra
+signal_id	bigint	NO	PRI	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+interval_code	varchar(10)	NO		NULL	
+candle_open_time	timestamp(6)	NO		NULL	
+origin	varchar(20)	NO		NULL	
+status	varchar(30)	NO	MUL	NULL	
+attempts	int	NO		0	
+owner_token	varchar(36)	YES		NULL	
+next_attempt_at	timestamp(6)	NO		NULL	
+updated_at	timestamp(6)	NO		NULL	
+completed_at	timestamp(6)	YES		NULL	
+paper_position_id	bigint	YES		NULL	
+failure_stage	varchar(40)	YES		NULL	
+error_message	mediumtext	YES		NULL	
+source_event_id	bigint	YES	MUL	NULL	
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+symbol	varchar(30)	NO	MUL	NULL	
+interval_code	varchar(10)	NO		NULL	
+candle_open_time	timestamp(6)	NO		NULL	
+outcome	varchar(48)	NO		NULL	
+reason_code	varchar(96)	NO		NULL	
+signal_id	bigint	YES	MUL	NULL	
+origin	varchar(32)	NO		NULL	
+created_at	timestamp(6)	NO	MUL	NULL

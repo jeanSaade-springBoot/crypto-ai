@@ -1,0 +1,147 @@
+## Iteration 3 — Log and timing forensics
+
+### Findings
+
+- **PROJECT EVIDENCE:** No database-result artifacts exist in the permitted `db/CODEX/` folder. No trade-specific timing, price-event, exit-audit, or log correlation is therefore available for frozen positions `182, 172, 162, 158, 143, 137`.
+
+- **PROJECT EVIDENCE:** The active application log contains only startup activity: `2026-10-19 14:32:18.902 UTC` (`17:32:18.902 KSA`) through `2026-10-19 14:32:36.235 UTC` (`17:32:36.235 KSA`). It contains zero matching FIX-129, FIX-131, FIX-137, FIX-153, FIX-127, or live-exit markers. This is not evidence about any frozen trade.
+
+- **PROJECT EVIDENCE:** Normal fast kline pipeline stages are intentionally not timing-logged. `KlineTransactionCoordinator` invokes `KlineTiming.measure(..., false, ...)` for input, protection, observer, and close-dispatch. `KlineTiming` emits a timing record only for failure or elapsed time at least 1,000 ms. Therefore absence of a FIX-129 timing row cannot establish that a normal sub-second stage did not run.
+
+- **PROJECT EVIDENCE:** Timing diagnostics are explicitly best-effort, not a complete ledger. `KlineTimingStore` uses a bounded asynchronous queue and can report `PERSIST_DROPPED`; shutdown can lose queued rows. Application-file logging is also asynchronous with `neverBlock=true`; a missing archived file event cannot prove the underlying event did not occur.
+
+- **PROJECT EVIDENCE:** There is useful reconstructable evidence when records exist:
+  - FIX-131 closed-candle logs carry receipt correlation, Binance event time, receipt time, input-commit time, and receipt-to-commit duration.
+  - FIX-137 worker logs carry event/symbol/interval/candle identity, stage and elapsed duration.
+  - FIX-153 signal-save logs carry candle close, signal generation, row-creation, service-return times, and close-to-generation/insertion delays.
+  - `signal_processing_work` provides claim/attempt/completion/expiry state.
+  - `market_price_event` provides observed price time and durable protection outcome.
+  - `production_exit_audit` links the paper position to the terminal trigger and context signal.
+
+- **PROJECT EVIDENCE:** The primary live-exit logs omit a paper-position ID, wallet-trade ID, market-price-event ID, observation time, and kline-receipt correlation. `paper_position.closed_at`, wallet trade `executed_at`, and exit audit `audited_at` are application `Instant.now()` values written before transaction completion; they are useful event timestamps but do not prove database commit time.
+
+- **AGENT INFERENCE:** No delay, stop-loss failure, stale observation, late execution, or logging defect can be attributed to any frozen trade without the exact DB lifecycle records and a time/symbol map to search archived logs.
+
+- **AGENT INFERENCE:** The supplied snapshot metadata remains internally inconsistent: `2026-10-25 15:00:04 UTC` converts to `2026-10-25 18:00:04 KSA`, while the supplied snapshot KSA is `2026-10-25 18:00:02`. This two-second discrepancy does not identify a trade defect.
+
+### Evidence
+
+- **PROJECT EVIDENCE:** `KlineTiming.java`, `KlineTimingStore.java`, `KlineTransactionCoordinator.java`.
+- **PROJECT EVIDENCE:** `KlineReceipt.java`, `CandleClosedAnalysisWorker.java`, `SignalProcessingCoordinator.java`.
+- **PROJECT EVIDENCE:** `MarketPriceEventService.java`, `LivePositionProtectionService.java`, `WalletAutoExecutionService.java`, `ProductionExitAuditService.java`.
+- **PROJECT EVIDENCE:** `logback-spring.xml` configures UTC timestamps for application and database-timing files, seven-day application-log retention, and non-blocking async file delivery.
+- **EXTERNAL RESEARCH:** None.
+
+### Unknowns
+
+- Exact UTC/KSA entry, protection, and exit timelines for all six positions.
+- Whether each loss was a fixed stop, signal exit, profit-lock event, take-profit management event, or another path.
+- First accepted threshold-crossing price observation and protection latency.
+- Candle-close → signal → claim → entry timing.
+- Whether relevant archived application logs cover each exact lifecycle window.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Read actual schema before selecting forensic columns and joins.  
+SQL:
+```sql
+SELECT table_name, column_name, column_type, is_nullable, column_key, extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+    'paper_position', 'trade_signal', 'wallet_trade',
+    'wallet_managed_position', 'production_exit_audit',
+    'signal_processing_work', 'market_price_event',
+    'fix129_stage_timing', 'candle'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-002  
+Purpose: Establish the authoritative lifecycle, symbol, signal linkage, and UTC timing bounds for only the six frozen positions.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-003  
+Purpose: Obtain durable exit/audit and wallet-execution evidence linked to the frozen positions after schema confirmation.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.production_exit_audit
+WHERE paper_position_id IN (182, 172, 162, 158, 143, 137)
+ORDER BY paper_position_id, audited_at;
+
+SELECT *
+FROM crypto_ai.wallet_managed_position
+WHERE entry_signal_id IN (
+  SELECT signal_id
+  FROM crypto_ai.paper_position
+  WHERE id IN (182, 172, 162, 158, 143, 137)
+)
+ORDER BY opened_at;
+
+SELECT *
+FROM crypto_ai.wallet_trade
+WHERE signal_id IN (
+  SELECT signal_id
+  FROM crypto_ai.paper_position
+  WHERE id IN (182, 172, 162, 158, 143, 137)
+)
+OR signal_id IN (
+  SELECT exit_signal_id
+  FROM crypto_ai.paper_position
+  WHERE id IN (182, 172, 162, 158, 143, 137)
+)
+ORDER BY executed_at;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-004  
+Purpose: Reconstruct protection observations and available slow/failure pipeline timing during each frozen position’s holding interval.  
+SQL:
+```sql
+WITH frozen AS (
+  SELECT id, symbol, opened_at, closed_at
+  FROM crypto_ai.paper_position
+  WHERE id IN (182, 172, 162, 158, 143, 137)
+)
+SELECT
+  f.id AS paper_position_id,
+  mpe.*
+FROM frozen f
+JOIN crypto_ai.market_price_event mpe
+  ON mpe.symbol = f.symbol
+ AND mpe.observed_at >= f.opened_at
+ AND mpe.observed_at <= f.closed_at
+ORDER BY f.id, mpe.observed_at, mpe.id;
+
+WITH frozen AS (
+  SELECT id, symbol, opened_at, closed_at
+  FROM crypto_ai.paper_position
+  WHERE id IN (182, 172, 162, 158, 143, 137)
+)
+SELECT
+  f.id AS paper_position_id,
+  st.*
+FROM frozen f
+JOIN crypto_ai.fix129_stage_timing st
+  ON st.symbol = f.symbol
+ AND st.started_at >= f.opened_at
+ AND st.started_at <= f.closed_at
+ORDER BY f.id, st.started_at, st.id;
+```
+### END_DB_REQUEST

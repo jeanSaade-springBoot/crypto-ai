@@ -1,0 +1,14 @@
+FIX-146 validation — current development package
+PASS: dependency-free SharedTradingReadiness compiled and smoke tested with Java 17.
+Scenarios: unchecked block; one ready/one blocked; degraded diagnostics; exact 60-second
+expiry; refresh recovery; disabled/re-enabled requires revalidation; no-ready diagnostics.
+PASS: Java syntax parsed for the six changed/new main/test Java files, using JavacTask.parse.
+PASS: node --check src/main/resources/static/js/fix-registry.js.
+PASS: V100 and V101 bytes unchanged from prior FIX-145 source bundle.
+NOT RUN: Java 21 mvn clean verify, the nine new JUnit/H2 regressions, Spring wiring,
+admin authorization integration, real MySQL lock/timeout/CAS/concurrency tests,
+existing FIX-142 backlog reproduction and Production/Replay release gates.
+Earlier local 483-test success is prior-package evidence, not FIX-146 execution evidence.
+
+Build correction: undefined deadline reference removed from dispatchProtectionTicks.
+Syntax parser passed again; full dependency/type checking remains pending locally.

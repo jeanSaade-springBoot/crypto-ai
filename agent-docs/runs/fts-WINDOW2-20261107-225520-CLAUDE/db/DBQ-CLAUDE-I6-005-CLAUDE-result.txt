@@ -1,0 +1,4 @@
+metric	n	pnl
+winners_below_0.2pct	32	1.053168248380
+all_winners	90	13.113152806417
+buy_1m_then_bearish_next_1m	30	920.000000000000

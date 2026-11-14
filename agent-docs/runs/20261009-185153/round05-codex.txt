@@ -1,0 +1,92 @@
+## FINDINGS
+
+The checked-in implementation substantially realizes the pending local-candle direction in source, but it does not safely meet that direction’s release requirements. The appropriate verdict is rejection of the architecture as ready/consistent, not authorization for any change.
+
+1. **Kline WebSocket ownership**
+   - In `OFF` and `OBSERVE`, the trader starts its own Binance WebSocket and processes klines.
+   - In `LIVE`, trader WebSocket ingestion is disabled; the retained collector path is used instead.
+
+2. **REST/bootstrap ownership**
+   - In `OFF` and `OBSERVE`, the trader calls Binance REST for server time and klines, then writes local candles.
+   - In `LIVE`, imports/bootstrap are refused.
+
+3. **Persistence and collector coupling**
+   - `OFF`: candle reads/writes use local `crypto_ai.candle`.
+   - `LIVE`: candle reads route to the collector datasource/schema (`crypto_ai_v2`); local writing is rejected.
+   - `OBSERVE`: local candle reads/writes remain active, while the shared consumer separately reads collector stream/cursor tables. Thus OBSERVE combines direct ingestion with collector connectivity.
+
+4. **Close transition**
+   - The runtime WebSocket path is correctly structured: only an atomic open→closed runtime write assigns a close token; only the receipt owning that token publishes close analysis. Processing order is input → protection → observer → close dispatch; analysis is after commit and executor-backed.
+
+5. **Material backfill defect**
+   - Ordinary REST import uses a duplicate-key update that may close an existing `closed=0` runtime candle. It does not assign a runtime close token, write an analysis outcome, or dispatch analysis.
+   - This is not just a narrow live race. On checked-in defaults, bootstrap runs before the WebSocket starts. A candle left open at shutdown can be closed by startup REST import and become permanently ineligible for both normal close dispatch and reconciliation.
+   - The effect depends on bootstrap being enabled, the relevant candle being included in the REST window, and the process having persisted an open row before shutdown. Those conditions are the checked-in normal path, but “every restart” is too absolute.
+
+6. **Reconciliation**
+   - A dedicated reconciliation implementation exists and uses the right primitives for its own path: update-only recovery of an existing open row, insert-if-absent gap repair, no close token, and `SKIPPED_NOT_LIVE` outcome.
+   - It is disabled in checked-in configuration.
+   - Its retry/audit design can leave `PENDING` rows indefinitely after they leave the active window, and candidate SQL applies `LIMIT 50` before in-memory due/loss-evidence filtering.
+
+7. **OBSERVE contradiction**
+   - OBSERVE is not execution-equivalent to LIVE shared processing: collector deliveries are marked `OBSERVED`.
+   - However, OBSERVE bootstrap explicitly calculates an indicator, creates a `STARTUP` signal, and invokes paper-trading processing after REST import. It also runs the collector consumer. This contradicts the requested separation and is more serious than merely an observational collector connection.
+
+8. **Replay**
+   - Fresh Replay selects closed candles by closure/time predicates, not by runtime provenance, close token, reconciliation outcome, or `SKIPPED_NOT_LIVE`.
+   - Therefore the source does not establish Replay parity with production’s local live-admission boundary.
+
+9. **Rate limits**
+   - I found no shared Binance REST policy handling 429/418, `Retry-After`, Binance usage headers, or a shared budget spanning bootstrap, reconciliation, and exchange-clock calls.
+
+10. **Bootstrap**
+   - `V103` explicitly requires `crypto_ai_v2.market_data_stream_event`. `B105` claims a trader-only baseline effect, but source review cannot prove the Flyway/MySQL behavior. The fresh trader-only bootstrap gate remains unresolved.
+
+11. **Documentation contradictions**
+   - `AGENTS.md` calls trader-owned ingestion a pending design decision, while source and both architecture documents describe FIX-153 as implemented in source but unapproved.
+   - `claude-docs/ARCHITECTURE.md` incorrectly says direct ingestion entry points are disabled in both LIVE and OBSERVE. Code disables them only in LIVE.
+   - `codex-docs/ARCHITECTURE.md` correctly identifies the unsafe ordinary REST finalization, yet calls automatic reconciliation “pending” immediately before acknowledging a first reconciliation implementation slice. It does not distinguish the implemented-but-disabled slice from the still-unmet release design clearly enough.
+   - The `CandleRepository` comment says ordinary backfill “inserts missing identities only,” directly contradicting its duplicate-key update SQL.
+
+## EVIDENCE
+
+- WebSocket starts unless mode is LIVE: [BinanceWebSocketManager.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\client\binance\websocket\BinanceWebSocketManager.java:95).
+- Runtime kline ingestion rejects only LIVE: [BinanceKlineService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\service\BinanceKlineService.java:53).
+- REST import rejects only LIVE and writes completed REST candles: [MarketDataService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\service\MarketDataService.java:31).
+- OFF/LIVE datasource routing and writer refusal: [SharedMarketSource.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\shared\SharedMarketSource.java:21).
+- Default mode OFF; reconciliation disabled: [application.yml](C:\workspace\crypto-ai-trader-mysql\src\main\resources\application.yml:40), [application.yml](C:\workspace\crypto-ai-trader-mysql\src\main\resources\application.yml:420).
+- Runtime token assignment versus ordinary backfill update: [CandleRepository.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\repository\CandleRepository.java:99), [CandleRepository.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\repository\CandleRepository.java:173).
+- Transaction ordering: [KlineTransactionCoordinator.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\infrastructure\transaction\KlineTransactionCoordinator.java:36).
+- After-commit asynchronous analysis handoff: [CandleClosedEventListener.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\indicator\event\CandleClosedEventListener.java:30), [CandleAnalysisDispatcher.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\indicator\event\CandleAnalysisDispatcher.java:102).
+- Bootstrap precedes `ApplicationReadyEvent` WebSocket start and analyzes in non-OFF mode: [MarketDataBootstrapService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\service\MarketDataBootstrapService.java:48), [MarketDataBootstrapService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\service\MarketDataBootstrapService.java:105).
+- Detector requires tokened, non-BACKFILL closed candles: [LocalClosedCandleDetector.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\local\LocalClosedCandleDetector.java:34).
+- Reconciliation considers only `closed=0`; limit precedes filtering: [LocalCandleReconciliationService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\local\LocalCandleReconciliationService.java:122).
+- Reconciliation’s no-token historical-only handling: [LocalCandleReconciliationService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\local\LocalCandleReconciliationService.java:161).
+- Indefinite `PENDING` eligibility: [LocalReconciliationAuditRepository.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\local\LocalReconciliationAuditRepository.java:35).
+- OBSERVE reads collector events but marks delivery observed: [SharedMarketConsumer.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\shared\SharedMarketConsumer.java:322), [SharedMarketConsumer.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\shared\SharedMarketConsumer.java:477).
+- Manual REST import remains reachable: [MarketDataController.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\controller\MarketDataController.java:16).
+- Collector migration dependency: [V103__fix_149_fresh_admission_indexes.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\db\migration\V103__fix_149_fresh_admission_indexes.java:49).
+- Documentary OBSERVE misstatement: [claude-docs/ARCHITECTURE.md](C:\workspace\crypto-ai-trader-mysql\claude-docs\ARCHITECTURE.md:45).
+
+## OBJECTIONS
+
+1. Ordinary REST backfill can consume an open runtime candle’s close without durable admission or terminal outcome.
+2. Bootstrap makes that failure reachable on normal restart conditions.
+3. Reconciliation is disabled and does not guarantee terminal resolution/age-out.
+4. OBSERVE permits simultaneous direct ingestion, REST-to-paper-trading startup processing, and collector consumption.
+5. Replay parity with the actual live admission boundary is unproven.
+6. Shared Binance REST rate-limit/ban handling is absent from reviewed code.
+7. Trader-only fresh bootstrap remains unvalidated due to `V103`.
+8. Documentation is internally inconsistent and in places contradicted by source.
+
+## UNKNOWNS
+
+- Effective production artifact, mode, overrides, schema/Flyway history, and deployment state; production was not accessed.
+- Whether duplicate top-level `local-candle` YAML keys cause startup failure under the exact Spring Boot 4.1 stack. This should remain an unknown without executing a configuration-load test.
+- Whether downstream freshness/execution guards reject OBSERVE `STARTUP` signals before a paper trade is created.
+- MySQL/Flyway validation of B105, Java 21 build status, and race/crash testing.
+- Whether infrastructure outside this repository enforces Binance-wide request limits.
+
+## VERDICT
+
+REJECTED

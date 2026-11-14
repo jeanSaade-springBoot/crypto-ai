@@ -1,0 +1,1 @@
+SELECT id, wallet_position_id, symbol, event_type, old_value_usdt, new_value_usdt, market_price_usdt, LEFT(reason,500) AS reason, occurred_at FROM position_management_event WHERE wallet_position_id IN (107,111,120,125,130,133) ORDER BY wallet_position_id, occurred_at

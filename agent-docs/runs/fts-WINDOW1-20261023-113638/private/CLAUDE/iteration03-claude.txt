@@ -1,0 +1,203 @@
+# CLAUDE: FTS WINDOW1, Iteration 3 (Log and Timing Forensics, self-review)
+
+**Status.** I've added the six I2 query results (DBQ-CLAUDE-I2-001 to 006) and traced the live-exit, wallet and kline-ingestion code. This was read-only work. I did not open the other agent's folders, LIVE_TEAM_STATUS.md or LIVE_EVENTS.log. Database times are UTC; every KSA time below is UTC+3.
+
+**Limitations:**
+- **No production logs.** The only local log, `logs/crypto-ai-trader.log`, starts at 2026-10-19T14:32 on a local dev PID and has nothing from 11–12 Oct. I have no SSH access, so no production log search was possible. All timing evidence below comes from the database plus the code.
+- **Output not saved.** I'm in plan mode with no file-write tool, so this was not written to `private/CLAUDE/iteration03-claude.txt`.
+
+---
+
+## FINDINGS
+
+**F-I3-01: Correction to F-I2-03. Across the whole system, the 0.5% stop floor does not drive losses; wide-ATR stop-outs do.** [PROJECT EVIDENCE: I2-006 + AGENT INFERENCE]
+
+| Bucket | Trades | Wins | Gross P&L (USDT) | Stopped |
+|---|---|---|---|---|
+| R:R<1, floor stop | 69 | 40 (58%) | −0.12 | 12 |
+| R:R≥1, floor stop | 61 | 29 | +0.08 | 26 |
+| R:R≥1, ATR stop | 63 | 21 (33%) | **−4.13** | 37 |
+
+- The geometry finding for the six frozen trades still stands. But my I2 claim that the floor geometry made these losses "much more likely" does not hold system-wide. Gross, the floor buckets roughly break even; the losses come from the ATR-based stop-outs.
+- [AGENT INFERENCE] Fees are still unrecorded (`fee_usdt=0`). Whether the floor buckets lose money net of fees depends on the fee rate (U-12, still unverified).
+
+**F-I3-02: Normal signal exits run on price ticks, not on signals. So the exit happens on the first price tick after the third timeframe's signal is committed.** [PROJECT EVIDENCE: code]
+- `LivePositionProtectionService.java:95-97` reads the newest committed 1m, 5m and 1h signals on each tick.
+- `:235-243` then applies `PositionExitPolicy.evaluateNormalExit` (`PositionExitPolicy.java:20-50`).
+- Consequence: the exit can only happen after the *last* required signal has committed **and** another price tick for that symbol has arrived.
+
+**F-I3-03: Delay from "exit conditions became true" to the SELL ranged from 2.8 s to 38.9 s.** [PROJECT EVIDENCE: I2-002, I1-006 + AGENT INFERENCE]
+
+| Trade | Exit rule | Last required signal (generated, UTC → KSA) | Wallet SELL (UTC → KSA) | Delay |
+|---|---|---|---|---|
+| 182 | SELL_CONFIRMED | 5m STRONG_SELL 176934, 10:05:03.926 → 13:05:03.926 | 10:05:18.504 → 13:05:18.504 | **14.6 s** |
+| 172 | HTF_SELL_CONFIRMED | 5m NEUTRAL 172588, 07:15:04.578 → 10:15:04.578 (1h SELL 172201 at 07:00:06) | 07:15:43.492 → 10:15:43.492 | **38.9 s** |
+| 158 | SELL_CONFIRMED | 5m SELL 166821, 03:30:01.464 → 06:30:01.464 | 03:30:04.217 → 06:30:04.217 | 2.8 s |
+| 162 | STRONG_SELL (signal path) | 1m STRONG_SELL 168277, 04:26:02.794 → 07:26:02.794 | paper closed 04:26:04.116 → 07:26:04.116 | 1.3 s |
+| 137 | SELL_CONFIRMED | 1m STRONG_SELL 156850, 21:00:01.779 → 00:00:01.779 (12 Oct); the 5m signal is unknown | 21:00:08.935 → 00:00:08.935 (12 Oct) | ≥7.2 s |
+
+- **Why 158 and 162 were quick.** Signals become visible only when committed, and `created_at` runs 1.3–2.3 s after `generated_at` (F-I2-09). That fully explains 158 and 162.
+- **182 and 172 are not explained by commit lag.** [AGENT INFERENCE] The likely cause is sparse price ticks for ACE and SHIB. I1-010 already showed ACE gaps of up to 57 s, and SHIB stayed within ±1 tick. DBQ-CLAUDE-I3-001 will test this.
+- **Exits followed the rules.** HTF_SELL_CONFIRMED for 172 matches the policy: the 1h SELL exit waited 15 minutes, until 5m stopped being supportive (WATCH → NEUTRAL).
+- **137 is unresolved.** Its 5m/1h context was cut off by `LIMIT 120` in I2-002 (five trades × up to 26 rows already filled the 120 rows). It is re-requested.
+
+**F-I3-04: The 8-second gap in trade 143 affected EGLD only; the price stream as a whole kept flowing.** [PROJECT EVIDENCE: I2-004 + AGENT INFERENCE]
+- **Ticks stored.** EGLD ticks were stored at 22:43:19, :21, :27, :35, :37, … UTC (01:43 KSA, 12 Oct). Both the :21→:27 gap (6 s) and the :27→:35 gap (8 s) skipped the expected 2-second updates.
+- **The stream was healthy.** Event IDs kept rising at a steady ~3.4–4 per second across all symbols (1789351 → 1789359 → 1789382 → 1789409).
+- **Every message is stored.** `BinanceKlineService.java:106` writes a `market_price_event` for every 1m kline message, with no de-duplication. The only exception is `recordPending` (`MarketPriceEventService.java:52-57`), which drops stale or future-dated observations without a row but logs `[FIX-153][PRICE_NOT_CANONICAL]`.
+- **The drop.** The 22:43 UTC 1m candle has high 4.100, low 3.994 and volume 6382.8, about 9.5× the previous minute. The first tick after the gap, at 4.027, came during a fast fall.
+- **Three possible causes, none proven:**
+  - (a) Binance sent no update because there were no trades. External docs give a 2000 ms cadence but do not say whether an update is sent when nothing traded.
+  - (b) Binance messages for EGLD were delayed or dropped.
+  - (c) The trader rejected them at input, which would leave a PRICE_NOT_CANONICAL log line.
+- (c) can only be ruled out from production logs, which I can't reach.
+- [AGENT INFERENCE] Even with no gap, a 4.100 → 3.994 drop within a minute means a fill near the 4.035 floor was not guaranteed. The tick gap made the fill worse; it did not cause the loss.
+
+**F-I3-05: The 1.2–3.2 s gap between the wallet record and the paper record happens inside one transaction. It is not a non-atomic commit.** [PROJECT EVIDENCE: code + AGENT INFERENCE] (resolves U-10, subject to the I3-004 check)
+- The live exit path runs inside a single `@Transactional` call (`onPrice`, `LivePositionProtectionService.java:74`). `executeMechanicalExit` (`WalletAutoExecutionService.java:474`) joins that transaction.
+- `wallet_trade.executed_at` is set to `Instant.now()` at `:548`. After that, the code still runs:
+  - `walletService.currentPortfolioValue()` (`:556`)
+  - `walletService.captureSnapshot()` (`:560`)
+- Both loop over **every** `wallet_asset` row with one candle query each (`WalletService.java:486-487, 602, 607`). They also run aggregate sums over the cash-flow and trade tables (`:603`).
+- Only then does `closePaper` set `closed_at` (`LivePositionProtectionService.java:405`).
+- So the lag is time spent on portfolio work inside the transaction, while the symbol and position locks are held.
+- [AGENT INFERENCE] This is not an atomicity defect. It is a latency and lock-hold risk: other price ticks for the same symbol wait behind it.
+- I haven't traced the entry path. The 1.7–2.2 s entry lag fits the same pattern; DBQ-CLAUDE-I3-004 checks it.
+
+**F-I3-06: The system stopped trading on 15 Oct.** [PROJECT EVIDENCE: I2-001]
+- Positions opened per day: 11 Oct: 50, 12 Oct: 38, 13–14 Oct: none, 15 Oct: 7.
+- The last open was 2026-10-15 03:08:06 UTC (06:08:06 KSA) and the last close 03:15:19 UTC (06:15:19 KSA).
+- After that, nothing more was opened up to the snapshot (25 Oct 10:08:57 UTC), about 10 days.
+- Whether the app was down, ingestion stopped, or entries were all vetoed is unknown (DBQ-CLAUDE-I3-005). This does not affect the frozen trades, but it matters operationally.
+
+**F-I3-07: Stop-loss fills average −0.60%, beyond the 0.5% floor.** [PROJECT EVIDENCE: I2-006 + AGENT INFERENCE]
+- If many of those stops were floor stops, that means slippage past the stop because of tick gaps, the same mechanism as in 143.
+- This is outside the frozen set, but the timing finding generalises. DBQ-CLAUDE-I3-006 measures it.
+
+**F-I3-08: How to classify the six trades so far.** [AGENT INFERENCE]
+- **No stale-data defects found.** Tick freshness and the price-age rejection check are in place.
+- **Delayed exits: 182 and 172, possibly 137.** These were valid exits, but tick sparsity made them late. Whether that cost money depends on the price path during the delay (I3-001).
+- **Trade 143.** A design outcome (it extended the target instead of taking profit) made worse by tick-gap slippage.
+- **162 and 158.** The exits were on time.
+
+---
+
+## EVIDENCE INDEX
+- **Database results:** I2-001 (activity / STOPPED), I2-002 (exit context), I2-003 (target extensions), I2-004 (143 ticks and candle), I2-005 (work rows / opportunities), I2-006 (system-wide buckets).
+- **Exit decision code:**
+  - `LivePositionProtectionService.java:54-72` (tick gate)
+  - `:95-97` (newest-signal reads)
+  - `:191-217` (hard floor)
+  - `:235-243` (normal exit)
+  - `:391-412` (closePaper)
+- **Wallet and ingestion code:**
+  - `WalletAutoExecutionService.java:474-562`
+  - `WalletService.java:484-490, 592-607`
+  - `BinanceKlineService.java:94-111`
+  - `MarketPriceEventService.java:40-71`
+- **External research:** Binance spot kline stream update speed is 2000 ms for non-1s intervals. The docs do not say whether updates are sent when no trades happen ([current docs](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams), [legacy docs](https://developers.binance.com/legacy-docs/binance-spot-api-docs/web-socket-streams)).
+
+## UNKNOWNS
+| ID | Status |
+|---|---|
+| U-07 | 182, 158, 172: confirmed to follow the policy. 137: still open (5m/1h context cut off) |
+| U-08 | Narrowed to the three causes in F-I3-04. Needs production logs (PRICE_NOT_CANONICAL / KLINE_PHASE_FAILED for EGLDUSDT at 22:43:27–35 UTC) |
+| U-09 | Resolved: lifetime lows were 143 = 4.022 and 162 = 0.0867 (I2-004) |
+| U-10 | Resolved by code trace as same-transaction work (F-I3-05). Snapshot timing still to be checked |
+| U-13 (new) | Price-tick density for ACE, SHIB and EGLD during the exit delays, and what the delay cost |
+| U-14 (new) | Why trading stopped after 15 Oct 03:15 UTC |
+| U-15 (new) | Whether Replay feeds the protection logic tick by tick. If it uses only candles, it cannot reproduce the 15–39 s exit delays or 143's gap fill |
+| U-16 (new) | The live value of `MarketPriceEventService` `maxAge`/`futureSkew` |
+| U-12 | The fee tier is still unverified |
+
+---
+
+## DB REQUESTS (read-only, bounded `SELECT`, `crypto_ai`)
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-001
+Purpose: Price-tick density and price path during each exit-decision window (F-I3-03, U-13).
+SQL:
+SELECT symbol, id, observed_at, price, delivery_status, outcome_reason, created_at
+FROM market_price_event
+WHERE (symbol='ACEUSDT'  AND observed_at BETWEEN '2026-10-12 10:04:55' AND '2026-10-12 10:05:20')
+   OR (symbol='SHIBUSDT' AND observed_at BETWEEN '2026-10-12 07:14:58' AND '2026-10-12 07:15:45')
+   OR (symbol='EGLDUSDT' AND observed_at BETWEEN '2026-10-11 20:59:58' AND '2026-10-11 21:00:13')
+   OR (symbol='XRPUSDT'  AND observed_at BETWEEN '2026-10-12 03:29:58' AND '2026-10-12 03:30:07')
+ORDER BY symbol, observed_at LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-002
+Purpose: Commit times of the exit-relevant signals, plus trade 137's missing 5m/1h context (U-07, F-I3-03).
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, generated_at, created_at, decision
+FROM trade_signal WHERE id IN (176927,176934,172587,172588,172201,166819,166821,168251,168277,156850) ORDER BY id;
+SELECT id, interval_code, candle_open_time, generated_at, created_at, decision
+FROM trade_signal WHERE symbol='EGLDUSDT' AND interval_code IN ('5m','1h')
+ AND generated_at BETWEEN '2026-10-11 19:55:00' AND '2026-10-11 21:00:09' ORDER BY interval_code, generated_at DESC LIMIT 20;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-003
+Purpose: Inter-arrival gaps between ticks during each frozen trade's life (F-I3-04 baseline, F-I3-03).
+SQL:
+SELECT pp.id pp_id, COUNT(*) ticks, MAX(g.gap_s) max_gap_s, SUM(g.gap_s>=4) gaps_ge_4s, SUM(g.gap_s>=10) gaps_ge_10s
+FROM paper_position pp
+JOIN (SELECT symbol, observed_at,
+             TIMESTAMPDIFF(MICROSECOND, LAG(observed_at) OVER (PARTITION BY symbol ORDER BY observed_at), observed_at)/1000000 gap_s
+      FROM market_price_event
+      WHERE symbol IN ('ACEUSDT','SHIBUSDT','DOGEUSDT','XRPUSDT','EGLDUSDT')
+        AND observed_at BETWEEN '2026-10-11 20:50:00' AND '2026-10-12 10:10:00') g
+  ON g.symbol=pp.symbol AND g.observed_at BETWEEN pp.opened_at AND pp.closed_at
+WHERE pp.id IN (182,172,162,158,143,137) GROUP BY pp.id ORDER BY pp.id DESC;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-004
+Purpose: Confirm that the wallet-to-paper lag is portfolio-snapshot work in the same transaction (F-I3-05). Reads the schema first.
+SQL:
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME IN ('wallet_snapshot','wallet_asset') ORDER BY TABLE_NAME, ORDINAL_POSITION;
+SELECT COUNT(*) asset_rows, SUM(quantity>0) nonzero_rows FROM wallet_asset;
+SELECT id, captured_at FROM wallet_snapshot
+WHERE captured_at BETWEEN '2026-10-12 09:57:04' AND '2026-10-12 09:57:07'
+   OR captured_at BETWEEN '2026-10-12 10:05:18' AND '2026-10-12 10:05:21'
+   OR captured_at BETWEEN '2026-10-11 21:00:08' AND '2026-10-11 21:00:13'
+   OR captured_at BETWEEN '2026-10-11 22:43:35' AND '2026-10-11 22:43:37'
+ORDER BY captured_at LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-005
+Purpose: Was the system running after 12 Oct, and why did trading stop (F-I3-06, U-14)?
+SQL:
+SELECT DATE(generated_at) d, COUNT(*) signals, SUM(decision IN ('BUY','STRONG_BUY')) buys, MAX(generated_at) last_gen
+FROM trade_signal WHERE generated_at >= '2026-10-12 00:00:00' GROUP BY d ORDER BY d LIMIT 20;
+SELECT DATE(open_time) d, COUNT(*) candles_1m, MAX(open_time) last_open
+FROM candle WHERE interval_code='1m' AND open_time >= '2026-10-12 00:00:00' GROUP BY d ORDER BY d LIMIT 20;
+SELECT status, decision_code, COUNT(*) n, MAX(last_evidence_at) last_seen
+FROM execution_opportunity WHERE started_at >= '2026-10-15 00:00:00' GROUP BY status, decision_code ORDER BY n DESC LIMIT 30;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-006
+Purpose: How far stop-loss fills land past the stop, as a system-wide measure of tick-gap slippage (F-I3-07).
+SQL:
+SELECT COUNT(*) n,
+       ROUND(AVG((stop_loss-exit_price)/stop_loss*100),4) avg_slip_pct,
+       ROUND(MAX((stop_loss-exit_price)/stop_loss*100),4) max_slip_pct,
+       SUM(exit_price < stop_loss) filled_below_stop
+FROM paper_position WHERE status='STOPPED' AND stop_loss IS NOT NULL AND exit_price IS NOT NULL;
+### END_DB_REQUEST
+
+---
+
+**Self-review.**
+- I corrected F-I2-03 against system-wide data instead of defending it.
+- Every timing claim cites a record ID or a code line.
+- The cause of the 143 gap is left open because the logs that would settle it are out of reach.
+- No trades were substituted.
+- Every KSA time is UTC+3, with date rollovers shown.
+
+**Iteration 4 plan:** fold in the I3 results, trace the BUY path's timestamps and Replay's price feed (U-15), and score entry quality at decision time against the outcomes.

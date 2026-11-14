@@ -1,0 +1,78 @@
+## FINDINGS — Iteration 3: Log and timing forensics
+
+- **PROJECT EVIDENCE:** The frozen population remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutes used.
+
+- **PROJECT EVIDENCE:** The permitted `db/CODEX` evidence directory is empty. No executed DBQ-FTS or Codex query results are available, so no trade-specific entry, protection, exit, or latency conclusion is supportable.
+
+- **PROJECT EVIDENCE:** Local runtime logs end at **2026-10-15 00:29:06 UTC** (**2026-10-15 03:29:06 KSA**); `database-timing.log` ends at **2026-10-15 00:29:07 UTC** (**03:29:07 KSA**). This is about **33h 19m** before the snapshot at **2026-10-16 09:48:32 UTC** (**12:48:15 KSA**). The logs cannot establish activity after their end time.
+
+- **PROJECT EVIDENCE:** The implementation persists a canonical 1m price event with candle input, then executes protection before observer and close-dispatch work. `APPLIED` is committed with protection effects; `NON_CANONICAL` excludes invalid/stale/out-of-order/duplicate observations; `PROTECTION_NOT_APPLIED` is the resolver’s durable no-commit conclusion. The accepted event alone can still be a protection no-op if no open position existed, so position mutation remains separately required.
+
+- **PROJECT EVIDENCE:** Signal processing logs and state can distinguish claimed, completed, expired, retryable, and review-required work. Freshness is checked after normal locks; for a 1m signal the latest exact closed candle must remain within a 90-second grace period. This is the relevant timing boundary, but the six trades’ signals and work rows are not yet available.
+
+- **AGENT INFERENCE:** At present, a failed trade cannot be classified as a valid stop, late/stale protection, execution delay, or strategy defect. The required correlation keys—symbol, entry/exit signal IDs, exact UTC open/close times, and price-event IDs—are missing.
+
+**EXTERNAL RESEARCH:** None.
+
+## EVIDENCE
+
+- `agent-docs/runs/fts-WINDOW1-20261016-124815/CHARTER.md`
+- `agent-docs/runs/fts-WINDOW1-20261016-124815/private/CODEX/iteration01-codex.txt`
+- `agent-docs/runs/fts-WINDOW1-20261016-124815/private/CODEX/iteration02-codex.txt`
+- `src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java`
+- `src/main/java/com/crypto/market/service/MarketPriceEventService.java`
+- `src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java`
+- `src/main/java/com/crypto/execution/processing/SignalProcessingFreshness.java`
+- `logs/crypto-ai-trader.log`
+- `logs/database-timing.log`
+
+## UNKNOWNS
+
+For every frozen trade: symbol, signal lineage, entry/exit UTC and KSA times, close reason, actual trigger observation, whether the trigger event was accepted, protection completion latency, work status/attempts, and log correlation remain unverified.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Establish the six trades’ exact timing/correlation keys and inspect durable price/protection and processing evidence around each recorded exit. All returned timestamps are UTC; report conversions separately as KSA = UTC+3.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.market_price_event;
+SHOW CREATE TABLE crypto_ai.signal_processing_work;
+
+SELECT p.*
+FROM crypto_ai.paper_position p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+
+SELECT s.*
+FROM crypto_ai.trade_signal s
+JOIN crypto_ai.paper_position p
+  ON s.id = p.signal_id OR s.id = p.exit_signal_id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, s.id;
+
+SELECT w.*
+FROM crypto_ai.signal_processing_work w
+WHERE w.signal_id IN (
+    SELECT p.signal_id
+    FROM crypto_ai.paper_position p
+    WHERE p.id IN (182, 172, 162, 158, 143, 137)
+    UNION
+    SELECT p.exit_signal_id
+    FROM crypto_ai.paper_position p
+    WHERE p.id IN (182, 172, 162, 158, 143, 137)
+      AND p.exit_signal_id IS NOT NULL
+)
+ORDER BY w.signal_id, w.id;
+
+SELECT
+    p.id AS paper_position_id,
+    m.*
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.market_price_event m
+  ON m.symbol = p.symbol
+ AND m.observed_at >= DATE_SUB(p.closed_at, INTERVAL 10 MINUTE)
+ AND m.observed_at <= DATE_ADD(p.closed_at, INTERVAL 2 MINUTE)
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, m.observed_at, m.id;
+```
+### END_DB_REQUEST

@@ -1,0 +1,1 @@
+SELECT installed_rank, version, description, installed_on, success FROM flyway_schema_history WHERE CAST(version AS UNSIGNED) >= 100 ORDER BY installed_rank;

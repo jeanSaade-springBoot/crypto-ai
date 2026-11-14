@@ -1,0 +1,2 @@
+SELECT @@session.time_zone AS session_tz, @@global.time_zone AS global_tz, @@system_time_zone AS system_tz, NOW(6) AS now_session, UTC_TIMESTAMP(6) AS now_utc, TIMEDIFF(NOW(), UTC_TIMESTAMP()) AS session_offset;
+SELECT id, generated_at, UNIX_TIMESTAMP(generated_at) AS generated_epoch, btc_context_evaluated_at, btc_signal_generated_at, liquidity_evaluated_at FROM crypto_ai.trade_signal WHERE id IN (156723,159408,165412,167668,171589,176710) ORDER BY id;

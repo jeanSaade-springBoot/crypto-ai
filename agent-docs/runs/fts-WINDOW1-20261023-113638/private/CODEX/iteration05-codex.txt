@@ -1,0 +1,70 @@
+## FINDINGS — Iteration 5: Entry Quality
+
+- **[PROJECT EVIDENCE]** Entry quality for frozen `paper_position` IDs **182, 172, 162, 158, 143, 137** is presently **unverifiable**, not weak or defective. The permitted Codex DB-evidence folder contains no results, and no frozen position has been linked to its entry signal, executed BUY, or managed position.
+
+- **[PROJECT EVIDENCE]** Current code separates signal quality from entry quality. A bullish signal is not sufficient: at execution the system obtains a fresh price, recomputes entry quality against that price, and can cancel an otherwise approved BUY if price is already at/below the stop, at/above target, or classified as a chase.
+
+- **[PROJECT EVIDENCE]** Current entry-quality scoring uses only contemporaneous/persisted pre-entry evidence: rolling 30-minute signal prices; a fresh opportunity anchor/best price when applicable; execution-price expansion; ATR extension; risk/reward at execution price; opportunity age; recent rejection-zone evidence; high-volatility regime; and `STOP_EXPOSED` liquidity state. Score under 50 is `CHASE_ENTRY` and blocks an initial entry; higher scores cap initial allocation by tier.
+
+- **[PROJECT EVIDENCE]** Current execution validation additionally requires a 1m execution signal plus fresh 5m (20-minute) and 1h (3-hour) context, with profile-specific authority. This describes the checked-in source, not the historical release/configuration governing any frozen trade.
+
+- **[AGENT INFERENCE]** `wallet_managed_position.entry_quality_score`, if present, cannot alone prove an original entry’s quality: current code overwrites it on each `executeBuy`, including a progressive add. A valid reconstruction needs the first linked executed BUY, its observed execution price/time, and the signal/context evidence available before that point.
+
+- **[AGENT INFERENCE]** The prior ICPUSDT log candidate remains unusable for this entry-quality study: it identifies managed-position ID `182`, not proven frozen `paper_position` ID `182`.
+
+- **[PROJECT EVIDENCE]** The supplied snapshot UTC and KSA values do not represent the same instant. The frozen IDs remain authoritative, but the snapshot clock must not be treated as a precise historical cutoff.
+
+## EVIDENCE
+
+- [AnalysisService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:278) assembles and persists the contemporaneous analysis decision, context gates, component scores, price, ATR, stop, target, and risk/reward.
+
+- [TradeExecutionValidationService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:62) requires the executable 1m signal and fresh 5m/1h context before profile approval.
+
+- [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:865) defines the dynamic entry-quality calculation; [the initial guard](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1171) blocks scores below 50 and caps approved size.
+
+- [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:377) revalidates against a fresh execution price before the wallet BUY and paper-position creation.
+
+- [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:139) writes the supplied score to the managed position; therefore it is mutable across later BUY stages.
+
+- **[EXTERNAL RESEARCH]** None.
+
+## UNKNOWNS
+
+- For each frozen trade: symbol, entry signal, first BUY execution timestamp and price (UTC, then KSA conversion), decision-to-fill gap, entry stage, and actual entry-quality score/classification.
+- The 1m/5m/1h decisions and freshness available at entry.
+- Contemporaneous stop, target, ATR, risk/reward, regime, BTC, liquidity, derivatives, confluence, data-quality, and strategy evidence.
+- Whether a progressive add overwrote the managed-position score.
+- Historical runtime version, execution profile, wallet settings, and opportunity state.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Establish the actual schema needed to reconstruct initial-entry quality and avoid assuming current-source column names or table ownership.  
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'execution_opportunity',
+      'signal_processing_work',
+      'wallet_settings',
+      'market_price_event',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+Self-review: analysis only. No code, configuration, database, Git, deployment, or documentation changes were made.

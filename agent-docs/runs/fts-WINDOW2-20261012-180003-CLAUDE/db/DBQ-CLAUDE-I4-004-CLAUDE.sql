@@ -1,0 +1,1 @@
+SELECT id, interval_code, candle_open_time, decision, original_decision, final_entry_allowed, atr_immediate_entry_allowed, atr_recommended_position_percent, atr_at_signal, atr_entry_type, latest_price, generated_at, created_at FROM trade_signal WHERE id IN (159285,159321,159407,159408) ORDER BY generated_at

@@ -1,0 +1,2 @@
+global_tz	session_tz	system_tz	session_now	utc_now	session_offset_minutes
+SYSTEM	SYSTEM	Arab Standard Time	2026-10-20 15:02:54.938782	2026-10-20 12:02:54.938782	180

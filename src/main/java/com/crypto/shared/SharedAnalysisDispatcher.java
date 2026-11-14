@@ -42,6 +42,11 @@ public final class SharedAnalysisDispatcher {
     private int liveCursor, historyCursor;
     private long liveHeartbeat, historyHeartbeat;
     private volatile boolean stopped;
+    // FIX-146: only an operationally admitted symbol may create new analysis claims.
+    private volatile java.util.function.Predicate<String> admissionGate=symbol->true;
+    public void admissionGate(java.util.function.Predicate<String> gate) {
+        admissionGate=java.util.Objects.requireNonNull(gate);
+    }
 
     public SharedAnalysisDispatcher(SharedMarketSource source, JdbcTemplate local,
             CoinConfigurationService coins, Supplier<List<String>> intervals,
@@ -62,6 +67,50 @@ public final class SharedAnalysisDispatcher {
     public void historicalEnabled(boolean enabled) { historicalEnabled=enabled; }
     public void live() { dispatch(true); }
     public void historical() { dispatch(false); }
+    // FIX-142: durable retry queues are not bounded by executing-thread capacity.
+    private volatile int historicalCapacity=1;
+    public void historicalCapacity(int size){if(size<1||size>4)throw new IllegalArgumentException("Historical capacity must be 1..4");historicalCapacity=size;}
+    private volatile boolean freshPriority;
+    public void freshPriority(boolean enabled){freshPriority=enabled;}
+    private volatile boolean acknowledgmentEnabled;
+    private long acknowledgmentCursor;
+    public void acknowledgmentEnabled(boolean enabled){acknowledgmentEnabled=enabled;}
+    private boolean ackRefused(String reason){Fix142Metrics.count("ACK_"+reason);return false;}
+    private boolean acknowledgeCompletedWork(Map<String,Object> review) {
+        if(!acknowledgmentEnabled||num(review,"phase")!=4||!"REVIEW_REQUIRED".equals(review.get("analysis_status")))return false;
+        var work=jdbc.queryForList("SELECT signal_id,symbol,interval_code,candle_open_time,status,completed_at FROM signal_processing_work WHERE source_event_id=? FOR UPDATE",review.get("source_event_id"));
+        Fix142Metrics.count("ACK_EXAMINED");
+        if(work.size()!=1) {
+            if(work.isEmpty()&&!jdbc.queryForList("SELECT signal_id FROM signal_processing_work WHERE symbol=? AND interval_code=? AND candle_open_time=? LIMIT 1",review.get("symbol"),review.get("interval_code"),review.get("candle_open_time")).isEmpty())Fix142Metrics.count("ACK_LEGACY_WORK_CANDIDATE");
+            return ackRefused(work.size()>1?"AMBIGUOUS_WORK_LINK":"WORK_LINK_MISSING");
+        }
+        var w=work.getFirst();
+        if(!"COMPLETED".equals(w.get("status"))||w.get("completed_at")==null)return ackRefused("WORK_UNRESOLVED");
+        for(String key:List.of("symbol","interval_code","candle_open_time"))if(!Objects.equals(review.get(key),w.get(key)))return ackRefused("WORK_IDENTITY_MISMATCH");
+        var conflict=jdbc.queryForList("SELECT signal_id FROM signal_processing_work WHERE symbol=? AND interval_code=? AND candle_open_time=? AND signal_id<>? FOR UPDATE",review.get("symbol"),review.get("interval_code"),review.get("candle_open_time"),w.get("signal_id"));
+        if(!conflict.isEmpty())return ackRefused("CONFLICTING_WORK");
+        var signals=jdbc.queryForList("SELECT id,symbol,interval_code,candle_open_time FROM trade_signal WHERE id=? FOR UPDATE",w.get("signal_id"));
+        if(signals.size()!=1)return ackRefused("SIGNAL_MISSING_OR_AMBIGUOUS");
+        for(String key:List.of("symbol","interval_code","candle_open_time"))if(!Objects.equals(review.get(key),signals.getFirst().get(key)))return ackRefused("SIGNAL_IDENTITY_MISMATCH");
+        int changed=jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='WORK_ACKNOWLEDGED',analysis_completed_at=? WHERE source_event_id=? AND phase=4 AND analysis_status='REVIEW_REQUIRED' AND (owner_token=? OR (owner_token IS NULL AND ? IS NULL))",w.get("completed_at"),review.get("source_event_id"),review.get("owner_token"),review.get("owner_token"));
+        if(changed!=1)throw new IllegalStateException("FIX-142 acknowledgment must affect exactly one locked row");
+        jdbc.update("INSERT INTO shared_delivery_resolution_audit(source_event_id,symbol,operation,old_owner_token,reviewer,evidence) VALUES(?,?,'WORK_ACKNOWLEDGED',?,'FIX-142_EXACT_CHAIN',?)",review.get("source_event_id"),review.get("symbol"),review.get("owner_token"),"COMPLETED work signal="+w.get("signal_id")+" completedAt="+w.get("completed_at"));
+        log.info("[FIX-142][WORK_ACKNOWLEDGED] event={}, signal={}; no execution replay",review.get("source_event_id"),w.get("signal_id"));
+        return true;
+    }
+    public void reconcileCompletedWorkAcknowledgments() {
+        if(stopped||!source.enabled()||!acknowledgmentEnabled)return;
+        List<Map<String,Object>> rows;
+        try{rows=jdbc.queryForList("SELECT source_event_id,symbol,interval_code FROM shared_market_event_delivery WHERE analysis_status='REVIEW_REQUIRED' AND source_event_id>? ORDER BY source_event_id LIMIT 64",acknowledgmentCursor);}
+        catch(Exception scan){log.error("[FIX-142][ACKNOWLEDGMENT_SCAN_FAILED]",scan);return;}
+        if(rows.isEmpty()){acknowledgmentCursor=0;return;}
+        for(var row:rows)try {
+            Boolean acknowledged=tx.execute(status->{lockSymbol(new Lane(str(row,"symbol"),str(row,"interval_code")));
+                var current=jdbc.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=? FOR UPDATE",row.get("source_event_id"));return acknowledgeCompletedWork(current);});
+            Fix142Metrics.count(Boolean.TRUE.equals(acknowledged)?"ACK_RECONCILIATION_COMMITTED":"ACK_RECONCILIATION_RETAINED");
+        }catch(Exception failure){Fix142Metrics.count("ACK_RECONCILIATION_FAILED");log.error("[FIX-142][ACKNOWLEDGMENT_FAILED] event={}",row.get("source_event_id"),failure);}
+        finally{acknowledgmentCursor=num(row,"source_event_id");}
+    }
     public void stop() { stopped=true; }
 
     private List<Lane> lanes() {
@@ -79,7 +128,7 @@ public final class SharedAnalysisDispatcher {
         if(stopped || !source.enabled() || (!live && !historicalEnabled))return;
         long started=System.nanoTime();
         Set<Lane> poolActive=live?liveActive:historyActive;
-        int capacity=live?8:1;
+        int capacity=live?8:historicalCapacity;
         if(poolActive.size()>=capacity)return;
         int checked=0, submitted=0;
         try {
@@ -90,7 +139,7 @@ public final class SharedAnalysisDispatcher {
                 int cursor=live?liveCursor++:historyCursor++;
                 Lane lane=lanes.get(Math.floorMod(cursor,lanes.size()));
                 checked++;
-                if(!active.add(lane))continue;
+                if(!admissionGate.test(lane.symbol()) || !active.add(lane))continue;
                 poolActive.add(lane);
                 boolean handedOff=false;
                 try {
@@ -105,7 +154,7 @@ public final class SharedAnalysisDispatcher {
                     long queued=System.nanoTime();
                     try {
                         (live?liveExecutor:historyExecutor).execute(()->run(lane,candidate,live,token,queued));
-                        handedOff=true;submitted++;
+                        handedOff=true;submitted++;Fix142Metrics.count(live?"LIVE_SUBMITTED":"HISTORY_SUBMITTED");
                         log.info("[FIX-138][CLAIM] mode={}, event={}, lane={}, closeUtc={}, claimMs={}",
                             live?"LIVE":"HISTORY",id,lane,time(candidate,"candle_close_time"),claimMs);
                     } catch(RejectedExecutionException rejected) {
@@ -156,7 +205,7 @@ public final class SharedAnalysisDispatcher {
             if(live)args.add(Timestamp.from(now));
             args.add(Timestamp.from(now));
             var rows=jdbc.queryForList("SELECT * FROM shared_market_event_delivery WHERE symbol=? AND interval_code=? AND phase=4 AND analysis_status=? AND closed=1"
-                +window+" AND (analysis_not_before IS NULL OR analysis_not_before<?) ORDER BY candle_close_time,symbol_sequence LIMIT 1",args.toArray());
+                +window+" AND (analysis_not_before IS NULL OR analysis_not_before<?) ORDER BY candle_close_time"+(live&&freshPriority?" DESC,symbol_sequence DESC":" ASC,symbol_sequence ASC")+" LIMIT 1",args.toArray());
             if(!rows.isEmpty() && (result==null || before(rows.getFirst(),result)))result=rows.getFirst();
         }
         long ms=(System.nanoTime()-started)/1_000_000;
@@ -172,7 +221,7 @@ public final class SharedAnalysisDispatcher {
     }
 
     private boolean claim(Lane lane,Map<String,Object> selected,boolean live,String token) {
-        if(stopped || (!live && !historicalEnabled) || !SharedCutoverPolicy.approved(lockSymbol(lane)))return false;
+        if(stopped || !admissionGate.test(lane.symbol()) || (!live && !historicalEnabled) || !SharedCutoverPolicy.approved(lockSymbol(lane)))return false;
         long id=num(selected,"source_event_id");
         var e=jdbc.queryForMap("SELECT * FROM shared_market_event_delivery WHERE source_event_id=? FOR UPDATE",id);
         Instant now=Instant.now();
@@ -194,7 +243,7 @@ public final class SharedAnalysisDispatcher {
         var reviews=jdbc.queryForList("SELECT * FROM shared_market_event_delivery WHERE analysis_status='REVIEW_REQUIRED' AND symbol=? AND interval_code=? ORDER BY symbol_sequence LIMIT 17 FOR UPDATE",lane.symbol(),lane.interval());
         if(reviews.size()>16) {blocked(lane,"REVIEW_BATCH_LIMIT",num(reviews.getFirst(),"source_event_id"));return false;}
         for(var review:reviews) {
-            if(!isolateAnalysisOnlyReview(review)) {blocked(lane,"UNRESOLVED_EXECUTION_REVIEW",num(review,"source_event_id"));return false;}
+            if(!isolateAnalysisOnlyReview(review) && !acknowledgeCompletedWork(review)) {blocked(lane,"UNRESOLVED_EXECUTION_REVIEW",num(review,"source_event_id"));return false;}
         }
         // A historical task may not claim a lane with ready fresh work. It does
         // not become live if the clock changes; false authority is passed explicitly.
@@ -284,6 +333,7 @@ public final class SharedAnalysisDispatcher {
         long lastSeen=cursor;
         for(var row:rows) {
             long id=num(row,"source_event_id");
+            Fix142Metrics.count("ISOLATION_EXAMINED");
             try {
                 Boolean cleared=tx.execute(status->{
                     // Symbol lock first, then the delivery row - claim()'s order. Everything
@@ -293,8 +343,10 @@ public final class SharedAnalysisDispatcher {
                     if(!"REVIEW_REQUIRED".equals(str(current,"analysis_status")))return false;
                     return isolateAnalysisOnlyReview(current);
                 });
-                if(Boolean.TRUE.equals(cleared))isolated++;
+                if(Boolean.TRUE.equals(cleared)){isolated++;Fix142Metrics.count("ISOLATION_COMMITTED");}
+                else Fix142Metrics.count("ISOLATION_RETAINED");
             } catch(Exception failure) {
+                Fix142Metrics.count("ISOLATION_FAILED");
                 log.warn("[FIX-141][REVIEW_RECONCILE_ROW_FAILED] event={}; left REVIEW_REQUIRED, will be retried after the cursor wraps",id,failure);
             } finally {
                 lastSeen=id;
@@ -380,6 +432,7 @@ public final class SharedAnalysisDispatcher {
         if(candidates>0)log.info("[FIX-141][OWNER_TIMEOUT_CANDIDATES] candidates={}, checked={}",candidates,rows.size());
     }
     private void blocked(Lane lane,String reason,long event) {
+        Fix142Metrics.count("CLAIM_REJECTED_"+reason);
         long now=System.nanoTime();
         Long previous=lastBlockedLog.get(lane);
         if(previous==null || now-previous>=TimeUnit.SECONDS.toNanos(30)) {
@@ -390,6 +443,7 @@ public final class SharedAnalysisDispatcher {
 
     private void run(Lane lane,Map<String,Object> e,boolean live,String token,long queued) {
         long id=num(e,"source_event_id");
+        try(var timing=com.crypto.infrastructure.diagnostics.JdbcTimingDataSource.context("symbol="+lane.symbol()+" interval="+lane.interval()+" event="+id+" phase=ANALYSIS mode="+(live?"LIVE":"HISTORY"))) {
         String outcome="REVIEW_REQUIRED";
         log.info("[FIX-138][TASK_START] mode={}, event={}, lane={}, queueWaitMs={}, closeAgeMs={}",live?"LIVE":"HISTORY",id,lane,
             (System.nanoTime()-queued)/1_000_000,java.time.Duration.between(time(e,"candle_close_time"),Instant.now()).toMillis());
@@ -422,6 +476,7 @@ public final class SharedAnalysisDispatcher {
                         jdbc.update("UPDATE shared_market_event_delivery SET analysis_status='COVERED_BY_LIVE',analysis_completed_at=CURRENT_TIMESTAMP(6) WHERE symbol=? AND interval_code=? AND candle_open_time=? AND analysis_status='HISTORICAL_DEFERRED'",lane.symbol(),lane.interval(),e.get("candle_open_time"));
                     return count==1;
                 });
+                if(Boolean.TRUE.equals(committed))Fix142Metrics.count((live?"LIVE_COMMITTED_":"HISTORY_COMMITTED_")+result);
                 log.info("[FIX-138][TASK_END] mode={}, event={}, lane={}, outcome={}, outcomeCommitted={}, elapsedMs={}",
                     live?"LIVE":"HISTORY",id,lane,result,committed,(System.nanoTime()-queued)/1_000_000);
             } catch(Exception failure) {
@@ -429,6 +484,7 @@ public final class SharedAnalysisDispatcher {
             } finally {
                 (live?liveActive:historyActive).remove(lane);active.remove(lane);
             }
+        }
         }
     }
 

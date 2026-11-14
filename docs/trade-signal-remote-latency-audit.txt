@@ -1,0 +1,130 @@
+Remote crypto_ai trade_signal audit - 2026-10-03 (Asia/Riyadh)
+
+Target and scope
+169.58.108.119:3307, crypto_ai, MySQL 8.4.11. Read-only metadata, Performance
+Schema summaries, bounded SELECTs and EXPLAIN ANALYZE. Session UTC and a 5-second
+SELECT limit were used. No remote data, indexes, global settings or application
+source were changed. Credentials were not saved in repository artifacts.
+
+This report supersedes the LOCAL audit's index recommendations for this server.
+Remote already has idx_trade_signal_symbol_interval_generated on
+(symbol,interval_code,generated_at); do not add it again under another name.
+
+Measured table/server state
+Exact count at sampling: 1,331,655 rows (still receiving new signals).
+Initial metadata estimate: about 653,838 rows; materially lower than actual.
+Allocated table data: about 50.3 GiB; indexes: about 375 MiB.
+Buffer pool: 256 MiB, shared by all schemas. It is smaller than this table's
+indexes alone. Cache/resource pressure is plausible, not established solely by
+these sizes. No host RAM inventory is available, so no target size is prescribed.
+The table is actively receiving October 3 Riyadh-time signals, unlike local data.
+
+Current bounded measurements
+Query                                  Server plan time    Observed work
+Latest 20 BTCUSDT/1m                    44.4 ms             20 lane-index rows
+Distinct symbols, previous 24 hours     3,771 ms            8,935 base-row reads
+Interval counts, previous 24 hours      1,474 ms            8,935 base-row reads
+Signal staleness, previous four hours   28.6 ms             3,779 scanned rows
+Daily strategy/regime, previous 7 days  960 ms              177,746 index entries
+Blocked BTC BUY, previous three hours   4,935 ms            3,221 rows; one result
+
+These are individual EXPLAIN ANALYZE iterator timings, not endpoint p95/p99 or
+guaranteed steady-state timings. Audit reads themselves affect caches. Remote
+client elapsed includes roughly 0.1 seconds of transport/tool overhead per call.
+
+Validated query rewrite without a new index
+Current countDistinctSymbolsSince query:
+SELECT COUNT(DISTINCT symbol) FROM trade_signal WHERE generated_at >= cutoff.
+It uses the health generated-time index but symbol is not covered, requiring
+base-table fetches. A separately executed result query returned 21 in 4,132 ms
+including transport.
+
+Candidate:
+SELECT COUNT(DISTINCT recent.symbol)
+FROM (SELECT symbol,interval_code,MAX(generated_at) latest_generated_at
+      FROM trade_signal GROUP BY symbol,interval_code) recent
+WHERE recent.latest_generated_at >= cutoff.
+With the same fixed cutoff it also returned 21, in 210 ms including transport.
+Its EXPLAIN ANALYZE root took 5.14 ms. MySQL performed a covering index skip scan
+for grouping over 105 symbol/timeframe lanes instead of thousands of base rows.
+This is one sampled equality check plus a semantics-preserving MAX equivalence,
+not a broad production regression test or a deployed fix.
+
+The same MAX-then-cutoff approach for signalStaleness used a covering grouping
+skip scan, approximately 3.94 ms, and returned 52 lanes. Its original recent
+sample returned 52 lanes in 28.6 ms. Exact key/timestamp equality was not compared;
+verify it before implementation. The SQL equivalence preserves the inclusive
+lower cutoff and does not introduce an upper cutoff.
+
+Project query map and actionable priorities
+1. TradeSignalRepository.countDistinctSymbolsSince, called by
+   ExecutionIntelligenceController.summary (line 48): adopt the validated native
+   MAX-per-lane query. This reduces a dashboard count without changing trading
+   decisions or installing an index on a 50-GiB table.
+2. SystemHealthDailyService.signalStaleness (around line 206): use the equivalent
+   MAX-per-lane shape. Keep enabled-symbol output and timestamp semantics.
+3. TradeSignalRepository.findBlockedBuys/findBlockedSells (around lines 89-123):
+   split symbol/all-symbol branches, normalize parameters at service boundaries,
+   and replace UPPER(column) with direct equality on symbol-specific reads.
+   Pair with candidate (symbol,generated_at); benchmark before/after. Do not
+   change original-vs-final decision OR predicates or blocked-SELL definitions.
+4. SystemHealthDailyService.intervalCounts (line 183): evaluate the small covering
+   (generated_at,interval_code) index to eliminate wide base-row reads. A new
+   global index containing every score or JSON field is not justified.
+5. SystemHealthDailyService daily baseline aggregates (around line 347): the
+   existing V76 covering strategy/regime index is used; do not duplicate it.
+   Current seven-day aggregate still processes 177,746 entries. Cache historical
+   baseline aggregates with a defined backfill-refresh policy, or use diagnostic
+   rollups if workload warrants. Existing single-flight/TTL should be retained.
+6. LivePositionProtectionService lines 71-73: three full entities per price update
+   for an open managed position. The lane index is already present. Consider
+   narrow immutable projections or a batch retrieval while preserving all policy
+   inputs and freshness. Do not blindly TTL-cache execution/protection decisions.
+7. Historical symbol reads/charts still lack (symbol,generated_at), and candle-time
+   reads across all symbols must not sort SELECT * from the entire table without
+   a selective window. Primary-key signal lookups and candle identity checks have
+   appropriate existing indexes. Revisit redundant indexes only separately.
+
+Historical recorded statement timings
+Performance Schema contains cumulative samples over many weeks, including older
+deployments and manual investigations. These are NOT current measured response
+times. The most frequent expensive project patterns include:
+- Daily strategy/regime by Riyadh day: 14,086 calls; average about 19.13 seconds;
+  approximate digest p95 91.20 seconds. First seen Aug 24, latest Oct 2 UTC.
+- Distinct-symbol count since timestamp: 35,444 calls; average 4.26 seconds;
+  approximate digest p95 20.89 seconds. First seen Aug 8, latest Oct 2 UTC.
+- Interval counts: 14,100 calls; average 4.91 seconds.
+- Signal staleness: 14,097 calls; average 2.35 seconds.
+- INSERT trade_signal: 1,195,228 calls in the main captured digest; average
+  10.61 ms, maximum 5.46 seconds. Insert maxima need timestamp/lock correlation;
+  cumulative digest summaries do not establish today's cause.
+
+V76 health covering index was installed Aug 28. Some historical health timing
+therefore predates that migration. Performance Schema also includes older candle
+recovery SQL no longer matching the current source and expensive manual queries;
+do not treat every captured digest as a currently deployed project query.
+
+Signal creation delay
+For the latest 200 persisted one-minute signals, grouped by 16 symbols, average
+candle-close-to-created_at delay per symbol was approximately 3.54-6.60 seconds;
+the largest sampled delay was 14.425 seconds. This is candle input/queue/analysis/
+row-creation delay, NOT isolated SQL time, exchange response latency, or commit
+completion. It can include recovery. created_at does not prove transaction commit.
+fix129_stage_timing had no samples in the previous hour. Stage-level evidence is
+needed to attribute the delay between input, queue wait, external context reads,
+analysis, locks, JDBC/pool waits, serialization, and commit. A database query
+improvement should not be presented as a complete evaluation-latency fix.
+
+Proposed next work
+Implement and test the two MAX-per-lane diagnostic read rewrites first; no schema
+change is needed. Then fix blocked query predicates and review the two candidate
+indexes through Flyway with a planned large-table index build. Compare result
+IDs/order/counts, warm and first-read timings, rows examined, insert throughput,
+and live endpoint p95/p99. Refresh stale optimizer statistics only as a separately
+planned server operation. Size the buffer pool after checking available host RAM.
+
+Artifacts
+scripts/diagnostics/trade-signal-remote-proposal.sql contains tested SELECT shapes,
+repository integration guidance, and commented-out remote candidate DDL.
+scripts/diagnostics/trade-signal-index-proposal.sql is LOCAL ONLY and must not be
+applied to this remote database.

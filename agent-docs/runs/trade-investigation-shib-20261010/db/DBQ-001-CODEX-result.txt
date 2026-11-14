@@ -1,0 +1,31 @@
+exit_code=0
+duration_ms=276
+row_count=23
+--- stdout ---
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+signal_id	bigint	YES	MUL	NULL	
+position_analysis_id	bigint	YES	MUL	NULL	
+execution_key	varchar(100)	YES	UNI	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+side	varchar(10)	NO		NULL	
+quantity	decimal(30,12)	NO		NULL	
+price_usdt	decimal(30,12)	NO		NULL	
+decision_price_usdt	decimal(30,12)	YES		NULL	
+execution_price_observed_at	timestamp(6)	YES		NULL	
+gross_amount_usdt	decimal(30,12)	NO		NULL	
+fee_usdt	decimal(30,12)	NO		0.000000000000	
+net_amount_usdt	decimal(30,12)	NO		NULL	
+cost_basis_usdt	decimal(30,12)	YES		NULL	
+realized_pnl_usdt	decimal(30,12)	YES		NULL	
+realized_pnl_percent	decimal(20,8)	YES		NULL	
+execution_type	varchar(20)	NO		MANUAL	
+execution_reason	varchar(40)	YES	MUL	NULL	
+status	varchar(20)	NO		EXECUTED	
+executed_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+notes	varchar(500)	YES		NULL	
+execution_message	mediumtext	YES		NULL	
+created_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+
+--- stderr ---
+

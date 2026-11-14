@@ -1,0 +1,4 @@
+bucket	n	losers	stopped	pnl_sum
+SS0	126	65	51	-1.463035
+SS1-4	33	22	16	-2.919535
+SS5+	34	14	8	0.211830

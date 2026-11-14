@@ -1,0 +1,1 @@
+SELECT delivery_status, outcome_reason, COUNT(*) AS n, MIN(created_at) AS first_raw, MAX(created_at) AS last_raw FROM market_price_event WHERE id BETWEEN 1330000 AND 1580000 GROUP BY delivery_status, outcome_reason ORDER BY n DESC

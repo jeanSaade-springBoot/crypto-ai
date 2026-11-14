@@ -1,0 +1,1 @@
+SELECT id, candle_open_time, generated_at, decision, original_decision, latest_price, total_score FROM crypto_ai.trade_signal WHERE symbol = 'ACEUSDT' AND interval_code = '1m' AND generated_at BETWEEN '2026-10-12 09:57:00' AND '2026-10-12 10:06:00' ORDER BY generated_at LIMIT 20;

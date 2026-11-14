@@ -1,0 +1,219 @@
+# Claude: FTS WINDOW2, Iteration 5 (entry quality, self-review)
+
+I judged each entry only on what the system knew at that moment. What happened after entry is kept in a separate column.
+
+- **None of the six entries was a strong entry.** Every one had an Entry Quality score of 50–60, and every one was sized as a reduced or exploratory position (25% or 15%).
+- **Two entries passed at exactly the cutoff of 50:** 162 and 182.
+- **Four entries bought at the top of a short price burst:** 137, 143, 162 and 182.
+- **182 is the weakest entry.** It failed on every measure available at the time, which adds to the defect I confirmed in iteration 4 (F15).
+- **143 looked like a chase but was not the cause of its loss.** Price went on to reach the target.
+- **Two new code-level observations (F17, F18)** and one rule gap (F19). None of them caused a loss in the frozen set.
+
+All times are KSA (UTC+3), converted from the stored UTC values.
+
+**What I read:** CHARTER.md, my iteration 1–4 outputs, the I4-001 to I4-004 results, and the earlier I1/I2 results again (I1-003, I2-001, I2-006, I2-007). Code: `ExecutionIntelligenceService.java` (`:229`, `:236`, `:364`, `:439`, `:615`, `:631-711`, `:769-785`, `:845-1030`, `:1150-1223`, `:1257-1329`, `:1807-1817`), `PaperTradingService.java:320-389`, `MarketStrategyService.java:57-83`, and `RangeEntryLocationService.java`. I also searched claude-docs, `AGREED_KNOWLEDGE.md` and `DECISIONS.md` for any documented rule about downtrend regimes or Entry Quality.
+
+**What I didn't do:** no writes, no git, no deploy. Plan mode is on, but this session has no Write or ExitPlanMode tool, so I created no plan file. I did not open LIVE_TEAM_STATUS.md, LIVE_EVENTS.log or any Codex file.
+
+---
+
+## EVIDENCE
+
+### E23: How Entry Quality is scored (PROJECT EVIDENCE, code)
+
+`assessEntryQuality` (`:865-1030`) starts at 100 and subtracts penalties:
+
+| What is measured | Penalty |
+|---|---|
+| Expansion from the 30-minute low (or the opportunity anchor) | >1.5% −10, >3% −22, >5% −35, >8% −50 |
+| ATR extension (distance above that reference, in ATRs) | >2.5 −10, >4 −20, >6 −30 |
+| Opportunity age | >20 min −5, >40 min −10, >60 min −15 |
+| Reward/risk | **below 1: −30**; below 1.25: −15; 2 or more: +5 |
+| Recent rejection of a high nearby | −12, but this penalty can never push the score below 50 (`:995-1003`) |
+| BREAKOUT regime with small expansion | +5 |
+
+- A score below 50 (`CHASE_ENTRY_CUTOFF=50`, `:229`) blocks the entry. Scores 50–54 are classed LATE_ENTRY but are still allowed.
+- **AGENT INFERENCE:** the reward/risk penalty is flat. A ratio of 0.33 costs exactly the same −30 as 0.99. Because the stop is held at a 0.5% minimum while the target shrinks with ATR (iteration-2 E2), every low-volatility entry starts at 70 at most. Combined with the rejection floor, this lets scores collect exactly at the cutoff of 50.
+
+### E24: Entry quality for each trade, using only what was known at entry (PROJECT EVIDENCE: I1-003, I2-001, I2-006, I2-007, I4-004)
+
+| id | 1m signal and regime | 5m / 1h used | Price action before entry (1m candles) | R:R | Entry Quality (from the message) | Approval route |
+|---|---|---|---|---|---|---|
+| 137 | #156723 STRONG_BUY 91/81, RANGE, RANGE_MEAN_REVERSION | 5m NEUTRAL 48 (a genuine NEUTRAL), 1h WATCH 74 | 23:49–23:52: flat range 3.992–3.998. 23:53–23:54: two candles with about 95% buy-side volume, up to 4.004. **Entry at 3.999, near the top of the push.** | 0.64 | 58 | BALANCED_NEUTRAL_5M_WATCH_1H |
+| 143 | #159408 **WATCH** 73/78, BREAKOUT. RSI 84.3, price above the upper Bollinger band, 4.35 ATR above SMA20. The ATR plan said WAIT_FOR_RETRACEMENT near 4.0118 with a recommended size of 0%. | message says "fresh 5m BUY"; the 5m stored at entry is #159407 WATCH (see E26) | 01:39 candle: range 3.990–4.053 on 21.9× normal volume. Price had climbed from 3.976 at 01:34 (+1.4%). **Entry at 4.033, 0.5% below the candle's high wick.** | 1.50 | 60 in the message, but **70 stored** (E25) | SETUP_TIMEFRAME_ATR |
+| 158 | #165412 **WATCH** 64/73, WEAK_UPTREND (the weakest score of the six) | 5m BUY #165415 76/75 (the trigger), 1h NEUTRAL 60 | Flat range 1.4098–1.4116. The opportunity was 53 minutes old, with 4 bearish and 5 neutral observations out of 20. | **0.33** | not shown in the message. The code implies about 60: 100 −30 (R:R) −10 (age over 40 min). That is unverified. | SETUP_CONFIRMATION_WAKEUP |
+| 162 | #167668 **WATCH** 76/75, BREAKOUT | 5m WATCH (116 s old), 1h WATCH | 06:56–06:59: flat at 0.08679. 07:00–07:01: rose to 0.08709. **Entry at 0.08705, near the high.** | 0.44 | **50 LATE_ENTRY (exactly the cutoff)** | ACCUMULATED_EVIDENCE |
+| 172 | #171589 BUY 77/67, WEAK_UPTREND; confluence CONFLICT; derivatives LEARNING | 5m BUY 80 **with confidence 49**, 1h NEUTRAL 46 | Stuck between 548 and 549 (×1e-8) for 6 minutes. Some candles had only 1 to 5 trades. **Entry at 549, the top of that one-tick range.** | 0.74 | 60 | IMMEDIATE_VALIDATION, BALANCED_STRONG |
+| 182 | #176710 BUY 75/68 in a **WEAK_DOWNTREND** regime, under the TREND_FOLLOWING profile; confluence CONFLICT | 5m stored NEUTRAL, originally **STRONG_SELL 25** (F15); 1h WATCH 60 | 12:51–12:56: rose from 0.1877 to 0.1884 (+0.37%, about 4.6× the 1m ATR). The 12:51 and 12:53 candles had **0 trades**. **Entry at the top.** | 0.48 | **50 (exactly the cutoff)** | BALANCED_NEUTRAL_5M_WATCH_1H |
+
+**AGENT INFERENCE:** where the stored inputs allow it, I rebuilt how each score was reached. None of this is confirmed; I5-003 asks for the inputs.
+
+| id | Possible breakdown of the score | How certain |
+|---|---|---|
+| 182 | 100 −30 (R:R) −20 (ATR extension of 4.6, measured from the 0.1877 low) = **50** | Fits exactly |
+| 172 | 100 −30 (R:R) −10 (ATR extension of about 2.9) = 60 | Holds only if the 30-minute low was 547. A low of 548 gives 70 instead, so one price tick moves the score by 10. |
+| 137 | 100 −30 (R:R) −12 (rejection penalty) = 58 | Plausible |
+| 162 | 50 may be the rejection floor. 100 −30 −5 (age 21 min) −10 −12 = 43, which the floor raises to 50 | Unproven |
+
+### E25: Trade 143 has two different Entry Quality scores (PROJECT EVIDENCE: I2-007, I4-004, code)
+
+- The route message says "Entry Quality 60/100 (ACCEPTABLE_ENTRY)". That score was computed at decision time with the **5m** ATR (`:631-635`). The code comment there says the 1m ATR must not be used for this route because it can "falsely label a valid 5m setup" as a chase.
+- `wallet_managed_position.entry_quality_score` is **70**. That value comes from `PaperTradingService.java:377-385` → `assessEntryQualityAtPrice` (`:857-858`), which uses the **1m** `getAtrAtSignal()`.
+- The execution-time recheck `revalidateAtExecutionPrice` (`:1167-1168`) also uses the **1m** ATR. This applies to every route, including the setup-ATR (`:634`), wake-up (`:439`) and transition (`:615`) routes, which deliberately use the 5m ATR at decision time.
+- With a smaller ATR the score should be lower, but here the 1m score is higher (70 against 60). That points to a different reference price at the two moments, for example the opportunity anchor being reset when the opportunity was saved. Its `started_at` equals the signal time while it already held 7 pieces of evidence. This is unresolved (U21).
+
+### E26: Trade 143's "fresh 5m BUY" (PROJECT EVIDENCE: I2-001, I2-007)
+
+- The 1m #159408 was generated at 01:40:01.634. The 5m #159407, for the candle that closed at the same 01:40:00 boundary, was generated **2 ms later** (01:40:01.636), and it was **WATCH**.
+- So the "fresh 5m BUY" authority must be the earlier 5m signal, for the candle that closed at 01:35. The candle that had just closed was not yet analyzed.
+- The wallet BUY happened at 01:40:03.115, after the WATCH 5m existed.
+- **AGENT INFERENCE:** at every 5-minute boundary, the 1m entry decision reads 5m context that is one bar old. I5-001 checks this.
+
+### E27: U14 closed (PROJECT EVIDENCE: I4-001)
+
+- The XRP tick that did not trigger 158's exit was created at 06:30:02.192.
+- The exit signals were inserted **after** it: #166819 at 06:30:02.688 and #166821 at 06:30:02.811.
+- Across all eight signals checked, the gap between `generated_at` and `created_at` was 1.29–2.28 s.
+- **So the tick arrived before the signals were visible.** This is not a defect. It does show that `generated_at` comes earlier than the moment a signal becomes visible, which matters for Replay (F18).
+
+### E28: How widespread the F15 masking is (PROJECT EVIDENCE: I4-002; 5m signals, 10-11 to 10-15 UTC)
+
+- 963 bearish 5m signals were stored as NEUTRAL.
+- The higher-timeframe decision recorded on each one:
+
+| Higher-timeframe decision | Count | Share |
+|---|---|---|
+| WATCH | 401 | |
+| NEUTRAL | 372 | |
+| SELL / STRONG_SELL | 138 | |
+| BUY / STRONG_BUY | 52 | **5.4%** |
+
+- So in about 95% of cases, the "bullish structure" that justified relabelling the signal was not a bullish decision. For the WATCH and NEUTRAL cases, the iteration-4 E16 code path (a trend score of at least 15) explains it.
+- The 138 cases with a bearish higher-timeframe decision suggest the bullish count came from the other context, the 15m. That is unverified.
+- **Time pattern:** most of the neutralized groups stop at about 10-12 20:00–22:00 KSA. The "UNAVAILABLE" confluence groups start at 10-13 01:50 KSA. Something changed in that interval (U22).
+
+### E29: The deployed build (PROJECT EVIDENCE: I4-003)
+
+- Flyway V107 "fix 154 trusted higher timeframe buy" was installed 2026-10-10 03:15 KSA.
+- V109 "fix 154 forward replay and audit columns" was installed 2026-10-10 04:52 KSA.
+- All six trades happened after that.
+- **AGENT INFERENCE:** the application runs these migrations, so a build containing FIX-154 ran before the frozen trades. That contradicts AGENTS.md ("FIX-154 … not-yet-implemented") and strengthens F7. Under the Do Not Start From Zero rule, I am reporting the contradiction, not resolving it.
+
+### E30: Trade 143's lock state confirmed (PROJECT EVIDENCE: I4-004)
+
+- `profit_lock_state=ACTIVE` and `profit_lock_rebase_started_at=NULL`. This confirms E20: the exit came from the active-lock branch, not the rebase branch.
+- `entry_stage=SETUP_TIMEFRAME_ATR`, allocated 25%, `near_tp_state=NEAR_TP_ARMED`.
+
+---
+
+## FINDINGS (Iteration 5; I have reviewed only my own work)
+
+- **F20, new: the entry-quality pattern across the frozen set.** PROJECT EVIDENCE (E24) and INFERENCE.
+  - Every entry scored 50–60.
+  - Four of six bought the top of a 2–5 minute burst: 137, 143, 162 and 182.
+  - Three of six had a 1m WATCH, not a BUY: 143, 158 and 162.
+  - Three of six had a target below about +0.25% gross: 158 (+0.17%), 162 (+0.22%) and 182 (+0.24%). Their net value after typical fees was about zero (fee level is an EXTERNAL assumption carried from iteration 2).
+  - These are all designed exploratory routes, and each passed its gate as coded. The pattern describes the routes, not a defect.
+
+- **Ranking of entries, from what was known at the time:**
+
+| Rank | id | Entry | Why |
+|---|---|---|---|
+| 1 | 143 | acceptable chase | Strong breakout, R:R 1.5. It later reached the target. |
+| 2 | 137 | fair | STRONG_BUY, but bought at the top of a 2-candle push with a +0.32% target. |
+| 3 | 172 | fair | BUY with conflicting context, an illiquid single-tick range, and a 5m with confidence 49. |
+| 4 | 158 | marginal | Weakest 1m score (64), an aged and mixed opportunity, R:R 0.33. |
+| 5 | 162 | late | WATCH-only signal at exactly the cutoff of 50, bought into a burst. |
+| 6 | 182 | poor | Defective context (F15), a downtrend regime, cutoff score, an illiquid market, bought into a burst. |
+
+- **F21, new (rule question, not a confirmed defect): the FIX-119 late-entry deferral was skipped on 162 because of one old BUY.**
+  - The guard (`:1275-1279`) skips the deferral when `buyCount > 0`.
+  - 162 had 1 BUY against 9 WATCH and 10 NEUTRAL, and the current signal was WATCH. So the code's own example of a defective case (WATCH-only accumulated evidence at a LATE_ENTRY price) was let through by a single earlier BUY.
+  - It is behaving as coded. Whether one BUY should be enough is a design question.
+  - **Effect after the fact:** if the entry had been deferred, there would have been no position. Without the signal exit, price would have hit the stop at 07:29:22.
+
+- **F19, new (rule gap, PROJECT EVIDENCE: code): no gate stops a long entry in a downtrend regime.**
+  - `MarketStrategyService.java:70` maps STRONG_DOWNTREND and WEAK_DOWNTREND to the same TREND_FOLLOWING profile as uptrends, with entry allowed.
+  - No other code refers to the downtrend regimes. My search found only `MarketRegime`, `MarketRegimeService` and this switch.
+  - 182 was a trend-following BUY inside a WEAK_DOWNTREND.
+  - It is not documented as intended in TRADING_RULES, AGREED_KNOWLEDGE or DECISIONS. I5-004 measures its effect across the population before I rate its severity.
+
+- **F17, new (code inconsistency, low; not a cause of loss): the execution-time Entry Quality uses a different ATR from the routes that use 5m ATR.**
+  - `revalidateAtExecutionPrice` and the stored `entry_quality_score` use the 1m ATR (`:857-858`, `:1167`).
+  - The setup-ATR, wake-up and transition routes deliberately score with the 5m ATR (`:364`, `:439`, `:615`, `:634`).
+  - **Effects:** the cutoff check (score at least 50) and the size cap can disagree between decision time and execution time. The stored score (70 on 143) also does not match the logged score (60).
+  - It did not block or resize 143. Any audit that reads `entry_quality_score` gets the 1m-ATR score.
+
+- **F18, new (Replay parity risk; INFERENCE from E26 and E27): context selection at the 5-minute boundary.**
+  - The 1m and 5m signals for the same boundary are generated within milliseconds of each other, but each becomes visible 1.3–2.3 s after its `generated_at`.
+  - Production can only see committed rows. Replay selects by `generated_at` at or before the 1m signal (`latestAtOrBefore`).
+  - **Example:** 137's 5m #156721 was generated **17 ms before** its 1m #156723. Replay would include it. Production may not have seen it before the commit.
+  - On 137 the stored context agrees (NEUTRAL in both, per the opportunity row), so the outcome there is unaffected. The general mechanism can still make Replay pick a different 5m than Production did. I5-001 tests this.
+
+- **F15, confirmed in iteration 4 and now sized (E28).** The masking is systematic: 963 relabelled bearish 5m signals in 4 days, only 5.4% of them backed by a real bullish higher-timeframe decision. The impact on entries is unchanged: 5 of 95 entries, 1 of them a frozen loss (182).
+
+- **F7, strengthened (E29).** The FIX-154 migrations were installed on 10-10, before every frozen trade. AGENTS.md says FIX-154 is not implemented. This needs both agents to review it; I am not resolving it alone.
+
+- **The iteration-4 classifications stand.** Entry quality adds detail but changes no verdict:
+
+| id | Classification |
+|---|---|
+| 137 | valid loss (fair entry) |
+| 143 | valid loss (acceptable chase; lost through a market gap after the target was extended) |
+| 158 | valid loss (marginal entry; the exit was early in hindsight) |
+| 162 | valid loss under the coded rules (late entry; rule question F21) |
+| 172 | valid loss (fair entry; the exit was early in hindsight) |
+| 182 | **logic defect F15**, plus poor entry quality and rule gap F19 |
+
+## UNKNOWNS
+
+- **U21:** why trade 143 was scored 60 at decision time and 70 when stored (I5-002, I5-003).
+- **U23:** which 5m signal was the "fresh 5m BUY" for 143, and whether Production could see 137's 5m #156721 when it made the decision (I5-001).
+- **U24:** the actual Entry Quality breakdown for each entry (the 30-minute reference, the rejection high, the opportunity anchor). The breakdowns in E24 are inferred (I5-003).
+- **U25:** what the RANGE_ENTRY_LOCATION check reported for 137's mean-reversion BUY (its Bollinger position), plus the full ATR_RISK text for every entry (I5-005).
+- **U22:** what changed between 10-12 20:00 KSA and 10-13 01:50 KSA in how 5m confluence was recorded.
+- **U19 (carried over):** whether Replay prices protection with ticks or candles. Not traced this iteration; it moves to iteration 6.
+- **U7:** partly closed (E29). The exact commit is still unknown.
+- **Logs:** production logs are still unavailable. The FIX-11G post-guard INFO line (`:700`) would show the Entry Quality score that actually applied for 137 and 182.
+
+---
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: For U23/F18/E26, find which 5m signal was visible when each entry was decided. Lists 5m signals generated within 6 minutes before (up to 10 s after) each entry's 1m signal, with `created_at` (visibility), decision and ATR, alongside the 1m signal's own `generated_at` and `created_at`.
+SQL:
+SELECT p.id AS position_id, e.id AS entry_1m_id, e.generated_at AS e_gen, e.created_at AS e_created, s.id AS s5_id, s.candle_open_time, s.generated_at, s.created_at, TIMESTAMPDIFF(MICROSECOND, s.created_at, e.generated_at)/1000 AS visible_before_1m_gen_ms, s.decision, s.original_decision, s.total_score, s.confidence_score, s.atr_at_signal, s.atr_entry_type, s.atr_immediate_entry_allowed FROM paper_position p JOIN trade_signal e ON e.id=p.signal_id JOIN trade_signal s ON s.symbol=p.symbol AND s.interval_code='5m' AND s.generated_at BETWEEN e.generated_at - INTERVAL 6 MINUTE AND e.generated_at + INTERVAL 10 SECOND WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, s.generated_at LIMIT 60
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: For U21/U24, the full opportunity rows behind each entry, including anchor and best entry prices, `created_at`/`updated_at`, health and the last bearish time.
+SQL:
+SELECT o.* FROM execution_opportunity o WHERE o.id IN (35535,36524,37621,37952,39062,40290) ORDER BY o.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: For U24/E24, rebuild Entry Quality: the 1m signal prices in the 30 minutes before each entry signal (gives the rolling low/high, the recent rejected high, and expansion/ATR extension), plus each signal's ATR.
+SQL:
+SELECT p.id AS position_id, s.id, s.generated_at, s.decision, s.total_score, s.latest_price, s.atr_at_signal FROM paper_position p JOIN trade_signal e ON e.id=p.signal_id JOIN trade_signal s ON s.symbol=p.symbol AND s.interval_code='1m' AND s.generated_at BETWEEN e.generated_at - INTERVAL 30 MINUTE AND e.generated_at WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, s.generated_at LIMIT 200
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: For F19/F20/F21, outcomes across the population: production entries since 10-11 grouped by entry regime and decision, and by route and stored Entry Quality bucket.
+SQL:
+SELECT s.market_regime, s.decision AS entry_decision, COUNT(*) AS n, SUM(p.realized_pnl>0) AS wins, SUM(p.realized_pnl<0) AS losses, SUM(p.status='STOPPED') AS stopped, ROUND(AVG((p.exit_price-p.entry_price)/p.entry_price*100),4) AS avg_gross_pct FROM paper_position p JOIN trade_signal s ON s.id=p.signal_id WHERE p.opened_at>='2026-10-11 00:00:00' AND p.status IN ('CLOSED','STOPPED') GROUP BY s.market_regime, s.decision ORDER BY n DESC LIMIT 40;
+SELECT w.execution_reason, CASE WHEN m.entry_quality_score<55 THEN 'a50-54' WHEN m.entry_quality_score<60 THEN 'b55-59' WHEN m.entry_quality_score<70 THEN 'c60-69' ELSE 'd70+' END AS eq_bucket, COUNT(*) AS n, SUM(p.realized_pnl>0) AS wins, SUM(p.realized_pnl<0) AS losses, SUM(p.status='STOPPED') AS stopped, ROUND(AVG((p.exit_price-p.entry_price)/p.entry_price*100),4) AS avg_gross_pct FROM paper_position p JOIN wallet_trade w ON w.signal_id=p.signal_id AND w.side='BUY' LEFT JOIN wallet_managed_position m ON m.entry_signal_id=p.signal_id WHERE p.opened_at>='2026-10-11 00:00:00' AND p.status IN ('CLOSED','STOPPED') GROUP BY w.execution_reason, eq_bucket ORDER BY w.execution_reason, eq_bucket LIMIT 60
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-005
+Purpose: For U25, the full decision path and ATR/authority fields of the six 1m entry signals (the RANGE_ENTRY_LOCATION result for 137, the ATR_RISK text for every entry).
+SQL:
+SELECT s.id, s.symbol, s.market_regime, s.market_regime_confidence, s.selected_strategy, s.atr_at_signal, s.atr_overextended, s.atr_retracement_entry_price, LEFT(s.atr_explanation,600) AS atr_expl, s.entry_authority, s.entry_authority_max_position_percent, LEFT(CAST(s.decision_path AS CHAR),5000) AS path FROM trade_signal s WHERE s.id IN (156723,159408,165412,167668,171589,176710) ORDER BY s.id
+### END_DB_REQUEST
+
+---
+
+**Next (iteration 6):** use I5-001 to settle F18 and U23 (which 5m was visible at the boundary, and Replay parity), and I5-002/003 to settle U21 and confirm the Entry Quality breakdowns. Use I5-004 to rate F19 and F21 across the population. Then trace how Replay prices protection (U19) and move to the risk/reward, fee and stop-loss part of the study.

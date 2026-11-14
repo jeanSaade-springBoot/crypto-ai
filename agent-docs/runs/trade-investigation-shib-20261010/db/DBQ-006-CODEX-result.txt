@@ -1,0 +1,9 @@
+exit_code=0
+duration_ms=170
+row_count=1
+--- stdout ---
+id	symbol	interval_code	decision	total_score	confidence_score	market_regime	selected_strategy	final_entry_allowed	candle_open_ksa	candle_open_utc	generated_ksa	generated_utc	created_ksa	created_utc	latest_price	stop_loss	take_profit	risk_reward_ratio
+89469	SHIBUSDT	1m	WATCH	60	74	WEAK_UPTREND	TREND_FOLLOWING	1	2026-10-09 23:44:00.000000	2026-10-09 20:44:00.000000	2026-10-09 23:45:03.498678	2026-10-09 20:45:03.498678	2026-10-09 23:45:04.777648	2026-10-09 20:45:04.777648	0.000005410000	0.000005382950	0.000005433730	0.87726400
+
+--- stderr ---
+

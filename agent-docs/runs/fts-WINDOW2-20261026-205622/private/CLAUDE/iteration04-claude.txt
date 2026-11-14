@@ -1,0 +1,223 @@
+# CLAUDE — WINDOW2 Failed-Trade Study — Iteration 4 (Code / Trade Route)
+
+Nothing was written to code, config, the database or git. This message is the whole Iteration 4 output, as in earlier iterations.
+
+**Scope and inputs**
+- Frozen `paper_position` IDs 182, 172, 162, 158, 143 and 137 (none substituted).
+- My own I1–I3 results in `db/CLAUDE/`.
+- Code, read only. No logs were available, and no web sources were used this iteration.
+
+**Times:** every database value is UTC; KSA = UTC+3 is shown only where labelled.
+
+**In short:**
+- **Trade 182: the 5m SELL was cancelled by the 5m's own 1h check, and the 1m entry gates only read the cancelled value.** Some other code reads both values, so this is a likely design gap, not a confirmed bug (F-22).
+- **Replay probably cannot reproduce trade 143.** At a shared 5-minute boundary Replay always processes 5m before 1m, while Production depends on a millisecond race (F-24). This also affects trades 158 and 137.
+- **Live exits fire within 20–60 ms of the next price update.** The wait for that update was 1.4–37.6 s, with no price cost on any of the four trades (F-21).
+- **The 1.2–3.2 s gap between wallet SELL and paper close** happens inside one transaction, most likely during a whole-portfolio revaluation (F-23; inference).
+
+## FINDINGS
+
+**F-21 — Live exits fire within 19–58 ms of the next price update** (PROJECT EVIDENCE: I3-001, I3-002, I3-004)
+
+This corrects Iteration 3 F-14, which timed the lags from the 1m signal instead of the 5m/1h signal that completed the exit condition.
+
+| Trade | Exit condition became true (5m/1h signal committed, UTC) | Next price update recorded (UTC) | Wallet SELL (UTC) | Wait | Price cost |
+|---|---|---|---|---|---|
+| 137 | 5m #156852 SELL, 21:00:04.262 | 21:00:08.877 | 21:00:08.935 | 4.6 s | 0 (3.987 at both) |
+| 158 | 5m #166821 SELL, 03:30:02.811 | 03:30:04.189 | 03:30:04.217 | 1.4 s | 0 |
+| 172 | 5m #172588 NEUTRAL, 07:15:05.866 | 07:15:43.473 | 07:15:43.492 | 37.6 s | 0 (0.00000548) |
+| 182 | 5m #176934 STRONG_SELL, 10:05:05.787 | 10:05:18.478 | 10:05:18.504 | 12.7 s | 0 (0.188) |
+
+- **Why:** live exits are evaluated only inside `onPrice` (`LivePositionProtectionService.java:54-71`), and there is no timer.
+- **Gaps between price updates:** SHIB had no recorded update from 07:15:03.48 to 07:15:43.47 UTC (10:15:03 to 10:15:43 KSA). ACE had none from 10:05:02.47 to 10:05:18.48 UTC.
+- **No filtering in the ingester:** `BinanceKlineService.java:91-111` writes a price row for every 1m kline message without filtering. So a gap means either Binance sent nothing or a message was rejected or rolled back (Iteration 3 F-18). DBQ-CLAUDE-I4-006 checks trade counts in those candles.
+- **Assessment:** a design property, not a defect. In these four trades it cost nothing. On a fast-moving symbol a 40 s wait could cost money.
+- **Clock observation (minor):** several price rows were stored about 50–150 ms *before* their Binance event time (for example observed 21:00:00.021, stored 20:59:59.975). That suggests the server clock runs slightly behind Binance's. FIX-153 corrects for this in its freshness check (`:66`).
+
+**F-22 — Trade 182: the 5m STRONG_SELL was neutralised by its own 1h check, and the 1m gates read only the neutralised decision** (PROJECT EVIDENCE: code + I3-005; the route code needs DBQ-CLAUDE-I4-001)
+
+*How the 5m SELL became NEUTRAL:*
+- The higher timeframes checked for a 5m signal are 15m and 1h (`MultiTimeframeConfluenceService.java:298`).
+- The application only analyses 1m, 5m and 1h (`application.yml:93-96, 114-117`). So no 15m signal exists, and in practice the 1h signal is the only check on a 5m signal (I4-003 verifies this).
+- Under TREND_FOLLOWING, a bearish 5m becomes NEUTRAL whenever any higher signal counts as bullish (`:136-138`). "Bullish" includes a 1h signal whose trend score is at least 15 (`:24, 337-338`), even if its decision is only WATCH.
+- The trading decision is stored as `decision` and the raw strategy decision as `original_decision` (`AnalysisService.java:410-411`). Entry stays allowed (`:137`), which matches `primary_blocking_stage` NULL on #176655 and #176792.
+
+*Where only `decision` is read:*
+- **The 1m signal's own confluence check.** `hasHardBearishOpposition` (`:146-151`) checks `getDecision()` only. If 5m #176655 had kept STRONG_SELL, the BUY would have been vetoed to WATCH (`:120-122`). With 5m NEUTRAL and trend 10 (at the limit of 10), it falls into `hasNeutralWeakStructure`, which records CONFLICT but keeps the BUY (`:128-130`).
+- **Execution approval.** Two entry rules approve a BUY when 5m is NEUTRAL: `balancedBuyWithNeutralFiveException` and the FIX-11G rule `BALANCED_NEUTRAL_5M_WATCH_1H` (`TradeExecutionValidationService.java:218-284`). The FIX-11G comment says "neither timeframe is bearish", but that is judged on the neutralised decision.
+  - **Inference:** trade 182 entered through FIX-11G (5m=NEUTRAL, 1h=WATCH, 25% size). DBQ-CLAUDE-I4-001 confirms this from `wallet_trade.execution_message`.
+- **The exit policy.** `PositionExitPolicy.decision()` (`:95-97`) uses only `decision`. With 5m held at NEUTRAL, `SELL_CONFIRMED` could not fire until #176934 kept STRONG_SELL.
+
+*The inconsistency:*
+- Other guards in the same service read the raw value through `strongerDecision(decision, original_decision)`:
+  - the BALANCED_EARLY post-bearish guard (`ExecutionIntelligenceService.java:2092, 2100`)
+  - the bearish-reversal anchor (`:2449`)
+- So the codebase already treats a hidden bearish 5m as relevant evidence in some places and ignores it in others.
+
+*Assessment:*
+- A likely design gap, a "candidate logic defect". It is not confirmed until the route code is verified and the trade is replayed.
+- It is separate from FIX-154, which covers bearish 1h evidence blocking a 1m BUY.
+- The entry judgement uses only information available at 09:57 UTC (12:57 KSA).
+
+**F-23 — The paper-close gap sits inside one transaction, probably a whole-portfolio revaluation** (PROJECT EVIDENCE: code; the cause is AGENT INFERENCE)
+
+*The transaction:*
+- `executeMechanicalExit` is `@Transactional` (`WalletAutoExecutionService.java:474`) and joins the outer `onPrice` transaction.
+- The paper and wallet rows therefore commit together. The 1.2–3.2 s difference is only in when each timestamp was taken.
+
+*What runs between the two timestamps:*
+- `wallet_trade.executed_at` is set at `:548`. After that the code:
+  1. Updates daily statistics, which calls `currentPortfolioValue()` (`:553-559`).
+  2. Calls `captureSnapshot()` (`:560`).
+- Each of those loops over every `wallet_asset` row and runs one latest-closed-1m-candle query per asset (`WalletService.java:484-490, 600-607`). `captureSnapshot` also sums all of `wallet_trade` and the cash flows.
+- Only after that does `closePaper` stamp `closed_at = Instant.now()` (`LivePositionProtectionService.java:405`).
+
+*Why it may be slow:*
+- I found no index on `candle(symbol, interval_code, closed, close_time)` in the migrations I searched.
+- The query sorts by `close_time DESC`, so it may sort every 1m row for each symbol. DBQ-CLAUDE-I4-003 checks this.
+
+*Side effect (inference):* during those 1–3 s the transaction holds the global daily-statistics row lock (`SELECT … FOR UPDATE`). That would hold up every other wallet entry or exit, on any symbol, until the transaction commits.
+
+*Consequences:*
+- `paper_position.closed_at` is not the decision time. Exit timelines should use `wallet_trade.executed_at`.
+- Exit prices are unaffected: the price is fixed before this work starts.
+- **Resolves U-16 at code level and narrows U-11.** The timing split needs I4-003/I4-004.
+
+**F-24 — Replay processes 5m before 1m at shared boundaries; Production races them** (PROJECT EVIDENCE: code; the per-trade outcomes are AGENT INFERENCE)
+
+*How Replay orders signals:*
+- Replay stamps each signal at exactly the candle-close boundary: `evaluationTime = openTime + interval` (`RegressionTestWorker.java:584`).
+- At the same boundary it processes 1h, then 5m, then 1m (`:557-560, 787-793`).
+- Lookups use generated time ≤ the reference time, inclusive (`ExecutionIntelligenceService.java:2606-2608`; `MultiTimeframeConfluenceService.java:105-112`).
+- So a Replay 1m signal at :00 or :05 always sees the 5m signal for the bar that just closed.
+
+*What Production did instead:*
+- Production's choice depended on which signal happened to be generated first, by a few milliseconds (Iteration 3 F-12/F-13).
+
+*Per-trade consequences (inference):*
+
+| Trade | Production | Replay (inferred) |
+|---|---|---|
+| 143 | 1m #159408 used the older 5m BUY #159285; trade opened through `SETUP_TIMEFRAME_ATR` | Sees the 5m WATCH for the 22:35 candle; `setupTimeframeAtrAuthoritySignal` returns null, so **trade 143 probably does not open** |
+| 158 | Entered later through the wake-up route, at 25% | The 1m sees 5m BUY directly; probably a different route, and possibly a different size |
+| 137 | Used #156594 | Uses the #156721-equivalent; both NEUTRAL, so likely the same decision |
+
+*Assessment:*
+- A Production/Replay parity gap that affects 2 of every 10 1m signals: the ones at :00 and :05 of each 5-minute block.
+- It is not a look-ahead in either system: both use only signals generated at or before the reference time.
+- Confirming it needs a Replay run over 2026-10-11 22:30–22:45 UTC for EGLDUSDT and 2026-10-12 02:25–02:40 UTC for XRPUSDT. I cannot start one in analysis-only mode.
+
+**F-25 — Route summary per trade** (PROJECT EVIDENCE; codes marked † need DBQ-CLAUDE-I4-001)
+
+| Trade | Entry route (signal, UTC / KSA) | Exit route (code) | Followed the coded rules? |
+|---|---|---|---|
+| 137 | IMMEDIATE_VALIDATION, profile code † (#156723 STRONG_BUY, 20:55:01 / 23:55:01) | SELL_CONFIRMED: 1m #156850 + 5m #156852 SELL, 1h #156853 NEUTRAL (`PositionExitPolicy:35-44`) | Yes |
+| 143 | SETUP_TIMEFRAME_ATR with 5m #159285 BUY (22:40:01 / 01:40:01 on 10-12) | PROFIT_LOCK_HARD_EXIT via the lock-trigger branch (`LivePositionProtectionService:207-216`) | Yes in Production; Replay probably differs (F-24) |
+| 158 | SETUP_CONFIRMATION_WAKEUP with 5m #165415 BUY (`ExecutionIntelligenceService:397-456`) | SELL_CONFIRMED: #166819 + #166821 | Yes |
+| 162 | ACCUMULATED_EVIDENCE on 1m WATCH #167668 (`:1964-2068`) | SIGNAL_SELL #168277 on the signal path; 5m #168251 SELL | Yes |
+| 172 | IMMEDIATE_VALIDATION † | HTF_SELL_CONFIRMED: 1h #172201 SELL, 5m #172588 NEUTRAL (`PositionExitPolicy:25-33`) | Yes; exit waited 37.6 s (F-21) |
+| 182 | IMMEDIATE_VALIDATION, probably `BALANCED_NEUTRAL_5M_WATCH_1H` † | SELL_CONFIRMED: #176927 + #176934 | Followed the code, with the F-22 gap |
+
+**F-26 — Trade 162: the 5m BUY that came after entry was downgraded by the BREAKOUT rule** (PROJECT EVIDENCE)
+- #167746 (04:05 UTC) went from BUY to WATCH with `primary_blocking_stage` MULTI_TIMEFRAME and entry blocked.
+- That is the BREAKOUT rule: a BUY needs at least one bullish higher signal (`MultiTimeframeConfluenceService.java:205-207`).
+- This came after the 04:02 entry, so it did not affect the entry. WATCH still counts as "supportive" in the exit policy, so it did not force an exit either. Recorded only as context.
+
+## Per-trade classification after Iteration 4
+
+| Trade | Classification |
+|---|---|
+| 137 | Valid losing trade. Stop wider than target; target below fees. The exit waited 4.6 s at no price cost. |
+| 143 | Entry admitted by a timing race that Replay probably would not reproduce (F-12, F-24). The exit was a price gap, not a protection failure. |
+| 158 | Stop/target design limitation. The wake-up route worked as designed; Replay would probably take a different route. |
+| 162 | Valid signal-path exit; stop/target design limitation. |
+| 172 | Valid higher-timeframe exit. Waited 37.6 s for a price update, at no price cost. |
+| 182 | Entry admitted because the hidden 5m STRONG_SELL never reached the 1m gates (F-22, candidate logic defect); stop/target design limitation. |
+
+## EVIDENCE
+
+| ID | Type | Reference |
+|---|---|---|
+| E-24 | DB | I3-001 (price rows at exit), I3-002 (commit times), I3-004 (wallet timing), I3-005 (downgrade explanations) |
+| E-25 | Code | `MultiTimeframeConfluenceService.java:24-27, 105-143, 146-162, 192-216, 295-304, 337-353` |
+| E-26 | Code | `FinalDecisionService.java:122-126, 182-207`; `AnalysisService.java:303-316, 406-411` |
+| E-27 | Code | `TradeExecutionValidationService.java:218-321` |
+| E-28 | Code | `ExecutionIntelligenceService.java:397-456, 548-711, 1964-2068, 2078-2137, 2449, 2455-2461, 2606-2614` |
+| E-29 | Code | `PositionExitPolicy.java:20-111`; `LivePositionProtectionService.java:54-72, 95-97, 185-248, 391-412` |
+| E-30 | Code | `WalletAutoExecutionService.java:474-562`; `WalletService.java:484-490, 591-607` |
+| E-31 | Code | `RegressionTestWorker.java:550-584, 787-793` |
+| E-32 | Config | `application.yml:93-96, 114-117` (intervals 1m, 5m, 1h; no 15m) |
+
+## UNKNOWNS
+
+- **U-18:** The exact entry profile code for trades 137, 172 and 182 (does 182 use FIX-11G?). Needs I4-001.
+- **U-19:** The 1h ACE trend score that neutralised the 5m SELL, and whether any 15m signals exist. Needs I4-002 and I4-003.
+- **U-20:** Whether the candle index and asset count explain the 1.2–3.2 s gap (F-23). Needs I4-003 and I4-004.
+- **U-21:** Replay results for trades 143 and 158. Needs a Replay run, which is outside analysis-only mode.
+- **U-22:** Whether the SHIB/ACE gaps were quiet markets or dropped messages. Needs I4-006 plus `[FIX-153][PRICE_NOT_CANONICAL]` logs.
+- **U-23:** Whether earlier 1m SELLs on ACE were suppressed by the neutralised 5m between 09:57 and 10:05 UTC, and what an earlier exit would have cost or saved. Needs I4-005.
+- **U-15, U-17** stay open (logs needed).
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: Entry route and profile code recorded for each wallet BUY (U-18, F-22, F-25).
+SQL:
+SELECT id, signal_id, execution_reason, executed_at, LEFT(execution_message, 900) AS msg_900, LEFT(notes, 200) AS notes_200 FROM crypto_ai.wallet_trade WHERE id IN (344,358,392,403,426,451) ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: The higher-timeframe context that neutralised the ACE 5m SELLs, and the 1m entry signal's view of it (F-22, U-19).
+SQL:
+SELECT id, interval_code, candle_open_time, generated_at, created_at, decision, original_decision, trend_score, confidence_score, confluence_status, confluence_entry_allowed, confluence_higher_interval, confluence_higher_decision, confluence_higher_trend_score, confluence_higher_signal_generated_at, final_entry_allowed, LEFT(confluence_explanation, 400) AS conf_expl_400 FROM crypto_ai.trade_signal WHERE symbol = 'ACEUSDT' AND ((interval_code IN ('5m','1h') AND generated_at BETWEEN '2026-10-12 07:55:00' AND '2026-10-12 10:06:00') OR id = 176710) ORDER BY generated_at LIMIT 60;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: Index coverage for the portfolio-revaluation candle query, asset count, and whether any 15m signals exist (F-22, F-23; U-19, U-20). Read-only metadata and EXPLAIN.
+SQL:
+SHOW INDEX FROM crypto_ai.candle;
+SELECT COUNT(*) AS asset_rows, SUM(quantity > 0) AS nonzero_assets FROM crypto_ai.wallet_asset;
+EXPLAIN SELECT * FROM crypto_ai.candle WHERE symbol = 'EGLDUSDT' AND interval_code = '1m' AND closed = 1 ORDER BY close_time DESC LIMIT 1;
+SELECT interval_code, COUNT(*) AS n FROM crypto_ai.trade_signal WHERE generated_at BETWEEN '2026-10-11 00:00:00' AND '2026-10-13 00:00:00' GROUP BY interval_code;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: Snapshot timestamps around each live exit, to split the 1.2–3.2 s gap between wallet SELL and paper close (F-23, U-20).
+SQL:
+SELECT id, captured_at FROM crypto_ai.wallet_snapshot WHERE captured_at BETWEEN '2026-10-11 21:00:08' AND '2026-10-11 21:00:13' OR captured_at BETWEEN '2026-10-11 22:43:35' AND '2026-10-11 22:43:37' OR captured_at BETWEEN '2026-10-12 03:30:04' AND '2026-10-12 03:30:07' OR captured_at BETWEEN '2026-10-12 07:15:43' AND '2026-10-12 07:15:46' OR captured_at BETWEEN '2026-10-12 10:05:18' AND '2026-10-12 10:05:21' ORDER BY captured_at LIMIT 50;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-005
+Purpose: ACE 1m decisions and prices while trade 182 was open, to test whether exits were held back by the neutralised 5m (U-23). Use only for outcome, not entry judgement.
+SQL:
+SELECT id, candle_open_time, generated_at, decision, original_decision, latest_price, total_score FROM crypto_ai.trade_signal WHERE symbol = 'ACEUSDT' AND interval_code = '1m' AND generated_at BETWEEN '2026-10-12 09:57:00' AND '2026-10-12 10:06:00' ORDER BY generated_at LIMIT 20;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-006
+Purpose: Trade activity in the candles that contain the price-update gaps (U-22).
+SQL:
+SELECT symbol, open_time, close_price, number_of_trades, volume, updated_at FROM crypto_ai.candle WHERE interval_code = '1m' AND ((symbol = 'SHIBUSDT' AND open_time BETWEEN '2026-10-12 07:14:00' AND '2026-10-12 07:16:00') OR (symbol = 'ACEUSDT' AND open_time BETWEEN '2026-10-12 10:04:00' AND '2026-10-12 10:06:00')) ORDER BY symbol, open_time LIMIT 10;
+### END_DB_REQUEST
+
+## Self-review
+
+- **Revised:**
+  - Iteration 3 F-14 lags are corrected in F-21: they are now timed from the 5m/1h commit that completed the exit condition, not from the 1m signal.
+  - U-16 is resolved at code level (F-23).
+- **Facts versus inferences:**
+  - Facts from code: how the 5m was neutralised, the boundary order in Replay, and the work done inside the exit transaction.
+  - Inferences: trade 182 entered through FIX-11G; Replay would not open trade 143; the candle query causes the 1–3 s gap.
+- **Why F-22 is not called a confirmed defect:**
+  - The neutralisation follows its documented rule.
+  - The inconsistency is between guards that read `original_decision` and gates that do not. That needs I4-001/I4-002 and a design decision, not an assumption.
+- **Entry judgements** for trades 182 and 143 use only data available at entry. The I4-005 price path is for outcome only.
+- **Plan for Iteration 5:**
+  - Fold in the I4 results.
+  - Turn F-22 and F-24 into regression checks: a Replay comparison for trades 143 and 158, and a test for a hidden bearish 5m reaching the 1m gates.
+  - Measure how often the F-22 pattern occurs across all positions from 2026-10-11 to 2026-10-15.

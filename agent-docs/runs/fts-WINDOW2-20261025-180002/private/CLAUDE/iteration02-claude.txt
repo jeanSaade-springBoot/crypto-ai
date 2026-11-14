@@ -1,0 +1,328 @@
+# CLAUDE — FTS WINDOW2, Iteration 2: Database forensics
+
+**Run:** `fts-WINDOW2-20261025-180002` · **Frozen trades:** 182, 172, 162, 158, 143, 137 (none substituted)
+**Snapshot:** 2026-10-25 15:00:04 UTC = 2026-10-25 18:00:02 KSA
+**Inputs:** my iteration-1 output and the results of DBQ-CLAUDE-I1-001..008. I did not open the other agent's files, `LIVE_TEAM_STATUS.md` or `LIVE_EVENTS.log`. I made no writes of any kind.
+
+## Timeline (PROJECT EVIDENCE: I1-002, I1-004, I1-005, I1-006)
+
+| Pos | Symbol | Entry signal (decision) | Opened UTC → KSA | Closed UTC → KSA | Held | Entry → Exit | P&L USDT (% of cost) | Close trigger (exit signal) |
+|---|---|---|---|---|---|---|---|---|
+| 182 | ACEUSDT | 176710 BUY 75 | 10-12 09:57:06 → 12:57:06 | 10:05:20 → 13:05:20 | 494 s | 0.1884 → 0.1880 | −0.0318 (−0.21%) | SELL_CONFIRMED (176927 SELL) |
+| 172 | SHIBUSDT | 171589 BUY 77 | 06:36:05 → 09:36:05 | 07:15:45 → 10:15:45 | 2380 s | 5.49e-6 → 5.48e-6 | −0.0455 (−0.18%) | HTF_SELL_CONFIRMED (172587) |
+| 162 | DOGEUSDT | 167668 **WATCH** 76 | 04:02:06 → 07:02:06 | 04:26:04 → 07:26:04 | 1437 s | 0.08705 → 0.08675 | −0.0517 (−0.34%) | STRONG_SELL, signal path (168277) |
+| 158 | XRPUSDT | 165412 **WATCH** 64 | 02:35:04 → 05:35:04 | 03:30:06 → 06:30:06 | 3301 s | 1.4108 → 1.4090 | −0.0319 (−0.13%) | SELL_CONFIRMED (166819) |
+| 143 | EGLDUSDT | 159408 **WATCH** 73 | 10-11 22:40:04 → 10-12 01:40:04 | 22:43:36 → 01:43:36 | 211 s | 4.033 → 4.027 | −0.0372 (−0.15%) | PROFIT_LOCK_HARD_EXIT (159487) |
+| 137 | EGLDUSDT | 156723 STRONG_BUY 91 | 10-11 20:55:04 → 23:55:04 | 21:00:12 → 10-12 00:00:12 | 307 s | 3.999 → 3.987 | −0.0750 (−0.30%) | SELL_CONFIRMED (156850) |
+
+- All six trades lost a combined −0.2732 USDT, gross of fees.
+- `fee_usdt = 0` on every wallet fill. This matches `claude-docs/TRADING_RULES.md` §6.
+- For every trade, `paper_position.realized_pnl` equals qty × (exit − entry) and equals `wallet_trade.realized_pnl_usdt`. Rows 451/454, 426/429, 403/407, 392/401, 358/359 and 344/346 reconcile exactly.
+- Wallet row 357 belongs to a different position (wallet position 171) that was inside the ±2 min window. It is not part of trade 143.
+
+## FINDINGS
+
+**F-I2-01: confirmed structural defect. In 5 of 6 trades the risk/reward was below 1:1 when the trade was entered. (PROJECT EVIDENCE + code)**
+
+`AtrRiskService.java:40-45` sets the stop distance to `max(2·ATR, 0.50%·price)` (`application.yml:143`, `minimum-stop-percent: 0.50`). The reward is always `3·ATR` and is never floored. So whenever ATR is below about 0.167% of price, the 0.5% stop floor wins and the reward/risk drops under 1. The DB values match this formula exactly:
+
+| Pos | ATR% | Stop dist | TP dist | Reward/risk |
+|---|---|---|---|---|
+| 182 | 0.08% | 0.50% (floor) | 0.24% | 0.48 |
+| 172 | 0.12% | 0.50% (floor) | 0.37% | 0.74 |
+| 162 | 0.07% | 0.50% (floor) | 0.22% | 0.44 |
+| 158 | 0.05% | 0.49% (floor, from signal price 1.4109) | 0.17% | 0.35 |
+| 137 | 0.11% | 0.50% (floor) | 0.32% | 0.64 |
+| 143 | 0.27% | 0.54% (2 ATR) | 0.79% | 1.50 |
+
+- I searched `src/main` for `riskRewardRatio` / `RiskReward`. The only hits are where the value is persisted (`AnalysisService.java:540`), the domain class, the dashboard and the inspector. I found no entry gate on R:R, but this was a bounded grep and iteration 3 must confirm it.
+- The explanation text attached to these signals says "Stop uses 2.0 ATR and target uses 3.0 ATR". For the five floored trades that text misdescribes the stop that was actually used.
+
+**F-I2-02: real fees would cancel most of the targets. (AGENT INFERENCE + EXTERNAL RESEARCH, unverified this run)**
+
+Binance's standard spot fee is about 0.1% per side, about 0.2% round trip. Against that, the TP distance of trade 158 (0.17%) is a negative net reward, and 162 (0.22%) and 182 (0.24%) are close to zero. Because automated P&L is recorded gross, this exposure is hidden. Both F-I2-01 and F-I2-02 apply to all six frozen trades.
+
+**F-I2-03: five trades never came near their take-profit. (PROJECT EVIDENCE: I1-007 tick ranges)**
+
+| Pos | Max price while open | vs entry | TP |
+|---|---|---|---|
+| 182 | 0.1883 | below entry the whole time | 0.18885 |
+| 172 | 5.50e-6 | +1 tick | 5.5104e-6 |
+| 162 | 0.08711 | +0.07% | 0.08724 |
+| 158 | 1.4116 | +0.06% | 1.41321 |
+| 137 | 4.005 | +0.15% | 4.01188 |
+
+No trade hit its stop-loss. Each was closed by a bearish-confirmation rule for a loss of 0.13–0.34%, smaller than the 0.5% stop. Under the documented rules (`TRADING_RULES.md` §7 item 5) these exits followed the intended behaviour. They are not defects. The losses come from the entries.
+
+**F-I2-04: trade 143 went from a winner to a loss. The code allowed it. (PROJECT EVIDENCE + code)**
+
+- Entry at 4.033, original TP 4.0647.
+- 22:40:41 UTC (01:40:41 KSA): price 4.067 crossed TP. The continuation policy extended TP to 4.0805 (event 51), and again at 22:41:13 UTC to 4.1043 (event 52), instead of taking profit.
+- Price peaked at 4.101 (+1.69%), which is 95.35% of the extended TP distance. Profit lock armed at 4.0758.
+- `LivePositionProtectionService.java:207-231`: when the lock triggers, the code exits unconditionally only if price is below the hard floor (entry × 1.0005 = 4.0350). Otherwise it calls `evaluateProfitLockBreach(one, five, hour)`, and that call can choose to "protected hold".
+- The exit was recorded at 4.027, which is below both the lock (4.0758) and the floor (4.0350). Exiting below the floor rather than at it suggests either a price gap between ticks or holds while price passed the floor. This is unproven until the tick sequence is pulled (I2-007).
+- If it had exited at the original TP or at the lock price, the trade would have made about +0.79% or +1.06%.
+- **Verdict:** pending the tick and log evidence, this looks rule-following but with a weak design (lock price is advisory, floor only at break-even). It is not a proven defect.
+
+**F-I2-05: three entries were made on 1m WATCH signals, not BUY. (PROJECT EVIDENCE)**
+
+Execution Intelligence approved them anyway:
+- **162** via `ACCUMULATED_EVIDENCE` (1 BUY / 9 WATCH), self-graded `LATE_ENTRY` 50/100.
+- **158** via `SETUP_CONFIRMATION_WAKEUP` (5m trigger 165415).
+- **143** via `SETUP_TIMEFRAME_ATR`, even though the 1m signal had `WAIT_FOR_RETRACEMENT` with 0% recommended size, RSI 84.3 and price 4.35 ATR above SMA20. The override replaced the 1m ATR with the 5m ATR.
+
+These routes are documented (`TRADING_RULES.md` §4). Whether these specific overrides were correct needs `original_decision` / `decision_path` (I2-002).
+
+**F-I2-06: candidate entry-quality concerns. (AGENT INFERENCE, to verify)**
+- 182 entered as TREND_FOLLOWING in a `WEAK_DOWNTREND` regime.
+- Funding percentile was 99–100% (crowded longs) on 182, 143 and 137, labelled only "LOW_CONVICTION".
+- 182 and 172 both carried "No persistent bid support above the stop-loss".
+- Sentiment `raw=0.380` is identical on SHIB 06:36 and on DOGE 04:02 and 04:26, which suggests a shared or stale sentiment value.
+
+**F-I2-07: trade 143 re-entered soon after the previous position on the same coin closed. (PROJECT EVIDENCE + AGENT INFERENCE)**
+
+Wallet position 171 on EGLDUSDT closed with PROFIT_LOCK_EXIT at 3.996 at 22:39:41 UTC. The new BUY filled at 4.033 at 22:40:03 UTC, 22 s later and 0.93% higher. Ticks are needed to confirm the price path; it may have been a chase.
+
+**F-I2-08: minor lineage and timing observations. (PROJECT EVIDENCE)**
+- `paper_position.exit_signal_id` is NULL for every live-path exit, although `production_exit_audit.source_signal_id` is filled.
+- On live-path exits, `paper_position.closed_at` is 1.2–3.2 s later than `wallet_trade.executed_at`. On entries, `opened_at` is about 2 s after the wallet BUY. There is no P&L effect; the cause is unknown.
+- Trade 162's exit audit shows `position_recommendation=REDUCE`, yet the full quantity was sold.
+
+**Data freshness (PROJECT EVIDENCE):** entry signals were generated 1.5–2.8 s after the minute boundary and wallet BUYs filled 1.5–2.4 s after the signal. The exit tick for 182 preceded its fill by 57 ms. I see no sign of stale data or execution delay. `signal_mode` and `data_quality_valid` have not been retrieved yet.
+
+## EVIDENCE
+
+| ID | Source |
+|---|---|
+| E-I2-01 | DBQ-CLAUDE-I1-001: live schema. `market_price_event` has `delivery_status`, `ordering_slot`, `outcome_reason`, `source_received_at`. `trade_signal` has `signal_mode`, `data_quality_valid`, `risk_reward_ratio`. |
+| E-I2-02 | I1-002 / I1-003: position rows and entry/exit reason text |
+| E-I2-03 | I1-004: entry signals, including three with decision WATCH |
+| E-I2-04 | I1-005: exit audits 181, 172, 163, 159, 141, 137 |
+| E-I2-05 | I1-006: wallet fills, fees 0, P&L reconciles |
+| E-I2-06 | I1-007: tick counts and price ranges over each position's life |
+| E-I2-07 | I1-008: TP extension events 51 and 52 (trade 143 only) |
+| E-I2-08 | `AtrRiskService.java:34-45`, `application.yml:135-144` |
+| E-I2-09 | `LivePositionProtectionService.java:95-239` (TP-extend branch, SL, rebase floor, lock hold/exit, normal exit) |
+
+## UNKNOWNS
+
+- **U-I2-01:** `signal_mode`, `data_quality_valid`, `original_decision`, `decision_path`, `primary_blocking_stage` and stored `risk_reward_ratio` for the entry and exit signals.
+- **U-I2-02:** Tick sequence and `delivery_status` for 143. This decides whether the exit at 4.027 came from a gap between ticks or from holds while price passed the 4.035 floor.
+- **U-I2-03:** Profit-lock state history on `wallet_managed_position` 172, and why the 4.0758 lock price did not lead to an exit.
+- **U-I2-04:** The 5m and 1h signals in force at each exit, to check that SELL_CONFIRMED / HTF_SELL_CONFIRMED met their rule.
+- **U-I2-05:** The outcome after exit (would TP or SL have been hit first). This is for outcome evaluation only, not for judging the entry.
+- **U-I2-06:** Whether the R:R < 1 pattern also holds across the whole closed population, or only in this sample.
+- **U-I2-07:** The candle table schema, and `signal_processing_work` / `execution_opportunity` lineage.
+- **U-I2-08:** Whether the trade-143 behaviour reproduces in Replay. `ShadowProductionReplayService.java:440-612` has parallel hard-floor logic; parity is unverified.
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-001
+Purpose: Extended decision, quality and risk columns for the entry and exit-source signals.
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, generated_at, decision, original_decision, signal_mode, data_quality_valid, final_entry_allowed, primary_blocking_stage, confidence_score, raw_confidence_score, effective_confidence_score, confluence_status, confluence_entry_allowed, confluence_higher_decision, market_regime, selected_strategy, strategy_entry_allowed, atr_at_signal, atr_percent, risk_reward_ratio, atr_overextended, atr_entry_type, atr_recommended_position_percent, atr_immediate_entry_allowed, candle_range_atr_multiple, entry_authority, entry_authority_max_position_percent, btc_context_status, btc_context_entry_allowed, btc_context_age_seconds, liquidity_status, liquidity_entry_allowed, order_book_stop_exposed, order_book_target_blocked, derivatives_status, funding_percentile, sentiment_available
+FROM crypto_ai.trade_signal
+WHERE id IN (176710,171589,167668,165412,159408,156723,176927,172587,168277,166819,159487,156850)
+ORDER BY id DESC
+LIMIT 12;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-002
+Purpose: Decision path, final and authority explanations, and sentiment breakdown for the six entry signals (WATCH overrides; repeated sentiment 0.380).
+SQL:
+SELECT id, LEFT(CAST(decision_path AS CHAR), 3000) AS decision_path_head, LEFT(final_decision_explanation, 1500) AS final_expl, LEFT(entry_authority_explanation, 1000) AS authority_expl, LEFT(atr_explanation, 600) AS atr_expl, LEFT(CAST(sentiment_breakdown AS CHAR), 1000) AS sentiment_head
+FROM crypto_ai.trade_signal
+WHERE id IN (176710,171589,167668,165412,159408,156723)
+ORDER BY id DESC
+LIMIT 6;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-003
+Purpose: 5m and 1h context from 65 min before entry to close, to check the entry route and the exit confirmation rule.
+SQL:
+SELECT p.id AS position_id, s.id, s.interval_code, s.candle_open_time, s.generated_at, s.decision, s.original_decision, s.total_score, s.trend_score, s.market_regime, s.signal_mode, s.data_quality_valid
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.trade_signal s ON s.symbol = p.symbol AND s.interval_code IN ('5m','1h') AND s.generated_at BETWEEN p.opened_at - INTERVAL 65 MINUTE AND p.closed_at
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC, s.interval_code, s.generated_at
+LIMIT 250;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-004
+Purpose: 1m signal sequence during each position's life (the run-up to the exit).
+SQL:
+SELECT p.id AS position_id, s.id, s.candle_open_time, s.generated_at, s.decision, s.original_decision, s.total_score, s.latest_price, s.signal_mode, s.data_quality_valid
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.trade_signal s ON s.symbol = p.symbol AND s.interval_code = '1m' AND s.generated_at BETWEEN p.opened_at AND p.closed_at
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC, s.generated_at
+LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-005
+Purpose: Managed-position state (profit lock, highest price, entry stage, allocation, near-TP) for the frozen trades, plus prior EGLD position 171.
+SQL:
+SELECT id, entry_signal_id, symbol, quantity, average_entry_price_usdt, total_cost_usdt, entry_decision, stop_loss_usdt, take_profit_usdt, status, opened_at, updated_at, highest_price_usdt, profit_lock_active, profit_lock_price_usdt, profit_lock_progress_percent, profit_lock_activated_at, profit_lock_state, profit_lock_rebase_started_at, entry_stage, allocated_position_percent, entry_quality_score, near_tp_state, near_tp_best_price, near_tp_bearish_streak, near_tp_harvest_used
+FROM crypto_ai.wallet_managed_position
+WHERE id IN (211,201,191,187,172,171,166)
+ORDER BY id DESC
+LIMIT 7;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-006
+Purpose: Wallet fill provenance (decision price vs fill, price observation time, execution reason).
+SQL:
+SELECT id, signal_id, position_analysis_id, execution_key, symbol, side, price_usdt, decision_price_usdt, execution_price_observed_at, executed_at, created_at, execution_reason, LEFT(execution_message, 800) AS exec_msg_head
+FROM crypto_ai.wallet_trade
+WHERE id IN (451,454,426,429,403,407,392,401,357,358,359,344,346)
+ORDER BY id DESC
+LIMIT 13;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-007
+Purpose: Full tick sequence for EGLDUSDT from 22:39:00 to 22:43:40 UTC (re-entry and the profit-lock collapse), plus trade 137 and trade 182.
+SQL:
+SELECT id, symbol, observed_at, source_received_at, created_at, price, source, delivery_status, ordering_slot, outcome_reason
+FROM crypto_ai.market_price_event
+WHERE (symbol = 'EGLDUSDT' AND observed_at BETWEEN '2026-10-11 22:39:00' AND '2026-10-11 22:43:40')
+   OR (symbol = 'EGLDUSDT' AND observed_at BETWEEN '2026-10-11 20:54:50' AND '2026-10-11 21:00:15')
+   OR (symbol = 'ACEUSDT' AND observed_at BETWEEN '2026-10-12 09:56:50' AND '2026-10-12 10:05:25')
+ORDER BY symbol, observed_at
+LIMIT 300;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-008
+Purpose: Tick `delivery_status`/source distribution over each position's life (which ticks protection actually consumed).
+SQL:
+SELECT p.id AS position_id, e.source, e.delivery_status, e.outcome_reason, COUNT(*) AS n, MIN(e.observed_at) AS first_obs, MAX(e.observed_at) AS last_obs
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.market_price_event e ON e.symbol = p.symbol AND e.observed_at BETWEEN p.opened_at AND p.closed_at
+WHERE p.id IN (182,172,162,158,143,137)
+GROUP BY p.id, e.source, e.delivery_status, e.outcome_reason
+ORDER BY p.id DESC, n DESC
+LIMIT 60;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-009
+Purpose: First 5 and last 15 ticks for 172, 162 and 158 (long-held positions).
+SQL:
+SELECT * FROM (
+  SELECT p.id AS position_id, e.id, e.observed_at, e.price, e.delivery_status, e.source,
+         ROW_NUMBER() OVER (PARTITION BY p.id ORDER BY e.observed_at ASC) AS rn_first,
+         ROW_NUMBER() OVER (PARTITION BY p.id ORDER BY e.observed_at DESC) AS rn_last
+  FROM crypto_ai.paper_position p
+  JOIN crypto_ai.market_price_event e ON e.symbol = p.symbol AND e.observed_at BETWEEN p.opened_at AND p.closed_at
+  WHERE p.id IN (172,162,158)
+) t
+WHERE rn_first <= 5 OR rn_last <= 15
+ORDER BY position_id DESC, observed_at
+LIMIT 60;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-010
+Purpose: Position-analysis history per wallet position (exit-score evolution; the REDUCE vs full-close question on 162).
+SQL:
+SELECT id, wallet_position_id, trade_signal_id, interval_code, current_price_usdt, unrealized_pnl_percent, holding_minutes, trend_deterioration_score, momentum_exhaustion_score, profit_protection_score, risk_event_score, exit_score, recommendation, confidence, advisory_only, LEFT(explanation, 500) AS expl_head, analyzed_at
+FROM crypto_ai.position_analysis
+WHERE wallet_position_id IN (211,201,191,187,172,166)
+ORDER BY wallet_position_id DESC, analyzed_at
+LIMIT 300;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-011
+Purpose: Outcome only (kept separate from the entry assessment): first touch of the original signal TP and of the SL within 4 h after open, and the 60-minute range after exit.
+SQL:
+SELECT p.id, p.symbol, s.take_profit AS signal_tp, p.stop_loss,
+ (SELECT MIN(e.observed_at) FROM crypto_ai.market_price_event e WHERE e.symbol = p.symbol AND e.observed_at > p.opened_at AND e.observed_at <= p.opened_at + INTERVAL 4 HOUR AND e.price >= s.take_profit) AS first_tp_touch,
+ (SELECT MIN(e.observed_at) FROM crypto_ai.market_price_event e WHERE e.symbol = p.symbol AND e.observed_at > p.opened_at AND e.observed_at <= p.opened_at + INTERVAL 4 HOUR AND e.price <= p.stop_loss) AS first_sl_touch,
+ (SELECT MIN(e.price) FROM crypto_ai.market_price_event e WHERE e.symbol = p.symbol AND e.observed_at BETWEEN p.closed_at AND p.closed_at + INTERVAL 60 MINUTE) AS post60_min,
+ (SELECT MAX(e.price) FROM crypto_ai.market_price_event e WHERE e.symbol = p.symbol AND e.observed_at BETWEEN p.closed_at AND p.closed_at + INTERVAL 60 MINUTE) AS post60_max
+FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC
+LIMIT 6;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-012
+Purpose: Population check of F-I2-01. Outcome of all closed positions bucketed by the stored risk/reward ratio of the entry signal.
+SQL:
+SELECT CASE WHEN s.risk_reward_ratio IS NULL THEN 'NULL' WHEN s.risk_reward_ratio < 0.75 THEN '<0.75' WHEN s.risk_reward_ratio < 1 THEN '0.75-1' WHEN s.risk_reward_ratio < 1.5 THEN '1-1.5' ELSE '>=1.5' END AS rr_bucket,
+       COUNT(*) AS n, SUM(p.realized_pnl > 0) AS wins, SUM(p.realized_pnl < 0) AS losses, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum, MIN(p.opened_at) AS first_open, MAX(p.opened_at) AS last_open
+FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id
+WHERE p.status IN ('CLOSED','STOPPED') AND p.closed_at IS NOT NULL AND p.closed_at <= '2026-10-25 15:00:04'
+GROUP BY rr_bucket
+ORDER BY rr_bucket
+LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-013
+Purpose: Processing-work lineage for entry and exit signals (origin, attempts, latency, failures).
+SQL:
+SELECT signal_id, symbol, interval_code, candle_open_time, origin, status, attempts, next_attempt_at, updated_at, completed_at, paper_position_id, failure_stage, LEFT(error_message, 300) AS err_head, source_event_id
+FROM crypto_ai.signal_processing_work
+WHERE signal_id IN (176710,171589,167668,165412,159408,156723,176927,172587,168277,166819,159487,156850)
+ORDER BY signal_id DESC
+LIMIT 24;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-014
+Purpose: Execution-opportunity records behind the WATCH-signal entries (162, 158, 143) and the other entries.
+SQL:
+SELECT id, symbol, direction, status, started_at, last_evidence_at, anchor_entry_price, best_entry_price, latest_signal_id, evidence_count, buy_count, watch_count, neutral_count, bearish_count, evidence_score, opportunity_health, average_signal_score, average_confidence, five_minute_decision, one_hour_decision, execution_source, recommended_position_percent, decision_code, LEFT(decision_explanation, 600) AS expl_head, executed_at
+FROM crypto_ai.execution_opportunity
+WHERE latest_signal_id IN (176710,171589,167668,165412,159408,156723)
+   OR (symbol IN ('ACEUSDT','SHIBUSDT','DOGEUSDT','XRPUSDT','EGLDUSDT') AND executed_at BETWEEN '2026-10-11 20:50:00' AND '2026-10-12 10:00:00')
+ORDER BY executed_at
+LIMIT 30;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-015
+Purpose: EGLDUSDT paper-position sequence around 137 and 143 (re-entry pattern after the prior profit-lock exit).
+SQL:
+SELECT id, symbol, entry_price, exit_price, realized_pnl, close_reason, signal_id, opened_at, closed_at
+FROM crypto_ai.paper_position
+WHERE symbol = 'EGLDUSDT' AND opened_at BETWEEN '2026-10-11 19:00:00' AND '2026-10-12 00:00:00'
+ORDER BY opened_at
+LIMIT 30;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-016
+Purpose: Candle and data-quality table schema, so candle-level queries in iteration 3 use real column names.
+SQL:
+SELECT TABLE_NAME, ORDINAL_POSITION, COLUMN_NAME, COLUMN_TYPE
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'crypto_ai' AND (TABLE_NAME LIKE 'candle%' OR TABLE_NAME LIKE '%data_quality%')
+ORDER BY TABLE_NAME, ORDINAL_POSITION
+LIMIT 200;
+### END_DB_REQUEST
+
+## Self-review (iteration 2)
+
+- I judged each entry only on what was known when the signal was generated. After-exit price action is kept apart in I2-011.
+- **F-I2-01 is the only confirmed defect.** The formula and the DB values match exactly. It is a configuration/design defect, not a stale-data or execution problem.
+- Everything else is rule-following behaviour or still needs evidence:
+  - The exits look compliant, but the 5m/1h state at each exit is unverified (I2-003).
+  - Trade 143 is not called a defect until the tick sequence and lock state are in.
+- Every timestamp is shown as UTC with its KSA (UTC+3) equivalent.
+- **Next (iteration 3):**
+  - Rebuild trade 143 tick by tick.
+  - Check each exit against `PositionExitPolicy`.
+  - Check the WATCH-override routes in `ExecutionIntelligenceService`.
+  - Confirm that no R:R gate exists anywhere in the entry path.
+  - Check Replay parity for the hard-floor logic.

@@ -1,0 +1,8 @@
+SELECT * FROM wallet_managed_position
+WHERE (symbol = 'ACEUSDT'  AND opened_at BETWEEN '2026-10-12 09:56:00' AND '2026-10-12 09:58:00')
+   OR (symbol = 'SHIBUSDT' AND opened_at BETWEEN '2026-10-12 06:35:00' AND '2026-10-12 06:37:00')
+   OR (symbol = 'DOGEUSDT' AND opened_at BETWEEN '2026-10-12 04:01:00' AND '2026-10-12 04:03:00')
+   OR (symbol = 'XRPUSDT'  AND opened_at BETWEEN '2026-10-12 02:34:00' AND '2026-10-12 02:36:00')
+   OR (symbol = 'EGLDUSDT' AND opened_at BETWEEN '2026-10-11 22:39:00' AND '2026-10-11 22:41:00')
+   OR (symbol = 'EGLDUSDT' AND opened_at BETWEEN '2026-10-11 20:54:00' AND '2026-10-11 20:56:00')
+LIMIT 20;

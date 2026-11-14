@@ -1,0 +1,257 @@
+# FTS WINDOW2 (2026-10-20), Claude, Iteration 6: root cause and research (self-review)
+
+Nothing was changed: no code, config, DB writes or git. I couldn't save a plan file because Write and ExitPlanMode aren't available in this session, so this message is the whole deliverable.
+
+**Context loaded:**
+- AGENTS.md, CHARTER.md, the iteration-6 prompt, and my iteration 2, 4 and 5 outputs. From iteration 3 I read only its findings index (F10–F17).
+- `db/CLAUDE/` results I1-002, I1-005, I2-002 and I5-001…004.
+- The code at `ExecutionIntelligenceService.java:845-1030`.
+- I did not read LIVE_TEAM_STATUS, LIVE_EVENTS, the other agent's folders or its memory.
+
+**Times:** UTC comes from `UNIX_TIMESTAMP()` epochs, and KSA = UTC + 3h. Raw `TIMESTAMP` output in the investigator session is displayed in KSA (iteration-2 F0).
+
+---
+
+## FINDINGS
+
+### F35. All six entry-quality scores rebuilt exactly from code plus DB inputs; none was floored (PROJECT EVIDENCE + arithmetic; resolves U21)
+
+**Method.** I re-ran the scoring logic in `EIS:865-1030` by hand:
+- Rolling reference = the lowest 1m `latest_price` in the 30 minutes up to the signal's `generated_at`, or the opportunity best/anchor if lower and the opportunity is ≤120 min old.
+- Age = whole minutes from `started_at` to `generated_at`, truncated by `Duration.toMinutes()`.
+- A rejection penalty needs ≥2 later closes below the 30-minute high and a fill within 0.50% of that high.
+- The BREAKOUT bonus needs an ATR extension ≤ 2.5.
+
+| Trade | Reference (source) | Expansion | ATR ext. | Age | R:R | Rejection | Rebuilt | Recorded |
+|---|---|---|---|---|---|---|---|---|
+| 137 | 3.992 (rolling) | 0.18% | 1.63 | 1 min | 0.64 → −30 | 4.005 high, 0.15% away → −12 | **58** | 58 ✓ |
+| 143 (fill, 1m ATR) | 3.972 (rolling) | **1.54% → −10** | 5.60 → −20 | 0 | 1.39 | none | **70** | 70 ✓ |
+| 143 (decision, 5m ATR) | 3.972 | 1.51% → −10 | 6.61 → −30 | 0 | 1.50 | none | **60** | 60 ✓ |
+| 158 | 1.4082 (OPPORTUNITY_BEST) | 0.18% | 3.38–3.51 → −10 | **53 min → −10** | 0.33 → −30 | 1 later close only → none | **50** | 50 ✓ |
+| 162 | 0.08672 (rolling) | 0.38% | 5.19 → −20 | **20 min (1259.976 s)** → 0 | 0.44 → −30 | high = current → none | **50** | 50 ✓ |
+| 172 | 5.47e-6 (rolling) | 0.37% | **2.94 → −10** | 14 min | 0.74 → −30 | none | **60** | 60 ✓ |
+| 182 | 0.1875 (rolling) | 0.48% | **5.95 → −20** | 1 min | 0.48 → −30 | 0.1895 high, 0.58% away (>0.50) → none | **50** | 50 ✓ |
+
+- 162's regime was BREAKOUT, but its extension of 5.19 is above 2.5, so it got no bonus.
+- 182's liquidity was BULLISH_SUPPORT, so it had no STOP_EXPOSED penalty.
+- 172's −10 is the ATR extension: two SHIB ticks are 2.94 ATR.
+
+**Corrections to iteration 5:**
+- F28 said the 182, 158 and 162 scores were ambiguous. They are settled: all are exact 50s, and the floor clamp was not involved.
+- 137's breakdown is confirmed.
+
+### F36. Three of the six entries passed the gate by margins at or near the measurement noise (PROJECT EVIDENCE + arithmetic)
+
+These are not defects; each threshold behaved exactly as coded. They do show how fragile the score is.
+
+**162 cleared the gate by 24 ms of opportunity age:**
+- Opportunity 37952 started 1791765662.837 (00:41:02.837 UTC / 03:41:02.837 KSA).
+- Signal #167668 was generated 1791766922.813 (01:02:02.813 UTC / 04:02:02.813 KSA).
+- The difference is 1259.976 s. `toMinutes()` truncates that to 20, so the "> 20" age penalty did not apply.
+- If the signal had been generated 24 ms later, age would read 21, giving −5 → 45 → CHASE_ENTRY → blocked. There was no rejection, so the floor would not have saved it.
+
+**182 cleared by one tick:**
+- The ATR-extension limit was 0.1875 + 6 × 0.000151214 = 0.188407.
+- At the next ACE tick (0.1885), the extension would have been 6.61 → −30 → 40 → blocked.
+
+**158 was 7 minutes from a block:** at opportunity age above 60 min, the penalty becomes −15 → 45 → blocked.
+
+**Structural reading (AGENT INFERENCE):**
+- When R:R < 1 (−30), an entry passes only if all other penalties total ≤ 20.
+- Because penalties come in 10/20 steps, 50 is the most common accepted score.
+- I5-004 shows **43 of 114 closed trades (38%) at exactly 50**, the largest bucket.
+
+### F37. Root-cause pattern A: first-bounce entries after a sustained 1m bearish streak (PROJECT EVIDENCE from I5-001; pattern is AGENT INFERENCE)
+
+Three trades entered on the first one or two bullish 1m signals after a long STRONG_SELL run:
+
+| Trade | Bearish 1m streak before entry | Flip | Entry | Price move into entry | Hold |
+|---|---|---|---|---|---|
+| **182** | #176248…#176627: **16 consecutive STRONG_SELL**, 06:39:01–06:54:01 UTC / 09:39:01–09:54:01 KSA | NEUTRAL 22 → BUY 78 → BUY 75 | 06:57:01.850 UTC / 09:57:01.850 KSA | 0.1875 → 0.1884 | 494 s |
+| **137** | 12 of the 15 signals in the prior 15 min were SELL/STRONG_SELL; the last was #156671 at 17:53:00 UTC / 20:53:00 KSA | WATCH 89 (conf 49) → STRONG_BUY 91 | 17:55:01.576 UTC / 20:55:01.576 KSA | 3.992 → 3.999 | 307 s |
+| **143** | #159066…#159257: **10 consecutive STRONG_SELL**, 19:26:00–19:34:00 UTC / 22:26–22:34 KSA | BUY 80 (conf 49) → 5 × WATCH | 19:40:01.634 UTC / 22:40:01.634 KSA | 3.972 → 4.032 (+1.5%) | 211 s |
+
+- The 1m score swings from 9–15 to 75–91 within one or two candles. These are the three shortest holds in the sample.
+- **182 had a strategy–regime mismatch:** `selected_strategy=TREND_FOLLOWING` while `market_regime=WEAK_DOWNTREND`. It took a trend-following BUY inside a downtrend regime, and the 5m was a raw STRONG_SELL neutralised by the 1h WATCH (F30).
+- **137** ran `RANGE_MEAN_REVERSION`, but it bought at 57% of the real 30-minute range, 0.15% under a rejected high. That is not the bottom of the range.
+- **158, 162 and 172 do not fit this pattern.** They had 0–1 bearish 1m signals in the prior 15 min and were range-chop entries.
+- Whether "first bounce after a streak of 10 or more" loses more often across the population is untested (DBQ-CLAUDE-I6-001).
+
+### F38. Root-cause pattern B: TP sits inside noise and the stop sits outside the whole recent range, so signal exits decide the outcome (PROJECT EVIDENCE from I5-003, I1-002, I1-005)
+
+| Trade | Real 30-min range | Fill position in range | TP distance | SL distance | Realized | Exit reason |
+|---|---|---|---|---|---|---|
+| 137 | 0.35% | 57% | +0.32% | −0.50% | −0.30% | SELL_CONFIRMED |
+| 143 | 2.09% | 76% | +0.79% (original) | −0.57% | −0.15% | PROFIT_LOCK_HARD_EXIT |
+| 158 | **0.25%** | 77% | **+0.17%** | −0.49% | −0.13% | SELL_CONFIRMED |
+| 162 | 0.45% | **90%** | +0.22% (+0.23% after tick rounding) | −0.50% | −0.34% | STRONG_SELL |
+| 172 | 2 ticks (0.37%) | **100%** | 3 ticks (+0.55%) | 3 ticks | −1 tick (−0.18%) | HTF_SELL_CONFIRMED |
+| 182 | 1.17% | 45% | +0.27% (after tick rounding) | −0.53% | −0.21% | SELL_CONFIRMED |
+
+- For 137, 158, 162 and 172, the 0.5% stop is **wider than the entire previous 30 minutes of trading**.
+- **No trade hit its SL.** Every loss came from a 1m/5m/1h signal exit, at −0.13% to −0.34%. Those loss sizes are about the same as the TP distances.
+- So the *realized* R:R is also below 1, and the planned SL rarely sets the loss.
+- 162 and 172 were bought at the top of their ranges. The quality model cannot see this because it uses close-price samples (F32).
+
+### F39. Fee-adjusted edge: the structural R:R < 1 design has no margin once real fees apply (EXTERNAL RESEARCH + AGENT INFERENCE)
+
+**Fee schedule (EXTERNAL RESEARCH):** Binance's official schedule (Regular tier) is **0.100% maker / 0.100% taker**, or **0.075%** with the BNB discount. A round trip therefore costs 0.20%, or 0.15% with BNB. This confirms the iteration-2 assumption.
+
+**Win rate needed to break even** at the planned exits only, using p = (SL% + fee) / (TP% + SL%) with a 0.20% fee:
+
+| Trade | Required win rate |
+|---|---|
+| 158 | Impossible: TP +0.17% < 0.20% fee, so even a TP hit loses (BNB fee: 96.8%) |
+| 162 | ≈ 96% |
+| 182 | ≈ 92% |
+| 137 | ≈ 85% |
+| 172 | ≈ 68% |
+
+**Population check (I5-004, gross average return per trade):**
+
+| Entry-quality bucket | Gross average | After an approximate 0.20% fee (inferred) |
+|---|---|---|
+| =50 (43 trades) | +0.17% | ≈ −0.03%: **negative** |
+| 55–69 | +0.24% | ≈ +0.04%: marginal |
+| 70–84 | +0.33% | ≈ +0.13% |
+| 85+ | +0.71% | ≈ +0.51% |
+
+- Notional per trade is about 15–25 USDT (I1-002: quantity × entry).
+- 114 trades at about 0.04–0.05 USDT fee each is roughly 5 USDT of drag, against +11.52 USDT gross P&L.
+- Paper `fee_usdt=0` (I1-003), so paper P&L overstates edge. This matters most in the buckets these losses came from.
+- These figures are an estimate until DBQ-CLAUDE-I6-002 returns the actual notionals.
+
+### F40. U22 resolved: the single BUY in 162's accumulated evidence (PROJECT EVIDENCE)
+
+- #167646 was a BUY with score 76 and confidence 75, at 0.08693.
+- It was generated at 1791766862.771 (01:01:02.771 UTC / 04:01:02.771 KSA), one candle before the entry signal (WATCH, 0.08705).
+- Opportunity 37952 had 20 evidence rows: 1 BUY, 9 WATCH, 10 NEUTRAL, 0 bearish. `peak_epoch` equals this BUY.
+- So FIX-119's late-entry deferral was bypassed (buyCount=1) by a BUY observed 60 s earlier, at a price only 0.14% lower.
+- This confirms F31's route inconsistency: BALANCED_EARLY plus LATE was admitted on the strength of one adjacent candle.
+
+### F41. Root-cause verdict per trade (end of iteration 6)
+
+Entry was assessed with information available at entry; outcome is assessed separately.
+
+| Trade | Primary root cause | Contributing | Class |
+|---|---|---|---|
+| **137** | Pattern A (bounce flip after a bearish streak) + R:R 0.64 | Bought near a rejected high (−12) but allowed by FIX-11G's ≥50 bar (F29) | Valid losing trade; design gap |
+| **143** | **Outcome:** a TP win became a loss through continuation extension (F21) plus a genuine 8 s Binance gap | **Entry input:** a superseded 5m was used as authority (F1); Replay would likely not enter (F22) | **Only logic-defect candidate (F1/F22)**; exit followed the rules |
+| **158** | Pattern B: TP +0.17% is below round-trip fees inside a 0.25% range | 53-min-old opportunity; wakeup route has a 46% loss rate | Valid losing trade; design gap (no R:R or fee gate) |
+| **162** | Pattern B + LATE_ENTRY bought at 90% of its range | Gate cleared by 24 ms (F36); one adjacent BUY bypassed FIX-119 (F40/F31) | Valid losing trade; design gap |
+| **172** | Tick granularity: TP/SL 3 ticks, a 2-tick range, bought at the range top | R:R 0.74 | Valid losing trade; symbol/geometry mismatch |
+| **182** | Pattern A + the 1h WATCH counted twice (F30) + TREND_FOLLOWING in a WEAK_DOWNTREND regime | Gate cleared by 1 tick (F36) | Valid on current rules; design gap |
+
+**System-level root causes, ranked:**
+1. **RC1, geometry.** SL is floored at 0.5% and TP = 3 × 1m ATR, so R:R = 6 × ATR% < 1 on low-volatility symbols. No route used here gates on R:R. Entry quality turns R:R < 1 into sizing only (−30). Zero paper fees hide the shortfall (F4, F20, F27, F39). This affects 5 of the 6 trades.
+2. **RC2, entries on counter-trend 1m flips** after sustained bearish 1m signals while the higher timeframe is only neutral/WATCH (F37, F30, F19). 3 of 6 trades.
+3. **RC3, defect candidate.** Same-boundary 5m invisibility on SETUP_TIMEFRAME_ATR plus a Replay parity gap. 143 only; 1 of 22 such entries (F1, F15, F22).
+4. **RC4, policy.** Continuation TP extension with no protected exit at the original TP. 143 only (F21).
+5. **RC5, threshold fragility.** Discrete penalties, truncated minutes and close-price samples leave accept/block decisions at ms/tick margins (F36, F32).
+
+There was no stale data, no data-quality defect, and no execution delay with a price cost in any trade (F6, F16, F25).
+
+---
+
+## EVIDENCE
+
+**PROJECT EVIDENCE (DB results):**
+
+| Ref | What it showed |
+|---|---|
+| I5-001 | 1m signal series used for the rebuild, streaks and rejection counts |
+| I5-002 | Opportunity started/anchor/best/count fields (35535, 36524, 37621, 37952, 39062, 40290) |
+| I5-003 | Real 30-minute ranges |
+| I5-004 | Entry-quality buckets and per-code breakdown |
+| I1-002 | Entry, exit, SL, TP and realized values |
+| I1-005 | ATR, regime, strategy and liquidity |
+| I2-002 | Extension events 51/52 |
+
+**PROJECT EVIDENCE (code):**
+- `ExecutionIntelligenceService.java:871-892` (rolling reference and high)
+- `:898-933` (opportunity anchor/best ≤120 min)
+- `:948-951` (age via `toMinutes()`)
+- `:955-974` (rejection rule: ≥2 closes, ≤0.50%)
+- `:976-1017` (penalties, floor, BREAKOUT bonus requiring extension ≤2.5)
+
+**EXTERNAL RESEARCH:**
+- Binance fee schedule (official): Regular 0.100%/0.100%, 0.075% with BNB. https://www.binance.com/en/fee/schedule
+- Corroborating third-party pages, lower reliability:
+  - [finhay.com.vn](https://www.finhay.com.vn/en/phi-giao-dich-binance)
+  - [support.binance.us](https://support.binance.us/en/articles/9843536-binance-us-launches-trading-fee-discount-and-vip-program-with-bnb)
+  - [coinspot.io](https://coinspot.io/en/analysis/binance-fees-2025-the-ultimate-guide/)
+  - [Binance Square](https://www.binance.com/ru-KZ/square/hashtag/binancefees)
+
+---
+
+## UNKNOWNS
+
+- **U25:** whether "first bounce after ≥10 bearish 1m signals in 15 min" has a worse loss rate across the population (I6-001).
+- **U26:** fee-adjusted P&L by entry-quality and R:R bucket using actual notionals (I6-002).
+- **U27:** how often a position is closed by a signal exit rather than SL/TP, and loss size by exit reason (I6-003).
+- **U28:** across the population, do positions with a TP extension end up worse than closing at their first TP (I6-004)? This decides whether RC4 is systemic or a one-off.
+- **U8/F22:** Replay parity is still not executed and needs an approved Replay run.
+- **Logs:** still no production log access. The FIX-11G log lines would independently confirm the decision-time scores; F35 reaches the same values by arithmetic.
+- **Documentation contradiction:** FIX-154 is deployed but documented as pending (F34). This awaits dual-agent resolution.
+
+---
+
+## DB_REQUESTS
+
+All are read-only and bounded, with epoch-based windows.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: Test RC2 (F37) across the population. Outcome of 14-day closed positions, bucketed by the number of 1m SELL/STRONG_SELL signals in the 15 min before the entry signal.
+SQL:
+SELECT b.bear_bucket, COUNT(*) AS n, SUM(b.realized_pnl<0) AS losses, ROUND(SUM(b.realized_pnl),4) AS pnl_usdt, ROUND(AVG(b.ret_pct),4) AS avg_ret_pct, ROUND(AVG(b.held_s),0) AS avg_hold_s FROM (SELECT p.id, p.realized_pnl, (p.exit_price-p.entry_price)/p.entry_price*100 AS ret_pct, UNIX_TIMESTAMP(p.closed_at)-UNIX_TIMESTAMP(p.opened_at) AS held_s, CASE WHEN x.bear15 >= 10 THEN 'A:>=10' WHEN x.bear15 >= 5 THEN 'B:5-9' WHEN x.bear15 >= 1 THEN 'C:1-4' ELSE 'D:0' END AS bear_bucket FROM crypto_ai.paper_position p JOIN (SELECT p2.id AS pid, (SELECT COUNT(*) FROM crypto_ai.trade_signal s WHERE s.symbol=es.symbol AND s.interval_code='1m' AND s.decision IN ('SELL','STRONG_SELL') AND s.generated_at < es.generated_at AND s.generated_at >= FROM_UNIXTIME(UNIX_TIMESTAMP(es.generated_at)-900)) AS bear15 FROM crypto_ai.paper_position p2 JOIN crypto_ai.trade_signal es ON es.id=p2.signal_id WHERE p2.status='CLOSED' AND p2.closed_at >= FROM_UNIXTIME(UNIX_TIMESTAMP()-14*86400)) x ON x.pid=p.id) b GROUP BY b.bear_bucket ORDER BY b.bear_bucket LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: Fee-adjusted P&L (F39, U26), at 0.10% per side on entry and exit notional, by entry-quality bucket and by planned R:R bucket over 14 days.
+SQL:
+SELECT CASE WHEN m.entry_quality_score = 50 THEN '=50' WHEN m.entry_quality_score < 55 THEN '51-54' WHEN m.entry_quality_score < 70 THEN '55-69' WHEN m.entry_quality_score < 85 THEN '70-84' ELSE '85+' END AS eq_bucket, COUNT(*) AS n, ROUND(SUM(p.quantity*p.entry_price),4) AS entry_notional, ROUND(SUM(p.realized_pnl),4) AS gross_pnl, ROUND(SUM(0.001*p.quantity*(p.entry_price+p.exit_price)),4) AS fee_est, ROUND(SUM(p.realized_pnl-0.001*p.quantity*(p.entry_price+p.exit_price)),4) AS net_pnl_est FROM crypto_ai.paper_position p JOIN crypto_ai.wallet_managed_position m ON m.entry_signal_id=p.signal_id WHERE p.status='CLOSED' AND p.closed_at >= FROM_UNIXTIME(UNIX_TIMESTAMP()-14*86400) GROUP BY eq_bucket ORDER BY eq_bucket LIMIT 10;
+SELECT CASE WHEN s.risk_reward_ratio IS NULL THEN 'NULL' WHEN s.risk_reward_ratio < 0.5 THEN '<0.5' WHEN s.risk_reward_ratio < 1 THEN '0.5-1' WHEN s.risk_reward_ratio < 2 THEN '1-2' ELSE '>=2' END AS rr_bucket, COUNT(*) AS n, ROUND(SUM(p.realized_pnl),4) AS gross_pnl, ROUND(SUM(p.realized_pnl-0.001*p.quantity*(p.entry_price+p.exit_price)),4) AS net_pnl_est FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id=p.signal_id WHERE p.status='CLOSED' AND p.closed_at >= FROM_UNIXTIME(UNIX_TIMESTAMP()-14*86400) GROUP BY rr_bucket ORDER BY rr_bucket LIMIT 10;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: Exit-reason distribution (F38, U27). Do signal exits dominate, and how large are the losses by reason over 14 days?
+SQL:
+SELECT p.close_reason, COUNT(*) AS n, SUM(p.realized_pnl<0) AS losses, ROUND(SUM(p.realized_pnl),4) AS pnl_usdt, ROUND(AVG((p.exit_price-p.entry_price)/p.entry_price*100),4) AS avg_ret_pct, ROUND(MIN((p.exit_price-p.entry_price)/p.entry_price*100),4) AS worst_ret_pct, ROUND(AVG(UNIX_TIMESTAMP(p.closed_at)-UNIX_TIMESTAMP(p.opened_at)),0) AS avg_hold_s FROM crypto_ai.paper_position p WHERE p.status='CLOSED' AND p.closed_at >= FROM_UNIXTIME(UNIX_TIMESTAMP()-14*86400) GROUP BY p.close_reason ORDER BY n DESC LIMIT 20;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-004
+Purpose: Whether RC4 is systemic (U28). For each closed position with a TP extension in 14 days, compare its first (original) TP gain with the realized return.
+SQL:
+SELECT m.id AS wmp_id, p.id AS paper_id, p.symbol, p.entry_price, MIN(e.old_value_usdt) AS first_tp, COUNT(*) AS n_ext, p.exit_price, p.close_reason, ROUND((MIN(e.old_value_usdt)-p.entry_price)/p.entry_price*100,4) AS first_tp_pct, ROUND((p.exit_price-p.entry_price)/p.entry_price*100,4) AS realized_pct, ROUND(p.realized_pnl,6) AS realized_pnl FROM crypto_ai.position_management_event e JOIN crypto_ai.wallet_managed_position m ON m.id=e.wallet_position_id JOIN crypto_ai.paper_position p ON p.signal_id=m.entry_signal_id WHERE e.event_type='TAKE_PROFIT_EXTENDED' AND e.occurred_at >= FROM_UNIXTIME(UNIX_TIMESTAMP()-14*86400) AND p.status='CLOSED' GROUP BY m.id, p.id, p.symbol, p.entry_price, p.exit_price, p.close_reason, p.realized_pnl ORDER BY p.id LIMIT 100;
+### END_DB_REQUEST
+
+**Log search request (needs SSH through the Coordinator, unchanged):** production log for 2026-10-11 17:50 – 2026-10-12 07:10 UTC (2026-10-11 20:50 – 2026-10-12 10:10 KSA). Search for `FIX-11G transitional BUY authority granted` and `FIX-11G post-guard result` with signalId 156723 or 176710.
+
+---
+
+## Self-review (Iteration 6)
+
+**Resolved:**
+- **U21:** all scores rebuilt exactly; no floor clamp was involved.
+- **U22:** the single BUY was #167646, one candle before entry.
+- **U23:** fill positions in the real range are 45–100%.
+- **U24, partly:** entry quality does order the gross returns. The =50 bucket is the weakest on average return, and likely negative after fees.
+
+**Corrected:**
+- **F28:** the 182, 158 and 162 scores are no longer ambiguous. They are exact 50s, not floored.
+- **F32:** sharpened. Two entries (162 and 172) were at 90–100% of their real range.
+
+**Root-cause ranking:**
+- RC1 (geometry and fees) and RC2 (counter-trend 1m flips) explain the five valid losing trades.
+- RC3 (143, F1/F22) is still the only logic-defect candidate.
+
+**Not yet established:**
+- Whether RC2 is systemic (I6-001).
+- Net-of-fee magnitudes (I6-002).
+- Whether RC4 is systemic (I6-004).
+
+**Next iteration (7):** apply the I6 results, then finalise the RC1–RC5 ranking with population-level confirmation or rejection. After that, draft correction directions and regression checks. These would be analysis only; no specification or implementation is implied.

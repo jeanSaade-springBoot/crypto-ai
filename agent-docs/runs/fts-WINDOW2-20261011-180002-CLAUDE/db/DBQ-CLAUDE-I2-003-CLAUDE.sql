@@ -1,0 +1,1 @@
+SELECT id, observed_at, price, source, source_received_at, delivery_status, outcome_reason, created_at FROM market_price_event WHERE symbol='AEROUSDT' AND observed_at BETWEEN '2026-10-11 02:12:00' AND '2026-10-11 02:22:00' ORDER BY observed_at LIMIT 600;

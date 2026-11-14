@@ -1,0 +1,87 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Entry quality for every frozen trade—**182, 172, 162, 158, 143, 137**—is currently **unverifiable**, not weak or defective. The permitted `db/CODEX/` folder contains no result artifacts, so no position, signal, candle, execution, or timing row can be attributed to any of them.
+
+- **PROJECT EVIDENCE:** Current code requires durable signal processing and freshness eligibility before business execution, then resolves a fresh canonical price, revalidates at that price, and only creates a `PaperPosition` after the wallet BUY succeeds. [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:90), [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:340)
+
+- **PROJECT EVIDENCE:** A created position records the fresh execution price, signal stop, target, signal linkage, and opening time. This describes the current route only; it is not proof that any frozen trade used it. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:401)
+
+- **PROJECT EVIDENCE:** The current `TradeSignal` model has evidence needed for a future entry-quality assessment: final-entry approval, strategy/BTC/derivatives/liquidity gates, data quality, confidence, decision path, risk/reward, ATR sizing, decision price, stop, and target. [TradeSignal.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/TradeSignal.java:69)
+
+- **AGENT INFERENCE:** No causal conclusion about late entries, weak risk/reward, stale analysis, BTC-context veto bypass, poor liquidity, execution-price slippage, or a strategy defect is justified until the historical records are obtained.
+
+- **PROJECT EVIDENCE:** There is a documentation-status conflict around FIX-154: the permanent project instruction calls it pending/not implemented, while Codex historical design material describes an implementation record. Without trade-time build/configuration evidence, neither status may be assumed to have governed these six entries.
+
+- **EXTERNAL RESEARCH:** None used.
+
+## EVIDENCE
+
+- Required frozen population retained exactly: `paper_position` IDs `182, 172, 162, 158, 143, 137`.
+- Snapshot clock is recorded as UTC `2026-11-01 08:17:41`, KSA `2026-11-01 11:17:36`; the intended 18:00 KSA clock was not preserved.
+- The forensic guidance requires contemporaneous signal, freshness/data-quality, context, risk, sizing, wallet, and execution-price evidence before classifying entry quality. [TRADE_INVESTIGATION_AGENT.md](/C:/workspace/crypto-ai-trader-mysql/codex-docs/TRADE_INVESTIGATION_AGENT.md:93)
+- No trade timestamp is available; therefore no trade-specific UTC→KSA conversion can be made.
+
+## UNKNOWNS
+
+- The identity, symbol, entry signal, entry UTC/KSA time, entry price, stop, target, quantity, and realized loss for each frozen trade.
+- Whether the signal was fresh, quality-valid, final-entry-allowed, and supported by contemporaneous BTC/5m/1h, liquidity, derivatives, ATR, and risk/reward evidence.
+- Decision-price versus canonical execution-price gap, wallet controls, duplicate/retry behavior, and runtime build/configuration.
+- Physical snapshot schema and the actual relationships required to join each frozen position to its signal, wallet execution, and candle evidence.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Establish the actual snapshot schema and keys before requesting entry-quality evidence for the six frozen `paper_position` IDs. This preserves the requirement to verify physical columns/relationships before querying trade rows.  
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    c.column_default,
+    c.extra,
+    k.constraint_name,
+    k.referenced_table_name,
+    k.referenced_column_name
+FROM information_schema.columns AS c
+LEFT JOIN information_schema.key_column_usage AS k
+    ON k.table_schema = c.table_schema
+   AND k.table_name = c.table_name
+   AND k.column_name = c.column_name
+   AND k.referenced_table_name IS NOT NULL
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'signal_processing_work',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY c.table_name, c.ordinal_position, k.constraint_name;
+
+SELECT
+    table_name,
+    index_name,
+    non_unique,
+    seq_in_index,
+    column_name
+FROM information_schema.statistics
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'signal_processing_work',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, index_name, seq_in_index;
+```
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation changes were made.

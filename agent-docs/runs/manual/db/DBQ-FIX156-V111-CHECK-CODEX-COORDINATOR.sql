@@ -1,0 +1,1 @@
+SELECT version, description, success FROM flyway_schema_history WHERE version IN ('111','112') ORDER BY version

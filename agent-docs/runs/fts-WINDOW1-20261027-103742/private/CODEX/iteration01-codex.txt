@@ -1,0 +1,74 @@
+## FINDINGS
+
+- The mandatory frozen scope is confirmed: `crypto_ai.paper_position` IDs **182, 172, 162, 158, 143, 137** only. No substitution was made.
+- The supplied Codex-private evidence directory is empty; therefore no database records, logs, or prior query results exist yet for reconstructing these trades.
+- Current code shows `paper_position` holds the persisted lifecycle, linked entry/exit signals, prices, P&L, reasons, and UTC open/close instants. A losing row alone cannot establish whether the cause was strategy, stop-loss, protection, data quality, or execution.
+- Protection may close paper positions from live price observations, with `PROFIT_LOCK_EXIT`, `PROFIT_LOCK_HTF_EXIT`, `PROFIT_LOCK_BEARISH_CONFIRMATION`, stop-loss, take-profit, or confirmed signal paths. The actual `close_reason`, `exit_reason`, price-event lineage, and wallet records are required per trade.
+- The snapshot’s intended window clock was not preserved. Analysis must use the supplied snapshot time and treat “10:00 KSA” only as the intended, drifted reference—not as an exact database cutoff.
+
+## EVIDENCE
+
+### PROJECT EVIDENCE
+
+- `PaperPosition` maps `paper_position`: entry/exit prices, realized P&L, `signal_id`, `exit_signal_id`, close reason, detailed reasons, and UTC lifecycle timestamps.
+- `WalletTrade` maps immutable paper execution records, including execution price, observed price timestamp, cost basis, realized P&L, fees, and execution reason.
+- `WalletManagedPosition` contains stop/target, high-water price, profit-lock state, near-TP state, and position lifecycle evidence.
+- `PositionExitPolicy` defines the active multi-timeframe normal-exit and profit-lock-breach decisions.
+- `MarketPriceEventService` treats only `LEGACY` and `APPLIED` price events as accepted protection evidence; `PENDING`, `NON_CANONICAL`, and `PROTECTION_NOT_APPLIED` remain evidence gaps/exclusions.
+
+### EXTERNAL RESEARCH
+
+- None.
+
+### AGENT INFERENCE
+
+- None asserted. Trade-specific causation is not yet evidence-backed.
+
+## UNKNOWNS
+
+- Each trade’s symbol, UTC/KSA entry and close times, signal linkage, stop/target, realized P&L calculation, and recorded exit reason.
+- Whether the entry was contemporaneously permitted, fresh, quality-valid, and within applicable risk controls.
+- Whether exit was triggered by accepted price evidence, a signal, fixed stop, profit lock, take profit, or another path.
+- Whether associated wallet executions reconcile to `paper_position`.
+- Whether Replay could meaningfully reproduce each case; this depends on complete historical candle and accepted price-event coverage.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual `crypto_ai` schema for the bounded set of entities needed to reconstruct the six frozen `paper_position` trades before requesting record-level evidence.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'signal_processing_work',
+      'market_price_event',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY
+    FIELD(
+        table_name,
+        'paper_position',
+        'trade_signal',
+        'wallet_trade',
+        'wallet_managed_position',
+        'signal_processing_work',
+        'market_price_event',
+        'candle',
+        'technical_indicator'
+    ),
+    ordinal_position;
+```
+### END_DB_REQUEST

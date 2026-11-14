@@ -1,0 +1,290 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The authoritative study scope is frozen to `crypto_ai.paper_position` IDs `182, 172, 162, 158, 143, 137`. No substitutions were made.
+
+- **PROJECT EVIDENCE:** No executable database results are available in the allowed CODEX evidence folder. Therefore, entry rationale, exit trigger, protection behavior, execution correctness, and P&L reconciliation are currently **unverified**.
+
+- **PROJECT EVIDENCE:** The snapshot timestamps conflict: `2026-10-30 15:00:04 UTC` converts to `2026-10-30 18:00:04 KSA`, not the stated `18:00:02 KSA`. The stated KSA snapshot time is two seconds earlier than the mathematically derived conversion. This does not change the frozen IDs, but it prevents treating both timestamps as simultaneously exact.
+
+- **PROJECT EVIDENCE:** Current source maps `paper_position` to entry/exit signal IDs, immutable entry/exit prices, SL/TP, close reason, P&L, and UTC lifecycle timestamps. `wallet_trade`, `signal_processing_work`, `market_price_event`, `trade_signal`, `candle`, and `technical_indicator` are the relevant supporting evidence domains. Source mapping is not proof of the deployed schema or historical rows.
+
+- **EXTERNAL RESEARCH:** None performed.
+
+- **AGENT INFERENCE:** This iteration should first establish actual schema and durable rows, then reconstruct each trade only from its linked records. No conclusion that these were valid losses, logic defects, or protection failures is justified yet.
+
+## EVIDENCE
+
+- Frozen selection rule supplied for WINDOW2: `status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0`, descending `closed_at`, limit six; Replay table `wallet_position_test` excluded.
+- Allowed CODEX DB evidence directory: present but contains no files/results.
+- Source evidence reviewed:
+  - `PaperPosition` maps `signal_id`, `exit_signal_id`, prices, SL/TP, close fields, and lifecycle timestamps.
+  - `MarketPriceEventService` treats `LEGACY` and `APPLIED` price events as accepted protection evidence; `PENDING`, `NON_CANONICAL`, and `PROTECTION_NOT_APPLIED` must remain explicit exclusions/evidence gaps.
+  - `SignalProcessingStore` records work status, attempts, ownership, failure stage, completion, and `paper_position_id`.
+
+## UNKNOWNS
+
+- Actual `paper_position` rows and whether the six IDs still satisfy the frozen selection at the stated snapshot.
+- Symbols, sides, entry/exit UTC timestamps, close reasons, SL/TP values, and realized P&L.
+- Entry and exit signal identities, decisions, freshness, data quality, strategy/risk gates, and signal-to-position linkage.
+- Whether processing work completed normally or contains retries/failures.
+- Whether accepted protection observations reached a stop, target, trailing/profit-lock, or other exit threshold.
+- Wallet execution quantities, fees, weighted prices, and reconciliation against `paper_position.realized_pnl`.
+- Whether any evidence belongs to Replay/test rather than the production-paper path.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Establish the actual current schema before selecting forensic columns; verify that each proposed evidence table exists in `crypto_ai`.  
+SQL:
+```sql
+SELECT
+  table_name,
+  column_name,
+  column_type,
+  is_nullable,
+  column_key,
+  ordinal_position
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+    'paper_position',
+    'trade_signal',
+    'wallet_trade',
+    'signal_processing_work',
+    'market_price_event',
+    'candle',
+    'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-002  
+Purpose: Obtain the authoritative lifecycle and frozen-selection attributes for exactly the six mandated paper positions, preserving raw UTC and calculated KSA separately.  
+SQL:
+```sql
+SELECT
+  p.id,
+  p.symbol,
+  p.side,
+  p.status,
+  p.signal_id,
+  p.exit_signal_id,
+  p.quantity,
+  p.entry_price,
+  p.stop_loss,
+  p.take_profit,
+  p.exit_price,
+  p.realized_pnl,
+  p.close_reason,
+  p.opened_at AS opened_at_utc,
+  DATE_ADD(p.opened_at, INTERVAL 3 HOUR) AS opened_at_ksa,
+  p.closed_at AS closed_at_utc,
+  DATE_ADD(p.closed_at, INTERVAL 3 HOUR) AS closed_at_ksa,
+  LEFT(p.entry_reason, 1500) AS entry_reason_excerpt,
+  LEFT(p.exit_reason, 1500) AS exit_reason_excerpt
+FROM crypto_ai.paper_position p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-003  
+Purpose: Recover contemporaneous entry and exit decision evidence for the six frozen positions, including decision authority, quality, strategy, risk/reward, and UTC/KSA generation times.  
+SQL:
+```sql
+SELECT
+  p.id AS paper_position_id,
+  'ENTRY' AS signal_role,
+  s.id AS signal_id,
+  s.symbol,
+  s.interval_code,
+  s.candle_open_time AS candle_open_time_utc,
+  DATE_ADD(s.candle_open_time, INTERVAL 3 HOUR) AS candle_open_time_ksa,
+  s.generated_at AS generated_at_utc,
+  DATE_ADD(s.generated_at, INTERVAL 3 HOUR) AS generated_at_ksa,
+  s.decision,
+  s.original_decision,
+  s.final_entry_allowed,
+  s.primary_blocking_stage,
+  s.signal_mode,
+  s.data_quality_valid,
+  s.selected_strategy,
+  s.strategy_version,
+  s.entry_authority,
+  s.entry_authority_max_position_percent,
+  s.total_score,
+  s.confidence_score,
+  s.raw_confidence_score,
+  s.effective_confidence_score,
+  s.latest_price,
+  s.stop_loss,
+  s.take_profit,
+  s.atr_at_signal,
+  s.atr_percent,
+  s.risk_reward_ratio,
+  s.btc_context_status,
+  s.btc_context_entry_allowed,
+  s.confluence_status,
+  s.confluence_entry_allowed,
+  s.derivatives_status,
+  s.derivatives_entry_allowed,
+  s.liquidity_status,
+  s.liquidity_entry_allowed,
+  LEFT(s.final_decision_explanation, 1500) AS final_decision_explanation_excerpt
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.trade_signal s ON s.id = p.signal_id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+
+UNION ALL
+
+SELECT
+  p.id AS paper_position_id,
+  'EXIT' AS signal_role,
+  s.id AS signal_id,
+  s.symbol,
+  s.interval_code,
+  s.candle_open_time AS candle_open_time_utc,
+  DATE_ADD(s.candle_open_time, INTERVAL 3 HOUR) AS candle_open_time_ksa,
+  s.generated_at AS generated_at_utc,
+  DATE_ADD(s.generated_at, INTERVAL 3 HOUR) AS generated_at_ksa,
+  s.decision,
+  s.original_decision,
+  s.final_entry_allowed,
+  s.primary_blocking_stage,
+  s.signal_mode,
+  s.data_quality_valid,
+  s.selected_strategy,
+  s.strategy_version,
+  s.entry_authority,
+  s.entry_authority_max_position_percent,
+  s.total_score,
+  s.confidence_score,
+  s.raw_confidence_score,
+  s.effective_confidence_score,
+  s.latest_price,
+  s.stop_loss,
+  s.take_profit,
+  s.atr_at_signal,
+  s.atr_percent,
+  s.risk_reward_ratio,
+  s.btc_context_status,
+  s.btc_context_entry_allowed,
+  s.confluence_status,
+  s.confluence_entry_allowed,
+  s.derivatives_status,
+  s.derivatives_entry_allowed,
+  s.liquidity_status,
+  s.liquidity_entry_allowed,
+  LEFT(s.final_decision_explanation, 1500) AS final_decision_explanation_excerpt
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.trade_signal s ON s.id = p.exit_signal_id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY paper_position_id, signal_role;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-004  
+Purpose: Trace processing-work and wallet execution evidence linked to entry or exit signals of the frozen positions, including retries, failure evidence, execution prices, fees, and UTC/KSA timestamps.  
+SQL:
+```sql
+SELECT
+  p.id AS paper_position_id,
+  'PROCESSING_WORK' AS evidence_type,
+  w.signal_id,
+  w.symbol,
+  w.interval_code,
+  w.candle_open_time AS event_time_utc,
+  DATE_ADD(w.candle_open_time, INTERVAL 3 HOUR) AS event_time_ksa,
+  w.origin,
+  w.status,
+  w.attempts,
+  w.source_event_id,
+  w.paper_position_id AS linked_paper_position_id,
+  w.failure_stage,
+  LEFT(w.error_message, 1000) AS error_message_excerpt,
+  w.updated_at AS updated_at_utc,
+  DATE_ADD(w.updated_at, INTERVAL 3 HOUR) AS updated_at_ksa,
+  w.completed_at AS completed_at_utc,
+  DATE_ADD(w.completed_at, INTERVAL 3 HOUR) AS completed_at_ksa,
+  NULL AS wallet_trade_id,
+  NULL AS trade_side,
+  NULL AS quantity,
+  NULL AS price_usdt,
+  NULL AS decision_price_usdt,
+  NULL AS fee_usdt,
+  NULL AS realized_pnl_usdt,
+  NULL AS execution_type,
+  NULL AS execution_reason
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.signal_processing_work w
+  ON w.signal_id = p.signal_id OR w.signal_id = p.exit_signal_id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+
+UNION ALL
+
+SELECT
+  p.id AS paper_position_id,
+  'WALLET_TRADE' AS evidence_type,
+  wt.signal_id,
+  wt.symbol,
+  NULL AS interval_code,
+  wt.executed_at AS event_time_utc,
+  DATE_ADD(wt.executed_at, INTERVAL 3 HOUR) AS event_time_ksa,
+  NULL AS origin,
+  wt.status,
+  NULL AS attempts,
+  NULL AS source_event_id,
+  NULL AS linked_paper_position_id,
+  NULL AS failure_stage,
+  LEFT(wt.execution_message, 1000) AS error_message_excerpt,
+  wt.executed_at AS updated_at_utc,
+  DATE_ADD(wt.executed_at, INTERVAL 3 HOUR) AS updated_at_ksa,
+  NULL AS completed_at_utc,
+  NULL AS completed_at_ksa,
+  wt.id AS wallet_trade_id,
+  wt.side AS trade_side,
+  wt.quantity,
+  wt.price_usdt,
+  wt.decision_price_usdt,
+  wt.fee_usdt,
+  wt.realized_pnl_usdt,
+  wt.execution_type,
+  wt.execution_reason
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.wallet_trade wt
+  ON wt.signal_id = p.signal_id OR wt.signal_id = p.exit_signal_id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY paper_position_id, evidence_type, event_time_utc;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-005  
+Purpose: Summarize the full accepted and excluded protection-price evidence during each frozen position’s holding period, without treating candle OHLC as a substitute for absent price-event evidence.  
+SQL:
+```sql
+SELECT
+  p.id AS paper_position_id,
+  e.delivery_status,
+  e.source,
+  COUNT(*) AS event_count,
+  MIN(e.observed_at) AS first_observed_at_utc,
+  DATE_ADD(MIN(e.observed_at), INTERVAL 3 HOUR) AS first_observed_at_ksa,
+  MAX(e.observed_at) AS last_observed_at_utc,
+  DATE_ADD(MAX(e.observed_at), INTERVAL 3 HOUR) AS last_observed_at_ksa,
+  MIN(e.price) AS minimum_observed_price,
+  MAX(e.price) AS maximum_observed_price,
+  GROUP_CONCAT(DISTINCT e.outcome_reason ORDER BY e.outcome_reason SEPARATOR ' | ') AS outcome_reasons
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.market_price_event e
+  ON e.symbol = p.symbol
+ AND e.observed_at >= p.opened_at
+ AND e.observed_at <= p.closed_at
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+GROUP BY p.id, e.delivery_status, e.source
+ORDER BY p.id, e.delivery_status, e.source;
+```
+### END_DB_REQUEST

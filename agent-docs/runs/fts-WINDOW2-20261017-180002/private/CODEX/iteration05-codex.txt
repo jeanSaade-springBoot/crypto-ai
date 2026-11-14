@@ -1,0 +1,61 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Entry quality is **unverifiable for each frozen trade** (`182, 172, 162, 158, 143, 137`): the permitted Codex DB-evidence directory remains empty. No trade-specific signal, execution-price, or context record is available.
+
+- **PROJECT EVIDENCE:** Current source blocks initial entries with Entry Quality below `50/100`; scores of `50–69`, `70–84`, and `85+` cap initial exposure at 25%, 40%, and 50% respectively. It evaluates the actual execution-time price, not merely the signal price. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:865) [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1150)
+
+- **PROJECT EVIDENCE:** The model considers 30-minute price expansion, ATR extension, opportunity age, execution-price reward/risk, recent rejection near a prior high, volatility regime, and stop-exposed liquidity. A fresh price at/below stop or at/above target rejects the BUY before wallet execution.
+
+- **PROJECT EVIDENCE:** Normal direct BUYs require a bullish 1m signal with final entry permission, immediate ATR permission, minimum score, and non-blocked strategy/BTC/derivatives/strong-target-wall conditions. Fresh 5m and 1h context is then validated at the signal time. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:2139) [TradeExecutionValidationService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:62)
+
+- **PROJECT EVIDENCE:** The wallet BUY retains immutable decision price, execution price, execution-price observation timestamp, and execution message. `wallet_managed_position.entry_quality_score` is not reliable as an immutable initial-entry record by itself: every later BUY/add writes it again. [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:129)
+
+- **AGENT INFERENCE:** No frozen trade may be classified as supported, weak, late/chased, or rule-violating until its exact linked entry signal and actual BUY execution are retrieved. A later losing outcome is not entry-quality evidence.
+
+- **EXTERNAL RESEARCH:** None.
+
+## EVIDENCE
+
+- Frozen population unchanged: `182, 172, 162, 158, 143, 137`.
+- Codex-only DB directory inspected: empty.
+- Current source establishes the evaluation logic, but not the deployed version, configuration, or data available at these six entries.
+
+## UNKNOWNS
+
+- Each trade’s symbol, entry signal ID, signal-time price, actual execution price, and execution-price observation time.
+- Entry Quality score/classification and its underlying expansion, ATR, reward/risk, opportunity-anchor, rejection-zone, liquidity, and regime inputs.
+- Whether the execution path was direct BUY, setup wake-up, retracement, accumulated evidence, or another reduced-entry route.
+- Signal/work freshness, 5m/1h context, `data_quality_valid`, BTC/derivatives/liquidity state, and historical configuration.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Confirm the actual schema before bounded entry-quality reads for only the six frozen positions. This identifies the authoritative linkage and whether immutable execution-price evidence, mutable managed-position score, opportunity evidence, and processing records exist.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'execution_opportunity',
+      'signal_processing_work',
+      'buy_htf_assessment_audit'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation changes were made.

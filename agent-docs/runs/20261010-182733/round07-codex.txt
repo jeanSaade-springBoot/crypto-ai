@@ -1,0 +1,71 @@
+## FINDINGS
+
+- **[PROJECT EVIDENCE]** RPR-0.6 cannot be dual-approved as the governing implementation contract. Governance requires the exact approved artifact at `agent-docs/FINAL_CHANGE_SPECIFICATION.md`; RPR-0.6 says it supersedes RPR-0.4 “for review only,” while the canonical file remains RPR-0.4.
+
+- **[PROJECT EVIDENCE]** Correction to my earlier concern: no frozen PDF is required yet. PDF freezing occurs after dual approval and before user review; the blocking governance issue is the non-canonical, unapproved artifact—not the current absence of a PDF.
+
+- **[PROJECT EVIDENCE]** The claimed complete read/write boundary and registry are inaccurate. Current Replay creates `analysis_test_run` (not `regression_test_run`), writes `fix122_replay_revision` before the worker begins, and incrementally writes `execution_opportunity_test`, `analysis_test_signal`, `trade_signal_test`, and `analysis_test_result`. `RegressionTestService` is absent from §4 despite necessarily changing if qualification is to precede non-diagnostic Replay writes.
+
+- **[PROJECT EVIDENCE]** “Staging then terminal publication” is not implementable from M04 as written. Current processing persists per-candle outputs, while `StopLossEvidenceStore.append` uses an independent transaction that survives a caller rollback. The specification lacks the schema, state transitions, transaction boundaries, crash recovery, and independent-write treatment needed to guarantee discard-on-failure.
+
+- **[PROJECT EVIDENCE]** M02 is necessary but incomplete. The worker presently places every loaded candle into the timeline, including open candles. Regression snapshot construction selects closed rows at-or-before the requested open time without checking that the resulting snapshot’s candle identity equals the requested candle. A currently open row can therefore produce a snapshot for the prior candle.
+
+- **[PROJECT EVIDENCE]** Production performs a candle-quality gate before indicator computation; Replay does not. The existing production gate evaluates the then-latest closed history, so blindly calling it in Replay would itself leak future data. RPR-0.6 must specify and test an as-of quality algorithm, exact close-time convention, and snapshot-identity check.
+
+- **[PROJECT EVIDENCE]** M06 does not specify both actual production routes. Live price protection performs TP continuation/extension, stop loss, profit-lock/rebase handling, normal exit, then near-TP logic. Signal processing has separate TP/lock/stop/floor/SELL/add ordering. Current exact-price Replay processes bearish signal SELLs without the profit-lock suppression that Production applies, and its add path has no equivalent lock check. “No policy reorder” is insufficient to resolve this.
+
+- **[PROJECT EVIDENCE]** The price-event requirement is impossible with the current `PriceEvent` shape. SQL orders by `observed_at, id`, but the replay object exposes only timestamp, price, and source. RPR-0.6 requires retained ID and ordering slot without registering the required `MarketPriceEventService`/data-contract change.
+
+- **[PROJECT EVIDENCE]** The isolation design remains under-specified. Current Replay reads `WalletSettingsRepository`; `BinanceMinimumExecutionPolicy` catches HTTP failures and converts them to normal policy results; the worker catches generic per-candle exceptions and continues. A named exception alone will not be fail-closed unless a run-level violation state reaches every swallowing boundary and asynchronous handoff.
+
+- **[PROJECT EVIDENCE]** The profile rule is not parity-safe as drafted. Production paper wallet executions record zero fees. Allowing arbitrary fees/slippage as ordinary profile data changes virtual cash and later sizing. A zero-fee production-policy profile and any counterfactual fee/slippage profile must be separately defined and labelled.
+
+- **[PROJECT EVIDENCE]** `ANALYSIS_PARITY` has no usable oracle contract. The current validator compares selected fields exactly, yet live order-book evaluation can return `INSUFFICIENT_DATA_HOLD` where historical Replay returns `UNAVAILABLE`; derivatives historical evaluation is always `UNAVAILABLE` because history is not persisted. RPR-0.6 does not define eligible signal modes, dependency evidence, field versions/tolerances, or refusal rules for these intentional differences.
+
+- **[PROJECT EVIDENCE]** Sentiment remains a look-ahead risk. Replay filters by `observed_at`; Fear & Greed persistence assigns that value from the provider timestamp, not demonstrated collection/publication time. The artifact needs a durable availability-time rule or a strict-claim refusal for sentiment-dependent signals.
+
+- **[PROJECT EVIDENCE]** Current source contains FIX-154 execution behavior and asynchronous audit suppression during Replay. RPR-0.6 mentions its table but does not register the assessment service, audit isolation, metrics, or policy-version identity. Repository documentation conflicts on FIX-154 status; current source must govern the revised design, while deployed-version parity remains unproven.
+
+- **[PROJECT EVIDENCE]** Resource protection is not concrete. `runAsync` is unqualified `@Async`; several executors exist, and Replay shares a 15-connection Hikari pool. C04/X10 give neither a named Replay executor nor numerical CPU/database budgets or a measurable protection-freshness threshold.
+
+- **[PROJECT EVIDENCE]** The stated “Production code unchanged” scope conflicts with RPR6-05 and RPR6-07 through RPR6-12, which modify shared production classes. A decision is required: no shared-code edits, or no production *behaviour* change with explicit equivalence tests and a real rollback path.
+
+- **[PROJECT EVIDENCE]** Archive compatibility is already unsafe. V109 adds five columns to `trade_signal_test` but not `trade_signal_test_archive`; archival uses positional `INSERT … SELECT ?, r.*`. On a fully upgraded schema this is expected to have incompatible column counts. RPR-0.6 does not register remediation or explicitly bound archive behavior.
+
+## EVIDENCE
+
+- Governance and artifact identity: [AGENTS.md](/C:/workspace/crypto-ai-trader-mysql/AGENTS.md:327), [RPR-0.6](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.6.md:3), [canonical RPR-0.4](/C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:3), [PDF rules](/C:/workspace/crypto-ai-trader-mysql/agent-docs/PDF_ARTIFACT_RULES.md:13).
+
+- Current writes and non-staging: [run creation/FIX-122 write](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:213), [incremental Replay output](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:636), [independent FIX-122 audit write](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/StopLossEvidenceStore.java:48).
+
+- Candle and data-quality mismatch: [timeline and snapshot processing](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:550), [Replay snapshot lookup](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/service/TechnicalIndicatorService.java:118), [Production quality gate](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java:117).
+
+- Route ordering and price identity: [Production signal lock suppression](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:197), [Replay exact-price signal SELL](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:232), [price-event projection](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118).
+
+- Isolation/profile/oracle: [HTTP failure converted to policy result](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/BinanceMinimumExecutionPolicy.java:38), [zero production fees](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:163), [exact comparator](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ReplayParityValidator.java:17), [order-book divergence](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/OrderBookLiquidityService.java:154), [derivatives historical limitation](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/DerivativesPositioningService.java:33).
+
+- FIX-154, resources, archive: [FIX-154 shared execution dependency](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:51), [Replay audit suppression](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BuyHtfAssessmentAuditStore.java:41), [unqualified async worker](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:99), [shared pool](/C:/workspace/crypto-ai-trader-mysql/src/main/resources/application.yml:16), [V109 active-only columns](/C:/workspace/crypto-ai-trader-mysql/src/main/resources/db/migration/V109__fix_154_forward_replay_and_audit_columns.sql:4), [positional archive query](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:268).
+
+## OBJECTIONS
+
+- **[AGENT INFERENCE]** Replace RPR-0.6 with a hash-identified revision in the canonical contract path before renewed review.
+
+- **[AGENT INFERENCE]** Add complete, ID-mapped contracts for run creation, qualification/refusal, staged publication, terminal failure, cancellation, crash recovery, archive behavior, and all independent transactions.
+
+- **[AGENT INFERENCE]** Define a strict as-of eligibility/oracle model: candle identity and close convention, data-quality calculation, BTC/context ordering, signal modes, order-book/derivatives/sentiment evidence, and explicit refusal labels.
+
+- **[AGENT INFERENCE]** Specify both protection and signal execution sequences in executable order, including profit-lock suppression of SELL/add, TP extension, floors, and reason codes; cover each with route-specific fixtures.
+
+- **[AGENT INFERENCE]** Define a structural isolation boundary across synchronous and asynchronous calls, with a terminal violation flag, virtual constraints/settings, fixed parity fee model, and separate counterfactual labels.
+
+- **[AGENT INFERENCE]** Resolve the shared-code scope contradiction, name bounded resources with measurable production-safety criteria, and register archive-schema repair or explicitly remove archival operations from the supported release scope.
+
+## UNKNOWNS
+
+- **[PROJECT EVIDENCE]** No database, runtime logs, production system, credentials, git operation, build, or test execution was accessed or changed in this review.
+
+- **[AGENT INFERENCE]** The archive mismatch is source-proven as a schema/query incompatibility, but its occurrence in a specific database has not been runtime-tested.
+
+- **[AGENT INFERENCE]** The deployed JAR/configuration identity, historical collection availability, and proportion of windows eligible for a strict claim remain unverified.
+
+VERDICT: REJECTED

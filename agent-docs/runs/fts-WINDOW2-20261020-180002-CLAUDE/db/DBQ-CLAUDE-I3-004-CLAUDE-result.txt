@@ -1,0 +1,20 @@
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+correlation_id	varchar(36)	NO	MUL	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+interval_code	varchar(10)	YES		NULL	
+candle_open_time	timestamp(6)	YES		NULL	
+observed_at	timestamp(6)	YES		NULL	
+block_start	timestamp(6)	YES		NULL	
+stage	varchar(40)	NO		NULL	
+started_at	timestamp(6)	NO		NULL	
+finished_at	timestamp(6)	NO		NULL	
+elapsed_ms	bigint	NO		NULL	
+outcome	varchar(20)	NO		NULL	
+thread_name	varchar(100)	NO		NULL	
+correlation_id	symbol	interval_code	obs_epoch	stage	start_epoch	finish_epoch	elapsed_ms	outcome	thread_name
+5686ca58-7a10-4b97-a71a-1324d1578e7d	EGLDUSDT	1m	1791741609.033000	PROTECTION_TRANSACTION	1791741608.908161	1791741612.142195	3233	RETURNED	WebSocketClient-SecureIO-1
+5da4a546-d55e-405e-95d3-94660a0d69ee	EGLDUSDT	1m	1791747815.021000	PROTECTION_TRANSACTION	1791747815.030599	1791747816.237592	1206	RETURNED	WebSocketClient-SecureIO-2
+3c9b7ecd-af34-4b2d-bce4-f2b141f5f397	XRPUSDT	1m	1791765004.319000	PROTECTION_TRANSACTION	1791765004.190166	1791765006.645492	2455	RETURNED	WebSocketClient-SecureIO-2
+543acea1-c40c-4469-a872-7b33369540ac	SHIBUSDT	1m	1791778543.462000	PROTECTION_TRANSACTION	1791778543.474976	1791778545.495632	2020	RETURNED	WebSocketClient-SecureIO-1
+045e9e9a-d59b-4484-bb3c-5f2df2aa5b13	ACEUSDT	1m	1791788718.446000	PROTECTION_TRANSACTION	1791788718.482525	1791788720.512952	2030	RETURNED	WebSocketClient-SecureIO-1

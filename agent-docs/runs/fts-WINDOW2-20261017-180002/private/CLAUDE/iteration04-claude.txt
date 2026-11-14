@@ -1,0 +1,224 @@
+# FTS WINDOW2: Claude, Iteration 4 of 8 (code and trade route, self-review only)
+
+**Iteration headline:**
+- **Confirmed in code (two defects):**
+  - On 5-minute boundaries, Production and Replay can look up different 5m signals. This changed the route for 143 and 158.
+  - Entry validation reads only the 5m decision label. That let a blocked 5m BUY approve 172 and a downgraded STRONG_SELL approve 182.
+- **Rejected:** a protection gap between the wallet BUY and the paper open. The entry is a single transaction, and price updates for that symbol wait on its lock.
+- **Explained:** the slow exits are a design property. Higher-timeframe exits are only evaluated when a price update arrives.
+
+I changed nothing: no code, config, DB writes, git or deploy. Plan mode is on, and this session has no Write or ExitPlanMode tool, so this message is the iteration output. I did not open `private/CODEX/`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or Codex memory.
+
+**Inputs this iteration:** my I1–I3 outputs; DB results I3-001, I3-002, I3-003, I3-004, I3-008 and I2-006. **I3-005, I3-006 and I3-007 have no result files.**
+
+**Labels:** **[PE]** project evidence · **[ER]** external research · **[AI]** agent inference. Times are **KSA (UTC)**. DB values as displayed are KSA (F2-0).
+
+**Caveat on code:** I read the current working tree. FIX-154 was applied on 10-10 (V107/V109, `buy_htf_assessment_audit` has 2297 rows, I2-006), so the FIX-154 code path was live for these trades **[PE]**. Whether every other method matches the build that ran on 10-11/10-12 is not proven (U4-1). I4-001 checks it against runtime audit rows.
+
+---
+
+## FINDINGS
+
+### F4-1 [PE code]: the confluence columns record only the strongest higher-timeframe signal (corrects F3-7 and U3-2)
+
+- For a 1m signal, confluence reads **both** 5m and 1h (`MultiTimeframeConfluenceService.java:297`).
+- It then stores only the one with the largest |trend − 13| (`:73-75`, `:96-100`, `:363-365`).
+- So `confluence_higher_signal_generated_at` is not "the 5m that was read". Four cases point at the 1h signal, not the 5m:
+
+| Trade | Signal | Points at |
+|---|---|---|
+| 172 | 171589 | the 06:00:06.0025 1h signal |
+| 158 exit | 166819 | the 03:00:01.5659 1h signal |
+| 162 exit | 168277 | the 04:00:09.7942 1h signal |
+| — | 166141 | the 03:00:01.5376 1h signal |
+
+- **Audit gap:** the persisted confluence evidence cannot show which 5m was read. This is a forensic-accuracy gap, not a trading defect.
+
+### F4-2 [PE code + DB]: the higher-timeframe lookup cuts off at the 1m signal's own wall-clock time, so the boundary race is real and decided by milliseconds
+
+**Production:**
+- Live `generatedAt` is `Instant.now()` (`AnalysisService.java:150`).
+- Every Execution-Intelligence (EI) and validation lookup uses `generatedAt <= current.generatedAt` (`ExecutionIntelligenceService.java:2455-2461`, `:2606-2609`; `TradeExecutionValidationService.java:367-379`).
+
+**What each entry saw on its boundary:**
+
+| ID | 1m generated | Same-boundary 5m generated | Visible to entry? |
+|---|---|---|---|
+| 137 | 156723: 20:55:01.575650 | 156721: 20:55:01.558049 (18 ms earlier) | **yes** |
+| 143 | 159408: 22:40:01.633945 (19:40:01.634) | 159407: 22:40:01.635944 (**2 ms later**) | **no** |
+| 158 | 165412: 02:35:01.469482 | 165415: 02:35:01.490485 (21 ms later) | **no** |
+
+- **143:** EI deterministically picked the previous 5m BUY, 159285 (22:35:01.553). Its opportunity row 36524 shows `five_minute_decision=BUY` (I3-003). This is a bound-by-generation-time effect, not a commit-visibility race; 159407 was committed at 22:40:02.940, before the opportunity row was written at 22:40:03.051.
+- **SETUP_TIMEFRAME_ATR requires the 5m to be bullish, entry-allowed and ATR-immediate** (`ExecutionIntelligenceService.java:1485-1487`). With 159407 (WATCH) visible instead, the route could not have fired. **[AI]** So 143's entry existed only because its 1m analysis started 2 ms before the 5m analysis.
+- **158:**
+  - The 1m path saw no 5m BUY. Work for 165412 completed 02:35:02.882 with `paper_position_id=NULL`.
+  - The entry came from processing the **5m** signal 165415 (work completed 02:35:04.813, `paper_position_id=158`, I3-004), via `SETUP_CONFIRMATION_WAKEUP` reusing 1m 165412.
+- **Confluence inside signal building** runs before either row commits. The 5m commit takes about 1.3 s, so on a boundary the 1m confluence practically never sees the same-boundary 5m. 137's confluence used the 20:50:01.42 5m signal, not 156721 (I3-001).
+
+### F4-3 [PE code]: Replay orders same-boundary signals differently from Production. This is a confirmed parity defect.
+
+**Replay mechanics:**
+- The timeline sorts by candle close, then by interval: 1h=0, 5m=1, 1m=2 (`RegressionTestWorker.java:557-560`, `:787-793`).
+- Replay `generatedAt` is the exact close boundary (`:584`, `:616`).
+- `latestAtOrBefore` keeps rows with `!generatedAt.isAfter(ref)` (`ExecutionReplayScope.java:106-120`).
+
+**Result:** in Replay, a 1m signal on a boundary **always** sees that boundary's 5m and 1h, both for confluence and for EI. In Production it sees them only when the 5m analysis happened to call `Instant.now()` first (EI), and essentially never for confluence (F4-2).
+
+**Effect on the six:**
+
+| ID | Expected Replay difference |
+|---|---|
+| 143 | Would see 5m WATCH 159407. SETUP_TIMEFRAME_ATR returns null, so a different route or no entry. |
+| 158 | The 5m is processed before the 1m of 02:35 exists, so a wake-up would bind to the 02:34 1m signal (different price and evidence) or take a direct route on the 1m. |
+| 137 | EI parity holds (it saw 156721 in both), but the confluence inputs differ. |
+
+- **[AI]** Production–Replay divergence on every 5-minute-boundary 1m signal. AGENTS.md requires Production and Replay evidence to stay aligned.
+- Replay has not been run (U2-9). The divergence is proven from code; its outcome on these trades is inference.
+
+### F4-4 [PE code]: direct-BUY validation trusts only the 5m decision label. F-25 (172) and F-38 (182) are confirmed.
+
+**How validation reads the 5m:**
+- `validateBuy` → `htfAssessment.assess` → `balancedBuy` (or its neutral-5m wrapper) uses `decision(fiveMinute)` only (`HigherTimeframeBuyAssessmentService.java:20-21`, `:50`; `TradeExecutionValidationService.java:93-109`, `:300-321`).
+- Neither the 5m's `final_entry_allowed` nor its `original_decision` is consulted.
+
+**172 (F-25, confirmed):**
+- 5m 171559 is BUY with `final_entry_allowed=0` (RANGE_ENTRY_LOCATION, confidence 49). The 1h is NEUTRAL.
+- `balancedBuy:306-308` returns **BALANCED_STRONG 75%**, matching opportunity 39062's text "5m is bullish while 1h is NEUTRAL" (I3-003). Entry Quality then capped it at 25%.
+- **Inconsistency between routes:** SETUP_TIMEFRAME_ATR rejects a 5m with `!five.isFinalEntryAllowed()` (`ExecutionIntelligenceService.java:1487`); the direct-BUY route accepts it.
+
+**182 (F-38, confirmed):**
+- 5m 176655 is NEUTRAL with `original_decision=STRONG_SELL`. `assess()` treats NEUTRAL as not bearish, so the **5M_BEARISH_VETO (`:22-26`) is bypassed**.
+- With the 1h WATCH, the FIX-11G branch (`TradeExecutionValidationService.java:263-284`) grants **BALANCED_NEUTRAL_5M_WATCH_1H 25%**. The size was later capped to 15%.
+- **Asymmetry:** other routes do check the original decision. SETUP_TIMEFRAME_ATR and the breakout route veto on `isBearish(current.getOriginalDecision())` (`ExecutionIntelligenceService.java:1478`, `:1518`). The direct validation never checks it for the 5m.
+
+**Classification [AI]:** logic defect (label-only authority). This is distinct from FIX-154 scope. AGENTS.md's FIX-154 notes preserve the legacy `5M_BEARISH_VETO` but do not address a neutralised 5m.
+
+### F4-5 [PE code]: the wallet BUY, managed position and paper open are one transaction, so there is no protection gap (resolves U3-3)
+
+**Transaction scope:**
+- `SignalProcessingCoordinator.process` runs `business.apply(signal)` and `store.complete` in one `REQUIRES_NEW` transaction, after the symbol lock (`SignalProcessingCoordinator.java:36-37`, `:64-103`).
+- `executed_at`/`opened_at` are `Instant.now()` values captured mid-transaction.
+- The commit time is about `signal_processing_work.completed_at` (137: 20:55:04.511; 182: 09:57:06.478, I3-004).
+- So the wallet `executed_at` is the **decision/write time inside the transaction, not the commit time**. The 1.5–2.2 s gap is in-transaction work.
+
+**Why there is no gap:**
+- Protection takes the same `wallet_symbol_coordination … FOR UPDATE` lock before reading the position (`LivePositionProtectionService.java:54-58`; `WalletTransactionCoordination.java:38-47`, 2 s query timeout).
+- A price update for that symbol during the entry transaction **waits**, then sees the committed position. No gap. Rejected.
+- **[AI]** Side effect: all ingestion runs on the single WebSocket thread (F3-9). A wait of up to 2 s for one symbol's lock stalls price updates for **all** symbols.
+- I3-008 shows a **7214 ms** maximum ingest lag in the 182 window and 1.7–2.2 s maxima in the 158, 162 and 172 windows. Locating them is I4-002.
+- The 162 paper `closed_at` coming before the wallet row (F9) is likewise ordering inside one transaction, not commit order (commit 04:26:06.575).
+
+### F4-6 [PE code]: higher-timeframe exits run only when a price update arrives (confirms F3-5)
+
+- Normal exits are evaluated inside `onPrice`: `evaluateNormalExit(one,five,hour)` (`LivePositionProtectionService.java:235-244`).
+- It uses the newest *committed* signals (`:95-97`). Signal commits do not trigger this path, so delay = commit + next price update. That is unbounded for thinly traded symbols (172: 37.6 s; 182: 12.7 s).
+- **The 172 exit audit credits the 1m SELL** (resolves F2-4): `closePaper(..., one)` passes the newest 1m signal as "context only" (`:391-411`). Crediting `source_signal_id=172587` is a labelling artifact; the trigger was HTF_SELL_CONFIRMED.
+- **143:** the hard floor (`entry × 1.0005`, `:210-216`) fires on the first update below it and fills at that update's price. There is no slippage control or limit price. That matches the data (4.027 against a 4.0350 floor). Protection is mechanically correct.
+
+### F4-7 [PE code]: the stop-loss and TP-extension paths behaved as coded for all six
+
+- Stop-loss is absolute (`:174-183`).
+- TP extension adds 50% of the entry-to-TP distance (`:108-110`): 143's 4.0647 → 4.0805 → 4.1043 matches.
+- The paper TP is kept in sync (FIX-067, `:144-150`).
+- No defect for the six.
+
+### F4-8 [PE]: SETUP_TIMEFRAME_ATR's 30% text is accurate at that stage; the cap comes later
+
+- `DEFERRED_POSITION_PERCENT = 30` (`ExecutionIntelligenceService.java:104`, `:1499`). The text "conservative 30%" is printed before Entry Quality capped the size to 25% (opportunity `recommended_position_percent=25`).
+- This is an explanation-staging inconsistency (F2-7), not a defect.
+
+---
+
+## SELF-REVIEW OF EARLIER CLAIMS
+
+| Earlier claim | Status |
+|---|---|
+| F3-7 "137 entry saw the current 5m" | **Refined:** true for EI, false for confluence (F4-2). |
+| F3-7 "the race depends on which thread commits first" | **Corrected:** EI depends on which thread *read the clock* first; confluence is effectively always the previous 5m. |
+| U3-2: confluence shows which 5m was read | **Withdrawn:** the columns hold only the strongest context (F4-1). |
+| F2-4: 172 audit cites the 1m SELL | **Explained:** it is a context label (F4-6). |
+| F-18 (143) | **Confirmed as a mechanism:** the parity/race defect in F4-2/F4-3. Not a superseded-label bug: 159407 was outside the lookup's time bound, not ignored. |
+| F-25 (172), F-38 (182) | **Confirmed in code** (F4-4). |
+| U-8: FIX-154 "not implemented" per AGENTS.md | **Contradiction stands:** schema applied 10-10, runtime audit rows exist. Reported only. |
+
+---
+
+## UNKNOWNS
+
+| ID | Unknown | Resolution |
+|---|---|---|
+| U4-1 | Whether the working-tree methods quoted above equal the build that ran on 10-11/10-12 (the session ran from `target\classes`, with modified tracked files). | I4-001 runtime audit rows, plus Coordinator git/log extraction |
+| U4-2 | Location and cause of the 7.2 s ingest lag near 182, and whether lag spikes line up with entry transactions holding symbol locks. | I4-002 |
+| U4-3 | How often, system-wide, the same-boundary 5m is excluded in Production (size of the parity divergence). | I4-003 |
+| U4-4 | How many entries overall used a blocked or neutralised 5m label, and what they produced. | I4-004 |
+| U4-5 | What runs during the 1.5–2.2 s inside the entry transaction. | Logs (`.gz`, U3-1) |
+| U3-1, U3-4, U3-5 | Still open. The I3-005, I3-006 and I3-007 results are missing and are needed in Iteration 5. | Reissue of I3-005/006/007 |
+| U2-9 | Replay has not been run. | — |
+
+---
+
+## DB REQUESTS
+
+Time literals are KSA (the session is +03:00). All requests are read-only and bounded.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: Runtime proof of which 5m and 1h signals FIX-154 validation actually read for each entry (F4-2, F4-4, U4-1).
+SQL:
+SELECT a.id, a.reference_signal_id, a.evaluation_path, a.evaluated_at, a.replay_mode, a.five_minute_signal_id, a.five_minute_raw_decision, a.five_minute_effective_decision, a.five_minute_age_seconds, a.five_minute_data_quality_valid, a.one_hour_signal_id, a.one_hour_raw_decision, a.one_hour_effective_decision, a.one_hour_age_seconds, a.assessment_band, a.max_initial_percent, a.legacy_veto_result, a.final_result, LEFT(a.final_reason, 300) AS final_reason FROM crypto_ai.buy_htf_assessment_audit a WHERE a.replay_mode = 0 AND a.reference_signal_id IN (156723,159408,165412,165415,167668,171589,176710) ORDER BY a.evaluated_at LIMIT 50;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: Locate price-update ingest lags over 1 s around the 182 entry and across the trading window, to check for single-thread stalls during entry transactions (F4-5, U4-2).
+SQL:
+SELECT e.symbol, e.observed_at, e.created_at, TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at)/1000 AS lag_ms FROM crypto_ai.market_price_event e WHERE e.observed_at BETWEEN '2026-10-12 09:56:50' AND '2026-10-12 10:05:21' AND TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at) > 1000000 ORDER BY e.observed_at LIMIT 60;
+SELECT DATE_FORMAT(e.observed_at, '%Y-%m-%d %H:%i') AS minute_ksa, COUNT(*) AS n_gt1s, COUNT(DISTINCT e.symbol) AS symbols, MAX(TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at))/1000 AS max_lag_ms FROM crypto_ai.market_price_event e WHERE e.observed_at BETWEEN '2026-10-11 20:00:00' AND '2026-10-12 10:30:00' AND TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at) > 1000000 GROUP BY minute_ksa ORDER BY max_lag_ms DESC LIMIT 40;
+SELECT w.id, w.symbol, w.side, w.executed_at, s.completed_at FROM crypto_ai.wallet_trade w LEFT JOIN crypto_ai.signal_processing_work s ON s.signal_id = w.signal_id WHERE w.executed_at BETWEEN '2026-10-11 20:00:00' AND '2026-10-12 10:30:00' ORDER BY w.executed_at LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: Size the Production-vs-Replay boundary divergence: for every LIVE 1m signal on a 5m boundary, whether the same-boundary 5m was generated before it, and whether it was committed before it (F4-2, F4-3, U4-3).
+SQL:
+WITH b AS (SELECT o.symbol, o.id AS one_id, o.generated_at AS one_gen, f.id AS five_id, f.generated_at AS five_gen, f.created_at AS five_created FROM crypto_ai.trade_signal o JOIN crypto_ai.trade_signal f ON f.symbol = o.symbol AND f.interval_code = '5m' AND f.signal_mode = 'LIVE' AND DATE_ADD(f.candle_open_time, INTERVAL 300 SECOND) = DATE_ADD(o.candle_open_time, INTERVAL 60 SECOND) WHERE o.interval_code = '1m' AND o.signal_mode = 'LIVE' AND o.generated_at BETWEEN '2026-10-11 20:00:00' AND '2026-10-12 10:30:00') SELECT COUNT(*) AS n, SUM(five_gen <= one_gen) AS five_in_ei_bound, SUM(five_gen > one_gen) AS five_excluded_from_ei, SUM(five_created <= one_gen) AS five_committed_before_1m_gen, ROUND(AVG(TIMESTAMPDIFF(MICROSECOND, one_gen, five_gen))/1000) AS avg_five_minus_one_ms, MIN(TIMESTAMPDIFF(MICROSECOND, one_gen, five_gen))/1000 AS min_ms, MAX(TIMESTAMPDIFF(MICROSECOND, one_gen, five_gen))/1000 AS max_ms FROM b;
+SELECT MOD(MINUTE(DATE_ADD(s.candle_open_time, INTERVAL 60 SECOND)), 5) = 0 AS entry_on_5m_boundary, COUNT(*) AS positions, SUM(p.realized_pnl < 0) AS losers, ROUND(SUM(p.realized_pnl), 6) AS pnl FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id WHERE p.closed_at IS NOT NULL GROUP BY entry_on_5m_boundary;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: System-wide exposure to label-only 5m authority, meaning entries approved on a blocked or neutralised 5m, and their results (F4-4, U4-4).
+SQL:
+SELECT a.final_result, f.decision, f.original_decision, f.final_entry_allowed, COUNT(*) AS n, COUNT(DISTINCT a.reference_signal_id) AS refs FROM crypto_ai.buy_htf_assessment_audit a JOIN crypto_ai.trade_signal f ON f.id = a.five_minute_signal_id WHERE a.replay_mode = 0 AND (f.final_entry_allowed = 0 OR f.original_decision IN ('SELL','STRONG_SELL')) GROUP BY a.final_result, f.decision, f.original_decision, f.final_entry_allowed ORDER BY n DESC LIMIT 40;
+SELECT p.id, p.symbol, p.status, p.realized_pnl, p.opened_at, a.final_result, f.id AS five_id, f.decision, f.original_decision, f.final_entry_allowed FROM crypto_ai.paper_position p JOIN crypto_ai.buy_htf_assessment_audit a ON a.reference_signal_id = p.signal_id AND a.replay_mode = 0 JOIN crypto_ai.trade_signal f ON f.id = a.five_minute_signal_id WHERE f.final_entry_allowed = 0 OR f.original_decision IN ('SELL','STRONG_SELL') ORDER BY p.id LIMIT 100;
+### END_DB_REQUEST
+
+**Reissue requests:** DBQ-CLAUDE-I3-005, I3-006 and I3-007 have no result files. Please run them unchanged, with the SQL as in the Iteration 3 output.
+
+---
+
+## STATUS AFTER ITERATION 4
+
+**Confirmed defects [PE code + DB]:**
+1. **Boundary lookup race and Replay-parity divergence (F4-2/F4-3).**
+   - Production bounds the higher-timeframe lookup by the 1m signal's wall-clock time; Replay orders 1h → 5m → 1m with identical times.
+   - It decided 143's route (2 ms margin) and 158's route.
+2. **Label-only 5m authority in direct-BUY validation (F4-4).**
+   - A 5m BUY with its own entry blocked (172), and a 5m STRONG_SELL neutralised to NEUTRAL (182), each authorised entries.
+   - Other routes do check these fields.
+
+**Confirmed audit gaps (not P&L):**
+- The confluence columns record only the strongest context (F4-1).
+- The exit audit credits the newest 1m signal as its source (F4-6).
+- SELL fills do not persist the price observation (F2-5).
+
+**Rejected:** a protection gap at entry (F4-5) and incorrect protection mechanics (F4-6, F4-7).
+
+**Design properties:**
+- Higher-timeframe exits run only when a price update arrives.
+- Stop and floor exits fill at the triggering update with no slippage control.
+- Entry transactions hold a symbol lock while ingestion runs on a single WebSocket thread (stall risk; I4-002).
+
+**Valid losing trades on the evidence so far:** 137 and 162 (thin targets; F2-10, F11). Whether 158's loss is attributable to the defect depends on the Replay outcome.
+
+**Next, Iteration 5:** Replay-parity trace per trade, using I4-001 and I4-003, and the missing I3 results.

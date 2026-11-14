@@ -1,0 +1,1 @@
+SELECT * FROM production_exit_audit WHERE paper_position_id IN (104,101,96,91,82,78) ORDER BY paper_position_id

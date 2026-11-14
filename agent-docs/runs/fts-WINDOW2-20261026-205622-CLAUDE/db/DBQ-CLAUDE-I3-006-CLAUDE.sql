@@ -1,0 +1,1 @@
+SELECT * FROM crypto_ai.candle WHERE symbol = 'EGLDUSDT' AND interval_code = '1m' AND open_time BETWEEN '2026-10-11 22:39:00' AND '2026-10-11 22:44:00' ORDER BY open_time LIMIT 10;

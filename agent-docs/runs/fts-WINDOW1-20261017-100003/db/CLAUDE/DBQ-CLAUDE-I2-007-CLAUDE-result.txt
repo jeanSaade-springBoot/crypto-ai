@@ -1,0 +1,27 @@
+position_id	entry_price	stop_loss	original_tp	min_close_60m	max_close_60m	first_tp_close	first_sl_close
+137	3.999000000000	3.979005000000	4.011875113389	3.968000000000	3.993000000000	NULL	2026-10-11 21:01:59.977306
+143	4.033000000000	4.010202321104	4.064696518344	3.944000000000	4.061000000000	NULL	2026-10-11 22:53:00.127756
+158	1.410800000000	1.403845500000	1.413208867638	1.405400000000	1.413500000000	2026-10-12 03:42:00.001507	NULL
+162	0.087050000000	0.086614750000	0.087240722576	0.086370000000	0.087310000000	2026-10-12 05:19:02.824217	2026-10-12 04:33:02.809790
+172	0.000005490000	0.000005462550	0.000005510418	0.000005480000	0.000005560000	2026-10-12 07:38:01.781593	NULL
+182	0.188400000000	0.187458000000	0.188853643224	0.188000000000	0.188600000000	NULL	NULL
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+symbol	varchar(30)	NO	MUL	NULL	
+interval_code	varchar(10)	NO		NULL	
+open_time	timestamp(6)	NO		NULL	
+close_time	timestamp(6)	NO		NULL	
+open_price	decimal(30,12)	NO		NULL	
+high_price	decimal(30,12)	NO		NULL	
+low_price	decimal(30,12)	NO		NULL	
+close_price	decimal(30,12)	NO		NULL	
+volume	decimal(38,12)	NO		NULL	
+quote_asset_volume	decimal(38,12)	YES		NULL	
+number_of_trades	bigint	YES		NULL	
+taker_buy_base_volume	decimal(38,12)	YES		NULL	
+taker_buy_quote_volume	decimal(38,12)	YES		NULL	
+closed	tinyint(1)	NO	MUL	NULL	
+created_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+updated_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED on update CURRENT_TIMESTAMP(6)
+ingestion_source	varchar(16)	YES		NULL	
+close_transition_token	varchar(36)	YES		NULL

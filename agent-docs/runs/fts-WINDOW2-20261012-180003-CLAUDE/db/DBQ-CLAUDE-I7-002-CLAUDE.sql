@@ -1,0 +1,1 @@
+SELECT o.id, o.symbol, o.latest_signal_id, o.status, o.execution_source, o.decision_code, o.five_minute_decision, o.executed_at FROM execution_opportunity o WHERE o.latest_signal_id IN (48825,99000,107438,113668,147593,159321,159408,164118,166746,182881,95260,125433,142422,161209,172956) ORDER BY o.latest_signal_id LIMIT 50

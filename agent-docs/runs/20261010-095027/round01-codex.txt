@@ -1,0 +1,39 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** I reviewed `RPR-0.4-DRAFT` as the active change contract. Its diagnosis is substantiated: current Replay starts at fixed 10,000 USDT, reads production wallet settings, and can consult live Binance minimum-notional data. [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:43), [BinanceMinimumExecutionPolicy.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/BinanceMinimumExecutionPolicy.java:29)
+
+- **PROJECT EVIDENCE:** The draft’s price-evidence concern is also substantiated. Current Replay labels any non-empty accepted price-event list as `EXACT_PRICE_REPLAY`; it does not prove complete coverage. [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:89), [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:387)
+
+- **PROJECT EVIDENCE:** The draft is not approval-ready under this repository’s mandatory change-contract rules. It provides area-level registry IDs, but no complete file/class/method registry or method-level current-to-new behavior mapping. The governing contract requires both. [AGENTS.md](C:/workspace/crypto-ai-trader-mysql/AGENTS.md:337), [agent-docs/FINAL_CHANGE_SPECIFICATION.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:222)
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Replay is currently single-symbol by request and execution: `RegressionTestRunRequest` has one `symbol`; the worker reads one symbol and loads its three candle lanes. [RegressionTestRunRequest.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/dto/RegressionTestRunRequest.java:5), [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:119)
+
+- **PROJECT EVIDENCE:** Historical derivatives are deliberately always `UNAVAILABLE` when enabled, so default parity mode would correctly refuse all affected historical runs unless new durable evidence is introduced. [DerivativesPositioningService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/DerivativesPositioningService.java:33)
+
+- **PROJECT EVIDENCE:** Current event retrieval orders SQL rows by `observed_at, id`, but converts them to a `PriceEvent` that omits the ID. Signal ordering is timestamp plus interval only. [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118), [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:65)
+
+- **PROJECT EVIDENCE:** FIX-11K/FIX-11Q are active Replay references, not merely dormant tables: the replay service invokes both observers and the admin controller exposes FIX-11K observations. [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:100), [RegressionTestController.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/controller/RegressionTestController.java:120)
+
+## OBJECTIONS
+
+- **PROJECT EVIDENCE:** RPR-0.4 does not meet the required implementation-contract granularity. RPR-01 through RPR-12 are work areas, not a complete modify/create/delete/config/migration/test registry; neither `ShadowProductionReplayService`, `RegressionTestWorker`, `RegressionTestService`, controller/UI, wallet services, observers, repositories, nor exact migrations are assigned authorized method-level changes. This permits unregistered refactoring and prevents later reconciliation. [agent-docs/FINAL_CHANGE_SPECIFICATION.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:218)
+
+- **AGENT INFERENCE:** “Complete price coverage” is not operationally defined. The draft requires every needed observation and gaps, but defines neither expected event cadence, maximum permitted gap, WebSocket-disconnect evidence, nor how a missing observation is detected. An accepted-event count cannot prove that no unrecorded price would have crossed TP/SL/profit-lock. A parity certificate could therefore be falsely positive. [agent-docs/FINAL_CHANGE_SPECIFICATION.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:107)
+
+- **AGENT INFERENCE:** The pre-execution rejection contract is incomplete. Eligibility requires coverage from the first Replay open through terminal close, but those boundaries emerge only after signal generation and shadow execution. The specification must define a pure, non-persisting preflight/dry-run phase, its inputs, and refusal behavior; otherwise it conflicts with its own “before generated signals or shadow wallet state are written” requirement. [agent-docs/FINAL_CHANGE_SPECIFICATION.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:93)
+
+- **PROJECT EVIDENCE:** The certificate lacks a defined oracle. “Field comparisons” does not specify the compared production records, identity keys, fields, precision/tolerance, missing-record handling, configuration identity, or how a virtual account can be compared with a deliberately non-reproduced historical wallet. This is material because the current Replay has a synthetic account and one-symbol lifecycle. [agent-docs/FINAL_CHANGE_SPECIFICATION.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:232), [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:75)
+
+- **PROJECT EVIDENCE:** Deterministic ordering remains under-specified. The draft says to use event IDs and a tie order, but does not define ordering among simultaneous 1m/5m/1h signals, signal/work commit sequence, or the schema/API change needed to retain the required identifiers. Current Replay’s `PriceEvent` has no ID. [agent-docs/FINAL_CHANGE_SPECIFICATION.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:187), [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:173)
+
+- **AGENT INFERENCE:** The removal scope is contradictory: section 6 calls FIX-11K/11Q removals “candidates,” while RPR-09 authorizes their execution without deciding retain-versus-remove per referenced API, UI, service, migration, and archive path. Each must have a fixed disposition before approval. [agent-docs/FINAL_CHANGE_SPECIFICATION.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:203)
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No production system, database, or runtime logs were accessed. I therefore cannot establish whether historical price, order-book, derivatives, configuration, or version evidence actually exists for any proposed parity window.
+
+- **AGENT INFERENCE:** No parity claim should be approved until the next revision defines the evidence completeness algorithm, certificate oracle, deterministic total ordering, and full authorized file/method/migration registry.
+
+VERDICT: REJECTED

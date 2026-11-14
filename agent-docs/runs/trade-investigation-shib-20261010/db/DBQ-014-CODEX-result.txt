@@ -1,0 +1,9 @@
+exit_code=0
+duration_ms=158
+row_count=1
+--- stdout ---
+id	entry_signal_id	symbol	status	average_entry_price_usdt	stop_loss_usdt	take_profit_usdt	highest_price_usdt	profit_lock_active	profit_lock_price_usdt	profit_lock_progress_percent	profit_lock_activated_at	profit_lock_state	profit_lock_rebase_started_at	near_tp_state	near_tp_best_price	updated_at
+64	89469	SHIBUSDT	CLOSED	0.000000000000	0.000005382950	0.000005433730	0.000005430000	1	0.000005421865	84.281500	2026-10-09 23:58:09.534172	ACTIVE	NULL	INACTIVE	NULL	2026-10-09 23:58:43.553029
+
+--- stderr ---
+

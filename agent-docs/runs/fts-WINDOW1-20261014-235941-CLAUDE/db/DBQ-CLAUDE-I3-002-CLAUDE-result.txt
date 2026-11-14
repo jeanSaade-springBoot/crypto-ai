@@ -1,0 +1,2 @@
+n_pairs	five_after_one	five_at_or_before_one	avg_ms	max_ms
+10028	8614	1414	385.4	10200.8

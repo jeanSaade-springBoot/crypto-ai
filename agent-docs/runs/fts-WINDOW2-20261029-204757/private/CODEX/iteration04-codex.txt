@@ -1,0 +1,50 @@
+## FINDINGS
+
+- **Current code route:** a live closed-candle worker persists/uses a signal, then calls `PaperTradingService.processSignal`; the coordinator claims durable work, locks the symbol, checks freshness, invokes business logic, and records completion. **PROJECT EVIDENCE:** [CandleClosedAnalysisWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java:167), [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:64).
+
+- **Terminal causes are route-dependent.** Signal processing evaluates take-profit, profit-lock, stop-loss, then validated SELL/STRONG_SELL. Live price protection evaluates take-profit continuation/exit, stop-loss, profit-lock/hard floor, normal signal exit, then near-TP protection. **PROJECT EVIDENCE:** [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:170), [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:99).
+
+- **The direct live-price route has an execution-before-paper-close guard.** `LivePositionProtectionService` calls `executeMechanicalExit(...)` and only closes `paper_position` when it returns `true`. The accepted direct price event is then marked `APPLIED` in the same transaction after the callback returns. This supports a route-level consistency check, but `APPLIED` alone still does not prove a position was closed because a no-position callback can also complete. **PROJECT EVIDENCE:** [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:53), [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:475).
+
+- **Signal-driven terminal closes need trade-specific reconciliation.** `completeClose` saves `paper_position` before invoking the wallet liquidation method. A thrown wallet exception participates in the surrounding coordinator transaction, so source order alone does *not* prove a durable paper-only close. However, `executeSignalLinkedExit` can return normally without an execution when the managed position is absent/empty; `completeClose` does not inspect an outcome. This is a current-source reconciliation risk, not a confirmed cause for any frozen trade. **PROJECT EVIDENCE:** [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487), [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:210).
+
+- **The signal-path profit-lock route has the same verification gap.** It closes the paper position before calling `executeProfitLock(...)` and ignores that method’s boolean result. **PROJECT EVIDENCE:** [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:452), [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:381).
+
+- **A separate `POSITION_STOP_LOSS` route can liquidate the managed wallet position before normal paper-position processing continues.** The source shown does not itself close the linked `paper_position`; this needs reconciliation through `position_analysis`, `wallet_managed_position`, `wallet_trade`, and the frozen paper rows. **PROJECT EVIDENCE:** [PositionManagementService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionManagementService.java:129), [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:113).
+
+- `production_exit_audit.close_trigger` is the strongest intended terminal-cause record, separate from the contextual signal; it is not by itself wallet-execution proof. **PROJECT EVIDENCE:** [ProductionExitAuditService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:32).
+
+- No permitted Codex database-result files exist in `db/CODEX/`. Therefore none of frozen IDs `182, 172, 162, 158, 143, 137` can yet be attributed to any route, trigger, timestamp, or defect. **PROJECT EVIDENCE:** permitted run-directory inspection.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `paper_position` holds entry/exit signal links, prices, status, close reason, P&L, and UTC lifecycle timestamps. [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:9)
+- **EXTERNAL RESEARCH:** None.
+- **AGENT INFERENCE:** The current-source risks above cannot establish that a frozen loss was erroneous; historical deployment/version, database records, and accepted price evidence are required.
+
+## UNKNOWNS
+
+- Every frozen trade’s symbol, UTC entry/close time, KSA conversion, entry/exit signal, close trigger, realized-P&L reconciliation, and wallet-managed-position linkage.
+- Whether any frozen trade used the direct price route, signal route, profit-lock route, or `POSITION_STOP_LOSS`.
+- Whether the source inspected was the version active at each trade.
+- Whether an accepted `market_price_event` first crossed the relevant stop/target/lock level.
+- The supplied snapshot UTC/KSA pair remains internally inconsistent; the frozen IDs remain authoritative, but no exact clock-bounded inference is valid.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Read actual schemas before issuing bounded joins to reconstruct the frozen trades’ route, wallet execution, terminal cause, and accepted-price evidence.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+SHOW CREATE TABLE crypto_ai.trade_signal;
+SHOW CREATE TABLE crypto_ai.production_exit_audit;
+SHOW CREATE TABLE crypto_ai.wallet_managed_position;
+SHOW CREATE TABLE crypto_ai.wallet_trade;
+SHOW CREATE TABLE crypto_ai.position_analysis;
+SHOW CREATE TABLE crypto_ai.market_price_event;
+SHOW CREATE TABLE crypto_ai.signal_processing_work;
+SHOW CREATE TABLE crypto_ai.position_management_event;
+```
+### END_DB_REQUEST
+
+No code, configuration, database, Git, deployment, or documentation state was changed.

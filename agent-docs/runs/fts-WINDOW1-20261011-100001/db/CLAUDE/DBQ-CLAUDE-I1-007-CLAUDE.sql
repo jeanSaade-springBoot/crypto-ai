@@ -1,0 +1,1 @@
+SELECT * FROM buy_htf_assessment_audit WHERE reference_signal_id IN (133249,128170,122431,121198,115669,115049) ORDER BY reference_signal_id

@@ -1,0 +1,1 @@
+SELECT id, observed_at, price, source, delivery_status, created_at FROM market_price_event WHERE symbol = 'EGLDUSDT' AND observed_at BETWEEN '2026-10-11 22:39:55' AND '2026-10-11 22:43:40' ORDER BY observed_at LIMIT 300

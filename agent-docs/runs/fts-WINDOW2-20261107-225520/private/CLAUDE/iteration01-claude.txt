@@ -1,0 +1,142 @@
+# CLAUDE — FTS WINDOW2, Iteration 1: Trade Reconstruction (self-review only)
+
+**Scope confirmed:** application crypto-ai-trader, schema `crypto_ai` (not `crypto_ai_v2`), Production entity `crypto_ai.paper_position`. The six frozen IDs are 182, 172, 162, 158, 143, 137. None was substituted.
+**Sources read:** AGENTS.md, DATABASE_INVESTIGATION_RULES.md, DATABASE_ENTITY_REGISTRY.md, CHARTER.md, FROZEN_TRADE_SELECTION.md, claude-docs/TRADE_INVESTIGATION_AGENT.md, the shared coordinator proof queries DBQ-FTS-001..005 with DATABASE_QUERY_LOG.md, and the exit-path code. My `db/CLAUDE/` folder is empty and I have no private files yet. I did not read the Codex folders, LIVE_TEAM_STATUS.md or LIVE_EVENTS.log. I took no write actions.
+
+---
+
+## FINDINGS
+
+**F-I1-01 — The frozen set is not today's trades** [PROJECT EVIDENCE + AGENT INFERENCE]
+- All six closed between 2026-10-11 20:55 UTC and 2026-10-12 10:05 UTC (DBQ-FTS-005).
+- That is about 26 days before the snapshot (2026-11-07 19:55:22 UTC).
+- Either no CLOSED losing paper position exists after 2026-10-12, or the trader has not been trading since then. **UNKNOWN** which one. This also adds to the snapshot clock-drift note in the charter.
+
+**F-I1-02 — The selection leaves out every stop-loss loss** [PROJECT EVIDENCE]
+- DBQ-FTS-002 shows `CLOSED` with 118 rows (26 negative) and `STOPPED` with 75 rows (75 negative).
+- The filter is `status=CLOSED`, so all stop-loss losses (`LivePositionProtectionService.java:178` and `PaperTradingService.java:183` close as `STOPPED`) are excluded by design.
+- The frozen set is therefore only signal-driven and lock-driven losses. That is valid for this charter, but the study cannot describe the overall loss population.
+
+**F-I1-03 — Paper and wallet loss counts match in total, not per row** [PROJECT EVIDENCE + AGENT INFERENCE]
+- Paper negative rows: 26 + 75 = 101. Wallet `EXECUTED` rows with `realized_pnl_usdt < 0`: 101 (DBQ-FTS-003).
+- The two totals match, but that is not a per-trade link. DBQ-FTS-003 also does not filter by `side`, although its stated purpose is "SELL pnl".
+
+**F-I1-04 — Close reasons point to two different code paths** [PROJECT EVIDENCE: code]
+- `SELL_CONFIRMED` (182, 158, 137) and `HTF_SELL_CONFIRMED` (172) can only come from `PositionExitPolicy.evaluateNormalExit` (`PositionExitPolicy.java:29,42`), called by the live protection path (`LivePositionProtectionService.java:235-238`). There the wallet exit runs **before** `closePaper`.
+- `STRONG_SELL` (162) comes from the signal path (`PaperTradingService.java:197-208`), where the close reason is `signal.getDecision().name()` after `validateSell`.
+  - In this path the paper close commits first (`completeClose`, `PaperTradingService.java:487-508`).
+  - The wallet exit runs afterwards, and any `RuntimeException` is only logged (`:525-527`), so paper and wallet can diverge.
+  - The exit price is `signal.getLatestPrice()` (`:449`), not a fresh live price.
+- `PROFIT_LOCK_HARD_EXIT` (143) has three possible sources:
+  - `LivePositionProtectionService.java:195`: the rebase hard floor.
+  - `LivePositionProtectionService.java:213`: the lock triggered and price fell below the floor of `avgEntry × 1.0005`.
+  - `PaperTradingService.java:194`: the signal-path hard floor, which prices the exit at `signal.latestPrice`.
+
+**F-I1-05 — Trade 143 lost money on an exit meant to protect profit** [PROJECT EVIDENCE + AGENT INFERENCE]
+- `realized_pnl = -0.037193156459`, and the position was held only 3 m 31 s.
+- The hard floor sits **above** entry (`× 1.0005`). An exit at a loss means the exit price was below entry. Possible causes:
+  - price jumped through the floor between observations;
+  - a stale `signal.latestPrice` carried the exit (signal path);
+  - `paper_position.entry_price` differs from `wallet_managed_position.average_entry_price` (for example after a progressive add);
+  - the floor fired from the rebase state.
+- **This is the strongest candidate for a logic or price-authority defect. Not confirmed.**
+
+**F-I1-06 — Repeated losses on one symbol** [PROJECT EVIDENCE]
+- Trades 137 and 143 are both EGLDUSDT. 143 opened 1 h 40 m after 137 closed, and both were short holds (5 m 08 s and 3 m 31 s).
+- I still need to check re-entry cooldown and opportunity-consumption behaviour (FIX-020, `completePositionOpportunity`).
+
+**F-I1-07 — Entry timing pattern** [AGENT INFERENCE]
+- Every `opened_at` is 4–6 s after a minute boundary: :57:06, :36:05, :02:06, :35:04, :40:04, :55:04.
+- Three entries (158, 143, 137) land on 5-minute boundaries.
+- This fits entries triggered by a closed 1m candle with about 4–6 s latency. It is not verified until the candle and signal times are retrieved.
+
+**F-I1-08 — Paper P&L excludes fees** [PROJECT EVIDENCE: code]
+- `completeClose` computes `(exit − entry) × qty` with no fee (`PaperTradingService.java:495-499`).
+- The real economic loss is larger than `realized_pnl`. Fees must come from `wallet_trade.fee_usdt` or be computed separately (automatic fees are recorded as 0, per TRADE_INVESTIGATION_AGENT §6).
+
+## EVIDENCE — timeline skeleton (from DBQ-FTS-005)
+
+| ID | Symbol | Opened UTC | Opened KSA | Closed UTC | Closed KSA | Held | close_reason | realized_pnl (gross) | signal_id |
+|---|---|---|---|---|---|---|---|---|---|
+| 182 | ACEUSDT | 2026-10-12 09:57:06.476 | 2026-10-12 12:57:06 | 2026-10-12 10:05:20.486 | 2026-10-12 13:05:20 | 8m14s | SELL_CONFIRMED | -0.031847 | 176710 |
+| 172 | SHIBUSDT | 2026-10-12 06:36:05.087 | 2026-10-12 09:36:05 | 2026-10-12 07:15:45.484 | 2026-10-12 10:15:45 | 39m40s | HTF_SELL_CONFIRMED | -0.045537 | 171589 |
+| 162 | DOGEUSDT | 2026-10-12 04:02:06.415 | 2026-10-12 07:02:06 | 2026-10-12 04:26:04.116 | 2026-10-12 07:26:04 | 23m58s | STRONG_SELL | -0.051694 | 167668 |
+| 158 | XRPUSDT | 2026-10-12 02:35:04.811 | 2026-10-12 05:35:04 | 2026-10-12 03:30:06.638 | 2026-10-12 06:30:06 | 55m02s | SELL_CONFIRMED | -0.031897 | 165412 |
+| 143 | EGLDUSDT | 2026-10-11 22:40:04.858 | **2026-10-12** 01:40:04 | 2026-10-11 22:43:36.229 | **2026-10-12** 01:43:36 | 3m31s | PROFIT_LOCK_HARD_EXIT | -0.037193 | 159408 |
+| 137 | EGLDUSDT | 2026-10-11 20:55:04.510 | 2026-10-11 23:55:04 | 2026-10-11 21:00:12.122 | **2026-10-12** 00:00:12 | 5m08s | SELL_CONFIRMED | -0.075019 | 156723 |
+
+The proven `paper_position` schema (DBQ-FTS-001) includes `exit_signal_id`, `entry_reason`, `exit_reason` and `stop_loss`/`take_profit`. Replay table `wallet_position_test` exists separately and is excluded (DBQ-FTS-004).
+
+## UNKNOWNS
+- U1: Entry and exit prices, quantity, SL/TP, `exit_signal_id`, and entry/exit reason text. These were not in DBQ-FTS-005.
+- U2: The schema of every table other than `paper_position`. Entity mappings are not proof of the schema, so the table queries below depend on DBQ-CLAUDE-I1-002.
+- U3: Signal candle times, decision chain, data quality, BTC/confluence gates, and freshness at entry.
+- U4: Per-trade wallet linkage, fees, and whether paper and wallet prices agree (most important for 162 and 143).
+- U5: Which branch produced 143's exit, and whether that price was fresh.
+- U6: The 5m/1h signals used for the exits of 182, 172, 158 and 137.
+- U7: Why no losing CLOSED trade appears after 2026-10-12.
+- U8: Protection price events, pending the schema for `market_price_event` (or its real name).
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-001
+Purpose: Get the real table names before choosing evidence tables (signals, wallet, managed position, exit audit, price events, candles).
+SQL:
+SHOW TABLES
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-002
+Purpose: Prove the schema of the evidence tables. Every later query that uses columns outside `paper_position` depends on this.
+SQL:
+DESCRIBE trade_signal;
+DESCRIBE wallet_trade;
+DESCRIBE wallet_managed_position;
+DESCRIBE production_exit_audit;
+DESCRIBE position_management_event;
+DESCRIBE execution_opportunity
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-003
+Purpose: Full lifecycle of the six frozen positions (prices, quantity, SL/TP, exit signal, reasons), using the schema already proven by DBQ-FTS-001. Reason text is truncated to keep the result bounded.
+SQL:
+SELECT id, symbol, side, status, quantity, entry_price, stop_loss, take_profit, exit_price, realized_pnl, close_reason, signal_id, exit_signal_id, opened_at, closed_at, TIMESTAMPDIFF(SECOND, opened_at, closed_at) AS held_s, LEFT(entry_reason, 600) AS entry_reason_600, LEFT(exit_reason, 800) AS exit_reason_800 FROM crypto_ai.paper_position WHERE id IN (182,172,162,158,143,137) ORDER BY closed_at DESC LIMIT 6
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-004
+Purpose: Entry and exit signals for the six positions: decision chain, gates, data quality and timing. Columns follow the `TradeSignal` entity mapping; if a column fails, return the error so I can correct it against DBQ-CLAUDE-I1-002.
+SQL:
+SELECT ts.id, ts.symbol, ts.interval_code, ts.candle_open_time, ts.generated_at, ts.created_at, ts.decision, ts.original_decision, ts.latest_price, ts.trend_score, ts.strategy_version, ts.strategy_entry_allowed, ts.primary_blocking_stage, ts.confluence_status, ts.confluence_entry_allowed, ts.confluence_higher_interval, ts.confluence_higher_decision, ts.btc_context_status, ts.btc_context_entry_allowed, ts.btc_context_age_seconds, ts.data_quality_valid FROM crypto_ai.trade_signal ts WHERE ts.id IN (SELECT signal_id FROM crypto_ai.paper_position WHERE id IN (182,172,162,158,143,137) UNION SELECT exit_signal_id FROM crypto_ai.paper_position WHERE id IN (182,172,162,158,143,137) AND exit_signal_id IS NOT NULL) ORDER BY ts.symbol, ts.generated_at LIMIT 12
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-005
+Purpose: Wallet executions for the six positions' symbols inside each position's lifetime (±2 min), giving fees, decision vs fill price, price-observation age and execution reason (U4). Columns follow the `WalletTrade` entity mapping.
+SQL:
+SELECT wt.id, wt.symbol, wt.side, wt.status, wt.execution_key, wt.price_usdt, wt.decision_price_usdt, wt.execution_price_observed_at, wt.gross_amount_usdt, wt.fee_usdt, wt.net_amount_usdt, wt.cost_basis_usdt, wt.realized_pnl_usdt, wt.realized_pnl_percent, wt.execution_type, LEFT(wt.execution_reason, 300) AS execution_reason_300, wt.executed_at, pp.id AS paper_position_id FROM crypto_ai.wallet_trade wt JOIN crypto_ai.paper_position pp ON pp.symbol = wt.symbol AND wt.executed_at BETWEEN pp.opened_at - INTERVAL 2 MINUTE AND pp.closed_at + INTERVAL 2 MINUTE WHERE pp.id IN (182,172,162,158,143,137) ORDER BY pp.id, wt.executed_at LIMIT 60
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-006
+Purpose: Immutable exit-audit and TP/lock management events for the six positions, to identify the branch behind 143's exit (F-I1-05) and the real exit triggers. Run after DBQ-CLAUDE-I1-002; table-wide `SELECT *` with tight bounds because the audit schema is not yet proven.
+SQL:
+SELECT pea.* FROM crypto_ai.production_exit_audit pea JOIN crypto_ai.paper_position pp ON pp.symbol = pea.symbol AND pea.created_at BETWEEN pp.closed_at - INTERVAL 1 MINUTE AND pp.closed_at + INTERVAL 1 MINUTE WHERE pp.id IN (182,172,162,158,143,137) LIMIT 20;
+SELECT pme.id, pme.wallet_position_id, pme.symbol, pme.event_type, pme.old_value_usdt, pme.new_value_usdt, pme.market_price_usdt, LEFT(pme.reason, 300) AS reason_300, pme.occurred_at FROM crypto_ai.position_management_event pme JOIN crypto_ai.paper_position pp ON pp.symbol = pme.symbol AND pme.occurred_at BETWEEN pp.opened_at AND pp.closed_at + INTERVAL 1 MINUTE WHERE pp.id IN (182,172,162,158,143,137) ORDER BY pme.occurred_at LIMIT 80
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-007
+Purpose: Check U7. Are there any paper positions, of any status, after the last frozen close, and what is the latest activity overall?
+SQL:
+SELECT status, COUNT(*) AS n, MIN(opened_at) AS first_open, MAX(opened_at) AS last_open, MAX(closed_at) AS last_close FROM crypto_ai.paper_position WHERE opened_at > '2026-10-12 10:05:20' GROUP BY status;
+SELECT MAX(opened_at) AS last_open_any, MAX(closed_at) AS last_close_any FROM crypto_ai.paper_position
+### END_DB_REQUEST
+
+## Self-review (iteration 1)
+- All timestamps above are labelled UTC or KSA (UTC+3). Trades 143 and 137 cross midnight in KSA.
+- All six frozen IDs are kept. No trade has been classified as a valid loss or a defect yet: entry quality, freshness and exit correctness wait on the DB requests above.
+- DBQ-CLAUDE-I1-006 uses `pea.created_at`, which I assumed and have not proven. If DBQ-CLAUDE-I1-002 shows a different timestamp column, I will fix that query in iteration 2.
+- Plan for iteration 2: verify the schema, finish the per-trade timelines (candle → signal → entry → protection → exit), and check paper vs wallet for each trade. Trade 143's price authority comes first, then 162's signal-path price freshness.

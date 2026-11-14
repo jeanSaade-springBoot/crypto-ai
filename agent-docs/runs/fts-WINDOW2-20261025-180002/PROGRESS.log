@@ -1,0 +1,29 @@
+﻿[18:00:02] START WINDOW2 TestMode=False
+[18:00:04] FROZEN 6 ids
+[18:00:04] START CODEX / iteration01-codex
+[18:01:37] DONE CODEX / iteration01-codex
+[18:01:38] START CLAUDE / iteration01-claude
+[18:02:53] DONE CLAUDE / iteration01-claude
+[18:02:57] START CODEX / iteration02-codex
+[18:04:16] DONE CODEX / iteration02-codex
+[18:04:17] START CLAUDE / iteration02-claude
+[18:08:18] DONE CLAUDE / iteration02-claude
+[18:08:33] START CODEX / iteration03-codex
+[18:13:32] DONE CODEX / iteration03-codex
+[18:13:33] START CLAUDE / iteration03-claude
+[18:19:32] DONE CLAUDE / iteration03-claude
+[18:20:19] START CODEX / iteration04-codex
+[18:25:13] DONE CODEX / iteration04-codex
+[18:25:14] START CLAUDE / iteration04-claude
+[18:30:58] DONE CLAUDE / iteration04-claude
+[18:31:00] START CODEX / iteration05-codex
+[18:36:21] DONE CODEX / iteration05-codex
+[18:36:23] START CLAUDE / iteration05-claude
+[18:42:44] DONE CLAUDE / iteration05-claude
+[18:42:48] START CODEX / iteration06-codex
+[18:46:45] DONE CODEX / iteration06-codex
+[18:46:46] START CLAUDE / iteration06-claude
+[18:50:22] DONE CLAUDE / iteration06-claude
+[18:50:24] START CODEX / iteration07-codex
+[18:52:15] DONE CODEX / iteration07-codex
+[18:52:15] START CLAUDE / iteration07-claude

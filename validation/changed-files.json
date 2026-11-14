@@ -1,0 +1,247 @@
+[
+  {
+    "file": "FIX153-VALIDATION.md",
+    "change": "added",
+    "sha256": "71d921f52bc49d8e0561107a9cb1d7fd5cd8452fdb8783a0bb0daa0e8a2a2896"
+  },
+  {
+    "file": "README-FIX-153.md",
+    "change": "added",
+    "sha256": "b32975267616b88732ae919cfa0fb8c5f6bf91fe484a6ea28b838406a0311cb6"
+  },
+  {
+    "file": "pom.xml",
+    "change": "modified",
+    "sha256": "92d87df2c5a89888f3cd4a11cdaedb1c44b29104ae3e1e2e74fa01f772417df0"
+  },
+  {
+    "file": "scripts/fix153-monitor.sql",
+    "change": "added",
+    "sha256": "6f5d2870961d9198c37e43cdb742d5b38ceeceed604d418af573d33a4e36e777"
+  },
+  {
+    "file": "src/main/java/com/crypto/config/CandleAnalysisAsyncConfig.java",
+    "change": "modified",
+    "sha256": "3ef911533fac8f74493a089223e5b025214354cbeb3ae78dcaa7beefac376e81"
+  },
+  {
+    "file": "src/main/java/com/crypto/domain/TradeSignal.java",
+    "change": "modified",
+    "sha256": "a2e5e4ba827ca4123baefdece6155fd495bc5b7351ed29fbffd9573af9df2d38"
+  },
+  {
+    "file": "src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java",
+    "change": "modified",
+    "sha256": "c9666ffc83e7e82e69008bc21e24d5e074ccdd5e75a17734c563e24fb6164bcb"
+  },
+  {
+    "file": "src/main/java/com/crypto/execution/processing/SignalProcessingStore.java",
+    "change": "modified",
+    "sha256": "c63c9c68d3293e89f2357877e6e258bedae7ebfe9fc027680a3b31653275dad7"
+  },
+  {
+    "file": "src/main/java/com/crypto/indicator/event/CandleAnalysisDispatcher.java",
+    "change": "modified",
+    "sha256": "28d39b4a05ece086371b85702042f6dee89b8becdd79470dd7e1f1de957ea16b"
+  },
+  {
+    "file": "src/main/java/com/crypto/indicator/event/CandleAnalysisExecutionCoordinator.java",
+    "change": "modified",
+    "sha256": "edfd606d274a86e7c404bb50b8dfb7b8c7d4ab06ab7cd3d8a821fa2c42523539"
+  },
+  {
+    "file": "src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java",
+    "change": "modified",
+    "sha256": "9f8c9694d9a6897b49720ca37ace961fdc61f0e2a4db687ca7e702bdf8ef0c8c"
+  },
+  {
+    "file": "src/main/java/com/crypto/indicator/event/CandleClosedEvent.java",
+    "change": "modified",
+    "sha256": "9456577f36d43e8d71aed7a2168ae874de9725c41f10f6e4a754b5ec92f2d810"
+  },
+  {
+    "file": "src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java",
+    "change": "modified",
+    "sha256": "0933313b21397832ea57d675c3f1284ea8fb5088dbcac8abf719470760cef1ca"
+  },
+  {
+    "file": "src/main/java/com/crypto/local/LocalCandleHealth.java",
+    "change": "added",
+    "sha256": "15df7bef6d3a6d0aefa2e9586d0ead91dd9f1c062d31324403ce5adb2678f3a0"
+  },
+  {
+    "file": "src/main/java/com/crypto/local/LocalClosedCandleDetector.java",
+    "change": "added",
+    "sha256": "9201b9e77fcbf770ef5b70b70a35240d9423c53198d4d025331e0b1d3f1514ff"
+  },
+  {
+    "file": "src/main/java/com/crypto/local/LocalRuntimeDiagnostics.java",
+    "change": "added",
+    "sha256": "b763d0d465f055b6e2c32771e4c59c6ed086c4a54fe44184a1f681a53ca1c14e"
+  },
+  {
+    "file": "src/main/java/com/crypto/local/LocalRuntimeSchemaChecks.java",
+    "change": "added",
+    "sha256": "5fc36941060730e654a5af3e633919e5600751a63115e9cb36e9403a274515e8"
+  },
+  {
+    "file": "src/main/java/com/crypto/local/LocalTraderInstance.java",
+    "change": "added",
+    "sha256": "5a6b678caf5770d148fecd9c31488fd848c7a35d9593d64d40e9b930f1910be6"
+  },
+  {
+    "file": "src/main/java/com/crypto/market/service/MarketPriceEventService.java",
+    "change": "modified",
+    "sha256": "5ac9807eeb8bde392a53dba3407c9a5d40fb8a20708e50c469d83884644c77c2"
+  },
+  {
+    "file": "src/main/java/com/crypto/position/service/LivePositionProtectionService.java",
+    "change": "modified",
+    "sha256": "9d7f12bd99c5f5f61eb766aff6fed08ab29eeac34609b64aec41d1e7e8bd9745"
+  },
+  {
+    "file": "src/main/java/com/crypto/regression/service/RegressionTestWorker.java",
+    "change": "modified",
+    "sha256": "c053f43e71ae7f56a7370328cb6cab928e383eec1ce2830b028ebefcabeed876"
+  },
+  {
+    "file": "src/main/java/com/crypto/repository/CandleRepository.java",
+    "change": "modified",
+    "sha256": "31abb5345ad6acf6453f08259e1cc279933b927d08beb050713801cd1de855c2"
+  },
+  {
+    "file": "src/main/java/com/crypto/service/AnalysisService.java",
+    "change": "modified",
+    "sha256": "477e1153b7ea262c63465e0ecf81ef83a4f5fc755146a4ecd497dcf305c6dfaf"
+  },
+  {
+    "file": "src/main/java/com/crypto/service/BinanceKlineService.java",
+    "change": "modified",
+    "sha256": "f0b756e887227285279e1ec7513ce5a1225abb6de3a5319c7df5ed4efbb5d2fc"
+  },
+  {
+    "file": "src/main/java/com/crypto/service/MarketDataBootstrapService.java",
+    "change": "modified",
+    "sha256": "d8405cfdd9bf3b4e70ea0544ddf70663b425ed891322c4787455e8dccd0c18a6"
+  },
+  {
+    "file": "src/main/java/com/crypto/service/MarketDataService.java",
+    "change": "modified",
+    "sha256": "c2e27c422780b6e921e30074df396e4b958fccfcceaf417df5e645fb7e3b39a4"
+  },
+  {
+    "file": "src/main/java/com/crypto/service/ScheduledAnalysisService.java",
+    "change": "modified",
+    "sha256": "3b1504aa2108e86d468de380291ebe752626f199f5afcdb4688287c4c87d14d8"
+  },
+  {
+    "file": "src/main/java/com/crypto/shared/Fix132DiagnosticsController.java",
+    "change": "modified",
+    "sha256": "2ef65311e36cd56c5867a031e09f82676a7aeba9795fb0e468b413465108aada"
+  },
+  {
+    "file": "src/main/java/com/crypto/shared/Fix142DiagnosticsController.java",
+    "change": "modified",
+    "sha256": "eed8b3a0afc0eec87faf4c9dae344b86a75e13ea288eac674d3b6edee2c24325"
+  },
+  {
+    "file": "src/main/java/com/crypto/shared/Fix142HealthService.java",
+    "change": "modified",
+    "sha256": "d9deefd29792c95621ff80010bd3a690a399a8e2040c12efe51c88626d32ba89"
+  },
+  {
+    "file": "src/main/java/com/crypto/shared/SharedMarketConsumer.java",
+    "change": "modified",
+    "sha256": "9a1d3ec513dec92241793795fb5f0e873fd910808000ed6b3c62f41fe2d1f4c2"
+  },
+  {
+    "file": "src/main/resources/application.yml",
+    "change": "modified",
+    "sha256": "68e366b736a9174af2fc23a6a87449d91ce54fc8bbf7626962c50cf9797e9139"
+  },
+  {
+    "file": "src/main/resources/db/migration/B105__fix_153_trader_only_baseline.sql",
+    "change": "added",
+    "sha256": "c0d9c1fae4481c3fbd1ed1d911d9b437047cb4960a3704ac606e6c7cb212591a"
+  },
+  {
+    "file": "src/main/resources/db/migration/V106__fix_153_local_candle_evidence.sql",
+    "change": "added",
+    "sha256": "4ef5304421cfdcaeeedb79056322517c34aa530b69e564a292bff47c7dcf17df"
+  },
+  {
+    "file": "src/main/resources/md/FIX-153.md",
+    "change": "added",
+    "sha256": "50f73da189acad6fbd79faab0cf88dd30d12b70cf5a79ddc23123c8e9d100dd1"
+  },
+  {
+    "file": "src/main/resources/static/js/fix-registry.js",
+    "change": "modified",
+    "sha256": "26247ecc0770ba4e688c4d83b9066d1968e0dcab97f9bd91c5c5930eb02718be"
+  },
+  {
+    "file": "src/test/java/com/crypto/deployment/DeploymentSafetyContractTest.java",
+    "change": "modified",
+    "sha256": "bc830dbb21e59ee96492e3e57cdce82fd4efe04bbbc27367832bd8e96043469b"
+  },
+  {
+    "file": "src/test/java/com/crypto/execution/processing/SignalProcessingCoordinatorTest.java",
+    "change": "modified",
+    "sha256": "6128dcbcefece3b9bf561b8712ef841be4c5366e3fe55efa15eb01f43962fc1b"
+  },
+  {
+    "file": "src/test/java/com/crypto/infrastructure/transaction/BinanceKlineTransactionTest.java",
+    "change": "modified",
+    "sha256": "48358b44779c53d0fd76334e518058d2b3d8263ea4c8781e4b3ed4116ac46396"
+  },
+  {
+    "file": "src/test/java/com/crypto/local/BaselineResolutionTest.java",
+    "change": "added",
+    "sha256": "ba8dca28365217d66f30788a58fd40aae7ea748bc9ab8f0ba15eac2069d30b3e"
+  },
+  {
+    "file": "src/test/java/com/crypto/local/LocalBootstrapTest.java",
+    "change": "added",
+    "sha256": "b592d7e0ef7591fec55387454b8279d1feceee9617f20754abe77d9ab8506fa3"
+  },
+  {
+    "file": "src/test/java/com/crypto/local/LocalCandleMySqlIT.java",
+    "change": "added",
+    "sha256": "910039c3eb595ad8ffb5b4b86a36ee0abe79d23f4c13155b4d771b2781d07e41"
+  },
+  {
+    "file": "src/test/java/com/crypto/local/LocalDetectorTest.java",
+    "change": "added",
+    "sha256": "3339e98cff780b058d12a0dad1ca1509bc9baaa2f2eec0ce1a7c2cb333f3f342"
+  },
+  {
+    "file": "src/test/java/com/crypto/local/LocalDispatcherTest.java",
+    "change": "added",
+    "sha256": "da58d66e559d78e015700be7903a56ecd41f339b2f6912ae1c25203cbab9e39d"
+  },
+  {
+    "file": "src/test/java/com/crypto/local/LocalInstanceAndHealthTest.java",
+    "change": "added",
+    "sha256": "50563fe061e9ef55507f947b490521edee36d71048b27b2338c0a5a094acfa97"
+  },
+  {
+    "file": "src/test/java/com/crypto/local/LocalPriceEvidenceTest.java",
+    "change": "added",
+    "sha256": "c300a1d4f6f9fdf054f09c5e9665d19947392e79187eeaa68722a008376e1146"
+  },
+  {
+    "file": "src/test/java/com/crypto/local/OffSharedRuntimeTest.java",
+    "change": "added",
+    "sha256": "de13d99acce96b1fa0f69c653e44b0d770261f7f12587e9505a60ba793d0b5c3"
+  },
+  {
+    "file": "src/test/java/com/crypto/shared/Fix142DiagnosticsControllerTest.java",
+    "change": "modified",
+    "sha256": "d8827d6c4f85734b00a8be45aed9a5aaff4be2579459beca4c074c4bffce415d"
+  },
+  {
+    "file": "src/test/java/com/crypto/shared/SharedCandleReadTest.java",
+    "change": "modified",
+    "sha256": "c29efb827cea585c2e0f109d9d66c48508eb50a95734064c6b1006656fc77f7c"
+  }
+]

@@ -2,6 +2,8 @@ package com.crypto.regression.service;
 
 import com.crypto.regression.dto.RegressionTestRunRequest;
 import com.crypto.inspector.service.TradeInvestmentHistory;
+import com.crypto.regression.replay.ReplayFix122EvaluationStore;
+import com.crypto.regression.replay.ReplayAccessPolicy;
 import com.crypto.regression.dto.RegressionInvestigationCaseRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -36,6 +38,11 @@ public class RegressionTestService {
 
     private final JdbcTemplate jdbcTemplate;
     private final RegressionTestWorker worker;
+    private final ReplayFix122EvaluationStore replayFix122EvaluationStore;
+
+    private static void requireReplayRead(String table) {
+        ReplayAccessPolicy.require(table, ReplayAccessPolicy.Operation.REPLAY_READ);
+    }
 
     /**
      * FIX-065: save multiple historical incidents/winning controls as a durable Investigation Queue.
@@ -226,9 +233,9 @@ public class RegressionTestService {
             throw new IllegalStateException("Could not create regression test run.");
         }
         long id = key.longValue();
-        // FIX-122: persist the business-rule revision separately from data-source/experimental modes.
-        jdbcTemplate.update("INSERT INTO fix122_replay_revision(test_run_id,enabled) VALUES (?,?)",
-                id, !Boolean.FALSE.equals(request.fix122Enabled()));
+        // FIX-156 / RET-01: do not persist a legacy shared experiment revision
+        // for baseline Replay. Its fixed parity policy is recorded by the
+        // immutable Replay profile/certificate work, not by FIX-122 state.
         worker.runAsync(id, effectiveSource);
         return id;
     }
@@ -356,9 +363,9 @@ public class RegressionTestService {
         deleted.put("trade_signal_test", jdbcTemplate.update("DELETE FROM trade_signal_test"));
         deleted.put("analysis_test_signal", jdbcTemplate.update("DELETE FROM analysis_test_signal"));
         deleted.put("analysis_test_result", jdbcTemplate.update("DELETE FROM analysis_test_result"));
-        // FIX-122: purge run-owned diagnostics before IDs can be reset; Production audit remains.
-        deleted.put("fix122_evaluation", jdbcTemplate.update("DELETE FROM fix122_evaluation WHERE test_run_id IS NOT NULL"));
-        deleted.put("fix122_replay_revision", jdbcTemplate.update("DELETE FROM fix122_replay_revision"));
+        // FIX-156 / O-8: the only allowed shared diagnostic-table operation
+        // stays explicit and run-owned; it cannot delete a Production row.
+        deleted.put("fix122_evaluation", replayFix122EvaluationStore.purgeReplayRows());
         deleted.put("analysis_test_run", jdbcTemplate.update("DELETE FROM analysis_test_run"));
 
         deleted.put("one_candle_continuation_grace_test_archive", jdbcTemplate.update("DELETE FROM one_candle_continuation_grace_test_archive"));
@@ -456,11 +463,13 @@ public class RegressionTestService {
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> latestRuns() {
+        requireReplayRead("analysis_test_run");
+        requireReplayRead("replay_position");
         List<Map<String, Object>> runs = jdbcTemplate.queryForList("""
                 SELECT r.id, r.test_name, r.symbol, r.start_time, r.end_time, r.status, r.progress_percent,
                        r.current_step, r.heartbeat_at, r.started_at, r.completed_at, r.created_at,
                        r.timing_total_ns,
-                       (SELECT COUNT(*) FROM wallet_position_test w WHERE w.test_run_id=r.id AND w.exit_time IS NOT NULL) AS closed_trade_count,
+                       (SELECT COUNT(*) FROM replay_position w WHERE w.test_run_id=r.id AND w.exit_time IS NOT NULL) AS closed_trade_count,
                        (SELECT COUNT(*) FROM proven_analyzed_trade p WHERE p.source_test_run_id=r.id) AS proven_trade_count
                 FROM analysis_test_run r
                 ORDER BY r.id DESC
@@ -474,6 +483,7 @@ public class RegressionTestService {
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> signals(long runId) {
+        requireReplayRead("trade_signal_test");
         // FIX-069: expose the production-shaped replay table as the canonical replay signal source.
         // Aliases preserve the existing UI contract while every production field remains available.
         return jdbcTemplate.queryForList("""
@@ -488,11 +498,12 @@ public class RegressionTestService {
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> trades(long runId) {
+        requireReplayRead("replay_position");
         List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
                 SELECT id, test_run_id, symbol, entry_time, entry_price, exit_time, exit_price, exit_reason,
                        realized_pnl_usdt, realized_pnl_percent, position_percent, status,
-                       EXISTS (SELECT 1 FROM proven_analyzed_trade p WHERE p.source_test_run_id = wallet_position_test.test_run_id AND p.source_trade_id = wallet_position_test.id) AS proven_success
-                FROM wallet_position_test
+                       false AS proven_success
+                FROM replay_position
                 WHERE test_run_id = ?
                 ORDER BY entry_time ASC
                 LIMIT 500
@@ -504,12 +515,15 @@ public class RegressionTestService {
 
     /**
      * FIX-11S: one read-only chart payload for an entire Replay run. Replay executions are
-     * taken from the isolated wallet_execution_test rows; Production executions are only
+     * taken from the Replay-owned replay_execution rows; Production executions are only
      * queried for the same symbol and requested Replay window. An empty Production result
      * is a normal case and is deliberately returned as [] rather than null.
      */
     @Transactional(readOnly = true)
     public Map<String, Object> allTradesChart(long runId, String interval) {
+        requireReplayRead("analysis_test_run");
+        ReplayAccessPolicy.require("candle", ReplayAccessPolicy.Operation.MARKET_EVIDENCE_READ);
+        requireReplayRead("replay_execution");
         List<Map<String, Object>> runs = jdbcTemplate.queryForList("""
                 SELECT id, symbol, start_time, end_time
                 FROM analysis_test_run
@@ -539,23 +553,12 @@ public class RegressionTestService {
                 SELECT id, side, execution_time, execution_price, quantity, notional_usdt,
                        position_percent, signal_interval, signal_decision, execution_source,
                        execution_code, execution_reason, realized_pnl_usdt, realized_pnl_percent
-                FROM wallet_execution_test
+                FROM replay_execution
                 WHERE test_run_id=? AND symbol=?
                   AND execution_time BETWEEN ? AND ?
                   AND UPPER(side) IN ('BUY','SELL')
                 ORDER BY execution_time ASC, id ASC
                 """, runId, symbol, start, end);
-
-        List<Map<String, Object>> productionExecutions = jdbcTemplate.queryForList("""
-                SELECT id, signal_id, side, executed_at AS execution_time, price_usdt AS execution_price,
-                       quantity, gross_amount_usdt, realized_pnl_usdt, realized_pnl_percent,
-                       execution_type, execution_reason, execution_message
-                FROM wallet_trade
-                WHERE symbol=? AND status='EXECUTED'
-                  AND executed_at BETWEEN ? AND ?
-                  AND UPPER(side) IN ('BUY','SELL')
-                ORDER BY executed_at ASC, id ASC
-                """, symbol, start, end);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("runId", runId);
@@ -565,7 +568,10 @@ public class RegressionTestService {
         result.put("to", end);
         result.put("candles", candles);
         result.put("replayExecutions", replayExecutions);
-        result.put("productionExecutions", productionExecutions);
+        // FIX-156 / D47: the baseline Replay chart is deliberately
+        // Replay-owned. It never reads wallet_trade as a convenient overlay;
+        // any Production comparison belongs in an immutable, pre-extracted
+        // fixture and in the parity report, not in the execution UI query.
         return result;
     }
 
@@ -589,10 +595,11 @@ public class RegressionTestService {
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> positionManagement(long runId) {
+        requireReplayRead("replay_position_management");
         return jdbcTemplate.queryForList("""
                 SELECT generated_at, action_code, current_price, old_take_profit, new_take_profit,
                        highest_price, profit_lock_active, profit_lock_price, explanation
-                FROM position_management_test
+                FROM replay_position_management
                 WHERE test_run_id = ?
                 ORDER BY generated_at ASC, id ASC
                 LIMIT 5000

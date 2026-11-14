@@ -1,0 +1,3 @@
+SELECT id, signal_id, side, executed_at, created_at, TIMESTAMPDIFF(MICROSECOND, executed_at, created_at)/1000 AS exec_to_row_ms, execution_price_observed_at FROM crypto_ai.wallet_trade WHERE id IN (344,346,358,359,392,401,403,407,426,429,451,454) ORDER BY id;
+SELECT id, entry_signal_id, opened_at, updated_at, profit_lock_activated_at FROM crypto_ai.wallet_managed_position WHERE id IN (166,172,187,191,201,211) ORDER BY id;
+SELECT id, opened_at, closed_at FROM crypto_ai.paper_position WHERE id IN (182,172,162,158,143,137) ORDER BY id;

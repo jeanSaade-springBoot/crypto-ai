@@ -1,0 +1,26 @@
+The wrapper result doesn't give any of the three values. The query failed before it reached a MySQL server.
+
+| Item | Result |
+|---|---|
+| Authenticated database | **Unknown.** No connection was made. |
+| Authenticated DB user | **Unknown.** No login happened. |
+| `trade_signal` row count | **Unknown.** The wrapper reported `row_count=n/a`, stdout was empty, and `exit_code=1`. |
+
+**Why it failed:** `ERROR 2005 (HY000): Unknown MySQL server host` means the MySQL client couldn't resolve the host name. Windows error 11001 means the same thing (host not found). The "host" it tried to look up was this whole string:
+
+```
+localhost --port=3307 --user=ai_investigator --database=crypto_ai --batch --raw --comments --default
+```
+
+The wrapper passed the host and every option after it to `--host` as one argument instead of separate arguments. That usually happens when an argument list is joined into one string and quoted, for example a PowerShell array turned into one quoted string. The string also ends at `--default`, which suggests it was cut off, possibly from `--default-character-set=...`.
+
+**Don't treat these as confirmed:** `ai_investigator`, `crypto_ai` and port `3307` appear only inside that broken host string. They show what the wrapper was meant to use, not what MySQL accepted. Port 3307 may be an SSH tunnel, but nothing in the output confirms that.
+
+**Next step:** fix the wrapper so it passes each option as its own argument, then run it again. A query that gives all three values in one go is:
+
+```sql
+SELECT DATABASE() AS db, CURRENT_USER() AS authenticated_user, USER() AS login_user,
+       (SELECT COUNT(*) FROM trade_signal) AS trade_signal_rows;
+```
+
+`CURRENT_USER()` returns the account MySQL actually authenticated. `USER()` returns the user name and host the client sent.

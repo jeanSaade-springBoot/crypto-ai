@@ -1,0 +1,161 @@
+Codex and I still both reject RPR-0.6. The spec hasn't changed since Round 1, and both of us have returned REJECTED in every round. I checked Codex's actual Round-7 output (`round07-codex.txt`) rather than the older text embedded in the prompt. Every claim holds against the code, apart from one minor precision point. Codex now covers almost all of my Round-6 objections.
+
+New this round:
+- **N42:** Replay's sentiment input depends on today's provider settings, and live and historical analysis decide differently whether sentiment counts at all.
+- **N43:** the `ANALYSIS_PARITY` comparator (the "oracle") has never run, and §8 has no test that it can catch a real divergence.
+- **C24:** I correct a number from my own Round 6.
+
+Everything was read-only: no files changed, and no database, logs, git or production access. This session has no plan-file write or ExitPlanMode tool, so the review is below.
+
+## FINDINGS
+
+### A. Codex's Round-7 claims, checked against the code
+
+| Codex claim | Result |
+|---|---|
+| Canonical spec is still RPR-0.4; no PDF is due yet | **[PROJECT EVIDENCE]** Confirmed. Codex adopted my Round-6 PDF correction. |
+| §3/§4 are wrong: run table name, `fix122_replay_revision` written before the worker, incremental writes, `RegressionTestService` missing | **[PROJECT EVIDENCE]** Confirmed |
+| M04 staging is undefined; one audit write commits on its own | **[PROJECT EVIDENCE]** Confirmed. I add a crash case under N38 below. |
+| M02: a still-open row produces the previous candle's snapshot, with no identity check | **[PROJECT EVIDENCE]** Re-verified. Production rejects a mismatched snapshot; neither Replay version checks. |
+| Data-quality gate missing; calling Production's gate as-is would leak future data | **[PROJECT EVIDENCE]** Confirmed (my N32) |
+| M06 gets both route orders wrong; Replay's exact-price SELL and add ignore the profit lock | **[PROJECT EVIDENCE]** Re-verified. The live price path runs: TP/extension → stop → rebase floor → lock trigger → normal exit → Near-TP. Codex's wording is compatible with mine. |
+| `PriceEvent` carries no id, status or ordering slot | **[PROJECT EVIDENCE]** Confirmed |
+| Isolation leaks: `wallet_settings` reads, swallowed HTTP failures, per-candle catch | **[PROJECT EVIDENCE]** Confirmed. Every `wallet_settings` reader on Replay's current or planned path is registered in §4. `PriceMoveMonitorService` also reads it but is Production-only. |
+| Production paper fills charge zero fees | **[PROJECT EVIDENCE]** Confirmed: six `feeUsdt(ZERO)` sites, and no fee or slippage logic in the paper path or in Replay. |
+| Historical derivatives are "always UNAVAILABLE" | **[PROJECT EVIDENCE]** True only when derivatives are enabled. When disabled, both paths return `NOT_APPLICABLE`. Minor. |
+| Sentiment look-ahead | **[PROJECT EVIDENCE]** Confirmed. N42 is a second, separate sentiment gap. |
+| FIX-154 is in source; source should govern, but deployed parity is unproven | **[PROJECT EVIDENCE]** Confirmed. This now matches my N40, so our Round-6 difference is resolved. |
+| No named executor or resource budgets | **[PROJECT EVIDENCE]** Confirmed; stronger evidence under N38 below. |
+| "Production code unchanged" conflicts with editing shared classes | **[PROJECT EVIDENCE]** Confirmed. `Jenkinsfile` deploys LIVE on every build, with no approval stage and no automatic rollback. Both agents say the user must decide. |
+| V109 archive drift | **[PROJECT EVIDENCE]** V109 adds exactly five columns, to `trade_signal_test` only. Whether archiving actually fails is still untested. |
+
+**Still open but not addressed by Codex this round:**
+- M07 daily-loss semantics (N22/C21)
+- order book after a restart (N27)
+- run-ID reuse after a purge (N29)
+- the default `wallet_settings` saves (N30/C23)
+- how far each evidence table can be trusted (N37)
+- registering `fix-registry.js` (N40)
+- the fill clock. **[PROJECT EVIDENCE]** Production prices a BUY at wall-clock `Instant.now()`; Replay prices it at the signal's nominal close.
+
+None of these changes the verdict, but Codex should say agree or disagree on each so the revision checklist is complete.
+
+### B. New findings this round
+
+**N42. Replay's sentiment uses today's provider settings, and live and historical analysis gate providers differently.**
+- **[PROJECT EVIDENCE]** Every analysis path calls `overviewAsOf(symbol, generatedAt)`. Inside it, the provider list and each provider's `enabled` flag and `weight` come from the *current* `sentiment_provider_config` rows. There is no as-of version.
+- **[PROJECT EVIDENCE]** Those rows are seeded once from `application.yml`, then edited through `update()`. Each collection overwrites `lastStatus`, and `lastSuccessAt` on success. No history table exists.
+- **[PROJECT EVIDENCE]** Which providers count depends on how old the reference time is:
+  - **Live** (within 1 s of the wall clock): a provider counts only if its last successful collection is under 2 h old (the `stale-after` default).
+  - **Historical** (Replay, and Production's own `HISTORICAL_ONLY` signals): a provider counts if it has any sample in the 24 h window.
+- **[PROJECT EVIDENCE]** Sentiment counts as "available" only if at least 50% of the *currently enabled* providers are usable. That switch adds or removes the 15-point sentiment maximum from the score normalisation.
+- **[AGENT INFERENCE]** Two effects follow. Both change the total score, so they can change the decision:
+  - **Configuration look-ahead.** By default only Fear & Greed (weight 0.15) and Manual News (0.03) are enabled. At its default weight, Manual News can never count as usable. If one more provider is enabled today and had no samples back then, past coverage drops from 1/2 to 1/3. Replay then treats sentiment as unavailable in windows where Production had it.
+  - **Different gates.** During a Fear & Greed outage of 2–24 h, Production's live analysis dropped sentiment as stale. Replay still counts the older sample.
+- **[AGENT INFERENCE]** M03's "stored as-of evidence" therefore isn't enough for sentiment. The signal itself records `sentimentAvailable` and a per-provider breakdown.
+  - The oracle should take Production's stored per-signal sentiment outcome.
+  - Simulation should either use a provider set declared in the profile, labelled as such, or refuse.
+- **[AGENT INFERENCE, minor]** The live-versus-historical switch compares against the machine clock inside an analysis policy. Sentiment is evaluated first, so a live run rarely crosses the 1 s threshold.
+
+**N43. The `ANALYSIS_PARITY` oracle has never run, and §8 doesn't test whether it catches anything.**
+- **[PROJECT EVIDENCE]** `ReplayParityValidator` has no caller anywhere in `src/main` or `src/test`; only `fix-registry.js` mentions it.
+- **[PROJECT EVIDENCE]** Only three test classes have Replay, Regression, Shadow or Parity in their names, and none covers the worker or the oracle.
+- **[PROJECT EVIDENCE]** The validator compares 13 fields by exact equality. Tests X01–X12 include no test of the oracle's own accuracy.
+- **[AGENT INFERENCE]** With no measured baseline, the oracle can be wrong in both directions:
+  - false alarms caused by deliberate input differences (N35, N42);
+  - false passes, because some decision inputs are never compared: total score, signal mode, and where sentiment, BTC and higher-timeframe context came from.
+- **[AGENT INFERENCE]** §8 needs:
+  - one fixture of a known-matching pair that must pass;
+  - one seeded divergence per compared field, plus one change to the final-decision logic, each of which must fail;
+  - for each declared deliberate difference, a fixture showing it is classified as a refusal, not a mismatch;
+  - before any run carries the label, a bounded read-only comparison against real `LIVE` signals that reports the mismatch rate per field.
+
+**N44 (moderate). When a price event became visible to Production can't be reconstructed.**
+- **[PROJECT EVIDENCE]** A price event is written as `PENDING` and becomes `APPLIED` inside the protection transaction. Production's BUY price lookup sees only rows already committed as `APPLIED`/`LEGACY` at wall-clock time.
+- **[PROJECT EVIDENCE]** No column records when that change committed; `created_at` is the receipt time.
+- **[AGENT INFERENCE]** Replay treats every event that was *eventually* `APPLIED` as visible from its `observed_at`. An event whose protection transaction was still open is therefore visible to Replay but was invisible to Production. The effect is small and limited to the newest event. Even so, M06 must record it as a simulation assumption, and no parity claim may rely on it.
+
+**N38 update: stronger evidence, not a new objection.**
+- **[PROJECT EVIDENCE]** The project uses Spring Boot 4.1.0, with `@EnableAsync` and seven unconditional executor beans. There is no `AsyncConfigurer`, no `@Primary` executor, no bean named `taskExecutor`, and only `spring.task.scheduling` is configured.
+- **[EXTERNAL RESEARCH]** Under the documented rule for current versions (R1, R2), `@Async` therefore runs Replay on an unbounded `SimpleAsyncTaskExecutor`. This closes the version caveat I left in Round 6; it still needs runtime confirmation.
+- **[EXTERNAL RESEARCH + PROJECT EVIDENCE]** The same Javadoc says exceptions escaping a `void` `@Async` method are only logged. If `runAsync`'s own ERROR update fails, the run row stays `RUNNING`.
+- **[AGENT INFERENCE]** M04's "records only terminal run failure" needs someone responsible for recovering runs stuck that way.
+
+### C. Correction to my own earlier claim
+
+- **C24 (corrects N41).** I said the sentiment look-ahead gap "is normally bounded by the 60 s collection cycle". That's wrong.
+  - **[PROJECT EVIDENCE]** The scheduler wakes every 60 s but collects a provider only once its interval has passed. Fear & Greed is seeded at 900 s, and the interval can be edited down to 60 s.
+  - **[AGENT INFERENCE]** The real bound is the provider's configured interval plus any publication delay, and longer after an outage. The objection itself stands.
+
+### D. Process observation
+
+- **[PROJECT EVIDENCE]** RPR-0.6 hasn't changed during this run, and every round so far has ended REJECTED from both agents.
+- **[AGENT INFERENCE]** This is agreement on rejection, not a stalemate: Codex and I no longer disagree on anything material. More rounds on this artifact add little. The next steps are:
+  1. the user decides N39: no edits to shared Production code, or edits allowed as long as Production behaviour doesn't change;
+  2. Codex writes a new revision at the canonical path, `agent-docs/FINAL_CHANGE_SPECIFICATION.md`;
+  3. both agents review that exact revision in full.
+
+### E. External research
+
+- **R1. Spring Framework `@EnableAsync` Javadoc, version 7.0.9**
+  - Source: https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/scheduling/annotation/EnableAsync.html (the page shows no date).
+  - Finding: Spring uses the single `TaskExecutor` bean, or one named `taskExecutor`; otherwise it falls back to `SimpleAsyncTaskExecutor`. Exceptions from `void` async methods are only logged.
+  - Limitations: this is the documented rule, not observed runtime behaviour.
+  - Relevance: N38 and M04.
+- **R2. Spring Boot reference, "Task Execution and Scheduling", documenting 4.1.1**
+  - Source: https://docs.spring.io/spring-boot/reference/features/task-execution-and-scheduling.html (the page shows no date).
+  - Finding: when the application defines its own `Executor` beans, Spring Boot doesn't create its default one; `spring.task.execution.mode=force` would change that.
+  - Limitations: the page doesn't spell out the case of several custom executors, and the project pins 4.1.0, not 4.1.1.
+  - Relevance: N38 and C04.
+- Neither source says anything about trading performance.
+
+## EVIDENCE
+
+All entries are **[PROJECT EVIDENCE]**.
+
+| ID | Location |
+|---|---|
+| A | `FINAL_CHANGE_SPECIFICATION.md:3`; `RegressionTestWorker.java:119-120, 129-131, 262-283, 551-556, 584-616, 636-686`; `RegressionTestService.java:213, 230`; `TechnicalIndicatorService.java:102-106, 118-145`; `LivePositionProtectionService.java:99-248`; `PaperTradingService.java:113-289, 237-238, 342-343`; `ShadowProductionReplayService.java:232-255, 310-311, 342-366`; `MarketPriceEventService.java:118-129, 173-175`; `WalletAutoExecutionService.java:173, 260, 349, 443, 540, 653`; `DerivativesPositioningService.java:33-57, 98-104`; `fix-registry.js:4, 6`; `V109…sql:4-9`; `Jenkinsfile:26-39, 46-48`; `wallet_settings` readers found by grep (8 files) |
+| N42 | `AnalysisService.java:220-230, 253-263, 527-530, 1021-1040`; `SentimentService.java:167-226`; `SentimentProviderConfigService.java:25-56, 69-89, 107-136`; `application.yml:152-196` |
+| N43 | `ReplayParityValidator.java:17-38`; `src` grep (only 2 files mention it); `src/test` file list |
+| N44 | `MarketPriceEventService.java:62, 82-88, 133-146`; `B105…sql:1442-1451, 2039-2042`; `V106…sql:5-8` |
+| N38 | `pom.xml:9`; `CryptoAiTraderApplication.java:21`; six config classes declaring seven executor beans; `application.yml:7-8`; `RegressionTestWorker.java:99-100, 414-428` |
+| C24 | `SentimentCollectionService.java:42-50, 92-116`; `SentimentProviderConfig.java:58-61`; `SentimentProviderConfigService.java:31, 74-76` |
+| D | `PROGRESS.log:11-35`; verdict lines in `round01`–`round07` outputs |
+
+## OBJECTIONS
+
+**Carried forward unchanged (the spec wasn't revised): objections 1–28 from Round 6, grouped as a revision checklist.**
+- Governance and identity: 1, 20, 27 (needs the user's decision on N39), 28.
+- Read/write boundary and registry: 2, 3, 19, 25.
+- Replay identity and labels: 4, 11.
+- Analysis eligibility and the oracle: 5, 6, 13, 18, 22, 23.
+- Execution policy and ordering: 7, 14, 15, 21, 24.
+- Price evidence: 8.
+- Staging, isolation and resources: 9, 10, 16, 26.
+- Migration and archive: 17.
+
+**New, material:**
+- **29. Sentiment configuration (N42).** Define where Replay gets the provider set, weights and health rule.
+  - The oracle uses Production's stored per-signal outcome.
+  - Simulation uses a labelled, profile-declared provider set, or refuses.
+  - Register any change to the sentiment services.
+- **30. Oracle accuracy (N43).** Add tests for false passes and false alarms to §8. Also measure a per-field mismatch rate on read-only Production data before any run may carry the `ANALYSIS_PARITY` label.
+
+**New, moderate:**
+- (N44) Record decision-time price visibility as a simulation assumption.
+- (N38) Name who recovers runs left `RUNNING` when their final status update fails.
+- (C24) Use the corrected sentiment bound wherever N41 is cited.
+
+The moderate items from Round 6 remain. I would approve a canonical, frozen revision that resolves objections 1–30.
+
+## UNKNOWNS
+
+- **[AGENT INFERENCE] Past sentiment settings:** they can't be recovered, because only current rows exist. Application logs of provider `FAILED` outcomes might show past outages; I didn't check them.
+- **[AGENT INFERENCE] Replay's actual thread pool:** a log search for thread names starting `SimpleAsyncTaskExecutor-` on the `FIX-11H replay data source` line would confirm N38 at runtime.
+- **[AGENT INFERENCE] Oracle mismatch rate on real `LIVE` signals:** not measured.
+- **[AGENT INFERENCE] V109 archive failure in a real database:** still untested.
+- **Still unverified from Round 6:** which JAR and configuration Production actually runs, and the event frequencies listed there.
+- **Not done:** no build, tests, git, database or log access.
+
+VERDICT: REJECTED

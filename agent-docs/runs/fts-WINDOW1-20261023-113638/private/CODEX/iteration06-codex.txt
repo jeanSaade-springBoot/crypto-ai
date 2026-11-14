@@ -1,0 +1,72 @@
+## FINDINGS — Iteration 6: Root Cause + Research
+
+- **[PROJECT EVIDENCE] Root cause remains unconfirmed for all frozen trades:** `paper_position` IDs **182, 172, 162, 158, 143, 137**. The permitted Codex DB-evidence directory has no result files, so no position can be linked to its signals, wallet executions, audit record, or accepted price-event sequence.
+
+- **[PROJECT EVIDENCE] Same-numbered records are not a valid linkage.** The archived ICPUSDT candidate is `WalletManagedPosition` ID 182, not proven to be frozen `paper_position` ID 182. The durable link is via `paper_position.signal_id` → `wallet_managed_position.entry_signal_id`, not equal numeric IDs. [ProductionExitAuditService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:37)
+
+- **[PROJECT EVIDENCE] Candidate only, not attributed:** logs previously identified an ICPUSDT stop-loss event:
+  - Observation: `2026-10-11 22:49:33.460 UTC` / `2026-10-12 01:49:33.460 KSA`
+  - Stop log: `2026-10-11 22:49:36.971 UTC` / `2026-10-12 01:49:36.971 KSA`
+  - Committed outcome: `2026-10-11 22:49:36.974 UTC` / `2026-10-12 01:49:36.974 KSA`
+  
+  If linkage is later proven, current source describes this as an absolute-stop route, with mechanical wallet exit preceding paper-position closure. It is not evidence of a fault by itself. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:173)
+
+- **[PROJECT EVIDENCE] Protection root-cause testing must use accepted price evidence.** An `APPLIED` direct-price outcome commits with protection effects; stale, future, duplicate, or out-of-order observations are non-canonical. Candle OHLC cannot replace missing intrabar price-event evidence. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:58)
+
+- **[PROJECT EVIDENCE] There are multiple possible close routes with different accounting guarantees.** Live TP/SL/profit-lock exits close wallet state before paper state; the signal-driven paper-close route persists the paper close first and separately attempts wallet exit. Therefore, a closed losing `paper_position` alone cannot establish executed net loss or a valid root cause. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487)
+
+- **[AGENT INFERENCE]** No common failure mechanism can be responsibly inferred across the six losses. Possible classifications—valid strategy loss, stop/profit-lock behavior, late/weak entry, execution/accounting discrepancy, or missing evidence—remain competing hypotheses.
+
+- **[EXTERNAL RESEARCH]** None. This iteration requires trade-specific durable evidence; general market research would not establish historical system behavior.
+
+## EVIDENCE
+
+- `paper_position` has lifecycle, entry/exit, stop/target, signal-link, and raw UTC timestamp fields. [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:10)
+- `wallet_trade` supplies execution time, price, quantity, fee, cost basis, and realized P&L evidence. [WalletTrade.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletTrade.java:11)
+- `production_exit_audit` distinguishes the terminal trigger from the contextual signal. [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:17)
+- Current exit policy may classify a close as confirmed bearish exit or profit-lock exit; this cannot be applied retroactively without the historical signal evidence. [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:20)
+
+## UNKNOWNS
+
+- All six positions’ symbols, raw UTC/KSA lifecycle, close reasons, SL/TP, and loss amounts.
+- Entry/exit signal evidence and contemporaneous data-quality/freshness.
+- Managed-position and wallet-trade linkage, including partial exits and fees.
+- Accepted versus rejected price-event sequence near each close.
+- Runtime version/configuration active for each historical loss.
+- Whether the ICPUSDT candidate links to frozen trade 182.
+
+The supplied snapshot fields remain internally inconsistent: `2026-10-25 10:08:57 UTC` converts to `2026-10-25 13:08:57 KSA`, not the supplied `2026-10-23 11:36:38 KSA`. The frozen IDs remain the only selection authority.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Establish the actual `crypto_ai` forensic schema before choosing trade-level join columns for root-cause reconstruction of only the six frozen paper positions.  
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_managed_position',
+      'wallet_trade',
+      'production_exit_audit',
+      'market_price_event',
+      'position_analysis',
+      'position_management_event',
+      'execution_opportunity',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+Self-review: analysis only; no code, configuration, database, Git, deployment, or documentation changes were made.

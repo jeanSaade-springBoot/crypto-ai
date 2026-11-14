@@ -1,0 +1,79 @@
+## FINDINGS
+
+1. Default checked-in mode is `OFF`; in that mode the trader owns Binance WebSocket and REST candle ingestion and persists locally to `crypto_ai.candle`. `LIVE` disables those direct paths and reads candles through the configured collector datasource. No production environment was accessed.
+
+2. `OBSERVE` is materially unsafe against the pending direction: direct WebSocket/REST ingestion is disabled only for `LIVE`, while `SharedMarketConsumer` starts its collector polling/dispatch clocks in every non-`OFF` mode. Therefore OBSERVE can operate both paths concurrently.
+
+3. Runtime candle persistence has a real monotonic close mechanism. A runtime close gets a token only on an atomic `closed=0 → 1` update; later open updates and duplicate closes cannot overwrite the completed candle or generate another dispatch token. The close event is published only after input, protection, and observer transactions.
+
+4. Ordinary REST bootstrap/backfill violates the pending recovery contract. Its `ON DUPLICATE KEY UPDATE` can finalize an existing open runtime candle, but preserves the existing provenance/token and creates neither reconciliation audit nor a `candle_analysis_outcome`. It is therefore not “insert missing identities only,” despite the source comment.
+
+5. The reported coin-activation race is technically credible. Activation reloads the all-symbol combined WebSocket before running bootstrap. If bootstrap finalizes a just-closed, already-open runtime candle before its final WebSocket close message is processed, that later close cannot obtain a token or dispatch analysis. The detector excludes it because it has no token; reconciliation excludes it because it is no longer open. I found no test covering this interleaving.
+
+6. A specialized reconciliation slice exists and is materially safer: it uses update-only recovery for an existing open row and insert-if-absent for a wholly absent candle, records audit/outcome evidence, and never dispatches recovered work. But it is disabled by the checked-in configuration, so it is not the current active default behavior.
+
+7. Reconciliation still has unproven/material weaknesses even if enabled:
+   - It takes `LIMIT 50` per interval before due-status and loss-evidence filtering.
+   - It does not restrict open candidates to enabled symbols.
+   - Reconnect loss evidence is process-local (`lastReconnectAdmission`) and disappears across restart.
+   - Retryable candidates age out of the quality window without a demonstrated terminal age-out outcome.
+   - REST clients have bounded timeouts but no shared 429/418, `Retry-After`, ban, or global request-budget coordination.
+
+8. The detector addresses the commit-to-dispatch crash window only while a tokened candle remains inside its bounded lookback. Retry state is in memory; after a sufficiently long outage, an old unanalysed tokened candle falls outside SQL selection without a detector-created terminal outcome. This is confirmed by code and even directly reflected in the unit test that asserts old runtime candles are not analysed.
+
+9. Replay reads closed local/selected-source candles by symbol, interval, time, and `closed=true`. It does not classify provenance, close token, reconciliation audit, outcome, or “historical-only” recovery state. It provides narrower price-event checks, not demonstrated parity for candle recovery/admission behavior.
+
+10. Documentation has material drift:
+    - AGENTS.md and `codex-docs/ARCHITECTURE.md` call V103 an unconditional fresh trader-only blocker, but `B105` expressly establishes a trader-only baseline intended to bypass V103; a source-level resolution test exists. A real disposable-MySQL success report was not found, so this corrects the categorical claim without proving deployment readiness.
+    - `claude-docs/ARCHITECTURE.md` incorrectly groups OBSERVE with LIVE/shared-only operation; code allows direct ingestion in OBSERVE.
+    - `MarketDataBootstrapService` and `CandleRepository` comments claim missing-only backfill, contradicted by their implementation.
+
+## EVIDENCE
+
+- Default OFF mode; reconciliation disabled; shared collector configuration: [application.yml](C:/workspace/crypto-ai-trader-mysql/src/main/resources/application.yml:40), [application.yml](C:/workspace/crypto-ai-trader-mysql/src/main/resources/application.yml:420).
+
+- WebSocket starts unless mode is exactly LIVE; reload waits for a replacement session: [BinanceWebSocketManager.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/client/binance/websocket/BinanceWebSocketManager.java:95), [BinanceWebSocketManager.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/client/binance/websocket/BinanceWebSocketManager.java:126).
+
+- Direct REST import rejects only LIVE and uses exchange time before the kline request: [MarketDataService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/MarketDataService.java:31).
+
+- Local versus collector datasource routing: [SharedMarketSource.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/shared/SharedMarketSource.java:19), [CandleRepository.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:32).
+
+- OBSERVE runs collector discovery/price/analysis clocks because only OFF returns: [SharedMarketConsumer.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/shared/SharedMarketConsumer.java:121).
+
+- Runtime atomic close token and immutable completed candles: [CandleRepository.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:109), [CandleRepository.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:190).
+
+- Transaction order and asynchronous close handling: [KlineTransactionCoordinator.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:36), [BinanceKlineService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BinanceKlineService.java:101), [CandleClosedEventListener.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/event/CandleClosedEventListener.java:30).
+
+- Ordinary backfill can close open duplicates; contradictory “inserts missing identities only” comment: [CandleRepository.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:173).
+
+- Activation ordering and all-symbol stream rebuild: [DynamicCoinActivationService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/administration/service/DynamicCoinActivationService.java:18), [BinanceStreamUrlBuilder.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/client/binance/websocket/BinanceStreamUrlBuilder.java:25).
+
+- Safer reconciliation paths and their selection limitations: [LocalCandleReconciliationService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/local/LocalCandleReconciliationService.java:92), [LocalCandleReconciliationService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/local/LocalCandleReconciliationService.java:122), [LocalCandleReconciliationService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/local/LocalCandleReconciliationService.java:161).
+
+- Bounded, in-memory detector and missing old-candle coverage: [LocalClosedCandleDetector.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/local/LocalClosedCandleDetector.java:28), [LocalClosedCandleDetector.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/local/LocalClosedCandleDetector.java:47), [LocalDetectorTest.java](C:/workspace/crypto-ai-trader-mysql/src/test/java/com/crypto/local/LocalDetectorTest.java:47).
+
+- Replay closed-candle selection: [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:469).
+
+- V103 collector-table requirement and B105 intended bypass: [V103__fix_149_fresh_admission_indexes.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/db/migration/V103__fix_149_fresh_admission_indexes.java:32), [B105__fix_153_trader_only_baseline.sql](C:/workspace/crypto-ai-trader-mysql/src/main/resources/db/migration/B105__fix_153_trader_only_baseline.sql:1), [LocalCandleMySqlIT.java](C:/workspace/crypto-ai-trader-mysql/src/test/java/com/crypto/local/LocalCandleMySqlIT.java:83).
+
+## OBJECTIONS
+
+- Default OFF-mode bootstrap can silently consume a live close without analysis/outcome evidence.
+- Default reconciliation is disabled; enabled reconciliation still lacks demonstrated fair candidate selection, durable restart evidence, terminal ageing, and coordinated Binance rate-limit handling.
+- OBSERVE permits direct and shared-market ingestion together, contrary to the pending architecture.
+- Replay parity does not cover the implemented recovery/admission classifications.
+- Required MySQL, crash/restart, concurrency, replay, and deployment-replacement proof is absent.
+
+Candidate for later solution review only: separate ordinary historical import from authority to finalize an existing runtime-open row, then test the activation/reconnect boundary against disposable MySQL.
+
+## UNKNOWNS
+
+- Production artifact, overrides, mode, database/Flyway history, collector availability, and actual operational behavior were intentionally not accessed.
+- Whether the activation race has occurred in reality.
+- Whether `LocalCandleMySqlIT` has passed on disposable MySQL; the source test exists, but no saved report was found.
+- Whether every administrative coin mutation invokes stream reload; the documented reload paths do, but no runtime audit was inspected.
+- Open-position protection coverage during application replacement.
+
+## VERDICT
+
+REJECTED

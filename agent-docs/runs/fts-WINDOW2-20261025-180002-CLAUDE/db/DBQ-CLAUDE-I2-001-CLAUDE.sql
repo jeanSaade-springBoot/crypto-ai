@@ -1,0 +1,5 @@
+SELECT id, symbol, interval_code, candle_open_time, generated_at, decision, original_decision, signal_mode, data_quality_valid, final_entry_allowed, primary_blocking_stage, confidence_score, raw_confidence_score, effective_confidence_score, confluence_status, confluence_entry_allowed, confluence_higher_decision, market_regime, selected_strategy, strategy_entry_allowed, atr_at_signal, atr_percent, risk_reward_ratio, atr_overextended, atr_entry_type, atr_recommended_position_percent, atr_immediate_entry_allowed, candle_range_atr_multiple, entry_authority, entry_authority_max_position_percent, btc_context_status, btc_context_entry_allowed, btc_context_age_seconds, liquidity_status, liquidity_entry_allowed, order_book_stop_exposed, order_book_target_blocked, derivatives_status, funding_percentile, sentiment_available
+FROM crypto_ai.trade_signal
+WHERE id IN (176710,171589,167668,165412,159408,156723,176927,172587,168277,166819,159487,156850)
+ORDER BY id DESC
+LIMIT 12;

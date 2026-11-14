@@ -1,0 +1,240 @@
+# CLAUDE: FTS WINDOW1, Iteration 1 (Trade Reconstruction, self-review)
+
+**Status:** No trade data has been retrieved yet. I have no database access, and the run folder `agent-docs/runs/fts-WINDOW1-20261023-113638/db/CLAUDE/` is empty. So this iteration contains no conclusions about any trade. It covers scope, the method I'll use, one charter problem, and the DB requests needed to rebuild the six timelines.
+
+Context loaded: AGENTS.md, AGREED_KNOWLEDGE.md (no entries), DECISIONS.md (no entries), DATABASE_INVESTIGATION_RULES.md, all of claude-docs/, CHARTER.md, and the schema from Flyway migrations (B105 baseline plus V104–V107). I did not read the other agent's folders, LIVE_TEAM_STATUS.md or LIVE_EVENTS.log.
+
+---
+
+## FINDINGS
+
+**F-I1-01: The charter's snapshot clock is internally inconsistent.** [PROJECT EVIDENCE + AGENT INFERENCE]
+- CHARTER.md lines 4–5 give `SNAPSHOT TIME UTC: 2026-10-25 10:08:57` and `SNAPSHOT TIME KSA: 2026-10-23 11:36:38`.
+- UTC+3 of the stated UTC time is **2026-10-25 13:08:57 KSA**, not 2026-10-23 11:36:38.
+- The KSA value matches the run ID `fts-WINDOW1-20261023-113638`. That KSA time is UTC **2026-10-23 08:36:38**.
+- The two labels are about 2 days apart, so at least one label is wrong. The study selected "latest 6 losing trades" (`ORDER BY closed_at DESC LIMIT 6`), so which instant is correct decides whether the frozen set is really the latest six at the snapshot.
+- I am not substituting trades. I treat 182, 172, 162, 158, 143 and 137 as the mandatory set and ask for a check that they match the selection at either instant (DBQ-CLAUDE-I1-002).
+
+**F-I1-02: Planned reconstruction method for each trade.** [PROJECT EVIDENCE: claude-docs/TRADE_INVESTIGATION_AGENT.md, claude-docs/TRADING_RULES.md]
+- For each trade I will rebuild this chain: candle close → `trade_signal` saved → `signal_processing_work` claimed → entry (`paper_position.opened_at` / `wallet_trade` BUY) → `market_price_event` observations → exit trigger (`production_exit_audit.close_trigger`) → exit committed (`closed_at` / `wallet_trade` SELL).
+- I will show both UTC and KSA and measure the latency of each step.
+- Things to keep in mind when reading the results:
+  - **P&L is gross:** automatic trades record `fee_usdt = 0` (INVESTIGATION_LOG item 2), so fees must be calculated separately.
+  - **Stop-loss can move:** `paper_position.stop_loss` is the final value, and the stop only moves up. Trade 182 may have been stopped at a raised stop, which is not the same as being stopped at the original stop.
+  - **Paper can close without the wallet:** `PaperTradingService.completeClose` still closes the paper position if the wallet exit fails. I will check that the paper and wallet records agree.
+  - **Price evidence:** only `LEGACY` and `APPLIED` price events count as accepted. I will not use candle OHLC to fill gaps.
+
+**F-I1-03: Schema version is unknown, so some columns may not exist.** [PROJECT EVIDENCE: V106/V107]
+- `trade_signal.signal_mode` comes from V106, and `trade_signal.data_quality_valid` plus `buy_htf_assessment_audit` come from V107.
+- AGENTS.md says FIX-154 (V107) is not implemented. I can't assume the snapshot database has V106 or V107, so queries that use those columns are kept separate (DBQ-CLAUDE-I1-004B and I1-012) so a missing column doesn't break the main queries.
+
+## EVIDENCE
+- `CHARTER.md:4-7,12-18`: snapshot labels and the frozen IDs.
+- `B105__fix_153_trader_only_baseline.sql:168-195,417-421`: `paper_position` columns, including `close_reason`, `entry_reason`, `exit_reason` and `exit_signal_id`.
+- `B105:641-663,702-704`: `wallet_trade` and `execution_key`.
+- `B105:1367-1389`: `production_exit_audit`, which has a unique index on `paper_position_id`.
+- `B105:1442-1451` and `:2039-2042`: `market_price_event` and `delivery_status` (default `LEGACY`).
+- `B105:1949-1964`: `signal_processing_work`.
+- `V106:1-13` and `V107:1-38`: the columns added by FIX-153 and FIX-154.
+
+## UNKNOWNS
+| ID | What I don't know yet |
+|---|---|
+| U-01 | Symbol, timestamps, prices, close reason and P&L for all six trades (no data yet) |
+| U-02 | Which snapshot instant is correct, and whether any newer losing trade was left out |
+| U-03 | Which Flyway migrations are applied, so whether V106/V107 columns exist |
+| U-04 | Exact column names in `execution_opportunity` and in later additions to `wallet_managed_position` |
+| U-05 | Ingestion mode (`shared-market.mode`) at each entry time; config and logs can't be read from the DB alone |
+| U-06 | Whether Replay can reproduce each trade (not assessed in Iteration 1) |
+
+---
+
+## DB REQUESTS (read-only `SELECT` statements against `crypto_ai` only)
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-001
+Purpose: Get the actual schema of the tables involved, and the latest applied migrations (U-03, U-04).
+SQL:
+SELECT table_name, ordinal_position, column_name, column_type
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN ('paper_position','production_exit_audit','wallet_trade','wallet_managed_position',
+                     'signal_processing_work','execution_opportunity','market_price_event','trade_signal',
+                     'position_management_event','buy_htf_assessment_audit')
+ORDER BY table_name, ordinal_position;
+SELECT installed_rank, version, description, installed_on, success
+FROM flyway_schema_history ORDER BY installed_rank DESC LIMIT 15;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-002
+Purpose: Get the frozen trade rows, and check that they match the selection at both candidate snapshot instants (F-I1-01).
+SQL:
+SELECT * FROM paper_position WHERE id IN (182,172,162,158,143,137) ORDER BY id DESC;
+SELECT id, symbol, status, realized_pnl, opened_at, closed_at,
+       (closed_at <= '2026-10-23 08:36:38') AS closed_before_ksa_label_utc,
+       (closed_at <= '2026-10-25 10:08:57') AS closed_before_utc_label
+FROM paper_position
+WHERE status = 'CLOSED' AND closed_at IS NOT NULL AND realized_pnl < 0
+ORDER BY closed_at DESC LIMIT 12;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-003
+Purpose: Get the recorded exit trigger and exit audit for each trade.
+SQL:
+SELECT id, paper_position_id, wallet_position_id, symbol, close_trigger, source_signal_id,
+       source_signal_decision, source_signal_original_decision, position_analysis_id, position_recommendation,
+       entry_price_usdt, exit_price_usdt, stop_loss_usdt, take_profit_usdt, close_explanation, audited_at
+FROM production_exit_audit
+WHERE paper_position_id IN (182,172,162,158,143,137)
+ORDER BY paper_position_id DESC;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-004
+Purpose: Get the entry and exit signals, including decision chain, regime, strategy, multi-timeframe and BTC context, and risk/reward. Large JSON columns are left out.
+SQL:
+SELECT pp.id AS pp_id, CASE WHEN ts.id = pp.signal_id THEN 'ENTRY' ELSE 'EXIT' END AS role,
+       ts.id, ts.symbol, ts.interval_code, ts.candle_open_time, ts.generated_at, ts.created_at,
+       ts.decision, ts.original_decision, ts.total_score, ts.confidence_score, ts.final_entry_allowed,
+       ts.latest_price, ts.stop_loss, ts.take_profit, ts.risk_reward_ratio, ts.atr_at_signal, ts.atr_percent,
+       ts.atr_entry_type, ts.atr_recommended_position_percent, ts.atr_overextended,
+       ts.market_regime, ts.market_regime_confidence, ts.selected_strategy, ts.strategy_entry_allowed,
+       ts.confluence_status, ts.confluence_entry_allowed, ts.confluence_higher_interval, ts.confluence_higher_decision,
+       ts.btc_context_status, ts.btc_context_entry_allowed, ts.btc_correlation, ts.btc_influence_factor,
+       ts.liquidity_status, ts.derivatives_status, LEFT(ts.final_decision_explanation, 800) AS final_expl
+FROM paper_position pp
+JOIN trade_signal ts ON ts.id IN (pp.signal_id, pp.exit_signal_id)
+WHERE pp.id IN (182,172,162,158,143,137)
+ORDER BY pp.id DESC, role;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-004B
+Purpose: Get `signal_mode` (V106) and `data_quality_valid` (V107) for the entry signals. This is kept separate because the columns may not exist (F-I1-03).
+SQL:
+SELECT pp.id AS pp_id, ts.id, ts.signal_mode, ts.data_quality_valid
+FROM paper_position pp JOIN trade_signal ts ON ts.id = pp.signal_id
+WHERE pp.id IN (182,172,162,158,143,137) ORDER BY pp.id DESC;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-005
+Purpose: Get the entry decision path and market-context snapshot (entry signals only, truncated).
+SQL:
+SELECT pp.id AS pp_id, ts.id, LEFT(CAST(ts.decision_path AS CHAR), 4000) AS decision_path,
+       LEFT(CAST(ts.market_context_snapshot AS CHAR), 3000) AS mcs
+FROM paper_position pp JOIN trade_signal ts ON ts.id = pp.signal_id
+WHERE pp.id IN (182,172,162,158,143,137) ORDER BY pp.id DESC;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-006
+Purpose: Get the wallet executions in each trade's lifetime, to recompute P&L and check paper vs wallet (F-I1-02).
+SQL:
+SELECT pp.id AS pp_id, wt.id, wt.signal_id, wt.execution_key, wt.side, wt.quantity, wt.price_usdt,
+       wt.gross_amount_usdt, wt.fee_usdt, wt.net_amount_usdt, wt.cost_basis_usdt, wt.realized_pnl_usdt,
+       wt.realized_pnl_percent, wt.execution_type, wt.status, wt.executed_at, LEFT(wt.notes, 300) AS notes
+FROM paper_position pp
+JOIN wallet_trade wt ON wt.symbol = pp.symbol
+ AND wt.executed_at BETWEEN pp.opened_at - INTERVAL 2 MINUTE AND pp.closed_at + INTERVAL 2 MINUTE
+WHERE pp.id IN (182,172,162,158,143,137)
+ORDER BY pp.id DESC, wt.executed_at LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-007
+Purpose: Get the managed-position state: highest price and profit lock.
+SQL:
+SELECT pp.id AS pp_id, w.id, w.entry_signal_id, w.symbol, w.quantity, w.average_entry_price_usdt, w.total_cost_usdt,
+       w.status, w.opened_at, w.updated_at, w.entry_confidence, w.entry_total_score, w.entry_decision,
+       w.highest_price_usdt, w.profit_lock_active, w.profit_lock_price_usdt, w.profit_lock_progress_percent,
+       w.profit_lock_activated_at
+FROM paper_position pp JOIN wallet_managed_position w ON w.entry_signal_id = pp.signal_id
+WHERE pp.id IN (182,172,162,158,143,137) ORDER BY pp.id DESC;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-008
+Purpose: Get the work-claim timeline for the entry signal (signal → claim → entry latency).
+SQL:
+SELECT pp.id AS pp_id, s.signal_id, s.symbol, s.interval_code, s.candle_open_time, s.origin, s.status, s.attempts,
+       s.next_attempt_at, s.updated_at, s.completed_at, s.paper_position_id, s.failure_stage,
+       LEFT(s.error_message, 400) AS err
+FROM paper_position pp JOIN signal_processing_work s ON s.signal_id = pp.signal_id
+WHERE pp.id IN (182,172,162,158,143,137) ORDER BY pp.id DESC;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-009
+Purpose: Get price-event coverage over each trade's lifetime: counts by delivery status, min/max price, and the first moment price was at/below the final stop or at/above the target.
+SQL:
+SELECT pp.id AS pp_id, pp.symbol, m.delivery_status, COUNT(*) AS n, MIN(m.price) AS min_px, MAX(m.price) AS max_px,
+       MIN(m.observed_at) AS first_obs, MAX(m.observed_at) AS last_obs,
+       MIN(CASE WHEN m.price <= pp.stop_loss THEN m.observed_at END) AS first_le_final_sl,
+       MIN(CASE WHEN m.price >= pp.take_profit THEN m.observed_at END) AS first_ge_final_tp
+FROM paper_position pp
+JOIN market_price_event m ON m.symbol = pp.symbol
+ AND m.observed_at BETWEEN pp.opened_at AND pp.closed_at + INTERVAL 5 SECOND
+WHERE pp.id IN (182,172,162,158,143,137)
+GROUP BY pp.id, pp.symbol, m.delivery_status ORDER BY pp.id DESC, m.delivery_status;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-010
+Purpose: Find the largest gap between price observations during each trade, to detect protection blind spots.
+SQL:
+SELECT pp_id, COUNT(*) AS n, MAX(gap_s) AS max_gap_s, SUM(gap_s > 10) AS gaps_over_10s
+FROM (
+  SELECT pp.id AS pp_id,
+         TIMESTAMPDIFF(SECOND, LAG(m.observed_at) OVER (PARTITION BY pp.id ORDER BY m.observed_at, m.id), m.observed_at) AS gap_s
+  FROM paper_position pp
+  JOIN market_price_event m ON m.symbol = pp.symbol
+   AND m.observed_at BETWEEN pp.opened_at AND pp.closed_at
+  WHERE pp.id IN (182,172,162,158,143,137)
+) t GROUP BY pp_id ORDER BY pp_id DESC;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-011
+Purpose: Get the price events right around entry and exit, to check fill price against the latest price and the exit trigger tick.
+SQL:
+SELECT pp.id AS pp_id, CASE WHEN m.observed_at <= pp.opened_at + INTERVAL 2 SECOND
+                             AND m.observed_at >= pp.opened_at - INTERVAL 20 SECOND THEN 'ENTRY' ELSE 'EXIT' END AS edge,
+       m.id, m.observed_at, m.price, m.source, m.delivery_status, m.created_at
+FROM paper_position pp
+JOIN market_price_event m ON m.symbol = pp.symbol
+ AND (m.observed_at BETWEEN pp.opened_at - INTERVAL 20 SECOND AND pp.opened_at + INTERVAL 2 SECOND
+   OR m.observed_at BETWEEN pp.closed_at - INTERVAL 20 SECOND AND pp.closed_at + INTERVAL 2 SECOND)
+WHERE pp.id IN (182,172,162,158,143,137)
+ORDER BY pp.id DESC, m.observed_at, m.id LIMIT 300;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-012
+Purpose: Get the 1m and 5m candles that were available at entry (gaps, closed flag, provenance), plus FIX-154 audit rows if that table exists.
+SQL:
+SELECT pp.id AS pp_id, c.interval_code, c.open_time, c.close_time, c.open_price, c.high_price, c.low_price,
+       c.close_price, c.volume, c.closed, c.ingestion_source, c.created_at, c.updated_at
+FROM paper_position pp
+JOIN candle c ON c.symbol = pp.symbol
+ AND ((c.interval_code = '1m' AND c.open_time BETWEEN pp.opened_at - INTERVAL 8 MINUTE AND pp.opened_at)
+   OR (c.interval_code = '5m' AND c.open_time BETWEEN pp.opened_at - INTERVAL 30 MINUTE AND pp.opened_at))
+WHERE pp.id IN (182,172,162,158,143,137)
+ORDER BY pp.id DESC, c.interval_code, c.open_time LIMIT 200;
+SELECT a.* FROM buy_htf_assessment_audit a
+JOIN paper_position pp ON a.reference_signal_id = pp.signal_id
+WHERE pp.id IN (182,172,162,158,143,137) ORDER BY a.reference_signal_id, a.evaluated_at LIMIT 60;
+### END_DB_REQUEST
+
+---
+
+**Self-review for this iteration:**
+- No trade facts are claimed or invented.
+- All findings are labelled.
+- Every timestamp conversion is shown explicitly.
+- All requests are bounded `SELECT` statements on `crypto_ai`.
+- If DBQ-CLAUDE-I1-001 shows that `ingestion_source`, `delivery_status`, `signal_mode` or `data_quality_valid` don't exist, I'll correct the affected queries in Iteration 2.
+
+**Iteration 2 plan:** once these results are in, build the UTC/KSA timeline and the entry-vs-outcome assessment for each trade.

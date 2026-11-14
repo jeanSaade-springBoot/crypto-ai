@@ -1,0 +1,223 @@
+# Iteration 3 of 8: log and timing forensics (Claude, self-review only)
+
+The study's application logs couldn't be read, so this timing reconstruction rests on database timestamps and code tracing. The logs for 2026-10-11 and 2026-10-12 exist only as `.gz` archives, and my tools can't decompress them.
+
+From those sources:
+- **Exit delays:** every signal-confirmed live exit was delayed by up to 39 s. In the four cases where I have the tick prices, the delay cost nothing.
+- **Trade 143's entry:** it relied on a 5m signal that was one bar old. It lost a 2 ms race against the newer 5m signal.
+- **2 s write delay:** every wallet transaction spends about 2 s on a portfolio snapshot before the paper row is written.
+
+No code, config, database writes, git or deploy. I didn't read the Codex folders, LIVE_TEAM_STATUS or LIVE_EVENTS. Times are shown as raw UTC → KSA (UTC+3).
+
+## FINDINGS
+
+**F20. The logs for the study window can't be read here.** (PROJECT EVIDENCE)
+- `logs/crypto-ai-trader.log` starts at 2026-10-12T13:43:00 UTC, after all six trades closed.
+- `logs/database-timing.log` starts at 15:20 UTC.
+- The relevant logs are `logs/crypto-ai-trader.2026-10-11.{0..12}.log.gz` and `…2026-10-12.{0..6}.log.gz`, which I can't decompress.
+- Log timestamps are UTC. For example, the line at `13:43:00.038` matches `receivedAt=…13:43:00.038478900Z` (`crypto-ai-trader.log:2`).
+- The log-extraction requests at the end are for the coordinator.
+
+**F21. Live exits only fire on a price tick, and new signals reach that path late.** (PROJECT EVIDENCE: code + DBQ-CLAUDE-I1-007/008)
+- `LivePositionProtectionService.onPrice` is the only evaluator for SELL_CONFIRMED and HTF_SELL_CONFIRMED (`:235-238`). It reads the newest committed signals by `generated_at` (`:95-97`).
+- A `trade_signal` row's `created_at` comes 1.3–2.3 s after its `generated_at`; for example, 168277 was generated at 04:26:02.794 and created at 04:26:04.094 (DBQ-CLAUDE-I1-002). So a signal can't be seen until after its `created_at` at the earliest.
+
+| Trade | Exit condition met (signal generated) UTC → KSA | Exit tick UTC → KSA | Delay | Price change in the gap |
+|---|---|---|---|---|
+| 137 | 5m 156852 at 21:00:02.921 → 00:00:02 | 21:00:09.033 → 00:00:09 | about 6 s | none: 3.987 → 3.987 (no tick between 21:00:01.023 and 21:00:09.033) |
+| 158 | 5m 166821 at 03:30:01.464 → 06:30:01 | 03:30:04.319 → 06:30:04 | about 3 s | none: 1.4090 → 1.4090 |
+| 172 | 5m 172588 at 07:15:04.578 → 10:15:04 | 07:15:43.462 → 10:15:43 | about 39 s | UNKNOWN (my earlier window started at 07:15:15) |
+| 182 | 5m 176934 at 10:05:03.926 → 13:05:03 | 10:05:18.446 → 13:05:18 | about 14.5 s | none: 0.188 throughout (no tick between 10:05:02.431 and 10:05:18.446) |
+
+- For 158, the tick at 03:30:02.32 → 06:30:02 KSA came after both signals' `generated_at` but did **not** trigger the exit. My explanation is that the signals hadn't committed yet. That is AGENT INFERENCE until DBQ-CLAUDE-I3-001.
+- Classification: a design-level latency (exits are driven by ticks, and signals become visible only on commit). In these trades it caused no measurable loss; 172 is still unresolved.
+
+**F22. Trade 143 entered on the previous 5m bar because of a 2 ms race.** (PROJECT EVIDENCE: code + data; the exact 5m ID used is still unconfirmed)
+- The 22:40 boundary produced two signals:
+  - 1m 159408 at 22:40:01.633945;
+  - 5m 159407 (22:35 candle, **WATCH**, BREAKOUT) at 22:40:01.635944, which is 2 ms *later*.
+- How the 5m signal is chosen:
+  - `setupTimeframeAtrAuthoritySignal` takes the latest 5m with `generated_at ≤ current.generatedAt` (`ExecutionIntelligenceService.java:1485`, `:2608`).
+  - So 159407 was excluded, and the only qualifying 5m BUY is 159285 (22:30 candle, generated at 22:35:01.55). The execution message calls this "the fresh 5m BUY" (wallet_trade 358).
+- At 20:55, trade 137 won the same race: the 5m signal (156721) was generated 18 ms *before* the 1m signal, and the audit confirms it was used (DBQ-CLAUDE-I2-002, row 1938).
+- What this means:
+  - Whether the just-closed 5m candle counts at a 5m boundary depends on millisecond ordering between concurrent analysis threads.
+  - Replay uses as-of `generated_at` (`TradeExecutionValidationService.java:372-378`), so it may not reproduce this race. That is a Replay-parity risk.
+- Classification: a **candidate logic/timing defect**. It turns F14's hypothesis into a mechanism.
+
+**F23. Correcting my iteration-2 reading of the FIX-154 audit.** (PROJECT EVIDENCE)
+- DBQ-CLAUDE-I2-002 has no rows for 159408 (trade 143) or 165412 (trade 158). That does **not** prove there was no audit:
+  - the wake-up path audits against the **5m trigger** ID: `validateBuyContext(fiveMinuteTrigger,"SETUP_WAKEUP")`, `ExecutionIntelligenceService.java:435`;
+  - audit writes are asynchronous and best-effort, and they can be dropped (`BuyHtfAssessmentAuditStore.java:46-51`).
+- `setupTimeframeAtrAuthoritySignal` itself never calls the FIX-154 assessment (`:1472-1492`). Whether trade 143 had any FIX-154 check is open (DBQ-CLAUDE-I3-003).
+
+**F24. F11 confirmed: FIX-154's "raw" 5m decision is the post-confluence decision.** (PROJECT EVIDENCE, DBQ-CLAUDE-I2-001/002)
+- For trade 182, audit 2425 records 5m 176655 with `five_minute_raw_decision=NEUTRAL`.
+- The signal's `original_decision` was STRONG_SELL, with `confluence_status=CONFLICT` against 1h WATCH 175258.
+- Every masked 5m signal (175399…176792) shows the same CONFLICT / 1h WATCH pattern.
+- So the assessment never saw the bearish 5m.
+
+**F25. Every wallet transaction spends about 2 s on a portfolio snapshot.** (PROJECT EVIDENCE: code + post-window timing log; the attribution to these trades is AGENT INFERENCE)
+- **Where the time goes in code:**
+  - `executeMechanicalExit` sets `executedAt`, then runs `currentPortfolioValue()` and `captureSnapshot()` (`WalletAutoExecutionService.java:548-560`).
+  - Those call `currentPrice()` once per wallet asset (`WalletService.java:607`). Each call runs `SELECT * FROM candle … ORDER BY close_time DESC LIMIT 1`, but the candle index is on `open_time`, not `close_time`.
+  - Only after that does `closePaper` stamp `closed_at` (`LivePositionProtectionService.java:405`).
+- **Supporting timing from after the study window:** in `database-timing.log:119-1239`, transaction `41cf3d85` ran 17 or more of these queries back to back. Each took 19–323 ms, about 1.7 s in total.
+- **This matches the gaps in the trade data** (wallet `executed_at` → paper `closed_at`/`opened_at`): 1.98 s for 182's exit, 2.24 s for 182's entry, 2.2 s for 162's entry.
+- **Risk:** this snapshot work runs inside the ~30 s `PROTECTION_TRANSACTION` on the WebSocket thread (`KlineTransactionCoordinator.java:57`). That stalls kline intake by about 2 s per exit.
+- It doesn't explain any of the six losses.
+
+**F26. Signal-path exits fill at a stale price.** (PROJECT EVIDENCE)
+- Trade 162 filled at 0.08675, which is the 04:25 candle close and the signal's `latest_price`.
+- It executed at 04:26:04.134 → 07:26:04 KSA. A newer tick of 0.08673 had arrived at 04:26:02.583.
+- This follows from `PaperTradingService.java:449,457`. The paper result is slightly flattered (about 0.0034 USDT).
+
+**F27. Local and Binance clocks disagree by up to about 170 ms, in both directions.** (PROJECT EVIDENCE, DBQ-CLAUDE-I1-008)
+- `created_at − observed_at` per trade window:
+
+  | Trade (time) | Offset | Meaning |
+  |---|---|---|
+  | 137 (21:00) | −150 ms | received *before* Binance's event time, which is impossible |
+  | 158 (03:29) | −130 ms | impossible, as above |
+  | 162 (04:25) | −67 to −167 ms | impossible, as above |
+  | 143 (22:43) | +5 to +35 ms | normal |
+  | 172 (07:15) | +11 ms | normal |
+  | 182 (10:05) | +35 to +168 ms | normal |
+
+- Validation uses the corrected clock (`MarketPriceEventService.java:39`). The stored `created_at`, `executed_at` and `closed_at` are not corrected.
+- Comparisons below 200 ms between local and exchange timestamps are unreliable. For example, 137's exit appears to execute *before* its trigger tick was observed. Use local timestamps only for local ordering.
+
+**F28. Entry latency.** (PROJECT EVIDENCE)
+
+| Trade | Candle close → wallet fill | Execution price observed before commit |
+|---|---|---|
+| 137 | 3.0 s | 2.99 s |
+| 143 | 3.1 s | 2.09 s |
+| 158 | 3.0 s | 2.66 s |
+| 162 | 4.2 s | 1.63 s |
+| 172 | 2.9 s | 1.48 s |
+| 182 | 4.2 s | 1.80 s |
+
+- This is acceptable for a 1m strategy and isn't a loss cause. Whether the price moved inside these gaps needs DBQ-CLAUDE-I3-005.
+
+**F29. Trade 143's drop to 4.027 was a real market move.** (PROJECT EVIDENCE, DBQ-CLAUDE-I2-004)
+- The 22:43 1m candle: high 4.100, low 3.994, close 4.026.
+- Volume was 6382.8, about 9.5× the previous minute.
+- Whether the 8 s gap without ticks was quiet trading on Binance's side or lost intake is still open (DBQ-CLAUDE-I3-004/006).
+
+**F30. Iteration-2 F9 (R:R below 1) is demoted.** (PROJECT EVIDENCE, DBQ-CLAUDE-I2-003)
+
+| Bucket | Positions | Winners | Net P&L | Per position |
+|---|---|---|---|---|
+| R:R < 1 | 65 | 37 (57%) | −0.324 | −0.005 |
+| R:R ≥ 1 | 121 | 49 (40%) | −3.911 | −0.032 |
+
+- Before fees, R:R below 1 is **not** linked to worse outcomes.
+- F9 is now a structural property only. The fee-erosion point (F10) stands, but it's AGENT INFERENCE.
+
+## EVIDENCE
+- **Database:**
+  - DBQ-CLAUDE-I1-002, -003, -005, -007, -008
+  - DBQ-CLAUDE-I2-001, -002, -003, -004
+- **Code:**
+  - `LivePositionProtectionService.java:65-72,95-97,235-238,391-412`
+  - `PositionExitPolicy.java:20-50`
+  - `ExecutionIntelligenceService.java:435,1472-1492,2039,2608`
+  - `TradeExecutionValidationService.java:81-112,367-386,435-444`
+  - `BuyHtfAssessmentAuditStore.java:38-53`
+  - `WalletAutoExecutionService.java:475-562`
+  - `WalletService.java:484-487,607`
+  - `KlineTransactionCoordinator.java:36-92`
+  - `KlineTiming.java:46` (only stages ≥ 1000 ms or failures are persisted)
+  - `BinanceKlineService.java:94-110`
+  - `MarketPriceEventService.java:31-74`
+  - `PaperTradingService.java:449,457`
+- **Logs:** `crypto-ai-trader.log:1-5`; `database-timing.log:116-1245`. Both are from after the study window.
+
+## UNKNOWNS
+- **U13:** When the exit and boundary signals actually committed, which would confirm F21 for 158.
+- **U14:** Which 5m signal 143's execution used, and whether any FIX-154 check ran for it.
+- **U15:** Ticks for 172 between 07:15:04 and 07:15:43.
+- **U16:** Whether the gaps without ticks (143, 182, 137) hit all symbols (intake stall) or only one (market quiet).
+- **U17:** Whether `PROTECTION_TRANSACTION` or other kline stages took ≥ 1 s around the exits.
+- **U18:** Query plan and asset count behind F25.
+- **U7 (carried over):** Replay reproduction, now including F22's race.
+
+## DB REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-001
+Purpose: Commit-visibility timing for the exit, entry and boundary signals (F21, F22)
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, decision, generated_at, created_at, TIMESTAMPDIFF(MICROSECOND, generated_at, created_at)/1000 AS gen_to_created_ms FROM trade_signal WHERE id IN (156721,156723,156850,156852,159285,159407,159408,159487,165412,165415,166819,166821,167668,168251,168277,171589,172201,172587,172588,176655,176710,176927,176934) ORDER BY symbol, generated_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-002
+Purpose: Durable signal-processing timing (completion relative to generation) for the same signals
+SQL:
+SELECT signal_id, symbol, interval_code, candle_open_time, origin, status, attempts, next_attempt_at, updated_at, completed_at, paper_position_id, failure_stage FROM signal_processing_work WHERE signal_id IN (156723,156850,156852,159285,159407,159408,165412,165415,166819,166821,167668,168277,171589,172587,172588,176710,176927,176934) ORDER BY symbol, signal_id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-003
+Purpose: FIX-154 audit rows for the 143 and 158 entries, by trigger IDs and by time window (F22, F23)
+SQL:
+SELECT id, reference_signal_id, evaluation_path, evaluated_at, five_minute_signal_id, five_minute_raw_decision, five_minute_effective_decision, one_hour_signal_id, one_hour_effective_decision, assessment_band, final_result, created_at FROM buy_htf_assessment_audit WHERE reference_signal_id IN (159285,159407,159408,165412,165415) OR evaluated_at BETWEEN '2026-10-11 22:39:55' AND '2026-10-11 22:40:05' OR evaluated_at BETWEEN '2026-10-12 02:34:55' AND '2026-10-12 02:35:05' ORDER BY evaluated_at LIMIT 50
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-004
+Purpose: Was each gap without ticks global or symbol-specific (U16)?
+SQL:
+SELECT CASE WHEN observed_at BETWEEN '2026-10-11 21:00:01.100' AND '2026-10-11 21:00:09.000' THEN 'G137' WHEN observed_at BETWEEN '2026-10-11 22:43:27.100' AND '2026-10-11 22:43:35.000' THEN 'G143' WHEN observed_at BETWEEN '2026-10-12 10:05:02.500' AND '2026-10-12 10:05:18.400' THEN 'G182' END AS gap_window, symbol, delivery_status, COUNT(*) AS n, MIN(observed_at) AS first_obs, MAX(observed_at) AS last_obs, MAX(TIMESTAMPDIFF(MICROSECOND, observed_at, created_at))/1000 AS max_lag_ms FROM market_price_event WHERE (observed_at BETWEEN '2026-10-11 21:00:01.100' AND '2026-10-11 21:00:09.000') OR (observed_at BETWEEN '2026-10-11 22:43:27.100' AND '2026-10-11 22:43:35.000') OR (observed_at BETWEEN '2026-10-12 10:05:02.500' AND '2026-10-12 10:05:18.400') GROUP BY gap_window, symbol, delivery_status ORDER BY gap_window, symbol LIMIT 300
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-005
+Purpose: Every tick (all statuses) in the 172 exit-delay window and in each entry's window from price observation to execution (U15, F28)
+SQL:
+SELECT symbol, id, observed_at, created_at, price, delivery_status, outcome_reason FROM market_price_event WHERE (symbol='SHIBUSDT' AND observed_at BETWEEN '2026-10-12 07:15:04.000' AND '2026-10-12 07:15:44.000') OR (symbol='EGLDUSDT' AND observed_at BETWEEN '2026-10-11 20:55:00.000' AND '2026-10-11 20:55:03.100') OR (symbol='EGLDUSDT' AND observed_at BETWEEN '2026-10-11 22:40:01.000' AND '2026-10-11 22:40:03.200') OR (symbol='XRPUSDT' AND observed_at BETWEEN '2026-10-12 02:35:00.300' AND '2026-10-12 02:35:03.100') OR (symbol='DOGEUSDT' AND observed_at BETWEEN '2026-10-12 04:02:02.500' AND '2026-10-12 04:02:04.300') OR (symbol='SHIBUSDT' AND observed_at BETWEEN '2026-10-12 06:36:01.400' AND '2026-10-12 06:36:03.000') OR (symbol='ACEUSDT' AND observed_at BETWEEN '2026-10-12 09:57:02.400' AND '2026-10-12 09:57:04.300') ORDER BY symbol, observed_at LIMIT 300
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-006
+Purpose: Slow or failed kline stages (≥ 1 s or not RETURNED) around the study trades and the gap windows (U16, U17)
+SQL:
+SELECT id, correlation_id, symbol, interval_code, candle_open_time, observed_at, stage, started_at, finished_at, elapsed_ms, outcome, thread_name FROM fix129_stage_timing WHERE started_at BETWEEN '2026-10-11 20:54:00' AND '2026-10-12 10:06:00' AND (symbol IN ('ACEUSDT','SHIBUSDT','DOGEUSDT','XRPUSDT','EGLDUSDT') OR started_at BETWEEN '2026-10-11 21:00:00' AND '2026-10-11 21:00:10' OR started_at BETWEEN '2026-10-11 22:43:25' AND '2026-10-11 22:43:36' OR started_at BETWEEN '2026-10-12 10:05:00' AND '2026-10-12 10:05:19') ORDER BY started_at LIMIT 300
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-007
+Purpose: Candle provenance and trade counts for the gap minutes, plus any reconnect or recovery audit (F29, U16)
+SQL:
+SELECT symbol, interval_code, open_time, closed, number_of_trades, volume, ingestion_source, close_transition_token IS NOT NULL AS has_token, created_at, updated_at FROM candle WHERE interval_code='1m' AND ((symbol='EGLDUSDT' AND open_time IN ('2026-10-11 20:59:00','2026-10-11 21:00:00','2026-10-11 22:42:00','2026-10-11 22:43:00')) OR (symbol='ACEUSDT' AND open_time IN ('2026-10-12 10:04:00','2026-10-12 10:05:00')) OR (symbol='SHIBUSDT' AND open_time='2026-10-12 07:15:00')) ORDER BY symbol, open_time
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-008
+Purpose: Reconciliation or reconnect evidence for the study symbols during the study window
+SQL:
+SELECT id, subject_type, symbol, interval_code, candle_open_time, status, failure_reason, attempt_count, last_observation, late_live_close_at, resolved_at, created_at FROM local_reconciliation_audit WHERE created_at BETWEEN '2026-10-11 20:50:00' AND '2026-10-12 10:10:00' AND (symbol IN ('ACEUSDT','SHIBUSDT','DOGEUSDT','XRPUSDT','EGLDUSDT') OR symbol IS NULL) ORDER BY created_at LIMIT 100
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-009
+Purpose: Query plan of the snapshot price lookup, and the wallet asset count (F25, U18)
+SQL:
+EXPLAIN SELECT * FROM candle WHERE symbol='EGLDUSDT' AND interval_code='1m' AND closed=1 ORDER BY close_time DESC LIMIT 1;
+SELECT COUNT(*) AS assets, SUM(quantity > 0) AS nonzero_assets FROM wallet_asset
+### END_DB_REQUEST
+
+## LOG REQUESTS (for the coordinator: bounded, read-only greps on the decompressed `.gz` files)
+- **10-11 files, 20:54–21:01 UTC and 22:39–22:44 UTC, EGLDUSDT:** lines tagged `[FIX-131][CANDLE_RECEIVED]`, `[FIX-129][STAGE_TIMING]`, `PRICE_NOT_CANONICAL`, `EQUAL_TIMESTAMP_REJECTED`, `reconnect` or `onClose`, `Live signal-driven exit`, and `[FIX-118]`.
+- **10-12 files:** the same tags for 02:34–03:31 (XRPUSDT), 04:01–04:27 (DOGEUSDT), 06:35–07:16 (SHIBUSDT) and 09:56–10:06 (ACEUSDT) UTC.
+- Also search for `SETUP_TIMEFRAME_ATR` and `FIX-154` near 22:40:01–22:40:04 UTC.
+
+## Self-review
+- **Corrections:**
+  - F23 retracts the inference that a missing audit row means no audit.
+  - F30 demotes F9 to a structural property only.
+- **Contradiction still to escalate:** F12 (FIX-154 is live while AGENTS.md says it isn't implemented) remains open for the dual-agent process.
+- **Unsupported claims:** none that I know of. F21 (the 158 commit lag) and F25 (attributing the 2 s gaps to the snapshot) are labelled as inference.
+- **Plan for iteration 4:** use I3-001…009 and the log extracts to close U13–U18. Then decide whether F22 is a confirmed defect, and assess whether Replay can reproduce F22 and F11, as analysis only.

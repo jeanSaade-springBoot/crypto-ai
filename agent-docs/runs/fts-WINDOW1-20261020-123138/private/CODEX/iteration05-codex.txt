@@ -1,0 +1,70 @@
+## FINDINGS — Iteration 5: Entry Quality
+
+- **[PROJECT EVIDENCE]** No assigned DB artifacts exist in `db/CODEX`. Entry quality is therefore **UNASSESSED** for every frozen trade: **182, 172, 162, 158, 143, 137**. No trade-specific conclusion about chasing, risk/reward, stale context, price slippage, or gate bypass is justified.
+
+- **[PROJECT EVIDENCE]** Current source evaluates entry quality against the fresh execution price, not merely `trade_signal.latest_price`. It uses a 30-minute rolling reference (or a fresh opportunity anchor/best price, maximum age two hours), ATR extension, reward:risk, opportunity age, recent rejection zone, high-volatility regime, and stop exposure.
+
+- **[PROJECT EVIDENCE]** The current scoring classifies scores as `EXCELLENT_ENTRY` (≥85), `GOOD_ENTRY` (≥70), `ACCEPTABLE_ENTRY` (≥55), `LATE_ENTRY` (50–54), or `CHASE_ENTRY` (<50). A score below 50 blocks the initial entry; otherwise the score caps initial allocation. This source behavior cannot establish what occurred for a historical frozen trade without its durable signal/execution evidence.
+
+- **[PROJECT EVIDENCE]** Before wallet execution, current code requires a fresh canonical execution price and rejects a BUY already at/below its stop or at/above its target. It then repeats the entry-quality guard at that execution price.
+
+- **[PROJECT EVIDENCE]** Entry authority also requires fresh 5m confirmation and fresh 1h context. Current higher-timeframe logic rejects bearish 5m; rejects untrusted bearish 1h; rejects quality-valid, strong bearish 1h with confidence ≥70; and caps a quality-valid soft 1h conflict at 25%. Whether this logic/version was active for the six historical entries is unknown.
+
+- **[PROJECT EVIDENCE]** The authoritative `paper_position` row links to its entry signal and retains `entry_reason`, but fee-aware execution facts—including decision price, actual fill authority timestamp, execution price, fee, and execution message—are in `wallet_trade`. Both are required to assess entry quality correctly.
+
+- **[AGENT INFERENCE]** An entry must be treated as unproven rather than “valid” merely because a `paper_position` exists. The necessary evidence is the linked entry signal, its preceding 30-minute 1m signal history, contemporaneous 5m/1h context, opportunity state, and entry wallet execution record.
+
+- **[PROJECT EVIDENCE]** Study snapshot metadata remains inconsistent: `2026-10-20 11:54:53 UTC` converts to `2026-10-20 14:54:53 KSA`, not the supplied `2026-10-20 12:31:38 KSA`. It must not be used as a timing anchor.
+
+## EVIDENCE
+
+- `src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:848`
+- `src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1150`
+- `src/main/java/com/crypto/service/TradeExecutionValidationService.java:62`
+- `src/main/java/com/crypto/service/HigherTimeframeBuyAssessmentService.java:15`
+- `src/main/java/com/crypto/domain/PaperPosition.java`
+- `src/main/java/com/crypto/domain/TradeSignal.java`
+- `src/main/java/com/crypto/wallet/domain/WalletTrade.java`
+- Assigned `db/CODEX` directory: empty.
+
+## UNKNOWNS
+
+For each frozen trade, missing evidence includes:
+
+- Linked entry signal ID, decision, strategy, quality flags, stop/target, reward:risk, and signal-time price.
+- Actual entry fill price, decision-price variance, canonical price observation UTC timestamp, fees, and execution message.
+- The prior 30-minute 1m signal prices needed to calculate expansion/rejection evidence.
+- The active opportunity anchor/best price and age.
+- Freshness and quality-validity of the contemporaneous 5m and 1h context.
+- Runtime version/configuration that executed the entry path.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Schema-first verification of the durable entry-quality evidence chain before requesting historical values for frozen `paper_position` IDs 182, 172, 162, 158, 143, and 137.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'signal_processing_work',
+      'execution_opportunity',
+      'buy_htf_assessment_audit'
+  )
+ORDER BY table_name, ordinal_position;
+
+SHOW INDEX FROM crypto_ai.paper_position;
+SHOW INDEX FROM crypto_ai.trade_signal;
+SHOW INDEX FROM crypto_ai.wallet_trade;
+```
+### END_DB_REQUEST

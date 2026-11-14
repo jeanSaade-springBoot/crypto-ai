@@ -1,0 +1,1 @@
+SELECT MAX(generated_at) last_1h, TIMESTAMPDIFF(MINUTE, MAX(generated_at), NOW()) stale_min FROM trade_signal WHERE interval_code='1h'

@@ -1,0 +1,213 @@
+# Claude: FTS WINDOW1, Iteration 6 (root cause and research, self-review)
+
+**Summary of what changed this iteration**
+- **One unverified anomaly is settled.** Trade 182 did fill on the newest price tick (F-I5-05). The odd part is the tick's price: it was above every trade made in that minute.
+- **One previous finding is withdrawn.** "Targets too small to cover fees are the main root cause" (F-I5-06) does not hold across the whole system.
+- **One defect turned out to be systemic.** The 5-minute boundary race (F-I5-01) is not limited to trade 143. It affects most boundary decisions.
+- **The biggest source of loss is the strategy, not the execution code.** Most of the money was lost in one strategy type, and the system's own scores and labels did not separate winners from losers.
+
+**Status**
+- **What I used.** I added the I5 results (DBQ-CLAUDE-I5-001 to 004) and read the price-ingestion and price-selection code. I did not open the other agent's folders, LIVE_TEAM_STATUS.md or LIVE_EVENTS.log.
+- **Times.** Database times are UTC. KSA = UTC+3.
+- **Limitations:**
+  - **Output not saved.** Plan mode is active and Write is disabled, so this was not saved to `private/CLAUDE/iteration06-claude.txt`. ExitPlanMode is not available either.
+  - **No production logs.** I still have no SSH access.
+  - **Snapshot clock problem.** The charter's snapshot pair (UTC 2026-10-25 10:08:57 / KSA 2026-10-23 11:36:38) is not a UTC+3 pair. I recorded it and did not use it.
+
+---
+
+## FINDINGS
+
+**F-I6-01: F-I5-05 is resolved. Trade 182 used the newest price tick, but that tick showed a price nobody traded at in that minute.** [PROJECT EVIDENCE: I5-001, I1-012, code]
+- **The fill used the newest tick.** Wallet trade 451 has `execution_price_observed_at` = 09:57:02.437 UTC (12:57:02.437 KSA). That is exactly tick 1972917 (0.1884, APPLIED), the newest one.
+- **The "older tick" explanations are rejected.** Both ideas from I5 are wrong: the host clock offset (a) and a not-yet-applied tick (b).
+- **The real anomaly is the tick's price.**
+  - The stored 09:57 one-minute candle reads open 0.1882, high 0.1882, low 0.1881, close 0.1881.
+  - The tick price comes from the live kline's close field `c`, timestamped with Binance's event time `E` (`BinanceKlineService.java:91,94,106`).
+  - The tick and the 09:57 candle row were written in the same transaction, about 1.4 ms apart (row created 09:57:02.4683, tick 09:57:02.4697).
+  - So the first in-progress update for 09:57 reported `c=0.1884`, which is above that minute's final high.
+- **Likely explanation.** [AGENT INFERENCE] Before the first trade of a new minute, the kline update repeats the previous minute's close (0.1884) as a placeholder.
+  - [EXTERNAL RESEARCH] Binance's documentation confirms the 2000 ms update rate for this stream. It does not describe what an update looks like before the first trade, so the placeholder idea is unconfirmed.
+- **Impact.**
+  - The paper fill was about 2 price steps (≈0.106%) worse than the next trades actually made. That is about half of 182's loss.
+  - Protection logic may also be reacting to prices that were never traded.
+- **Classification.** A suspected price-meaning defect, not confirmed. DBQ-CLAUDE-I6-001 tests it.
+
+**F-I6-02: Entry fills check freshness against the uncorrected host clock; price ingestion uses the corrected one.** [PROJECT EVIDENCE: code, I5-001] Confirmed inconsistency; it cost nothing here.
+- **The two clocks:**
+  - Entry fills: `PaperTradingService.java:238,343` calls `resolve(symbol, Instant.now())` with the raw host clock.
+  - Ingestion: `MarketPriceEventService.java:39` validates ticks with `exchangeClock.correctJvm`.
+- **Evidence the host clock runs behind Binance.** Tick 1759598 has a Binance time of 20:55:03.022 but was written at host time 20:55:02.869. The host is at least 153 ms behind.
+- **Effect on trade 137:**
+  - Wallet trade 344 executed at 20:55:03.017 host time.
+  - By that clock, tick 1759598 looked like it was from the future and was excluded.
+  - The fill used tick 1759564 (20:55:00.032) instead. Both were 3.999, so the cost was zero.
+- **U-16 is resolved:** `maxAge=15 s` and `futureSkew=2 s` (`MarketPriceEventService.java:31-32`).
+
+**F-I6-03: The 5-minute boundary race is systemic.** [PROJECT EVIDENCE: I5-002, code] Confirmed design defect.
+- **What the race is.** At each 5-minute boundary, the one-minute and five-minute analyses run at the same time. The one-minute decision can only see five-minute signals generated before it (rule at `:2455-2461`, `:2606-2608`). All 14 five-minute lookups use this rule (`:614, :1039, :1365, :1415, :1485, :1541, :1633, :1747, :1862, :1911, :2316`, and others).
+- **How often the newer five-minute signal arrives too late.** On 11–12 Oct, in **8,998 of 10,467 boundary pairs (86.0%)**, the five-minute signal for the just-closed candle was generated after the one-minute signal.
+  - In those cases the decision used a five-minute candle that had closed about 5 minutes earlier.
+  - It still counted as "fresh", because the freshness limit is 20 minutes.
+- **Among actual entries.** Of the first 60 closed positions entered on a boundary one-minute signal (positions 5 to 143; the query limit was reached):
+  - 57 had the newer five-minute signal generated afterwards. Only 53, 126 and 137 had it in time.
+  - Those 60 trades won 24 times (40%) and lost about −2.69 USDT net. The whole system: 193 trades, 46% wins, −4.17 USDT.
+- **Caveat.** The SETUP_CONFIRMATION_WAKEUP route (used by 158) is triggered by the new five-minute signal itself. So for that route, "generated later" does not mean "never seen". How much the race changed outcomes, route by route, is not proven.
+- **Replay.** Replay applies the same rule to the stored `generated_at` times. It reproduces the stale-signal decision exactly, so Replay cannot detect the defect.
+
+**F-I6-04: Correction to F-I5-06. Small targets are not the system-wide cause of the gross loss. Fees are a separate, larger hidden loss.** [PROJECT EVIDENCE: I5-004; the fee rate is EXTERNAL RESEARCH from I5]
+
+| Target bucket | Trades | Wins | Gross P&L | Estimated fees (0.20% round trip) | Estimated net |
+|---|---|---|---|---|---|
+| Target ≤ 0.30% | 38 | 26 (68%) | +0.161 | 1.73 | −1.57 |
+| Target > 0.30% | 155 | 64 (41%) | **−4.332** | 10.66 | −14.99 |
+
+- **Where the gross loss is.** Almost all of it is in trades whose target is above 0.30%. Those targets are rarely reached.
+- **Fee impact.** Estimated total fees are 12.39 USDT against a gross result of −4.17. Fees are recorded as zero (`fee_usdt=0`), so the system's own P&L hides about three times its reported loss.
+- **Effect on the frozen trades.** 182, 162 and 158 sit in the small-target bucket and lost on their exits. A small target does not explain why they lost; it explains why even a win would have lost money after fees.
+- **Revised root cause:** (a) wide-target trades have no gross edge; (b) the system does not count fees.
+
+**F-I6-05: Route, the overextension flag and the signal label do not separate winners from losers.** [PROJECT EVIDENCE: I5-003; interpretation is AGENT INFERENCE]
+- **By entry route:**
+  - ACCUMULATED_EVIDENCE is the only sizeable route that made money: 44 trades, 55% wins, +0.198.
+  - SETUP_CONFIRMATION_WAKEUP: 41 trades, 37% wins, −0.905.
+  - SETUP_TIMEFRAME_ATR: 22 trades, 50% wins, −0.912.
+  - IMMEDIATE_VALIDATION, all variants: 63 trades, 44% wins, −2.326. Its BALANCED_STRONG variant did worst: 16 trades, 38% wins, −1.026.
+- **By overextension flag:**
+  - Overextended: 58 trades, 45% wins, −0.819 (−0.014 per trade).
+  - Not overextended: 135 trades, 47% wins, −3.352 (−0.025 per trade).
+  - So the "chasing" grade I gave 162 and 143 does not carry over to the wider system.
+- **By market regime and strategy:**
+  - Trend-following in a weak uptrend: 134 trades, **−3.625**, about 87% of the gross loss.
+  - Breakout: 36 trades, −1.081.
+  - Range mean-reversion: 18 trades, +0.381.
+- **By signal label (weak-uptrend trend-following, not overextended):** BUY lost −0.050 per trade, worse than WATCH at −0.022 per trade.
+- **Inference.** The signal's label and score showed no predictive power. The losses come mainly from the strategy layer. Samples are small (193 trades over about 6 days) and I ran no significance test.
+
+**F-I6-06: Root-cause verdict per frozen trade.** [AGENT INFERENCE, built on F-I2 to F-I6]
+
+| Trade | Main cause | Defect involvement | Classification |
+|---|---|---|---|
+| 182 ACE | Entry quality at the minimum (50) in a weak downtrend; reward-to-risk 0.48; never moved in its favour (MFE 0) | Filled about 2 steps above the next trades (F-I6-01) | Valid losing trade, plus a suspected price-data issue |
+| 172 SHIB | One price step was larger than the ATR (the typical move size), so the plan could not be carried out | No check that the price step fits the plan | Valid losing trade; design gap |
+| 162 DOGE | Breakout bought at the candle top; reward-to-risk 0.44 | Signal-exit price asymmetry cost 0 (U-19) | Valid losing trade |
+| 158 XRP | Target 0.164%, below round-trip fees; reward-to-risk 0.33 | Replay exit time differs, P&L the same (F-I4-07) | Valid under the rules; no economic gate (design gap) |
+| 143 EGLD | Entry route worked only because the five-minute signal was one candle stale. It then reached +1.69% and lost through the exit design plus a tick gap (F-I2-06) | **Race defect, decisive for the route** (F-I5-01, F-I6-03); stale entry evidence counted (F-I4-05), not decisive | Logic defect plus exit-design outcome; U-08 still open |
+| 137 EGLD | Mean-reversion buy whose target sat above the range high | Exit followed policy (SELL_CONFIRMED) | Valid losing trade |
+
+**System verdict.**
+- The strategy loses money before fees, mainly in weak-uptrend trend-following (F-I6-05), and its P&L ignores fees (F-I6-04).
+- The execution defects are real but cost little in P&L. The one exception is 143.
+
+**F-I6-07: Correction candidates.** Analysis only. Each needs FINAL_CHANGE_SPECIFICATION plus approvals. They are listed in order of P&L weight.
+- **R2: fee-aware paper accounting plus an economic entry gate.**
+  - Reject entries where target distance ≤ round-trip cost + k price steps, or where the price step ≥ a set fraction of ATR.
+  - Regression checks: a 158-like and a 172-like case are rejected; typical trades are unchanged; Replay gives the same verdicts.
+- **R6: a Replay expectancy study of weak-uptrend trend-following.** This is a strategy decision, not a code fix.
+- **R1: choose the five-minute signal by candle identity, not generation time.**
+  - The expected signal is for the latest five-minute candle whose close time ≤ the one-minute candle's close time.
+  - If that signal is not generated yet, defer to the existing re-evaluation when the five-minute signal arrives. This must be in-process only, with no persisted fence (AGENTS.md).
+  - Replay must use the same rule.
+  - Regression checks: the five-minute signal arrives 2 ms after the one-minute one, and the decision uses it or defers; a Replay check on the 143 window; non-boundary minutes unchanged.
+- **R3: enforce the evidence boundary after every exit.** Only count signals generated after the previous position closed. Regression check: 143's evidence count would be 1.
+- **R4: use the exchange-corrected clock as the execution reference** (F-I6-02). Replay is unaffected.
+- **R5 (only if F-I6-01 is confirmed): treat zero-trade kline updates as non-tradable** for fills and protection. Check the kline's trade count `n` or first-trade id `f`.
+
+---
+
+## EVIDENCE INDEX
+- **Database results:**
+  - I5-001: wallet trades 344, 358, 392, 403, 426, 451 and price ticks
+  - I5-002: race counts and the 60 boundary entries
+  - I5-003: outcomes by route and by feature
+  - I5-004: outcomes by target size
+  - I1-012: candles
+- **Code:**
+  - `BinanceKlineService.java:91-108`
+  - `MarketPriceEventService.java:31-46, 133-146`
+  - `ExecutionPriceAuthorityService.java:30-48`
+  - `PaperTradingService.java:238, 343`
+  - `ExecutionIntelligenceService.java:66, 2455-2461, 2606-2608`
+- **External:** [Binance Spot WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams) confirms the 2000 ms kline update rate. Nothing it shows covers updates before the first trade.
+
+## UNKNOWNS
+
+| ID | Status |
+|---|---|
+| U-08 | Open: the cause of 143's tick gap; needs production logs |
+| U-12 | Narrowed: 0.15–0.20% round trip; the live fee tier is unverified |
+| U-14 | Open: the cause of the downtime |
+| U-16 | **Resolved:** 15 s / 2 s (F-I6-02) |
+| U-17 | Partly answered: stale evidence was not decisive for 143 |
+| U-18 | Open: what causes the ~2 s portfolio work |
+| U-20 | Partly answered: the race occurs 86% of the time; its effect on outcomes per route is unknown (I6-002) |
+| U-21 | Reframed as U-23 |
+| U-22 | **Resolved** (F-I6-05) |
+| U-23 (new) | Are first-of-minute ticks placeholder prices (I6-001)? |
+| U-24 (new) | Boundary versus non-boundary entry outcomes across the system (I6-002) |
+| U-25 (new) | Statistical significance of the route and regime differences |
+
+---
+
+## DB REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: U-23 / F-I6-01. Find APPLIED ticks priced outside their final one-minute candle's range, by position within the minute. Also read the candle schema to find a trade-count column.
+SQL:
+SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME='candle' ORDER BY ORDINAL_POSITION;
+SELECT CASE WHEN TIMESTAMPDIFF(MICROSECOND, c.open_time, e.observed_at) < 3000000 THEN 'FIRST_3S' ELSE 'LATER' END pos,
+       COUNT(*) n, SUM(e.price > c.high_price OR e.price < c.low_price) outside_range,
+       SUM((e.price > c.high_price OR e.price < c.low_price) AND e.price = p.close_price) outside_eq_prev_close
+FROM market_price_event e
+JOIN candle c ON c.symbol=e.symbol AND c.interval_code='1m' AND c.closed=1 AND e.observed_at >= c.open_time AND e.observed_at <= c.close_time
+LEFT JOIN candle p ON p.symbol=c.symbol AND p.interval_code='1m' AND p.open_time = c.open_time - INTERVAL 1 MINUTE
+WHERE e.delivery_status='APPLIED' AND e.observed_at >= '2026-10-12 00:00:00' AND e.observed_at < '2026-10-12 12:00:00'
+GROUP BY pos LIMIT 10;
+SELECT wt.id, wt.symbol, wt.price_usdt, c.low_price, c.high_price FROM wallet_trade wt
+JOIN candle c ON c.symbol=wt.symbol AND c.interval_code='1m' AND wt.execution_price_observed_at BETWEEN c.open_time AND c.close_time
+WHERE wt.side='BUY' AND wt.executed_at >= '2026-10-06 00:00:00' AND (wt.price_usdt > c.high_price OR wt.price_usdt < c.low_price) ORDER BY wt.id LIMIT 100;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: U-24 / U-20. Compare all closed trades entered on boundary minutes with non-boundary ones. Split boundary trades by whether the same-boundary five-minute signal came after the one-minute signal, and by route.
+SQL:
+SELECT CASE WHEN MINUTE(s.candle_open_time)%5<>4 THEN 'NON_BOUNDARY' WHEN f.generated_at > s.generated_at THEN 'BOUNDARY_5M_LATE' ELSE 'BOUNDARY_5M_VISIBLE' END kind,
+       eo.execution_source, COUNT(*) n, SUM(pp.realized_pnl>0) wins, ROUND(SUM(pp.realized_pnl),6) pnl
+FROM paper_position pp JOIN trade_signal s ON s.id=pp.signal_id AND s.interval_code='1m'
+LEFT JOIN trade_signal f ON f.symbol=s.symbol AND f.interval_code='5m' AND f.candle_open_time = s.candle_open_time - INTERVAL 4 MINUTE
+LEFT JOIN execution_opportunity eo ON eo.latest_signal_id=pp.signal_id AND eo.status='EXECUTED'
+WHERE pp.closed_at IS NOT NULL GROUP BY kind, eo.execution_source ORDER BY kind, n DESC LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: F-I6-04. Show how the wide-target trades exited, to explain why their targets were rarely reached.
+SQL:
+SELECT CASE WHEN (ts.take_profit-ts.latest_price)/ts.latest_price*100 <= 0.30 THEN 'TP<=0.30' ELSE 'TP>0.30' END tp_bucket,
+       pp.status, pp.exit_reason, COUNT(*) n, SUM(pp.realized_pnl>0) wins, ROUND(SUM(pp.realized_pnl),6) pnl,
+       ROUND(AVG(TIMESTAMPDIFF(SECOND, pp.opened_at, pp.closed_at)),0) avg_hold_s
+FROM paper_position pp JOIN trade_signal ts ON ts.id=pp.signal_id
+WHERE pp.closed_at IS NOT NULL GROUP BY tp_bucket, pp.status, pp.exit_reason ORDER BY tp_bucket, n DESC LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-004
+Purpose: F-I6-02. Measure how often a newer tick was excluded at fill time because the host clock was behind Binance: the Binance time is after the fill's host time but the row was written before it.
+SQL:
+SELECT wt.id, wt.symbol, wt.executed_at, wt.execution_price_observed_at, wt.price_usdt, e.id later_tick, e.observed_at, e.created_at, e.price
+FROM wallet_trade wt JOIN market_price_event e ON e.symbol=wt.symbol AND e.delivery_status='APPLIED'
+ AND e.observed_at > wt.execution_price_observed_at AND e.created_at < wt.executed_at
+WHERE wt.side='BUY' AND wt.executed_at >= '2026-10-06 00:00:00' ORDER BY wt.id LIMIT 100;
+### END_DB_REQUEST
+
+---
+
+**Self-review**
+- **Withdrawn or downgraded.** I withdrew F-I5-06 as "the main cause" because the system-wide data contradicts it. I rejected both I5 tick-selection explanations, and I downgraded the "chase" grade for the wider system.
+- **Labelled as unconfirmed.** The placeholder-price idea is marked as inference: the external source does not confirm it.
+- **Not proven.** The race's effect on outcomes route by route is left open.
+- **Checks.** No trades were substituted. Every KSA time is UTC+3, and nothing was changed.
+
+**Iteration 7 plan:** add the I6 results, then finalise the per-trade verdicts and the ranked correction list with regression and Replay-parity checks.

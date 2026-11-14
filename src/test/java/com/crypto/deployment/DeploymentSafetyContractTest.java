@@ -8,29 +8,21 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** FIX-135: source contract checks, NOT Windows process/PowerShell integration tests. */
 class DeploymentSafetyContractTest {
-    @Test void automaticBuildRunsTestsBeforeDeployment() throws Exception {
-        String pipeline=Files.readString(Path.of("Jenkinsfile"));
-        assertFalse(pipeline.contains("parameters {"));
-        assertFalse(pipeline.contains("params."));
-        assertFalse(pipeline.contains("when {"));
-        // New pushes supersede the prior build; the host mutex serializes deployment.
-        assertTrue(java.util.regex.Pattern.compile(
-                "disableConcurrentBuilds\\s*\\(\\s*abortPrevious\\s*:\\s*true\\s*\\)")
-                .matcher(pipeline).find(), "New builds must abort the previous pipeline");
-        assertFalse(pipeline.contains("-DskipTests"));
-        int build = pipeline.indexOf("mvn -B -ntp clean package");
-        int deploy = pipeline.indexOf("stage('Deploy Trader LIVE')");
-        assertTrue(build >= 0 && deploy > build);
+    // FIX-153 source ZIP does not contain Jenkinsfile or deployment scripts. Verify the
+    // shipped local contract here; Windows process and external pipeline acceptance remain release gates.
+    @Test void shippedDefaultsUseLocalRuntimeAndDisableBothSharedSchedulers()throws Exception{
+        String config=Files.readString(Path.of("src/main/resources/application.yml"));
+        assertTrue(config.contains("mode: ${SHARED_MARKET_MODE:OFF}"));
+        assertTrue(config.contains("enabled: ${SHARED_MARKET_FIX142_ENABLED:false}"));
+        assertTrue(config.contains("acknowledgment-enabled: ${SHARED_MARKET_FIX142_ACK_ENABLED:false}"));
+        assertTrue(config.contains("scheduled-analysis-enabled: false"));
+        assertTrue(config.contains("instance-lock-path:"));
     }
-    @Test void deploymentPreservesSafeguardsAndRequestsApprovedLive() throws Exception {
-        String script=Files.readString(Path.of("scripts/deploy/Deploy-Trader.ps1"));
-        assertFalse(script.contains("Remove-Item"));
-        assertFalse(script.contains("BACKUP_JAR"));
-        assertTrue(script.contains("Copy-Item -LiteralPath $sourceJar -Destination $releaseJar"));
-        assertTrue(script.contains("--shared-market.mode=LIVE"));
-        assertTrue(script.contains("--shared-market.activation-approved=true"));
-        assertTrue(script.contains("$listener.OwningProcess -ne $child.Id"));
-        assertTrue(script.contains("NO rollback or second launch"));
+    @Test void sharedRollbackRequiresExplicitRuntimeFlags()throws Exception{
+        String source=Files.readString(Path.of("src/main/java/com/crypto/shared/SharedMarketConsumer.java"));
+        assertTrue(source.contains("if(fix142Enabled && !source.enabled())throw"));
+        String prices=Files.readString(Path.of("src/main/java/com/crypto/market/service/MarketPriceEventService.java"));
+        assertTrue(prices.indexOf("if(\"OFF\".equals(mode))return;")<prices.indexOf("SELECT COUNT(*) FROM shared_market_cutover_history"));
     }
     @Test void incidentMigrationIsNotSilentlyRewritten() throws Exception {
         byte[] bytes=Files.readString(Path.of("src/main/resources/db/migration/V89__fix_132_shared_market_delivery.sql")).replace("\r\n", "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);

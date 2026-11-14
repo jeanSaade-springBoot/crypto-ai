@@ -1,0 +1,6 @@
+sig_rr_band	atr_band	n	gross_wins	net_wins	avg_gross_ret_pct	avg_net_ret_pct	stops
+a_lt0.5	atr_lt0.10	12	9	3	0.0721	-0.1279	0
+b_0.5-1	atr_0.10-0.167	11	6	2	0.0345	-0.1655	2
+b_0.5-1	atr_lt0.10	6	5	1	0.0474	-0.1526	1
+c_1-1.5	atr_0.167-0.25	31	17	16	0.0346	-0.1654	13
+d_ge1.5	atr_ge0.25	35	11	11	-0.1503	-0.3503	21

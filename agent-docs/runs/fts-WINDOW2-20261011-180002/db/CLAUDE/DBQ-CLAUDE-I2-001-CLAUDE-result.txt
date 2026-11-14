@@ -1,0 +1,4 @@
+id	reference_signal_id	evaluation_path	evaluated_at	replay_mode	one_hour_signal_id	one_hour_raw_decision	one_hour_effective_decision	one_hour_age_seconds	five_minute_signal_id	five_minute_raw_decision	five_minute_effective_decision	assessment_band	max_initial_percent	final_result	final_reason
+1106	115050	SETUP_WAKEUP	2026-10-10 17:35:04.172862	0	114160	SELL	NEUTRAL	2104	115050	BUY	BUY	SOFT_CONFLICT	25	BALANCED_STRONG	Balanced profile approved 75%: 5m is bullish while 1h is NEUTRAL. FIX-154 soft-HTF cap=25%.
+1318	121201	SETUP_WAKEUP	2026-10-10 21:40:04.559122	0	120186	SELL	NEUTRAL	2404	121201	BUY	BUY	SOFT_CONFLICT	25	BALANCED_STRONG	Balanced profile approved 75%: 5m is bullish while 1h is NEUTRAL. FIX-154 soft-HTF cap=25%.
+1560	133251	SETUP_WAKEUP	2026-10-11 05:35:03.962916	0	132367	SELL	NEUTRAL	2103	133251	BUY	BUY	SOFT_CONFLICT	25	BALANCED_STRONG	Balanced profile approved 75%: 5m is bullish while 1h is NEUTRAL. FIX-154 soft-HTF cap=25%.

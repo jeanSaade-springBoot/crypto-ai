@@ -1,0 +1,12 @@
+Harmless public-web research test only. Do not modify any files. Do not access databases. Do not print any passwords or secrets.
+
+Search the public internet for the official RFC 3339 specification page.
+
+Reply with:
+1. Source title
+2. URL
+3. Publication date if available
+4. One-sentence finding
+5. Label the finding as EXTERNAL RESEARCH
+
+Do not discuss this trading project.

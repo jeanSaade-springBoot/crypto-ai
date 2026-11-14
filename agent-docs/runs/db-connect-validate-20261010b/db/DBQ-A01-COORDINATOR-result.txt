@@ -1,0 +1,9 @@
+exit_code=0
+duration_ms=185
+row_count=1
+--- stdout ---
+DATABASE()	CURRENT_USER()
+crypto_ai	ai_investigator@localhost
+
+--- stderr ---
+

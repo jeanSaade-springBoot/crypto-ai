@@ -1,0 +1,49 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** RPR-0.4-DRAFT fails the mandatory contract standard. Its area-level registry omits the required complete file/class/method changes, migrations, configuration keys, transaction/concurrency behavior, and per-artifact master IDs. [AGENTS.md](C:/workspace/crypto-ai-trader-mysql/AGENTS.md:337) [FINAL_CHANGE_SPECIFICATION.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:218)
+
+- **PROJECT EVIDENCE:** Replay can reverse the required close-message order. Production performs protection before close-event publication; Replay creates a signal at `candleOpen + interval` but consumes only prices with `observedAt <= generatedAt`. Thus a closing receipt with Binance event time after that boundary is applied after the signal in Replay, though it was protected before signal dispatch in Production. [KlineTransactionCoordinator.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:36) [BinanceKlineService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BinanceKlineService.java:101) [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:584) [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:122)
+
+- **PROJECT EVIDENCE:** Exact-price Replay omits two Production signal-path effects:
+  1. After a live profit-lock hold, Production’s next authoritative signal-price evaluation closes directly with `PROFIT_LOCK`, without re-running the label-based hold policy.
+  2. Production runs `PositionManagementService.analyze()` first, which may execute `POSITION_STOP_LOSS`; exact-price Replay does not invoke it.
+  
+  [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:113) [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:176) [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:452) [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:183)
+
+- **PROJECT EVIDENCE:** Replay inputs are not uniformly closed candles. The worker’s normal candle query does not filter `closed`; it iterates such rows, while the indicator lookup silently substitutes the latest prior closed candle. This can produce a later-stamped signal based on a different candle than the timeline item. [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:129) [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:509) [TechnicalIndicatorService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/service/TechnicalIndicatorService.java:186)
+
+- **PROJECT EVIDENCE:** The draft’s “fail before generated signals … are written” rule conflicts with the current pipeline: signal-test rows are written before price evidence is read, whereas the proposed protection window depends on positions produced later by shadow execution. [FINAL_CHANGE_SPECIFICATION.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:93) [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:174) [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:195) [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:636)
+
+- **PROJECT EVIDENCE:** Workspace defaults enable derivatives and the historical evaluator returns `UNAVAILABLE`. Therefore default parity action is likely to refuse every affected window until historical derivatives are persisted or the eligibility rule is narrowed with evidence. Deployed configuration is unknown. [application.yml](C:/workspace/crypto-ai-trader-mysql/src/main/resources/application.yml:395) [DerivativesPositioningService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/DerivativesPositioningService.java:38)
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** The current single-symbol `ExecutionReplayScope` stores one opportunity and one latest price; multi-symbol global limits need a defined coordinator, global event order, and scope redesign—not merely RPR-04’s broad description. [ExecutionReplayScope.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionReplayScope.java:73) [ExecutionReplayScope.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionReplayScope.java:147)
+
+- **PROJECT EVIDENCE:** The existing parity validator compares pre-wallet signal fields only; it cannot supply RPR-08’s unspecified lifecycle certificate. [ReplayParityValidator.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ReplayParityValidator.java:10) [FINAL_CHANGE_SPECIFICATION.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:231)
+
+- **PROJECT EVIDENCE:** Current source contains FIX-154 behavior despite AGENTS.md describing it as pending. The code is authoritative over that statement, but the contradiction requires baseline/version reconciliation before any parity contract can assert a Production flow. [TradeExecutionValidationService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:93) [AGENTS.md](C:/workspace/crypto-ai-trader-mysql/AGENTS.md:204)
+
+## OBJECTIONS
+
+- **AGENT INFERENCE:** RPR-07 must define a durable causal ordering key linking a closed-candle receipt, price-protection outcome, signal admission, and signal processing—not merely UTC timestamp plus event ID.
+
+- **AGENT INFERENCE:** RPR-T-04 needs a concrete oracle: identity keys, initial-state relation, compared fields, tolerances/rounding, absent-record rules, and a classification for scheduling-caused divergence. Decision-policy and virtual-account lifecycle parity must be separate claims.
+
+- **AGENT INFERENCE:** Price qualification should require complete evidence of the Production-applied observation set and unresolved-state handling, not infer uninterrupted market-tick coverage. A WebSocket gap may accurately represent a period when Production had no protection observations; rejecting it as a parity impossibility would be a false refusal. Simulation may still diagnose it.
+
+- **PROJECT EVIDENCE:** The proposed removals remain conditional “candidates,” while RPR-09 authorizes their execution. Each API, UI, table, archive/export, and retention outcome requires an explicit decision. [FINAL_CHANGE_SPECIFICATION.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:203)
+
+- **PROJECT EVIDENCE — correction of peer claims:** The shared-market consumer does insert and update `market_price_event`; the assertion that it does not is contradicted by source. Historical-era semantics may still differ and need a defined eligibility policy. [SharedMarketConsumer.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/shared/SharedMarketConsumer.java:490) [SharedMarketConsumer.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/shared/SharedMarketConsumer.java:516)
+
+- **PROJECT EVIDENCE — correction of prior concern:** `PriceEvent` drops the SQL ID, but that alone does not prove current same-timestamp order is lost: SQL orders by ID before the timestamp-only stream sort. IDs are nevertheless required to meet the proposed multi-symbol/durable-order contract and to handle legacy ties. [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118) [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:89)
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No database, runtime logs, deployed configuration, production system, build, or tests were accessed/run. Frequency of the close-boundary ordering defect and historical evidence completeness are unproven.
+
+- **AGENT INFERENCE:** A corrected specification must select either a whole-window preflight or a deterministic, non-persisting dry-run before any replay-output write.
+
+- **PROJECT EVIDENCE:** The worktree is materially dirty, so repository source establishes only the inspected working-tree behavior, not deployed behavior.
+
+VERDICT: REJECTED

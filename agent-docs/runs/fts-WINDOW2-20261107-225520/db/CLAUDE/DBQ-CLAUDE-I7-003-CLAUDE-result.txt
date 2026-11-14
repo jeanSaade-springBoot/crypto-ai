@@ -1,0 +1,3 @@
+status	with_add	n	pnl_with_add
+CLOSED	20	118	6.016287998261
+STOPPED	24	75	-7.817920686964

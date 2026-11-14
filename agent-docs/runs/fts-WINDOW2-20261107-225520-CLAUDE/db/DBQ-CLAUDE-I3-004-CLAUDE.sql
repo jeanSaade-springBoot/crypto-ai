@@ -1,0 +1,4 @@
+SELECT 'GAP_143' AS win, symbol, COUNT(*) AS n, MIN(observed_at) AS first_obs, MAX(observed_at) AS last_obs, SUM(delivery_status <> 'APPLIED') AS non_applied FROM crypto_ai.market_price_event WHERE observed_at > '2026-10-11 22:43:27.038' AND observed_at < '2026-10-11 22:43:35.021' GROUP BY symbol
+UNION ALL
+SELECT 'GAP_142', symbol, COUNT(*), MIN(observed_at), MAX(observed_at), SUM(delivery_status <> 'APPLIED') FROM crypto_ai.market_price_event WHERE observed_at > '2026-10-11 22:39:35.030' AND observed_at < '2026-10-11 22:39:41.029' GROUP BY symbol LIMIT 100;
+SELECT observed_at, price, TIMESTAMPDIFF(MICROSECOND, LAG(observed_at) OVER (ORDER BY observed_at, id), observed_at) / 1000000 AS gap_s FROM crypto_ai.market_price_event WHERE symbol = 'EGLDUSDT' AND observed_at BETWEEN '2026-10-11 22:36:00' AND '2026-10-11 22:44:00' ORDER BY gap_s DESC LIMIT 15

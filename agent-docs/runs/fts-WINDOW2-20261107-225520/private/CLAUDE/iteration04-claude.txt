@@ -1,0 +1,305 @@
+# CLAUDE: FTS WINDOW2, Iteration 4 (code and trade route, self-review only)
+
+## Summary
+
+The main iteration 4 result: **trade 143's entry is a confirmed defect.** At the 5-minute boundary, the 1m and 5m analyses race each other. The entry was approved on a 5m BUY from the previous candle; the 5m WATCH for the candle that had just closed arrived 2 ms too late to be seen. Replay processes these signals in a different order, so it almost certainly cannot reproduce 143 or 158 (I have not run Replay to prove it). The other four trades followed the current rules, but 172 and 182 show design gaps.
+
+| ID | Classification |
+|---|---|
+| 137 | Valid losing trade. Entry and exit both followed the rules. |
+| 158 | Valid losing trade. The entry route depends on the race and diverges from Replay. |
+| 162 | Valid losing trade. It was a late entry allowed by a weak exemption. |
+| 172 | Losing trade that followed the rules, but the 5m was used as approval even though its own entry gate had rejected it (F-I4-04). |
+| 182 | Losing trade that followed the rules, but the entry hinged on a 1h trend score one point above its threshold (F-I4-05). |
+| 143 | **Confirmed entry defect** (F-I4-01). The exit was correct protection after an 8 s gap in EGLD prices. |
+
+Separately, the code shows FIX-154 running in Production, which contradicts the project docs (F-I4-08). I also found 23 later losing trades (−4.51 USDT on 2026-10-12) that the study can never select, because stop-loss exits are stored as `STOPPED`, not `CLOSED`.
+
+**Scope:**
+- I kept the six frozen IDs (182, 172, 162, 158, 143, 137) and did not substitute any.
+- I made no writes, and I did not read the Codex folders, LIVE_TEAM_STATUS.md or LIVE_EVENTS.log.
+- Plan mode is on, but the Write and ExitPlanMode tools are not available in this session, so this output exists only here.
+
+**Inputs:**
+- The results of DBQ-CLAUDE-I3-001 to 005.
+- The I2-006 and I2-008 results.
+- The current working-tree code of `ExecutionIntelligenceService`, `TradeExecutionValidationService`, `HigherTimeframeBuyAssessmentService`, `MultiTimeframeConfluenceService`, `PaperTradingService`, `CandleAnalysisDispatcher`, `CandleAnalysisAsyncConfig`, `AnalysisService`, `ExecutionReplayScope`, `RegressionTestWorker` and `ShadowProductionReplayService`.
+
+**Version caveat (applies to every code reference below):** I traced the current working tree. Which build was running in Production on 2026-10-11 and 2026-10-12 is **not proven**. Query I4-001 dates the relevant migrations. The opportunity explanation texts stored in the database match the current code strings word for word, which partly supports that the same code was running. That match is only partial evidence.
+
+---
+
+## Entry and exit route for each trade
+
+All times are UTC, with KSA (UTC+3) in brackets. Each row is PROJECT EVIDENCE from I2-008, I3-001 and I2-006.
+
+| ID | 1m signal (time generated) | 5m used by the code at that moment | 1h | Route and code | Exit |
+|---|---|---|---|---|---|
+| 137 | 156723 STRONG_BUY, 20:55:01.576 (23:55:01 KSA) | 156721 NEUTRAL, generated 18 ms **before** the 1m, so current | WATCH | IMMEDIATE_VALIDATION / `BALANCED_NEUTRAL_5M_WATCH_1H` (25%) | SELL_CONFIRMED on 5m SELL |
+| 143 | 159408 WATCH, 22:40:01.634 (10-12 01:40:01 KSA) | **159285 BUY from the 22:30 candle**. The current 159407 WATCH was generated 2 ms **after** the 1m | NEUTRAL | SETUP_TIMEFRAME_ATR / `REDUCED_POSITION_ALLOWED` | PROFIT_LOCK_HARD_EXIT |
+| 158 | 165412 WATCH, 02:35:01.469 (05:35:01 KSA) | Trigger 165415 BUY, 21 ms after the 1m (the wakeup is driven by the 5m) | NEUTRAL | SETUP_CONFIRMATION_WAKEUP / `FRESH_5M_CONFIRMATION` | 5m SELL |
+| 162 | 167668 WATCH, 04:02:02.813 (07:02:02 KSA) | 167616 WATCH, current | WATCH | ACCUMULATED_EVIDENCE / `OPPORTUNITY_CONFIRMED` (rated LATE_ENTRY, score 50) | Signal path, 1m STRONG_SELL |
+| 172 | 171589 BUY, 06:36:01.507 (09:36:01 KSA) | 171559 BUY, **`final_entry_allowed=0`, confidence 49** | NEUTRAL | IMMEDIATE_VALIDATION / `BALANCED_STRONG` | HTF_SELL_CONFIRMED |
+| 182 | 176710 BUY, 09:57:01.850 (12:57:01 KSA) | 176655 NEUTRAL, **original decision STRONG_SELL, status CONFLICT** | 175258 WATCH, trend score 16 | IMMEDIATE_VALIDATION / `BALANCED_NEUTRAL_5M_WATCH_1H` (25%) | 5m STRONG_SELL |
+
+---
+
+## FINDINGS
+
+### F-I4-01: Confirmed defect. 143 entered on a 5m signal that had already been replaced
+
+[PROJECT EVIDENCE: I3-001, I3-002, code]
+
+This settles U-I3-1 and promotes F-I3-03 from "candidate" to confirmed.
+
+**Timestamps (I3-001):**
+- 1m signal 159408 was generated at 22:40:01.633945 UTC (10-12 01:40:01.634 KSA).
+- 5m signal 159407, for the same boundary, was generated at 22:40:01.635944 UTC, which is **2.0 ms later**. It said WATCH.
+- The entry executed at 22:40:04.857700 UTC (01:40:04.858 KSA), **3.2 s after** that WATCH already existed.
+
+**How the code chooses the 5m signal:**
+- `setupTimeframeAtrAuthoritySignal` (`ExecutionIntelligenceService.java:1472-1492`) calls `latestAtOrBefore` (`:2455-2462`).
+- That lookup goes through `findTopBySymbolAndIntervalAndGeneratedAtLessThanEqualOrderByGeneratedAtDesc` (`:2606-2609`).
+- So it selects by **analysis completion time**, compared with the 1m signal's own `generated_at`. It does not select by candle identity.
+- It therefore returned 159285, a BUY from the 22:30 candle generated at 22:35:01. That signal was 5 minutes old but inside the 20-minute `FIVE_MINUTE_MAX_AGE` (`:66`).
+
+**Why the race exists:**
+- `CandleAnalysisDispatcher` serialises work only per `symbol|interval` (`CandleAnalysisDispatcher.java:34`).
+- The pool `candleAnalysisExecutor` (8–16 threads, `CandleAnalysisAsyncConfig.java:36-38`) runs the 1m and 5m analyses for the same boundary **in parallel**.
+- Production stamps `generated_at` with `Instant.now()` when the analysis finishes (`AnalysisService.java:160-161`).
+- So which 5m signal the 1m path sees is a race decided by milliseconds.
+
+**Nothing re-checks the 5m before execution:**
+- `PaperTradingService.java:349` calls `revalidateAtExecutionPrice` (`ExecutionIntelligenceService.java:1150-1169`).
+- That only re-checks the stop, the target and Entry Quality at the fresh price. It never re-reads the 5m signal.
+
+**The race only fails in one direction:**
+- If the fresh 5m is *more* bullish, `SETUP_CONFIRMATION_WAKEUP` catches it, because that path is triggered by the 5m signal itself (`:397-457`).
+- If the fresh 5m is *less* bullish, nothing revokes an approval already granted on the stale 5m.
+
+**Counterfactual (AGENT INFERENCE):** with 5m = WATCH, line 1486 returns null and the `SETUP_TIMEFRAME_ATR` route is closed. The later route at `:644` then rejects as `ATR_ENTRY_BLOCKED`, because the 1m was `WAIT_FOR_RETRACEMENT` at 0%. **So 143 would not have opened.**
+
+**Classification:** a logic defect in how the 5m approval is chosen at the boundary. It is not stale data and not an execution delay.
+
+### F-I4-02: The same race affects other entry routes and is common
+
+[PROJECT EVIDENCE: I3-002]
+
+**Scope of I3-002:** the query was limited to EXECUTED entries whose 1m candle closed on a 5m boundary and where the same-boundary 5m signal was generated after the 1m. It returned 70 rows.
+
+**In 7 of those rows, the entry was approved on a 5m reading better than the current one.** In each case the opportunity's recorded 5m was more bullish than the 5m for the boundary that had just closed:
+
+| Opportunity | Symbol | Route | 5m used → current 5m | Paper position | PnL (USDT) |
+|---|---|---|---|---|---|
+| 5718 | EDU | ACCUMULATED_EVIDENCE | BUY → WATCH | 6, STOPPED | −0.518 |
+| 13272 | ENA | ACCUMULATED_EVIDENCE | BUY → WATCH | 20 | +0.062 |
+| 18874 | ENA | SETUP_TIMEFRAME_ATR | BUY → WATCH | 42 | +0.041 |
+| 26899 | ONG | SETUP_TIMEFRAME_ATR | STRONG_BUY → WATCH | 100 | +0.032 |
+| 35234 | PEPE | IMMEDIATE_VALIDATION | BUY → WATCH | 123, STOPPED | −0.698 |
+| **36524** | **EGLD** | **SETUP_TIMEFRAME_ATR** | **BUY → WATCH** | **143** | **−0.037** |
+| 38059 | PEPE | ACCUMULATED_EVIDENCE | BUY → WATCH (original decision BUY) | 163, STOPPED | −0.165 |
+
+- Net result: **−1.283 USDT** over 7 entries (3 wins, 4 losses).
+- **AGENT INFERENCE:** the sample is too small to prove the defect costs money overall, but the decision path itself is wrong.
+- **How often the race happens:** in most boundary entries in I3-002, the 5m was generated 10 ms to 1.5 s after the 1m. The race is systemic, not rare. I4-003 measures it across all signals.
+
+### F-I4-03: Replay almost certainly cannot reproduce 143 or 158 (parity gap)
+
+[PROJECT EVIDENCE: code. Running Replay to confirm: AGENT INFERENCE]
+
+This settles U-I3-6.
+
+**How Replay orders signals:**
+- Fresh Replay sets `generatedAt` to the candle close time (`RegressionTestWorker.java:584,616`, `AnalysisService.java:183-190`). So the 1h, 5m and 1m signals for one boundary all share **the same instant**.
+- Signals are sorted 1h → 5m → 1m at equal timestamps (`RegressionTestWorker.java:557-560`, `ShadowProductionReplayService.java:68-71,1000`).
+- Replay lookups include equal timestamps (`ExecutionReplayScope.java:112`, `!isAfter(ref)`).
+- So in Replay, the same-boundary 5m is **always** processed before, and visible to, the 1m. Production is a race (F-I4-01).
+
+**Trade 143 in Replay:** the 1m would see 5m = WATCH, so `SETUP_TIMEFRAME_ATR` is closed and the entry most likely does not happen.
+
+**Trade 158 in Replay:**
+- The 5m wakeup (`ShadowProductionReplayService.java:258-268`) runs **before** the same-boundary 1m exists.
+- `latestSignalAtOrBefore` therefore returns the 1m from the previous minute, which is 60 s old.
+- That fails `SETUP_WAKEUP_1M_MAX_AGE = 45 s` (`ExecutionIntelligenceService.java:71`, `:423-424`), so the wakeup does nothing.
+- 158 would then go through `evaluateBuy` on the 1m with 5m = BUY, a different route and possibly a different outcome.
+
+**Scale:** about 30 Production `SETUP_CONFIRMATION_WAKEUP` entries in I3-002 depend on the "1m finishes before 5m" order. **This is a structural Replay ≠ Production divergence affecting a whole entry route,** not only trade 143.
+
+**Precedent:** FIX-141 already moved the BTC-context lookup to candle-identity selection for exactly this parity reason (`ExecutionReplayScope.java:122-137`, `TradeSignalRepository.java:34-39`, used in `BtcMarketContextService.java:84`). That fix was not applied to the 5m and 1h approval lookups in `ExecutionIntelligenceService` or `TradeExecutionValidationService` (`:367-378`).
+
+### F-I4-04: 172 was approved on a 5m signal whose own entry gate had rejected it (design inconsistency)
+
+[PROJECT EVIDENCE: I3-001, code]
+
+- The 5m signal 171559 said BUY with `final_entry_allowed=0` and confidence 49. It was generated at 06:35:04 UTC (09:35:04 KSA).
+- `validateBuy` (`TradeExecutionValidationService.java:81-112`) passes only the 5m's **decision label** into `HigherTimeframeBuyAssessmentService.assess` (`:20-37`) and then into `balancedBuy` (`:300-309`).
+- `balancedBuy` maps 5m BUY + 1h NEUTRAL to `BALANCED_STRONG` at 75%, and it neither checks `final_entry_allowed` nor reads the 5m's confidence.
+- The other routes do require it: `SETUP_TIMEFRAME_ATR` (`ExecutionIntelligenceService.java:1487`) and the confirmation wakeup (`:402`) both require `five.isFinalEntryAllowed()`. The same 5m would have been refused as approval on those routes.
+- Allocation was capped to 25% by Entry Quality (score 60). That did limit the size, but it did not block the entry.
+- **Classification:** a design gap, not a race. Whether it caused the loss is unproven; 172 lost −0.18% on an HTF_SELL exit.
+
+### F-I4-05: 182's entry depended on one 1h trend score, 16 against a threshold of 15
+
+[PROJECT EVIDENCE: I2-006, code]
+
+**How the 5m bearish signals were masked:**
+- `MultiTimeframeConfluenceService.java:136-138` downgrades a bearish 5m to NEUTRAL (status CONFLICT) when any higher-timeframe context counts as "bullish".
+- "Bullish context" is defined as decision BUY or `trend_score >= 15` (`:24`, `:337-339`).
+- The 1h signal 175258 was **WATCH with trend score 16**. It was generated at 09:00:04 UTC (12:00:04 KSA).
+- So all 12 of ACE's 5m SELL and STRONG_SELL signals from 09:05 to 10:00 UTC were shown as NEUTRAL. That is F-I3-06.
+
+**How the entry was then approved:**
+- `HigherTimeframeBuyAssessmentService.assess` checks `bearish(five)` on the **final decision**, which was NEUTRAL, not on `original_decision` (`:20-26`). So the "5m bearish veto" did not fire.
+- FIX-11G then granted 25% on 5m NEUTRAL + 1h WATCH (`TradeExecutionValidationService.java:263-284`).
+- **The same 1h WATCH was used twice:** first to neutralise the 5m bearish signal, then as the non-bearish 1h approval for the BUY.
+
+**What happened next:**
+- The next 1h signal, 176791, was generated at 10:00:06 UTC (13:00:06 KSA) with decision NEUTRAL and trend score 13.
+- That is below the threshold, so the masking stopped and 5m 176934 came through as an actual STRONG_SELL at 10:05:03 UTC (13:05:03 KSA). The position exited on it.
+
+**Classification:** losing trade that followed the rules; an entry-quality weakness. It should be weighed alongside the FIX-154 direction, but it is **not** the FIX-154 1h-veto case: here the 5m bearish evidence was hidden, not the 1h.
+
+### F-I4-06: 162's late entry was allowed by a one-BUY exemption
+
+[PROJECT EVIDENCE: I2-008, code]
+
+- The FIX-119 guard (`ExecutionIntelligenceService.java:1257-1280`) defers a LATE_ENTRY accumulated-evidence entry only when the evidence contains **zero** BUY observations and the 5m is not bullish.
+- 162's evidence was 20 observations: 1 BUY, 9 WATCH. That single BUY bypassed the guard.
+- The opportunity had started at 03:41:02 UTC (06:41:02 KSA), 21 minutes before entry, and Entry Quality was 50, labelled LATE_ENTRY.
+- The code does not check how old that BUY is.
+- **Classification:** followed the rules. The exemption is weak because it treats one possibly old BUY as enough to justify a late entry.
+
+### F-I4-07: 137 and 158 followed the rules, apart from the Replay issue in F-I4-03
+
+[PROJECT EVIDENCE]
+
+- **137:** the 5m was current, the 1m was STRONG_BUY in agreement, FIX-11G gave 25%, and it exited on a confirmed 5m SELL.
+- **158:** the wakeup gates at `:399-436` all passed with the current 5m BUY, and it exited on a 5m SELL.
+
+### F-I4-08: Contradiction with project docs. FIX-154 code appears to have been live in Production
+
+[PROJECT EVIDENCE + AGENT INFERENCE]
+
+- AGENTS.md describes FIX-154 as "not-yet-implemented", and `claude-docs/ARCHITECTURE.md:19` and `TRADING_RULES.md:124` say it is "pending".
+- But the working tree contains:
+  - `HigherTimeframeBuyAssessmentService`;
+  - FIX-154 audit calls in `TradeExecutionValidationService.java:93-97,435-443`;
+  - migrations V107 (`trade_signal.data_quality_valid`, `buy_htf_assessment_audit`) and V109.
+- All the October signals in I2-006 have `data_quality_valid=1`. That column only exists after V107, so this strongly suggests V107 was applied before 2026-10-11.
+- **I am not accepting either side silently.** I4-001 and I4-002 settle it. This needs dual-agent review before any shared knowledge is changed.
+
+### F-I4-09: Exits were confirmed against the price feed; the delays were feed gaps
+
+[PROJECT EVIDENCE: I3-003, I3-004]
+
+This settles U-I3-2 and the F-I3-04 lags.
+
+**Each exit fired on the next price event after the exit-enabling signal:**
+
+| ID | Signal that made the exit possible (UTC) | Next price event (UTC) | Gap with no prices |
+|---|---|---|---|
+| 182 | 10:05:03.926 | 10:05:18.446 | 16.0 s |
+| 172 | 07:15:04.578 | 07:15:43.462 | 40.0 s |
+| 137 | 21:00:02.921 | 21:00:09.033 | 8.0 s |
+
+**The EGLD gap behind 143 was specific to EGLD:**
+- During 22:43:27–22:43:35 UTC, 12 other symbols kept delivering prices: BTC, ETH, SOL, ICP, ENA and others. All were APPLIED.
+- EGLD gaps of 8–25 s were normal in that window; the largest was 24.9 s.
+- **AGENT INFERENCE:** Binance only pushes kline updates when the kline changes. Protection that relies on kline close prices therefore cannot see a fast wick inside a no-update gap.
+- That is a limit of the observation design, not a defect in the protection code.
+
+**XRP exit, 158 (minor, unexplained):**
+- The XRP price event at 03:30:02.320 (created 02.192) came after the 5m SELL at 03:30:01.464, but it did not trigger the exit.
+- The exit came on the next event, 03:30:04.319 (created 04.189). The exit price was the same.
+- Possibly the 5m signal had not been committed or seen yet. I mark this missing evidence; it had no price impact.
+
+**Clock skew:** the local `created_at` is earlier than Binance `observed_at` by 46–130 ms. Small, and it is noted here only for latency monitoring.
+
+### F-I4-10: The STOPPED blind spot is now sized
+
+[PROJECT EVIDENCE: I3-005]
+
+- STOPPED losses by day: **2026-10-12: 19 trades, −4.507 USDT**; 10-11: 16 trades, −3.044; 10-10: 24 trades, −4.899; 10-09: 10; 10-06: 4; 10-15: 2.
+- **23 STOPPED losses closed later than trade 182** (19 on 10-12 after 10:05 UTC, plus 2 on 10-15).
+- The latest is 193 at 10-15 03:15:19 UTC (06:15:19 KSA).
+- **Recommendation for future windows (not applied here):** the selection should include `status IN ('CLOSED','STOPPED')`.
+
+---
+
+## Remediation direction (recommendation only, not authorised)
+
+1. **Select 5m and 1h approval by candle identity**, the way FIX-141 does for BTC context. Use the latest 5m whose `candle_open_time + 5m ≤ the 1m candle close`. When the same-boundary 5m analysis is still pending, defer (stay BUILDING), with a durable, bounded outcome; consistent with the AGENTS.md automation direction.
+2. **Re-read the 5m inside `revalidateAtExecutionPrice`**, or make it reject when a newer, non-bullish 5m for the same boundary exists.
+3. **Apply one consistent 5m approval contract across all routes:** `final_entry_allowed`, and consider `original_decision` when a CONFLICT has masked a bearish 5m.
+4. **Fix the Replay order** once the Production fix exists, so Replay and Production use the same candle-identity rule.
+
+**Regression checks:**
+- Replay EGLD 2026-10-11 22:30–22:45 UTC and XRP 2026-10-12 02:30–03:31 UTC under Production parity, and compare against paper positions 143 and 158.
+- Unit cases: 1m before 5m and 5m before 1m at the same boundary, for every route that reads the 5m.
+
+---
+
+## UNKNOWNS
+
+- **U-I4-1:** Which build was running on 2026-10-11 and 2026-10-12, including the FIX-154, FIX-141 and FIX-11G code (I4-001).
+- **U-I4-2:** Whether `buy_htf_assessment_audit` holds the exact 5m and 1h signal IDs the entries used (I4-002). It would directly prove F-I4-04 and F-I4-05. The `SETUP_TIMEFRAME_ATR` route (143) does not call the validation service, so no audit row is expected for it.
+- **U-I4-3:** How often the race happens across all signals, not just executed ones (I4-003).
+- **U-I4-4:** The 5m approval each executed entry actually used, with outcome, to size F-I4-04 and F-I4-05 (I4-004).
+- **U-I4-5:** No Replay run has confirmed F-I4-03. It needs a coordinator-launched Production-parity Replay; I can't launch one from here.
+- **U-I4-6 (carried from U-I3-4):** The Production application logs for 10-11 and 10-12 are still unavailable. Lines to search for: `Execution Intelligence did not open a BUY`, `FIX-11G transitional BUY authority granted` for signal 176710, and `[FIX-118][PRODUCTION][LIVE_TRIGGER]` for EGLD at 22:43 UTC.
+- **U-I2-7 (carried):** The real fee tier is not verified.
+
+---
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: Date when FIX-154 and the other recent migrations were deployed, relative to the October trades (U-I4-1, F-I4-08). Uses the standard Flyway history table in the trader schema.
+SQL:
+SELECT installed_rank, version, description, installed_on, success FROM crypto_ai.flyway_schema_history WHERE CAST(version AS UNSIGNED) >= 95 ORDER BY installed_rank LIMIT 40
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: Immutable record of the 5m and 1h signals used to approve each frozen entry, including 158's 5m trigger (U-I4-2, F-I4-04, F-I4-05). Columns come from V107.
+SQL:
+SELECT id, reference_signal_id, evaluation_path, evaluated_at, replay_mode, five_minute_signal_id, five_minute_raw_decision, five_minute_effective_decision, five_minute_candle_close_time, five_minute_age_seconds, one_hour_signal_id, one_hour_raw_decision, one_hour_effective_decision, one_hour_age_seconds, assessment_band, max_initial_percent, final_result, LEFT(final_reason, 300) AS final_reason_300 FROM crypto_ai.buy_htf_assessment_audit WHERE reference_signal_id IN (156723,159408,165412,165415,167668,171589,176710) ORDER BY evaluated_at, id LIMIT 60
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: How often the 1m/5m race happens over all boundary signals, by UTC day (U-I4-3, F-I4-02, F-I4-03).
+SQL:
+SELECT DATE(s1.candle_open_time) AS utc_day, COUNT(*) AS n, SUM(s5.generated_at > s1.generated_at) AS five_after_1m, SUM(s5.generated_at <= s1.generated_at) AS five_before_1m, AVG(TIMESTAMPDIFF(MICROSECOND, s1.generated_at, s5.generated_at)) / 1000 AS avg_ms_5m_minus_1m, MAX(TIMESTAMPDIFF(MICROSECOND, s1.generated_at, s5.generated_at)) / 1000 AS max_ms FROM crypto_ai.trade_signal s1 JOIN crypto_ai.trade_signal s5 ON s5.symbol = s1.symbol AND s5.interval_code = '5m' AND s5.candle_open_time = s1.candle_open_time - INTERVAL 4 MINUTE WHERE s1.interval_code = '1m' AND MOD(MINUTE(s1.candle_open_time), 5) = 4 AND s1.candle_open_time BETWEEN '2026-10-06 00:00:00' AND '2026-10-16 00:00:00' GROUP BY utc_day ORDER BY utc_day LIMIT 20
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: For every executed entry, the 5m signal the code would have selected (latest by generated_at at or before the 1m, the same rule as `latestAtOrBefore`), with its approval-quality fields and the paper outcome. Sizes F-I4-04 (5m `final_entry_allowed=0`) and F-I4-05 (bearish 5m masked as NEUTRAL).
+SQL:
+SELECT eo.id AS opportunity_id, eo.symbol, eo.execution_source, eo.decision_code, eo.executed_at, s1.id AS one_id, s1.generated_at AS one_generated, s5.id AS five_id, s5.candle_open_time AS five_candle, s5.decision AS five_decision, s5.original_decision AS five_original, s5.confluence_status AS five_confluence, s5.final_entry_allowed AS five_final_allowed, s5.confidence_score AS five_confidence, pp.id AS paper_id, pp.status, pp.realized_pnl FROM crypto_ai.execution_opportunity eo JOIN crypto_ai.trade_signal s1 ON s1.id = eo.latest_signal_id AND s1.interval_code = '1m' LEFT JOIN crypto_ai.trade_signal s5 ON s5.id = (SELECT x.id FROM crypto_ai.trade_signal x WHERE x.symbol = s1.symbol AND x.interval_code = '5m' AND x.generated_at <= s1.generated_at ORDER BY x.generated_at DESC LIMIT 1) LEFT JOIN crypto_ai.paper_position pp ON pp.signal_id = s1.id WHERE eo.status = 'EXECUTED' ORDER BY eo.executed_at LIMIT 300
+### END_DB_REQUEST
+
+---
+
+## Self-review (iteration 4)
+
+**Time labelling:** every timestamp is labelled UTC or KSA. 137 and 143 cross midnight in KSA, and their KSA dates are shown.
+
+**Evidence labels:**
+- F-I4-01 is confirmed from timestamps plus code.
+- F-I4-03's mechanism is confirmed in code, but its Replay outcome is still AGENT INFERENCE.
+- F-I4-08 is a reported contradiction, not a conclusion.
+
+**Correction this iteration:** F-I3-03 is promoted from "defect candidate" to a confirmed entry-admission defect. I also widened it: the same race affects ACCUMULATED_EVIDENCE and IMMEDIATE_VALIDATION, not only SETUP_TIMEFRAME_ATR.
+
+**Not claimed:**
+- That the race causes losses overall: 7 cases, net −1.283 USDT, 3 wins and 4 losses.
+- That the reward:risk weakness caused any loss (this is F-I3-07, unchanged).
+
+**Plan for iteration 5:**
+- Fold in I4-001 to I4-004.
+- Measure exposure to the trend-score threshold of 15.
+- Prepare the Replay-parity test specification for the coordinator.
+- Freeze the classifications for each trade.

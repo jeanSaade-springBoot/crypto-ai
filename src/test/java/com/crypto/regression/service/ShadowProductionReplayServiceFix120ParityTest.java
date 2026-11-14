@@ -1,8 +1,16 @@
 package com.crypto.regression.service;
 
-import com.crypto.execution.service.ExecutionIntelligenceService;
-import com.crypto.execution.service.ExecutionPriceAuthorityService;
-import com.crypto.execution.service.ExecutionReplayScope;
+import com.crypto.regression.replay.ReplaySellValidationPolicy;
+import com.crypto.regression.replay.ReplayBuyValidationPolicy;
+import com.crypto.regression.replay.ReplayExecutionState;
+import com.crypto.regression.replay.ReplayMinimumExecutionPolicy;
+import com.crypto.regression.replay.ReplayPolicyProfile;
+import com.crypto.regression.replay.ReplayPolicyProfileStore;
+import com.crypto.regression.replay.ReplayRunOutputStore;
+import com.crypto.regression.replay.ReplayRunCertificateStore;
+import com.crypto.regression.replay.ReplayDecisionTraceStore;
+import com.crypto.regression.replay.ReplayPriceCoverageStore;
+import com.crypto.regression.replay.ReplaySizingPolicy;
 import com.crypto.position.service.DynamicProfitLockService;
 import com.crypto.position.service.NearTpFailureProtectionPolicy;
 import com.crypto.position.service.NearTpState;
@@ -11,7 +19,6 @@ import com.crypto.position.service.PositionExitPolicy;
 import com.crypto.position.service.PositionPriceAuthorityPolicy;
 import com.crypto.position.service.ProfitLockPolicy;
 import com.crypto.position.service.ProfitLockState;
-import com.crypto.service.TradeExecutionValidationService;
 import com.crypto.wallet.domain.WalletManagedPosition;
 import com.crypto.wallet.domain.WalletSettings;
 import com.crypto.wallet.repository.WalletManagedPositionRepository;
@@ -119,22 +126,28 @@ class ShadowProductionReplayServiceFix120ParityTest {
     }
 
     private ShadowProductionReplayService replayService(WalletSettingsRepository settingsRepository) {
-        return new ShadowProductionReplayService(
+        ShadowProductionReplayService service = new ShadowProductionReplayService(
                 mock(JdbcTemplate.class),
-                mock(ExecutionIntelligenceService.class),
-                mock(ExecutionReplayScope.class),
-                mock(ExecutionPriceAuthorityService.class),
+                new ReplayBuyValidationPolicy(),
+                new ReplayExecutionState(),
                 mock(PositionContinuationPolicy.class),
                 mock(PositionExitPolicy.class),
                 policy,
-                mock(TradeExecutionValidationService.class),
-                settingsRepository,
-                mock(WalletExecutionSizingPolicy.class),
-                mock(BinanceMinimumExecutionPolicy.class),
+                new ReplaySellValidationPolicy(),
+                mock(ReplayPolicyProfileStore.class),
+                mock(ReplayRunOutputStore.class),
+                mock(ReplayRunCertificateStore.class),
+                mock(ReplayDecisionTraceStore.class),
+                mock(ReplayPriceCoverageStore.class),
+                new ReplaySizingPolicy(),
+                new ReplayMinimumExecutionPolicy(),
                 mock(PositionPriceAuthorityPolicy.class),
-                mock(DefensiveRiskReductionReplayObserver.class),
-                mock(OneCandleContinuationGraceReplayObserver.class),
                 mock(NearTpFailureProtectionPolicy.class));
+        service.activateProfileForTest(new ReplayPolicyProfile(1L, "profile", Instant.EPOCH,
+                "fingerprint", "BALANCED", true, BigDecimal.TEN, BigDecimal.valueOf(25), 3,
+                "exchange-fixture", BigDecimal.TEN, true,
+                BigDecimal.valueOf(70), BigDecimal.valueOf(40), BigDecimal.TEN, BigDecimal.valueOf(25)));
+        return service;
     }
 
     private Object shadowPosition(long id, BigDecimal entry, BigDecimal target, BigDecimal highest,

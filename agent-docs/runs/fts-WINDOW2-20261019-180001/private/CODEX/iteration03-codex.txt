@@ -1,0 +1,74 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** All six frozen `paper_position` rows are closed with negative P&L. Their lifecycle timing is:
+
+| ID | Symbol | Held | Closed UTC | Closed KSA |
+|---:|---|---:|---|---|
+| 182 | ACEUSDT | 00:08:14.009789 | 2026-10-12 10:05:20.486035 | 2026-10-12 13:05:20.486035 |
+| 172 | SHIBUSDT | 00:39:40.397141 | 2026-10-12 07:15:45.484258 | 2026-10-12 10:15:45.484258 |
+| 162 | DOGEUSDT | 00:23:57.701460 | 2026-10-12 04:26:04.116278 | 2026-10-12 07:26:04.116278 |
+| 158 | XRPUSDT | 00:55:01.826646 | 2026-10-12 03:30:06.638124 | 2026-10-12 06:30:06.638124 |
+| 143 | EGLDUSDT | 00:03:31.371462 | 2026-10-11 22:43:36.229162 | 2026-10-12 01:43:36.229162 |
+| 137 | EGLDUSDT | 00:05:07.611462 | 2026-10-11 21:00:12.121700 | 2026-10-12 00:00:12.121700 |
+
+- **PROJECT EVIDENCE:** For #158, log event `1912742` records an XRPUSDT price callback as `APPLIED` with `observedUtc=2026-10-12T03:30:06.322Z`; the position closes 316.124 ms later. This is a close temporal association, not yet proof that this event exited position #158.
+
+- **PROJECT EVIDENCE:** For #182, log event `2007194` records ACEUSDT as `APPLIED` at `observedUtc=2026-10-12T10:05:20.431Z`; #182 closes 55.035 ms later. Again, association is strong but not a durable event-to-position link.
+
+- **PROJECT EVIDENCE:** #162 closes at `2026-10-12 04:26:04.116278 UTC`. DOGEUSDT signal `172875` is only recorded as created at `04:26:04.269527 UTC`, 153.249 ms after the close; it therefore cannot have caused #162’s closure. The saved position instead names `exit_signal_id=168277`, which remains unverified.
+
+- **PROJECT EVIDENCE:** At #182’s close, the ACEUSDT 1m candle ending `10:04:59.999 UTC` begins worker handling at `10:05:20.197 UTC`; its 1m signal is inserted at `10:05:30.284 UTC`. The worker delay is about 20.2 seconds to generation and 30.3 seconds to insertion. The post-close signal cannot explain the recorded close at `10:05:20.486 UTC`.
+
+- **PROJECT EVIDENCE:** The source explicitly permits an `APPLIED` price outcome to represent a successful no-op when no open position exists. Therefore neither price callback above establishes the recorded exit without matching position/wallet/audit evidence.
+
+- **PROJECT EVIDENCE:** Exact-second log searches did not find a symbol-bearing close line for #137, #143, or #172. This is a correlation limitation, not evidence that no exit occurred.
+
+- **EXTERNAL RESEARCH:** None.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `DBQ-CODEX-I2-001-CODEX-result.txt` supplies the lifecycle timestamps, exit reasons, and signal IDs from authoritative `crypto_ai.paper_position`.
+
+- **PROJECT EVIDENCE:** `logs/crypto-ai-trader.2026-10-12.3.log.gz` contains XRP event `1912742`; `logs/crypto-ai-trader.2026-10-12.7.log.gz` contains ACE event `2007194` and the delayed ACE analysis stages.
+
+- **PROJECT EVIDENCE:** [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:84) records `PRICE_OUTCOME_COMMITTED` only after the effects transaction commits. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:70) confirms that successful no-op callbacks receive the same `APPLIED / PROTECTION_CALLBACK_COMPLETED` outcome.
+
+- **PROJECT EVIDENCE:** [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:501) sets `closed_at` during terminal close processing, but current evidence does not identify the exact calling path for each frozen position.
+
+## UNKNOWNS
+
+- Exact, durable links among each `paper_position`, its `market_price_event`, managed/wallet position, wallet execution, and exit audit row.
+- The price and threshold evaluation for each suspected exit-trigger event.
+- Whether #182’s delayed candle analysis breached an applicable freshness rule; the configured threshold and contemporaneous execution path are not yet evidenced.
+- The actual `trade_signal` rows for entry IDs `176710, 171589, 167668, 165412, 159408, 156723` and exit ID `168277`.
+- Whether current DB rows reproduce the frozen snapshot state rather than later state.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Inspect the actual schema before selecting timing/causality fields for the six frozen positions. This identifies durable event, wallet execution, audit, and signal tables that can prove or refute the provisional log-to-close associations.  
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    c.extra
+FROM information_schema.columns AS c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'market_price_event',
+      'paper_position',
+      'wallet_trade',
+      'wallet_managed_position',
+      'wallet_execution',
+      'position_management_event',
+      'production_exit_audit',
+      'trade_signal',
+      'signal_processing_work'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+### END_DB_REQUEST

@@ -68,6 +68,11 @@ public class TradeSignal {
     @Column(name = "btc_context_entry_allowed", nullable = false)
     private boolean btcContextEntryAllowed;
 
+    // FIX-154: immutable quality evidence for this signal's own market context.
+    // NULL intentionally represents a signal created before V107.
+    @Column(name = "data_quality_valid")
+    private Boolean dataQualityValid;
+
     @Column(name = "btc_context_interval", length = 10)
     private String btcContextInterval;
 
@@ -400,4 +405,8 @@ public class TradeSignal {
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
+
+    // FIX-153: NULL means pre-migration evidence; HISTORICAL_ONLY is never live latency.
+    @Column(name="signal_mode",length=24)
+    private String signalMode;
 }

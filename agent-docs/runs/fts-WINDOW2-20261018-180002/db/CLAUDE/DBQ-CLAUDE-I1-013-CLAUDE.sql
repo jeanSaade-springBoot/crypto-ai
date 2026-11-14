@@ -1,0 +1,1 @@
+DESCRIBE crypto_ai.wallet_trade; DESCRIBE crypto_ai.market_price_event; DESCRIBE crypto_ai.candle;

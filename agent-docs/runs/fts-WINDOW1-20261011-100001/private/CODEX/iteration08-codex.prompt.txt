@@ -1,0 +1,44 @@
+You are CODEX on TRACK of the DAILY FAILED-TRADE STUDY. Unattended. Do not ask Jean anything.
+
+HARD ISOLATION: do not read the other agent private/db folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log, or the other agent's memory files.
+
+READ: AGENTS.md, agent-docs/AGREED_KNOWLEDGE.md, agent-docs/DECISIONS.md, agent-docs/DATABASE_INVESTIGATION_RULES.md, codex-docs/, agent-docs/runs/fts-WINDOW1-20261011-100001/CHARTER.md, your private files (iteration01-codex.prompt.txt, iteration01-codex.stderr.txt, iteration01-codex.txt, iteration02-codex.prompt.txt, iteration02-codex.stderr.txt, iteration02-codex.txt, iteration03-codex.prompt.txt, iteration03-codex.stderr.txt, iteration03-codex.txt, iteration04-codex.prompt.txt, iteration04-codex.stderr.txt, iteration04-codex.txt, iteration05-codex.prompt.txt, iteration05-codex.stderr.txt, iteration05-codex.txt, iteration06-codex.prompt.txt, iteration06-codex.stderr.txt, iteration06-codex.txt, iteration07-codex.prompt.txt, iteration07-codex.stderr.txt, iteration07-codex.txt), agent-docs/runs/fts-WINDOW1-20261011-100001/db/CODEX/
+
+ANALYSIS ONLY. No code/config/DB writes/git/deploy/implementation.
+
+TIME: DB timestamps are UTC. Report KSA = UTC+3. Never label raw UTC as KSA.
+
+FROZEN TRADES (mandatory, do not substitute):
+104, 101, 96, 91, 82, 78
+
+STUDY WINDOW: WINDOW1
+SNAPSHOT TIME UTC: 2026-10-11 07:00:03
+SNAPSHOT TIME KSA: 2026-10-11 10:00:01
+INTENDED WINDOW CLOCK KSA: 2026-10-11 10:00:00
+SNAPSHOT NOTE: On-schedule snapshot.
+AUTHORITATIVE ENTITY: crypto_ai.paper_position
+SELECTION: status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0 ORDER BY closed_at DESC LIMIT 6
+EXCLUDED: OPEN/incomplete rows; NULL closed_at; non-negative realized_pnl; wallet_position_test (Replay)
+
+SELECTED TRADE IDS:
+1. 104
+2. 101
+3. 96
+4. 91
+5. 82
+6. 78
+
+PROOF QUERIES: DBQ-FTS-001 .. DBQ-FTS-005
+
+DATABASE: you do not have the password. Emit:
+### DB_REQUEST
+QueryId: DBQ-CODEX-I8-001
+Purpose: ...
+SQL:
+SELECT ...
+### END_DB_REQUEST
+
+CURRENT TASK: ITERATION 8 - FINAL CLASSIFICATION
+Iteration 8 of 8. Self-review only.
+ITERATION 8: stdout MUST be the complete frozen CODEX_FAILED_TRADE_STUDY.md with summary fields, the mandatory table (one row per frozen ID), DATABASE EVIDENCE, LOG EVIDENCE, CODE EVIDENCE. Suggested fixes are candidates only. NO CHANGE is allowed.
+Label PROJECT EVIDENCE / EXTERNAL RESEARCH / AGENT INFERENCE.

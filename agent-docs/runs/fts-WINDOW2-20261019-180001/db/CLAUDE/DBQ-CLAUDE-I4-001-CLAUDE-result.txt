@@ -1,0 +1,17 @@
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	c	NULL	ref	uk_candle_symbol_interval_open_time,idx_candle_symbol_interval_time,idx_candle_closed,idx_candle_dashboard_closed_time	uk_candle_symbol_interval_open_time	164	const,const	15904	50.00	Using where; Using filesort
+INDEX_NAME	SEQ_IN_INDEX	COLUMN_NAME
+idx_candle_closed	1	closed
+idx_candle_dashboard_closed_time	1	symbol
+idx_candle_dashboard_closed_time	2	interval_code
+idx_candle_dashboard_closed_time	3	closed
+idx_candle_dashboard_closed_time	4	open_time
+idx_candle_symbol_interval_time	1	symbol
+idx_candle_symbol_interval_time	2	interval_code
+idx_candle_symbol_interval_time	3	open_time
+PRIMARY	1	id
+uk_candle_symbol_interval_open_time	1	symbol
+uk_candle_symbol_interval_open_time	2	interval_code
+uk_candle_symbol_interval_open_time	3	open_time
+egld_1m_closed
+9221

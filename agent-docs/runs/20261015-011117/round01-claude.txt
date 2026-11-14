@@ -1,0 +1,130 @@
+**Round 1 (independent)**: FIX-156 preparation review against the owner rule "Replay-only, ZERO Production code changes"
+
+This was a read-only review. I changed no code, configuration, database, git state or preparation file, and I didn't read the other agent's findings file (`agent-docs/FIX-156_PREPARATION_FINDINGS-20261015.md`). My own earlier memory notes were used only as claims and re-checked against the code. The shared memory files (`AGREED_KNOWLEDGE.md`, `DECISIONS.md`) have no FIX-156 or Replay entries.
+
+## FINDINGS
+
+**F1. BLOCKER: Replay runs inside the Production application, so even Replay-only code ships as a Production release.**
+- **PROJECT EVIDENCE:** `RegressionTestWorker`, `ShadowProductionReplayService` and the Production services are in one source tree, one build and one Spring context. O-6 and O-7 confirm Replay shares the Production datasource.
+- **AGENT INFERENCE:** any Replay change is only usable after the Production application is redeployed. That reopens the AGENTS.md release gate on protecting open positions during an application replacement.
+- §1's claim that latency and schedulers don't change can only be supported by R156-02 resource bounds. It cannot be "unchanged" by construction.
+- The preparation never says whether redeploying a Replay-only artifact counts as a "Production change" under the owner rule.
+
+**F2. BLOCKER: the preparation names Production classes as change owners.**
+- **R156-05 names `ExecutionReplayScope`.**
+  - **PROJECT EVIDENCE:** it is a Production `@Component` in `com.crypto.execution.service` (`ExecutionReplayScope.java:24-25`).
+  - 13 non-Replay classes reference it, including `ExecutionIntelligenceService`, `EntryConsumptionPolicy`, `TradeExecutionValidationService`, `RegimeStateService`, `EntryAuthorityService`, `OpportunityConsolidationService`, `BtcMarketContextService` and `MultiTimeframeConfluenceService`.
+  - Editing it, for example to add a stable signal key, is a Production source change.
+- **R156-06 names the price-event repository projection.**
+  - **PROJECT EVIDENCE:** `MarketPriceEventService` is also used by `BinanceKlineService`, `LivePositionProtectionService` and `ExecutionPriceAuthorityService`.
+  - Under the owner rule this must become a new Replay-owned reader of `market_price_event` rows, not a change to the shared projection.
+- **R156-05's "fail closed when scope is missing" (D50, D51, D52) can't be placed where the fall-through happens.**
+  - **PROJECT EVIDENCE:** `EntryConsumptionPolicy.java:20-25` reads `wallet_trade` when scope is inactive.
+  - `StopLossEvidenceStore.java:37-39` reads `wallet_trade`.
+  - `ExecutionIntelligenceService.java:2617-2623` reads and writes `execution_opportunity` when scope is inactive.
+  - Under zero-Production-change, fail-closed must be enforced only from the Replay side: guaranteed scope on every thread that calls into Production, plus tests. The preparation doesn't say this.
+
+**F3. BLOCKER: rule O-1 can't be met through the current call graph, and the preparation doesn't choose a mechanism.**
+- **PROJECT EVIDENCE:** Replay calls `executionIntelligenceService.evaluateBuy` (`ShadowProductionReplayService.java:270`). That calls `validationService.validateBuy` (`ExecutionIntelligenceService.java:653`), which loads current `wallet_settings` (`TradeExecutionValidationService.java:62-66, 400-402`).
+- Replay also calls `validateSell` (`:235, :660`), plus `revalidateAtExecutionPrice` and `markExecuted` (`:313, :328, :348, :360`).
+- Without editing Production code, only two mechanisms exist (**AGENT INFERENCE**):
+  - **(a) Copy-mirror.** Re-implement the BUY, wake-up, revalidation and validation path, which lives in a roughly 2,600-line service, inside Replay. R156-09 implies this. Replay would then certify a copy, not Production code, with a high risk of the copy drifting from Production. Nothing in the registry detects that drift.
+  - **(b) Replay-wired instances of unmodified Production classes.** Build the Production classes with Replay-owned substitute dependencies: a fixture-backed `WalletSettingsRepository` and a fixture-backed `BinanceMarketDataClient` for `BinanceMinimumExecutionPolicy.java:26-30`.
+    - This is feasible in principle: `ExecutionIntelligenceService` uses `@RequiredArgsConstructor` (`:40`).
+    - But `replayScope` and `stopLossEvidence` are field-injected with `@Autowired` (`:262-267`). That needs reflection or a separate child Spring context, and has never been tried here.
+- My recommendation is (b) where it is feasible, with (a) limited to narrow policy pieces. It must be decided and registered before freeze.
+
+**F4. MATERIAL: analysis parity uses current Production inputs that Replay can't swap out.**
+- **PROJECT EVIDENCE:** `AnalysisService.buildSignal` reads these directly from Production beans (`AnalysisService.java:227-279`):
+  - the current `sentimentService.isEnabled()`;
+  - `fundamentalService.latestAsOf` / `isAvailable`;
+  - `previousSnapshot(i)` (D54);
+  - `atrRiskService`;
+  - stateful `regimeStateService.apply`;
+  - `marketContextService.build`.
+- **AGENT INFERENCE:** under zero-Production-change, D53 and D54 can only be met by:
+  - a Replay qualifier that compares the current configuration with the dated fixture and refuses when they differ, and refuses when the prior snapshot is missing or wasn't available yet at signal time; or
+  - mechanism F3(b).
+- The register has no rows for the fundamentals-availability rule, the sentiment on/off flag, or the ATR/regime/scoring configuration.
+
+**F5. MATERIAL: D56 (stable signal key) needs a Long ID, which brings a hidden data risk.**
+- **PROJECT EVIDENCE:** `ExecutionReplayScope.entryConsumed(Long)` (`:85-92`). `EntryConsumptionPolicy` returns NOT_CONSUMED for a null ID before it checks scope (`:21`).
+- The only Replay-only fix is to give each regenerated signal a synthetic `Long` ID on the in-memory `TradeSignal`. **AGENT INFERENCE:** `TradeSignal` is a database (JPA) entity. If any reachable code ever saved or merged a signal carrying a synthetic ID, it could update or insert a `trade_signal` row.
+- I found no `signalRepository.save` in `ExecutionIntelligenceService`, but I haven't audited this across the whole codebase. A synthetic-ID scheme (for example, negative IDs) needs its own registry row and a test proving no repository write is reachable.
+
+**F6. MATERIAL: the Replay executor may change how Production async work is scheduled.**
+- **PROJECT EVIDENCE:**
+  - `RegressionTestWorker.java:99` and `DynamicCoinActivationService.java:18,35` use plain `@Async`.
+  - Several named `ThreadPoolTaskExecutor` beans exist. None is named `taskExecutor`, and there is no `AsyncConfigurer`.
+  - The project uses Spring Boot 4.1.0 (`pom.xml:9`).
+- **EXTERNAL RESEARCH:**
+  - *Spring Boot 3.5 Release Notes*, https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-3.5-Release-Notes (a wiki page, edited since release).
+  - *Task Execution and Scheduling* (Spring Boot 3.5 reference), https://docs.spring.io/spring-boot/3.5/reference/features/task-execution-and-scheduling.html.
+  - Findings: Spring Boot's default async executor is auto-configured only when no `Executor` bean exists, unless `spring.task.execution.mode=force` is set. Spring Boot 3.5 removed the `taskExecutor` alias.
+  - Limitations: these are 3.5 documents. I didn't verify 4.1 behaviour.
+  - Relevance: an incorrectly named or typed new Replay executor bean, or an `AsyncConfigurer`, could change which executor Production's plain `@Async` methods use.
+- R156-02 must require a bean name that isn't `taskExecutor`, no `AsyncConfigurer`, and a startup test proving the executor Production uses is unchanged.
+
+**F7. MATERIAL: R156-13's Flyway migration is a Production database change.**
+- **PROJECT EVIDENCE / AGENT INFERENCE:** there is one datasource (O-6), so additive Replay tables are created in the Production schema when the Production application starts.
+- This interacts with the open V103 fresh-install blocker in AGENTS.md.
+- Jean needs to rule whether this counts as a Production change. If it does, Replay-owned storage needs a design with no migration.
+
+**F8. Items that are genuinely Replay-only (PROJECT EVIDENCE):**
+- D22: pass literal `true` in `rebaseForExtendedTarget` (`ShadowProductionReplayService.java:746, 781`).
+- D39: stop calling `completePositionOpportunity` on price exits (`:157`).
+- Remove the `walletSettings()` loads (`:79, :726, :757, :777, :999`).
+- Replace the `binanceMinimumExecutionPolicy.evaluate` calls (`:535, :688`).
+- Stop the `wallet_position_test` writes.
+- The `RegressionTestService` chart and purge changes.
+- Static reachability and allow-list tests, which are test code only.
+
+**F9. Still open, unchanged:**
+- Gates P01–P07 are all Pending, and E03–E10 don't exist.
+- There is no historical source for `wallet_settings` (a single row) or for Binance minimum notional.
+- The working tree is dirty.
+- The FIX-154 BUY path (`BuyHtfAssessmentAuditStore`, `MultiTimeframeConfluenceService`) isn't covered by any D-row.
+
+## EVIDENCE
+| Claim | Location |
+|---|---|
+| Scope is a Production component with 13 Production users | `ExecutionReplayScope.java:24-197`; grep across 14 files |
+| BUY path reaches `wallet_settings` | `ExecutionIntelligenceService.java:461, 653`; `TradeExecutionValidationService.java:52, 62-66, 400` |
+| Field injection | `ExecutionIntelligenceService.java:40, 254-267` |
+| Fall-through to account and opportunity data | `EntryConsumptionPolicy.java:17-25`; `StopLossEvidenceStore.java:37-63`; `ExecutionIntelligenceService.java:2602-2623` |
+| Price service is shared with Production | `MarketPriceEventService` users: `BinanceKlineService`, `LivePositionProtectionService`, `ExecutionPriceAuthorityService` |
+| Analysis inputs | `AnalysisService.java:183-284` |
+| Binance minimum-order call | `BinanceMinimumExecutionPolicy.java:26-30`; `ShadowProductionReplayService.java:535, 688` |
+| Async | `RegressionTestWorker.java:99`; `DynamicCoinActivationService.java:18, 35`; `config/*AsyncConfig.java` |
+
+## OBJECTIONS
+1. §1 and §11.6 claim "Replay only", but R156-05 and R156-06 assign changes to Production classes. Re-assign them to Replay-owned replacements, or obtain an explicit owner exception.
+2. There is no rule classifying which files are Production and which are Replay. Every R156 item needs an exact file-ownership list, and an acceptance check that the diff touches no Production-owned file.
+3. The mechanism for O-1, D50–D52 and analysis parity (copy-mirror or Replay-wired instances) isn't decided. Copy-mirroring needs a test or check that detects drift from Production.
+4. The deployment and migration consequences (F1, F7) aren't addressed.
+5. The D56 synthetic-ID risk and the executor-resolution risk (F5, F6) aren't registered.
+
+## UNKNOWNS
+- Spring Boot 4.1's `@Async` executor resolution.
+- Whether `validateSell` reads settings or account tables.
+- Whether `indicator_snapshot` has an availability timestamp (needed for D54).
+- How `CandleInputAudit` is reached from Replay (D49).
+- The contents of RPR-0.9.12. I didn't re-hash or re-read it.
+- A full audit of saves to `trade_signal` across all Replay-reachable code.
+
+## FINDINGS FOR JEAN
+1. **Not freeze-ready.** Replay-only, no-Production-touch is achievable in principle, but the current preparation breaks the rule itself by naming `ExecutionReplayScope` and the shared price-event service as change owners.
+2. **One choice blocks the rest:** copy Production's BUY/SELL logic into Replay, or run the unmodified Production classes with Replay-supplied fake settings and Binance data. I recommend the second where it works, because it avoids Replay certifying a copy that can quietly drift away from Production.
+3. **Two rulings are needed:**
+   - Does shipping a Replay-only change inside the Production application (a redeploy) count as a Production change?
+   - Does a Flyway migration adding Replay tables to the shared database count?
+4. **Analysis parity** can only refuse when today's sentiment, fundamentals or ATR/regime settings differ from the dated fixture. Replay can't substitute historical values without touching Production code.
+5. **Two hidden risks need explicit tests:**
+   - giving regenerated signals fake IDs (a database-entity write risk);
+   - adding a Replay thread pool (it could change which pool Production's async jobs use).
+
+VERDICT: REJECTED
+
+Sources:
+- [Spring Boot 3.5 Release Notes](https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-3.5-Release-Notes)
+- [Spring Boot 3.5 reference: Task Execution and Scheduling](https://docs.spring.io/spring-boot/3.5/reference/features/task-execution-and-scheduling.html)

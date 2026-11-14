@@ -1,0 +1,19 @@
+src	id	symbol	detail	status	extra	ts	msg
+WORK	23368	AEROUSDT	1m	REVIEW_REQUIRED	INTERRUPTED_ATTEMPT	2026-10-06 01:00:29.453114	[FIX-128] Interrupted processing requires review; no automatic replay
+WORK	117518	AEROUSDT	5m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-10 19:15:09.660010	org.springframework.dao.QueryTimeoutException: PreparedStatementCallback; Statement cancelled due to timeout or client request
+WORK	153410	TAOUSDT	5m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-11 18:45:06.637302	org.springframework.dao.QueryTimeoutException: PreparedStatementCallback; Statement cancelled due to timeout or client request
+WORK	156113	DOGEUSDT	5m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-11 20:30:09.223115	org.springframework.dao.QueryTimeoutException: PreparedStatementCallback; Statement cancelled due to timeout or client request
+WORK	156371	ENAUSDT	5m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-11 20:40:10.540783	org.springframework.dao.QueryTimeoutException: PreparedStatementCallback; Statement cancelled due to timeout or client request
+WORK	158406	PEPEUSDT	5m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-11 22:00:09.590068	org.springframework.dao.QueryTimeoutException: PreparedStatementCallback; Statement cancelled due to timeout or client request
+WORK	158797	ICPUSDT	5m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-11 22:15:08.321939	org.springframework.dao.QueryTimeoutException: PreparedStatementCallback; Statement cancelled due to timeout or client request
+WORK	160835	ICPUSDT	5m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-11 23:35:08.413613	org.springframework.dao.QueryTimeoutException: PreparedStatementCallback; Statement cancelled due to timeout or client request
+WORK	160961	ICPUSDT	5m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-11 23:40:08.197421	org.springframework.dao.QueryTimeoutException: PreparedStatementCallback; Statement cancelled due to timeout or client request
+WORK	164022	PEPEUSDT	5m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-12 01:40:07.800884	org.springframework.dao.QueryTimeoutException: PreparedStatementCallback; Statement cancelled due to timeout or client request
+WORK	165807	PEPEUSDT	5m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-12 02:50:08.033720	org.springframework.dao.QueryTimeoutException: PreparedStatementCallback; Statement cancelled due to timeout or client request
+WORK	167738	PEPEUSDT	5m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-12 04:05:07.756407	org.springframework.dao.QueryTimeoutException: PreparedStatementCallback; Statement cancelled due to timeout or client request
+WORK	171056	PEPEUSDT	5m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-12 06:15:07.691166	org.springframework.dao.QueryTimeoutException: PreparedStatementCallback; Statement cancelled due to timeout or client request
+TRADE	450	PEPEUSDT	BUY	EXECUTED	IMMEDIATE_VALIDATION	2026-10-12 09:56:04.897957	176689
+WORK	176692	ACEUSDT	1m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-12 09:56:06.932400	org.springframework.transaction.UnexpectedRollbackException: Transaction silently rolled back because it has been marked as rollback-only
+TRADE	451	ACEUSDT	BUY	EXECUTED	IMMEDIATE_VALIDATION	2026-10-12 09:57:04.232436	176710
+WORK	182879	ICPUSDT	5m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-12 15:15:42.480849	org.springframework.dao.QueryTimeoutException: PreparedStatementCallback; Statement cancelled due to timeout or client request
+WORK	192214	AEROUSDT	5m	REVIEW_REQUIRED	PROCESSING_OR_COMMIT	2026-10-15 02:15:10.101032	org.springframework.dao.QueryTimeoutException: PreparedStatementCallback; Statement cancelled due to timeout or client request

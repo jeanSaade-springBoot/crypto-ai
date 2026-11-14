@@ -1,0 +1,88 @@
+## Iteration 2 — Database Forensics
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+- The frozen study subjects remain exactly: `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutes were used.
+- The permitted `db/CODEX/` folder contains no query-result artifacts. Therefore, there is still no deployed-DB evidence for any position’s symbol, timestamps, P&L, entry/exit signals, wallet executions, or protection observations.
+- The required proof-query results `DBQ-FTS-001` through `DBQ-FTS-005` are not available in the permitted evidence location. I do not claim they ran or infer their results.
+- Current source identifies the expected forensic chain: `paper_position` → entry/exit `trade_signal` → `wallet_trade` and accepted `market_price_event` evidence. Current source is only a query-design aid; deployed schema/results remain authoritative.
+- No cross-review, code/configuration/DB changes, Git action, deployment, or external research was performed.
+
+**AGENT INFERENCE**
+
+- A causal finding about any failed trade would be premature. A negative `realized_pnl` establishes selection eligibility only; it does not establish a strategy defect, execution delay, protection failure, or accounting discrepancy.
+- The stated snapshot values contain a reproducibility discrepancy: `2026-10-18 15:00:04 UTC` converts arithmetically to `2026-10-18 18:00:04 KSA`, while the supplied snapshot KSA is `18:00:02`. The intended-window clock remains the supplied `18:00:00 KSA`. This two-second discrepancy should be retained as metadata, not silently normalized.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+### EVIDENCE
+
+- Permitted Codex DB-evidence directory: `agent-docs/runs/fts-WINDOW2-20261018-180002/db/CODEX/` — no files returned.
+- Current-project source indicates:
+  - `paper_position` stores identity, lifecycle, prices, P&L, reasons, and signal links.
+  - `wallet_trade` is signal-linked execution evidence, not a direct paper-position foreign-key proof.
+  - Intrabar/protection analysis requires canonical accepted price-event records; candle OHLC or a later signal cannot replace missing event evidence.
+
+### UNKNOWNS
+
+- Whether the frozen IDs exactly match the required descending failed-trade selection at the snapshot.
+- All six symbols, UTC/KSA entry and close times, prices, quantities, close reasons, and realized P&L.
+- Entry decision and quality evidence; signal freshness; risk/reward; data quality; BTC/HTF/liquidity/derivatives gates.
+- Whether each close has a matching execution record and accepted protection observation.
+- Whether any loss is valid strategy behavior, a stop-loss/profit-lock result, a signal exit, an execution issue, or unverifiable.
+- Historical runtime mode/version/configuration and Replay comparability.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Obtain the deployed schema and the six authoritative position rows while independently re-proving the frozen failed-trade selection. All statements are bounded, read-only, and confined to `crypto_ai`.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'position_management_event',
+      'signal_processing_work',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position
+LIMIT 1000;
+
+SELECT p.*
+FROM paper_position p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137)
+LIMIT 6;
+
+SELECT
+    id,
+    status,
+    closed_at,
+    realized_pnl
+FROM paper_position
+WHERE status = 'CLOSED'
+  AND closed_at IS NOT NULL
+  AND realized_pnl < 0
+ORDER BY closed_at DESC
+LIMIT 6;
+```
+### END_DB_REQUEST

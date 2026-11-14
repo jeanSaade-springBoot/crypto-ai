@@ -1,0 +1,1 @@
+SELECT id, signal_id, execution_key, side, price_usdt, decision_price_usdt, execution_price_observed_at, execution_reason, executed_at, created_at FROM crypto_ai.wallet_trade WHERE id IN (344,346,358,359,392,401,403,407,426,429,451,454) ORDER BY id;

@@ -1,0 +1,1 @@
+SELECT id, interval_code, candle_open_time, generated_at, created_at, decision, original_decision, final_entry_allowed, atr_immediate_entry_allowed, atr_recommended_position_percent, total_score FROM trade_signal WHERE symbol='EGLDUSDT' AND interval_code IN ('1m','5m') AND generated_at BETWEEN '2026-10-11 22:20:00' AND '2026-10-11 22:41:00' ORDER BY generated_at

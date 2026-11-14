@@ -1,0 +1,159 @@
+## FINDINGS — Iteration 4: Code / trade route
+
+- **PROJECT EVIDENCE:** The frozen scope remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutions were made. The permitted `db/CODEX` directory contains no database-result evidence.
+
+- **PROJECT EVIDENCE:** Current source opens a paper position only after signal work is claimed, post-lock freshness passes, execution intelligence approves, a fresh canonical execution price is resolved, and the paper wallet BUY succeeds. The wallet BUY, managed-position creation, ledger row, and `paper_position` creation run within the coordinator’s processing transaction. [SignalProcessingCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingCoordinator.java:37), [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:300), [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:79)
+
+- **PROJECT EVIDENCE:** The normal live-protection route is Binance 1m kline → durable `market_price_event` `PENDING` → protection transaction → durable `APPLIED` or `NON_CANONICAL` outcome. Protection runs before analysis dispatch. An `APPLIED` event proves the callback transaction committed, but can still be a no-op when there was no managed open position; it does not itself prove a position exit. [BinanceKlineService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BinanceKlineService.java:99), [KlineTransactionCoordinator.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/infrastructure/transaction/KlineTransactionCoordinator.java:34), [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:54)
+
+- **PROJECT EVIDENCE:** For a live managed position, exit precedence is: TP continuation/exit, absolute stop-loss, profit-lock hard floor, profit-lock breach policy, then confirmed signal exit; Near-TP partial-harvest logic is last and is non-terminal. The actual trigger must therefore be reconstructed from the position’s close reason plus wallet ledger, exit audit, applicable price event, and contemporaneous 1m/5m/1h signals. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:100), [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:20)
+
+- **PROJECT EVIDENCE:** A signal-path close records `paper_position.exit_signal_id`. A live-price close receives a context signal but does **not** set `exit_signal_id`; its source context is instead preserved in `production_exit_audit.source_signal_id`. Therefore, a null `exit_signal_id` must not be interpreted as “no exit evidence” or “manual close.” [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487), [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:391), [ProductionExitAuditService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:29)
+
+- **PROJECT EVIDENCE:** Mechanical live exits use a `wallet_trade` idempotency key based on managed-position ID and close reason, not a signal ID. Thus ledger matching by `paper_position.exit_signal_id` alone is incomplete. [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:475)
+
+- **AGENT INFERENCE:** The previous signal-only evidence request would miss the context and ledger linkage for a live-price exit. The next DB evidence bundle must include `production_exit_audit`, `wallet_managed_position`, mechanical `wallet_trade` keys, and `position_analysis`.
+
+- **AGENT INFERENCE:** Current working-tree code is not proof of the deployed version active for any frozen trade. A version/configuration or timestamped log correlation is still required before calling an observed historical outcome compliant or defective.
+
+**EXTERNAL RESEARCH:** None.
+
+## EVIDENCE
+
+- [CHARTER.md](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/fts-WINDOW1-20261016-124815/CHARTER.md)
+- [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:12)
+- [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:50)
+- [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:18)
+- [WalletManagedPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletManagedPosition.java:13)
+
+## UNKNOWNS
+
+For all six frozen trades, no durable evidence currently establishes symbol, UTC/KSA lifecycle, entry signal, close trigger, protection event, accepted observation, wallet exit, managed-position ID, fee/P&L reconciliation, or applicable deployed version.
+
+The snapshot drift also means the exact intended 10:00 KSA window cannot be reconstructed from the preserved clock. No raw database timestamp has been reported as KSA.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Map each frozen paper position to its actual entry, live/signal exit route, wallet execution, managed position, exit audit, price-event evidence, signal work, and position-analysis evidence. All returned timestamps are UTC; report KSA only as UTC +03:00.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+SHOW CREATE TABLE crypto_ai.wallet_trade;
+SHOW CREATE TABLE crypto_ai.wallet_managed_position;
+SHOW CREATE TABLE crypto_ai.production_exit_audit;
+SHOW CREATE TABLE crypto_ai.position_analysis;
+SHOW CREATE TABLE crypto_ai.market_price_event;
+SHOW CREATE TABLE crypto_ai.trade_signal;
+SHOW CREATE TABLE crypto_ai.signal_processing_work;
+
+SELECT
+    p.id, p.symbol, p.side, p.status, p.quantity,
+    p.entry_price, p.stop_loss, p.take_profit, p.exit_price, p.realized_pnl,
+    p.signal_id, p.exit_signal_id, p.close_reason, p.entry_reason, p.exit_reason,
+    p.opened_at, p.closed_at
+FROM crypto_ai.paper_position p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+
+SELECT
+    a.*
+FROM crypto_ai.production_exit_audit a
+WHERE a.paper_position_id IN (182, 172, 162, 158, 143, 137)
+ORDER BY a.paper_position_id, a.audited_at, a.id;
+
+SELECT
+    p.id AS paper_position_id,
+    m.*
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.wallet_managed_position m
+  ON m.entry_signal_id = p.signal_id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, m.opened_at, m.id;
+
+SELECT
+    p.id AS paper_position_id,
+    w.*
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.production_exit_audit a
+  ON a.paper_position_id = p.id
+JOIN crypto_ai.wallet_trade w
+  ON w.signal_id = p.signal_id
+  OR w.signal_id = p.exit_signal_id
+  OR (
+      a.wallet_position_id IS NOT NULL
+      AND w.execution_key LIKE CONCAT('POSITION:', a.wallet_position_id, ':%')
+  )
+  OR (
+      a.position_analysis_id IS NOT NULL
+      AND w.execution_key = CONCAT('POSITION_ANALYSIS:', a.position_analysis_id, ':STOP_LOSS')
+  )
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, w.executed_at, w.id;
+
+SELECT
+    refs.paper_position_id,
+    refs.signal_role,
+    s.id, s.symbol, s.interval_code, s.candle_open_time,
+    s.decision, s.original_decision, s.final_entry_allowed,
+    s.latest_price, s.stop_loss, s.take_profit,
+    s.total_score, s.confidence_score, s.risk_reward_ratio,
+    s.data_quality_valid, s.signal_mode, s.generated_at,
+    s.explanation, s.final_decision_explanation, s.decision_path
+FROM (
+    SELECT p.id AS paper_position_id, 'ENTRY' AS signal_role, p.signal_id AS signal_id
+    FROM crypto_ai.paper_position p
+    WHERE p.id IN (182, 172, 162, 158, 143, 137)
+
+    UNION ALL
+
+    SELECT p.id, 'PAPER_EXIT_SIGNAL', p.exit_signal_id
+    FROM crypto_ai.paper_position p
+    WHERE p.id IN (182, 172, 162, 158, 143, 137)
+      AND p.exit_signal_id IS NOT NULL
+
+    UNION ALL
+
+    SELECT a.paper_position_id, 'LIVE_EXIT_CONTEXT', a.source_signal_id
+    FROM crypto_ai.production_exit_audit a
+    WHERE a.paper_position_id IN (182, 172, 162, 158, 143, 137)
+      AND a.source_signal_id IS NOT NULL
+) refs
+JOIN crypto_ai.trade_signal s ON s.id = refs.signal_id
+ORDER BY refs.paper_position_id, refs.signal_role, s.id;
+
+SELECT
+    p.id AS paper_position_id,
+    pa.*
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.production_exit_audit a
+  ON a.paper_position_id = p.id
+JOIN crypto_ai.position_analysis pa
+  ON pa.wallet_position_id = a.wallet_position_id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, pa.analyzed_at, pa.id;
+
+SELECT
+    p.id AS paper_position_id,
+    w.*
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.signal_processing_work w
+  ON w.signal_id = p.signal_id
+  OR w.signal_id = p.exit_signal_id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, w.signal_id, w.id;
+
+SELECT
+    p.id AS paper_position_id,
+    e.id, e.symbol, e.observed_at, e.price, e.source,
+    e.delivery_status, e.ordering_slot, e.outcome_reason, e.created_at
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.market_price_event e
+  ON e.symbol = p.symbol
+ AND e.observed_at >= DATE_SUB(p.closed_at, INTERVAL 15 MINUTE)
+ AND e.observed_at <= DATE_ADD(p.closed_at, INTERVAL 2 MINUTE)
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, e.observed_at, e.id;
+```
+### END_DB_REQUEST
+
+No implementation occurred; no documentation update is required.

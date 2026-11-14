@@ -1,0 +1,52 @@
+## FINDINGS
+
+- **[PROJECT EVIDENCE]** `Perform` provides no review target, decision, or acceptance criteria. An approval/rejection cannot be meaningfully tied to it.
+
+- **[PROJECT EVIDENCE]** A REST import can finalize a live `closed=0` candle as `BACKFILL` without a runtime close token. If the final WebSocket kline arrives afterward, it is treated as `DUPLICATE_CLOSE`, publishes no close event, the OFF-mode detector excludes it, and scheduled recovery bypasses OFF mode. This leaves no analysis or durable analysis outcome for that identity.
+
+- **[PROJECT EVIDENCE]** Default database Replay can include an unclosed candle. Its snapshot query only uses closed candles, so Replay can generate a later duplicate of the preceding closed candle’s signal identity. Production’s close-event worker rejects this identity mismatch and checks for an existing signal.
+
+- **[AGENT INFERENCE]** That Replay defect is conditional on the requested range including a row still open at Replay load time. It is not look-ahead, but can create late duplicate context and potentially a shadow decision Production could not make.
+
+- **[PROJECT EVIDENCE]** Current FIX-154 behavior materially conflicts with `AGENTS.md`: a trusted 1h `STRONG_SELL` at confidence ≥70 vetoes even if 5m is non-bearish; the required bearish, quality-valid 5m hard-confirmation path is absent. Tests explicitly codify this behavior.
+
+- **[PROJECT EVIDENCE]** FIX-154 freshness is evaluated by callers using `generatedAt`, then the assessment service is always called with both freshness flags set to `true`. This does not meet the project instruction requiring persisted candle-close-time freshness.
+
+- **[PROJECT EVIDENCE]** Documentation is internally contradictory. The architecture file says FIX-154 is pending, then later describes it as implemented; it says reconciliation must remain disabled, while the current configuration enables it. Local logs show live FIX-153 signal processing, but do not establish Production deployment or the active process configuration.
+
+- **[PROJECT EVIDENCE]** Claude is correct that V107 currently adds production `data_quality_valid` and the audit table, while V109 forward-adds Replay columns and `hard_confirmation_present`. The claim that a particular database will fail remains unproven without read-only Flyway history.
+
+- **[PROJECT EVIDENCE]** The coordinator’s cross-examination text permanently labels peer material “Round-1,” even in later rounds. Its sequential execution creates an independence risk, but there is no evidence that Claude actually read Codex’s same-round output outside its supplied prompt.
+
+## EVIDENCE
+
+- REST/live-close race: [MarketDataService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/MarketDataService.java:31), [CandleRepository.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:173), [BinanceKlineService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BinanceKlineService.java:110), [LocalClosedCandleDetector.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/local/LocalClosedCandleDetector.java:50), [ScheduledAnalysisService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/ScheduledAnalysisService.java:75).
+
+- Replay finality/identity mismatch: [RegressionTestWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:129), [RegressionTestWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:550), [TechnicalIndicatorService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/service/TechnicalIndicatorService.java:186), [TechnicalIndicatorService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/service/TechnicalIndicatorService.java:318), [CandleClosedAnalysisWorker.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/indicator/event/CandleClosedAnalysisWorker.java:130).
+
+- FIX-154 divergence/freshness: [AGENTS.md](/C:/workspace/crypto-ai-trader-mysql/AGENTS.md:202), [HigherTimeframeBuyAssessmentService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/HigherTimeframeBuyAssessmentService.java:22), [HigherTimeframeBuyAssessmentServiceTest.java](/C:/workspace/crypto-ai-trader-mysql/src/test/java/com/crypto/service/HigherTimeframeBuyAssessmentServiceTest.java:12), [TradeExecutionValidationService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:81), [OpportunityConsolidationService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/OpportunityConsolidationService.java:55).
+
+- Migration facts: [V107](/C:/workspace/crypto-ai-trader-mysql/src/main/resources/db/migration/V107__fix_154_trusted_higher_timeframe_buy.sql:3), [V109](/C:/workspace/crypto-ai-trader-mysql/src/main/resources/db/migration/V109__fix_154_forward_replay_and_audit_columns.sql:1).
+
+- Coordinator labels/order: [coordinator.ps1](/C:/workspace/crypto-ai-trader-mysql/agent-docs/coordinator.ps1:155), [coordinator.ps1](/C:/workspace/crypto-ai-trader-mysql/agent-docs/coordinator.ps1:452).
+
+## OBJECTIONS
+
+- **[PROJECT EVIDENCE]** No immutable review baseline exists: the worktree has extensive modified and untracked source, migration, test, configuration, log, and documentation files.
+
+- **[PROJECT EVIDENCE]** No parity, strategy-performance, or deployment-readiness claim is supportable while the Replay finality defect and import/live-close race remain unresolved.
+
+- **[AGENT INFERENCE]** The confidence-70 threshold is a policy cutoff, not performance validation. The cited near-even historical count does not establish out-of-sample returns, false-veto rate, transaction costs, slippage, or robustness.
+
+- **[PROJECT EVIDENCE]** The `PRODUCTION_PARITY` label is potentially misleading when FIX-122 selects the old revision, but the peer overstates this as conclusively false: the code defines that label as replay logic mode and persists the FIX-122 revision separately.
+
+## UNKNOWNS
+
+- **[PROJECT EVIDENCE]** The intended subject of `Perform`.
+- **[PROJECT EVIDENCE]** Whether any local or Production database applied V107, and its recorded checksum.
+- **[PROJECT EVIDENCE]** Whether the local log came from Production, which effective configuration it used, or whether the current source is deployed.
+- **[AGENT INFERENCE]** Frequency and financial impact of the Replay and import races require deterministic regression tests and bounded non-Production evidence.
+
+## VERDICT
+
+VERDICT: INSUFFICIENT_EVIDENCE

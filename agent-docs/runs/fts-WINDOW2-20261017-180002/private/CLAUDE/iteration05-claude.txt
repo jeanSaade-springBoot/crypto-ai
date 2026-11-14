@@ -1,0 +1,273 @@
+# FTS WINDOW2: Claude, Iteration 5 of 8 (entry quality, self-review only)
+
+**Iteration headline:**
+- **Main finding:** in five of the six entries, the stop was forced to the 0.5% minimum while the target stayed at 3× ATR. That gave targets of +0.17% to +0.37% and a planned risk/reward (R:R) of 0.33–0.74.
+- **No gate catches it.** Nothing in the code blocks an entry for low R:R or for a target smaller than fees. R:R below 1 only costs a flat −30 in the Entry Quality (EQ) score, and every entry stayed at or above the 50 cutoff.
+- **Per trade, judged only on what was known at entry:**
+  - **137 and 158:** valid but low-quality entries.
+  - **143:** a designed override of a chase; the entry was not what lost the money.
+  - **162:** an entry the system itself rated LATE_ENTRY, admitted through a gap in a guard's scope.
+  - **172 and 182:** low-quality entries that also carry the confirmed label-only defect from F4-4.
+
+I changed nothing: no code, config, DB writes, git or deploy. Plan mode is on, and this session has no Write or ExitPlanMode tool, so this message is the iteration output. I did not open `private/CODEX/`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or Codex memory.
+
+**Inputs this iteration:**
+- My I1–I4 outputs, and results I4-001, I4-002, I4-004, I1-003/004/005, I2-002 and I3-003.
+- Code: `ExecutionIntelligenceService` (EQ model, guards, wake-up), `AtrRiskService`, `PaperTradingService:300-394`, `WalletAutoExecutionService:66-139`, `application.yml:137-150`.
+- One web search.
+- **Still missing:** results for I3-005, I3-006, I3-007 and I4-003.
+
+**Labels:** **[PE]** project evidence · **[ER]** external research · **[AI]** agent inference. Times are **KSA (UTC)**. Displayed DB values are KSA (F2-0); UTC is the displayed value minus 3 h.
+
+---
+
+## FINDINGS
+
+### F5-1 [PE code + DB]: the 0.5% stop floor plus a 3× ATR target makes R:R collapse when ATR is low
+
+**Code** (`AtrRiskService.java:34-45`, `application.yml:137-143`):
+- Stop = max(2×ATR, 0.50% of price).
+- Target = 3×ATR. Nothing scales the target up when the stop is floored.
+- So once ATR is below 0.25% of price, R:R = 6 × ATR%, and it falls below 1 whenever ATR is under 0.167% of price.
+
+**Per trade** (the geometry is recomputed at the fill price):
+
+| ID | Implied 1m ATR % | Stop distance | Target distance | R:R (signal / at fill) | Stop floored? |
+|---|---|---|---|---|---|
+| 137 | 0.107% | 0.500% | 0.322% | 0.64 / 0.64 | yes |
+| 143 | 0.27% | 0.54% (0.565% at fill) | 0.81% (0.786% at fill) | 1.50 / 1.39 | no |
+| 158 | 0.055% | 0.50% (0.493% at fill) | 0.17% | 0.33 / 0.35 | yes |
+| 162 | 0.073% | 0.500% | 0.219% | 0.44 / 0.44 | yes |
+| 172 | 0.124% (**0.68 of one price tick**) | 0.500% | 0.372% | 0.74 / 0.74 | yes |
+| 182 | 0.080% (about 1.5 ticks) | 0.500% | 0.241% | 0.48 / 0.48 | yes |
+
+- The volatility level is LOW for all six (ATR under 0.50% of price). That `volatilityLevel` field is display-only: its only reads are in `DashboardApiController:1205,1313`, so it never gates a trade.
+- The 5m authorities were floored too. 159285 has R:R 1.37 and 165415 has R:R 0.80.
+
+### F5-2 [PE code]: R:R and fees never block an entry
+
+- **No hard R:R gate exists.** The signal's `risk_reward_ratio` is only read for display (`DashboardApiController`, `TradeInspectorService`).
+- Inside Execution Intelligence (EI), R:R is used in only two places:
+  - The EQ score: −30 when R:R < 1, −15 when R:R < 1.25 (`ExecutionIntelligenceService.java:991-993`).
+  - The scout route, which needs R:R ≥ 1.25 (`:1055`).
+- **EQ is a size cap, not a veto,** unless the score is below 50 (`:1171-1183`, `CHASE_ENTRY_CUTOFF=50` at `:229`). An entry with R:R 0.33 can score up to 70, which is GOOD_ENTRY.
+- **Fees are not modelled.** Searching `src/main` for any fee-rate configuration finds nothing, and `fee_usdt=0` on all 13 fills (I1-004).
+- **[ER]** Binance spot charges regular users 0.10% maker and 0.10% taker (0.075% when paid in BNB). That is about 0.20% for a round trip. The sources are third-party guides, not Binance's own fee page.
+
+**[AI] Break-even win rate per trade:**
+
+| ID | Before fees | With 0.2% round-trip fees |
+|---|---|---|
+| 137 | 60.8% | 85.2% |
+| 143 | 41.8% | 56.6% |
+| 158 | 74.2% | **impossible** (the target nets −0.03% after fees) |
+| 162 | 69.5% | 97.4% |
+| 172 | 57.3% | 80.3% |
+| 182 | 67.5% | 94.5% |
+
+- Four of the six (158, 162, 172, 182) would have had a sharply negative expected value in live trading, whatever the signal quality. 137 also needs an 85% win rate after fees.
+
+### F5-3 [PE code + DB, arithmetic AI]: how each persisted EQ score was built
+
+The persisted `entry_quality_score` is computed at the fill price using the **1m ATR** (`PaperTradingService.java:377-385` → `assessEntryQualityAtPrice`, `:857-858`). The penalties are fixed constants (`:976-1017`).
+
+| ID | Persisted EQ | Breakdown | Certainty |
+|---|---|---|---|
+| 137 | 58 | 100 − 30 (R:R) − 12 (recent rejection zone) | **Unique.** No other penalty set sums to 42 once the forced −30 is taken. This fits the 20:53/20:54 highs of 4.004 and 4.003 just above the 3.999 entry (I2-002). |
+| 143 | 70 | 100 − 10 (move above 1.5%) − 20 (4–6 ATR above reference) | Fits a reference price between 3.9676 and 3.9734 (I5-002 checks this). |
+| 158 | 50 | 100 − 30 − 10 (opportunity 37621 is 53 min old) − 10 (2.5–4 ATR), **or** −12 rejection floored at 50 | **Ambiguous.** |
+| 162 | 50 | 100 − 30 − 20 (more than 4 ATR above about 0.08679) | Most likely. |
+| 172 | 60 | 100 − 30 − 10 (2.5–4 ATR) | **Unique.** It only works if the reference was 5.47e-6: a 2-tick move counted as about 3 ATR, because ATR is smaller than one tick (F5-6). |
+| 182 | 50 | 100 − 30 − 20 (about 4.6 ATR above 0.1877) | Most likely. |
+
+**[AI]** The R:R penalty was the largest deduction in five trades. Three entries (158, 162, 182) sat exactly on the cutoff of 50.
+
+### F5-4 [PE code + DB]: the EQ that admits an entry and the EQ that gets persisted use different ATRs
+
+**The two calculations:**
+- **Admission:** the SETUP_TIMEFRAME_ATR route scores EQ with the 5m ATR (`:631-635`) and the wake-up route does the same (`:439`). The code comment says this avoids "a tiny 1m ATR" that would falsely flag a chase.
+- **Fill:** the execution-time recheck (`:1167`) and the persisted score (`PaperTradingService:378`) use the 1m ATR.
+
+**143 inverts the comment's assumption:**
+- The 1m ATR was 0.0109. It was inflated by the 22:39 candle, whose range ran from 3.990 to 4.053.
+- The 5m ATR from 159285 was 0.00907, which is *smaller*.
+- That explains both numbers: the message's EQ of 60 used the 5m ATR [PRIOR-RUN PE excerpt], and the persisted 70 used the 1m ATR. Both are consistent with the reference price in F5-3.
+
+**Effect:** no decision changed for the six, since both scores were above 50 and the size cap was 25% either way. But the persisted EQ is **not the value that admitted the trade**. That is a forensic and Replay-diagnostic gap.
+
+### F5-5 [PE code + DB]: 162 was admitted as BALANCED_EARLY at a price the system rated LATE_ENTRY
+
+- **The entry:** EI route ACCUMULATED_EVIDENCE, FIX-154 result BALANCED_EARLY (audit 2199: 5m WATCH 122 s old, 1h WATCH 122 s old), EQ 50 LATE_ENTRY (wallet trade 403).
+- **FIX-041 doesn't apply here:** it blocks BALANCED_EARLY combined with LATE_ENTRY, but only on the IMMEDIATE_VALIDATION route (`:672-684`). Its comment explicitly leaves accumulated evidence outside that check.
+- **FIX-119 doesn't apply either:** its late-entry deferral (`:1275-1280`) is skipped when there is even one BUY among the observations. 162 had 1 BUY and 9 WATCH.
+- **Price action:** the entry came at the close of the 04:01 breakout candle (high 0.08709, close 0.08705, 392 trades, the busiest candle in the window). That was +0.30% in 3 minutes from 0.08679 (I2-002). The 1m regime was BREAKOUT, with REDUCED_POSITION 60.
+- **[AI] Classification:** a policy-scope gap. The early-entry profile admitted a late price through a route that both guards leave out on purpose. It is not a code defect, because the code does what its comments say.
+
+### F5-6 [PE + AI]: price-tick rounding distorts EQ as well as R:R (extends F2-9)
+
+- **172 (SHIB):** the 1m ATR of 0.0068e-6 is smaller than the 1e-8 tick. So a 2-tick move produces about 3 ATR of "extension" and a −10 penalty. The target needs +3 ticks and the stop −3 ticks, so every result is about ±0.55%.
+- **Market at entry:** price was pinned at 5.48–5.49 with 1–28 trades a minute. It bought the upper tick (I2-002).
+- **[AI]** For coins whose ATR is smaller than one tick, the ATR-based EQ and risk geometry are meaningless. No code checks for this.
+
+### F5-7 [PE DB]: how each entry was positioned, using only pre-entry candles
+
+| ID | What preceded the entry (1m candles, I2-002) | Where it bought | Higher-timeframe evidence available |
+|---|---|---|---|
+| 137 | Base 3.992–3.998; 20:53 high 4.004; 20:54 high 4.003, close 3.999 | Just under a twice-rejected high | 5m NEUTRAL (score 48); 1h WATCH, 55 min old, regime WEAK_DOWNTREND |
+| 143 | 22:37 close 3.990 → 22:38 close 4.021 → 22:39 close 4.032 (272 trades, range 1.6%); re-entry 22 s after a profit-lock exit at 3.996 | After a +1.1% two-candle burst. The 1m plan said WAIT_FOR_RETRACEMENT at 0% | Authority was the 22:35 5m BUY at 3.986, from before the burst |
+| 158 | Range 1.4098–1.4116 over 6 min | Upper-middle of the range, at 1.4108 | 5m BUY 76 (R:R 0.80); 1h NEUTRAL in RANGE |
+| 162 | +0.30% in 3 min | At the breakout candle's close | 5m and 1h both WATCH |
+| 172 | Pinned at 5.48–5.49 | Upper tick | **The 5m BUY's own entry was blocked by RANGE_ENTRY_LOCATION** (confidence 49, BTC CONFLICT); 1m confluence CONFLICT |
+| 182 | 0.1877 → 0.1884 over 09:51–09:56, very thin (0 trades at 09:51 and 09:53, 2 at 09:54) | **The highest print of the move**; 1m regime WEAK_DOWNTREND | 5m was STRONG_SELL, neutralised to NEUTRAL; confluence CONFLICT |
+
+**[AI] Outcome, assessed separately from the entry:**
+- 143 then rose +1.69%, so its entry worked and the loss came from the exit (F2-8, F4-6).
+- The other five barely moved in their favour: 0 to +0.15% (F2-10).
+- 182 never ticked above its entry.
+
+### F5-8 [PE code]: how size was set (resolves the 15% figures from F2-13 and F4-4)
+
+- Effective size = round(ATR-plan % × EI %). An ATR-plan value of 0% is treated as 100% (`PaperTradingService.java:328-333`).
+- **162 and 182:** 60% × 25% = 15%, which matches the fills.
+- **143:** the 1m plan said WAIT_FOR_RETRACEMENT at **0%**, but that became 100% × 25% = 25%.
+- **[AI]** A 0% ATR recommendation means "do not enter now", yet the code treats it as "unset". In 143 this sits inside a deliberate override route, so I record it as a semantic risk, not a confirmed defect.
+
+### F5-9 [PE DB]: runtime FIX-154 audit rows confirm F4-4, and show one route has no audit (I4-001)
+
+- **182:** audit 2425 records `five_minute_raw_decision=NEUTRAL` for 176655, but `trade_signal.original_decision=STRONG_SELL`. The audit's "raw" field holds the label, not the original decision, so the audit cannot show the neutralisation. That confirms label-only authority at runtime.
+- **172:** audit 2284 shows 5m 171559 as BUY, 61 s old, giving BALANCED_STRONG. The 5m's `final_entry_allowed=0` is not part of the audit.
+- **137:** audit 1938 confirms EI read 156721, which is genuinely NEUTRAL, 1 s old. This matches F4-2.
+- **143:** there is **no audit row for 159408**. The SETUP_TIMEFRAME_ATR route writes no FIX-154 buy-evaluation evidence, so it is a gap in audit coverage.
+- **[AI]** This partly resolves U4-1: the runtime results match the working-tree code paths for 137, 158, 162, 172 and 182.
+
+### F5-10 [PE DB]: system-wide exposure to label-only 5m authority (I4-004)
+
+- 13 positions had a blocked or neutralised 5m authority. Six lost, for a net of about −0.56 USDT.
+- That includes **181 PEPE (STOPPED, −0.584)**, opened 09:56:07, one minute before 182, on a neutralised 5m SELL.
+- **[AI]** The sample is too small to measure an effect. It does show the same pattern in the excluded STOPPED class, with a larger loss.
+
+### F5-11 [PE + AI]: ingest-lag spikes (partly resolves U4-2)
+
+- **Not at any entry:** the largest stalls were 15.2 s at 22:18, 14.8 s at 22:32 and 7.3 s at 09:55, across 16–19 symbols each. None falls on one of the six entry minutes.
+- **At the 182 exit:** at 10:05:18, DOGE, ENA and SOL events observed at 18.58–18.80 were written at 20.53–20.55. That is just after the 182 exit transaction finished (paper closed 10:05:20.486).
+- **[AI]** This is strong evidence that the exit transaction blocked the single WebSocket thread for about 2 s for other symbols.
+- **[AI]** Lags over 15 s are at the 15 s price-age limit. Whether those events were rejected is outside entry scope (U5-6).
+
+---
+
+## Entry-quality verdict per trade [AI, using only information available at entry]
+
+| ID | Verdict | Followed the rules? | Defect involved |
+|---|---|---|---|
+| 137 | Low quality: R:R 0.64, under a rejection zone, HTF not supportive | Yes (FIX-11G at 25%) | None. A valid losing trade. |
+| 143 | A chase by its own 1m plan, admitted by the designed 5m override | Yes | Entry is not the loss cause. Boundary race and parity defect (F4-2/F4-3). |
+| 158 | Structurally negative expected value: R:R 0.35, target below fees | Yes | Boundary race and parity defect (F4-2/F4-3). The geometry is a design weakness. |
+| 162 | LATE_ENTRY admitted under BALANCED_EARLY | Yes, through a route outside both guards' scope | Policy-scope gap (F5-5) |
+| 172 | No edge: price pinned between two ticks; the 5m flagged a bad location | **No.** The authority relied on a blocked 5m. | Label-only 5m authority (F4-4) |
+| 182 | Bought the top of a thin drift against a raw STRONG_SELL | **No.** A neutralised 5m bypassed the bearish veto. | Label-only 5m authority (F4-4) |
+
+**Shared across all six:** the risk geometry is unsuited to low-ATR markets (F5-1/F5-2), and paper P&L leaves out fees.
+
+---
+
+## SELF-REVIEW OF EARLIER CLAIMS
+
+| Earlier claim | Status |
+|---|---|
+| F4-4 / F2-13: 182's size was "capped to 15%" | **Explained:** 60% ATR plan × 25% (F5-8). |
+| F2-7: 143 EQ 70 persisted vs. 60 in the message | **Explained:** the two used different ATRs (F5-4). |
+| F11 / F2-14: fees not modelled | **Confirmed:** no fee configuration exists, and the fee is 0 on every fill (F5-2). |
+| F2-9: tick rounding distorts R:R | **Extended:** it also distorts EQ (F5-6). |
+| F4-4: label-only authority | **Confirmed at runtime** by the audit rows (F5-9). |
+| U4-1 | **Partly resolved** (F5-9). |
+| U4-2 | **Partly resolved** (F5-11). |
+
+---
+
+## UNKNOWNS
+
+| ID | Unknown | Resolution |
+|---|---|---|
+| U5-1 | The reference price each EQ score used (rolling 30-min low or opportunity anchor), which would make F5-3 exact | I5-002 |
+| U5-2 | The full 143 message and explanation text: is the EQ 60 there? | I5-003 |
+| U5-3 | Whether R:R < 1 and target-below-fee entries lose system-wide, and their P&L after fees | I5-004 |
+| U5-4 | The 1m and 5m ATR values and flags as stored, to replace the implied ATRs in F5-1 | I5-001 |
+| U5-5 | The FIX-11G post-guard and FIX-119 log lines for the six. They are only in `.gz` logs. | Coordinator extraction |
+| U5-6 | Whether price events with more than 15 s ingest lag (22:18, 22:32) were rejected | Out of scope; noted |
+| U3-1/4/5, U4-3, U4-5, U2-9 | Still open. I3-005/006/007 and I4-003 have no results. Replay has not been run. | Reissue |
+
+---
+
+## DB REQUESTS
+
+Time literals are KSA (the session is +03:00). All requests are read-only and bounded.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: Stored ATR and risk-plan fields for the six entry signals and their 5m authorities (U5-4, F5-1, F5-4, F5-6). The schema check runs first, so that missing columns are visible.
+SQL:
+SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME='trade_signal' AND COLUMN_NAME IN ('atr_at_signal','atr_percent','volatility_level','candle_range_atr_multiple','atr_overextended','atr_immediate_entry_allowed','atr_retracement_entry_price','liquidity_status','entry_authority','entry_authority_max_position_percent','atr_explanation') ORDER BY COLUMN_NAME;
+SELECT id, symbol, interval_code, decision, latest_price, stop_loss, take_profit, risk_reward_ratio, atr_at_signal, atr_percent, volatility_level, candle_range_atr_multiple, atr_overextended, atr_entry_type, atr_recommended_position_percent, atr_immediate_entry_allowed, atr_retracement_entry_price, market_regime, LEFT(atr_explanation, 300) AS atr_explanation FROM crypto_ai.trade_signal WHERE id IN (156723,159408,159285,165412,165415,167668,167616,171589,171559,176710,176655) ORDER BY symbol, generated_at;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: Rebuild the EQ reference and rejection-zone inputs: the 1m LIVE signal prices in the 30 min before each entry signal, plus the anchor and best prices of the active opportunities (U5-1, F5-3).
+SQL:
+SELECT e.ref_id, s.id, s.symbol, s.decision, s.generated_at, s.latest_price FROM (SELECT 156723 AS ref_id, 'EGLDUSDT' AS sym, '2026-10-11 20:55:01.575650' AS g UNION ALL SELECT 159408,'EGLDUSDT','2026-10-11 22:40:01.633945' UNION ALL SELECT 165412,'XRPUSDT','2026-10-12 02:35:01.469482' UNION ALL SELECT 167668,'DOGEUSDT','2026-10-12 04:02:02.813094' UNION ALL SELECT 171589,'SHIBUSDT','2026-10-12 06:36:01.506950' UNION ALL SELECT 176710,'ACEUSDT','2026-10-12 09:57:01.850059') e JOIN crypto_ai.trade_signal s ON s.symbol=e.sym AND s.interval_code='1m' AND s.signal_mode='LIVE' AND s.generated_at BETWEEN DATE_SUB(e.g, INTERVAL 30 MINUTE) AND e.g ORDER BY e.ref_id, s.generated_at LIMIT 220;
+SELECT id, symbol, status, started_at, anchor_entry_price, best_entry_price, latest_signal_id, executed_at FROM crypto_ai.execution_opportunity WHERE (symbol='EGLDUSDT' AND started_at BETWEEN '2026-10-11 18:50:00' AND '2026-10-11 22:41:00') OR (symbol='XRPUSDT' AND started_at BETWEEN '2026-10-12 00:30:00' AND '2026-10-12 02:36:00') OR (symbol='DOGEUSDT' AND started_at BETWEEN '2026-10-12 02:00:00' AND '2026-10-12 04:03:00') OR (symbol='SHIBUSDT' AND started_at BETWEEN '2026-10-12 04:30:00' AND '2026-10-12 06:37:00') OR (symbol='ACEUSDT' AND started_at BETWEEN '2026-10-12 08:00:00' AND '2026-10-12 09:58:00') ORDER BY symbol, started_at LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: The full text of the 143 and 162 entry explanations, to see which EQ value each message states (U5-2, F5-4).
+SQL:
+SELECT id, LENGTH(execution_message) AS len, SUBSTRING(execution_message, 600, 900) AS message_tail FROM crypto_ai.wallet_trade WHERE id IN (358, 403);
+SELECT id, LENGTH(decision_explanation) AS len, SUBSTRING(decision_explanation, 380, 900) AS explanation_tail FROM crypto_ai.execution_opportunity WHERE id = 36524;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: System-wide test of F5-1/F5-2. Outcome by planned R:R bucket and by EQ bucket, with P&L after an assumed 0.10%-per-side fee, across all closed positions (CLOSED and STOPPED).
+SQL:
+SELECT CASE WHEN s.risk_reward_ratio < 0.5 THEN 'a_lt0.5' WHEN s.risk_reward_ratio < 1 THEN 'b_0.5-1' WHEN s.risk_reward_ratio < 1.5 THEN 'c_1-1.5' ELSE 'd_ge1.5' END AS rr_bucket, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losers, SUM(p.status='STOPPED') AS stopped, ROUND(SUM(p.realized_pnl),4) AS pnl_gross, ROUND(SUM(p.realized_pnl - 0.001*p.quantity*(p.entry_price + p.exit_price)),4) AS pnl_after_fee, ROUND(AVG((s.take_profit - s.latest_price)/s.latest_price*100),3) AS avg_tp_pct, ROUND(AVG((s.latest_price - s.stop_loss)/s.latest_price*100),3) AS avg_sl_pct, SUM((s.take_profit - s.latest_price)/s.latest_price*100 < 0.2) AS tp_below_fee_n FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id WHERE p.closed_at IS NOT NULL GROUP BY rr_bucket ORDER BY rr_bucket;
+SELECT CASE WHEN w.entry_quality_score < 55 THEN 'a_50-54' WHEN w.entry_quality_score < 70 THEN 'b_55-69' WHEN w.entry_quality_score < 85 THEN 'c_70-84' ELSE 'd_85+' END AS eq_bucket, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losers, SUM(p.status='STOPPED') AS stopped, ROUND(SUM(p.realized_pnl),4) AS pnl_gross, ROUND(SUM(p.realized_pnl - 0.001*p.quantity*(p.entry_price + p.exit_price)),4) AS pnl_after_fee FROM crypto_ai.paper_position p JOIN crypto_ai.wallet_managed_position w ON w.entry_signal_id = p.signal_id WHERE p.closed_at IS NOT NULL GROUP BY eq_bucket ORDER BY eq_bucket;
+SELECT p.id, p.realized_pnl, ROUND(p.realized_pnl - 0.001*p.quantity*(p.entry_price + p.exit_price),6) AS pnl_after_fee FROM crypto_ai.paper_position p WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id;
+### END_DB_REQUEST
+
+**Reissue requests:** DBQ-CLAUDE-I3-005, I3-006, I3-007 and I4-003 have no result files. Please run them unchanged, with the SQL as in the Iteration 3 and Iteration 4 outputs.
+
+---
+
+## STATUS AFTER ITERATION 5
+
+**Confirmed defects (unchanged):**
+- The boundary lookup race and Replay-parity divergence (F4-2/F4-3), which shaped 143 and 158.
+- Label-only 5m authority (F4-4), now confirmed at runtime (F5-9), which shaped 172 and 182.
+
+**New confirmed design weaknesses [PE code], not code defects:**
+1. **Low-ATR risk geometry.** The 0.5% stop floor and the 3× ATR target produce R:R below 1 and targets below fees. Five of six trades.
+2. **No R:R or fee gate.** R:R only reduces EQ by a flat −30.
+3. **EQ scope gap.** BALANCED_EARLY is admitted at LATE_ENTRY through ACCUMULATED_EVIDENCE (162).
+4. **ATR-based scoring breaks for coins whose ATR is below one tick** (172).
+
+**New audit gaps:**
+- The persisted EQ is not the EQ that admitted the trade (F5-4).
+- SETUP_TIMEFRAME_ATR writes no FIX-154 audit row (F5-9).
+- The audit's "raw" 5m decision does not capture `original_decision` (F5-9).
+- An ATR-plan 0% is treated as 100% when sizing (F5-8, a semantic risk).
+
+**Candidate corrections for the Iteration 8 report (not implemented, no authorisation implied):**
+- A fee-aware minimum target and minimum R:R gate, or a target that scales up when the stop is floored.
+- Using the same ATR for admission and for the persisted EQ.
+- Widening FIX-041's scope to cover ACCUMULATED_EVIDENCE.
+- Tick-aware ATR handling.
+- A FIX-154 audit row for every BUY route.
+- Regression checks: Replay of the six trades, plus the system-wide R:R bucket results from I5-004.
+
+**Next, Iteration 6:** system-wide checks of the defects and weaknesses, using I5-004 and I4-003.
+
+Sources:
+- [Crypto Trading: Binance Fees Explained (Unger Academy)](https://ungeracademy.com/?p=6767)
+- [Binance Exchange: How it Works, Fees, Trading, Risks (Analytics Insight)](https://www.analyticsinsight.net/cryptocurrency-analytics-insight/binance-exchange-how-it-works-fees-trading-risks)
+- [Binance.US zero-fee trading (a different exchange; not used for the rate)](https://blog.binance.us/zero-fee-trading/)

@@ -1,0 +1,167 @@
+# FTS WINDOW1, Claude, Iteration 1: trade reconstruction (self-review only)
+
+Scope check: I made no code, config, DB, git or deploy changes. I did not read `private/CODEX/`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or any Codex memory. `db/CLAUDE/` does not exist yet, so I have no Claude query results. I used only the coordinator's proof results, DBQ-FTS-001 to 005.
+
+Note: plan mode is active, but no plan-file write tool or exit-plan-mode tool is available in this session. This report is the iteration output.
+
+---
+
+## EVIDENCE
+
+### PROJECT EVIDENCE: frozen set (DBQ-FTS-005), with UTC and KSA times
+
+| # | id | Symbol | Opened UTC → KSA | Closed UTC → KSA | Held | close_reason | realized_pnl | signal_id |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 182 | ACEUSDT | 2026-10-12 09:57:06.476 → 12:57:06 | 10:05:20.486 → 13:05:20 | 8m14s | SELL_CONFIRMED | −0.031847 | 176710 |
+| 2 | 172 | SHIBUSDT | 2026-10-12 06:36:05.087 → 09:36:05 | 07:15:45.484 → 10:15:45 | 39m40s | HTF_SELL_CONFIRMED | −0.045537 | 171589 |
+| 3 | 162 | DOGEUSDT | 2026-10-12 04:02:06.415 → 07:02:06 | 04:26:04.116 → 07:26:04 | 23m58s | STRONG_SELL | −0.051694 | 167668 |
+| 4 | 158 | XRPUSDT | 2026-10-12 02:35:04.811 → 05:35:04 | 03:30:06.638 → 06:30:06 | 55m02s | SELL_CONFIRMED | −0.031897 | 165412 |
+| 5 | 143 | EGLDUSDT | 2026-10-11 22:40:04.858 → **2026-10-12** 01:40:04 | 22:43:36.229 → 2026-10-12 01:43:36 | 3m32s | PROFIT_LOCK_HARD_EXIT | −0.037193 | 159408 |
+| 6 | 137 | EGLDUSDT | 2026-10-11 20:55:04.510 → 23:55:04 | 21:00:12.122 → **2026-10-12** 00:00:12 | 5m08s | SELL_CONFIRMED | −0.075019 | 156723 |
+
+Other proof results:
+- **DBQ-FTS-001:** `paper_position` has no fee, wallet-link or managed-position-link column. Linkage is only through `signal_id` and `exit_signal_id`.
+- **DBQ-FTS-002:** status counts are CLOSED 118 (26 losers) and STOPPED 75 (75 losers).
+- **DBQ-FTS-003:** `wallet_trade` has 445 EXECUTED rows, 101 of them losers.
+- **DBQ-FTS-004:** `wallet_position_test` exists and is excluded as Replay.
+
+### PROJECT EVIDENCE: code paths that write each close_reason
+
+- **`SELL_CONFIRMED` and `HTF_SELL_CONFIRMED`** come only from the live tick path in production. `LivePositionProtectionService.java:235` calls `PositionExitPolicy.evaluateNormalExit` at `PositionExitPolicy.java:20-50`. The paper position closes at the **tick price** (`closePaper(symbol, price, …)`, `LivePositionProtectionService.java:238`).
+  - `SELL_CONFIRMED` needs 1m bearish, 5m bearish, and 1h not bullish (or 1h missing).
+  - `HTF_SELL_CONFIRMED` needs 1h bearish, a 5m signal present, and 5m not BUY/STRONG_BUY/WATCH.
+- **`STRONG_SELL`** (trade 162) comes from the **signal path**. `PaperTradingService.java:197-208` uses `signal.getDecision().name()` and closes at `signal.latestPrice` (candle close), after `validateSell` (`TradeExecutionValidationService.java:189`).
+- **`PROFIT_LOCK_HARD_EXIT`** (trade 143) has three possible sources:
+  - live rebase floor (`LivePositionProtectionService.java:191-199`);
+  - live lock-triggered floor of entry × 1.0005 (`:207-217`);
+  - signal-path rebase floor (`PaperTradingService.java:190-195`).
+- **Stop-loss:** a stop-loss close is written as STOPPED/`STOP_LOSS` (`LivePositionProtectionService.java:178`), so it can never be in this CLOSED-only selection.
+- **Signal inputs to the live exit:** the live path loads the latest 1m, 5m and 1h signal with `findTopBySymbolAndIntervalOrderByGeneratedAtDesc` (`LivePositionProtectionService.java:95-97`). There is no freshness bound and no "generated after position open" check.
+- **Replay differs:** `ReplaySellValidationPolicy.java:12-29` requires 5m ≤ 20 min and 1h ≤ 3 h relative to the 1m signal.
+
+---
+
+## FINDINGS (iteration 1, provisional)
+
+**F-1 (PROJECT EVIDENCE + AGENT INFERENCE): Five of six exits came from multi-timeframe sell logic, not from a hard stop.**
+- None of the six is a stop-loss loss. All P&L is small: −0.032 to −0.075 USDT, gross. Automatic trades record fee = 0 (claude-docs observation 2), so net losses are larger by an amount not yet computed.
+- These trades are "thesis-invalidated" exits above the stop. Whether each one was a valid losing trade or premature exit noise needs the 5m and 1h signal state at the exit tick.
+
+**F-2 (AGENT INFERENCE, needs evidence): Fast exits on trades 137, 143 and 182 may mean the 5m/1h context turned bearish almost right after entry, or was already borderline.**
+- Trade 137 closed at 21:00:12 UTC, 12 s after a 1h/5m boundary. That fits a new 5m or 1h signal flipping the exit.
+- Entry validation has `5M_BEARISH_VETO` and `1H_BEARISH_VETO`. A SELL_CONFIRMED exit 5–8 minutes after entry means 5m flipped bearish within one or two 5m closes.
+- If the 5m/1h signals used at exit predate the entry, that is a consistency defect between entry and exit validation.
+
+**F-3 (PROJECT EVIDENCE + AGENT INFERENCE): Trade 143 is an anomaly to explain: a "hard floor" exit with a loss.**
+- The floor is entry × 1.0005, which is above entry, yet realized_pnl is negative.
+- It needs one of two things: a ≥70% TP-progress lock (or a TP-extension rebase) within 3.5 minutes, then a fill below entry; or a signal-path close at a stale `latestPrice`.
+- The candidate explanations are gap-through slippage, the signal-path latestPrice, or the floor being compared against a different entry basis (for example a progressive add changing the average entry). **Not yet resolved.**
+
+**F-4 (PROJECT EVIDENCE): Production and Replay check sell-context freshness differently.**
+- The production live normal exit does not check freshness. Replay's sell validation does: 5m ≤ 20 min, 1h ≤ 3 h.
+- For any of the four live-path exits (182, 172, 158, 137), a stale 5m or 1h signal would trigger an exit in production that Replay would reject.
+- This is a code-level fact. Whether it affected these trades depends on DB-I1-004.
+
+**F-5 (PROJECT EVIDENCE): The selection rule leaves out every stop-loss loser.**
+- The rule `status=CLOSED` excludes all 75 STOPPED rows, every one of which is a loser (DBQ-FTS-002).
+- So the study covers only "soft-exit" losers. This is a scope note, not a substitution; the frozen set stays as given.
+
+**F-6 (AGENT INFERENCE): Most entries open within 4–6 s of a 1m close.**
+- Trades 158, 143, 137 and 172 opened at :x5:04, :x0:04, :x5:04 and :36:05, which fits normal 1m-close latency.
+- Three of those (158, 143, 137) land on 5-minute boundaries, which may mean the 5m close is what releases the 1m entry. To be verified.
+
+**F-7 (PROJECT EVIDENCE + AGENT INFERENCE): EGLDUSDT re-entered after a loss.**
+- Trade 137 closed at 21:00:12 UTC; trade 143 opened on the same symbol 1h40m later and lost again.
+- I need to check whether any re-entry cooldown or FIX-122 stop-loss evidence exclusion should have applied. FIX-122 covers stop-loss only, and 137 was not a stop.
+
+**F-8 (PROJECT EVIDENCE): All six losers are 5+ days old.**
+- The newest one closed 2026-10-12 10:05 UTC, but the snapshot is 2026-10-17 07:00 UTC.
+- Either no position has closed with a loss since then, or trading/ingestion has been idle. Needs a recency check (DB-I1-008).
+
+---
+
+## UNKNOWNS
+
+- **U-1:** entry and exit prices, quantity, SL/TP, risk/reward and `exit_signal_id` for each trade. DBQ-FTS-005 did not include these columns.
+- **U-2:** the entry signal's mode, freshness, final decision chain, data quality and BTC context.
+- **U-3:** the 1m/5m/1h signals that were "latest" at entry and at exit (decision and generated_at), which decide F-2 and F-4.
+- **U-4:** wallet executions (actual fill, quantity, partial harvests) and whether paper and wallet agree.
+- **U-5:** managed-position state for trade 143: lock state, highest price, TP extensions and management events.
+- **U-6:** the actual columns of `market_price_event` and `production_exit_audit` (not yet read). Needed for the exit-tick reconstruction in iteration 2.
+- **U-7:** activity since 2026-10-12.
+- **U-8:** network fees. Automatic trades record 0, so fees must be computed separately.
+
+---
+
+## DB REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-001
+Purpose: Full paper_position rows for the frozen trades (prices, qty, SL/TP, exit signal, reasons) — U-1.
+SQL:
+SELECT id, symbol, side, status, quantity, entry_price, stop_loss, take_profit, exit_price, realized_pnl, close_reason, signal_id, exit_signal_id, opened_at, closed_at, LEFT(entry_reason, 1500) AS entry_reason, LEFT(exit_reason, 1500) AS exit_reason FROM crypto_ai.paper_position WHERE id IN (182,172,162,158,143,137) ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-002
+Purpose: Read actual schemas before using them (U-6).
+SQL:
+SHOW COLUMNS FROM crypto_ai.trade_signal;
+SHOW COLUMNS FROM crypto_ai.wallet_trade;
+SHOW COLUMNS FROM crypto_ai.wallet_managed_position;
+SHOW COLUMNS FROM crypto_ai.position_management_event;
+SHOW COLUMNS FROM crypto_ai.market_price_event;
+SHOW COLUMNS FROM crypto_ai.production_exit_audit;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-003
+Purpose: Entry and exit signal rows (decision chain, freshness, R/R, quality) — U-2. Columns are taken from the TradeSignal entity; if the wrapper rejects an unknown column, rerun after I1-002.
+SQL:
+SELECT p.id AS position_id, CASE WHEN s.id = p.signal_id THEN 'ENTRY' ELSE 'EXIT' END AS role, s.id, s.symbol, s.interval_code, s.decision, s.original_decision, s.signal_mode, s.candle_open_time, s.generated_at, s.created_at, s.latest_price, s.stop_loss, s.take_profit, s.risk_reward_ratio, s.atr_percent, s.atr_entry_type, s.total_score, s.confidence_score, s.final_entry_allowed, s.primary_blocking_stage, s.selected_strategy, s.market_regime, s.data_quality_valid, s.btc_context_status, s.confluence_status, s.confluence_higher_decision, s.entry_authority FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id IN (p.signal_id, p.exit_signal_id) WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, role;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-004
+Purpose: Latest 1m/5m/1h signal at or before entry and at or before exit. This reproduces what the live path loaded (LivePositionProtectionService.java:95-97) — U-3, F-2, F-4.
+SQL:
+SELECT p.id AS position_id, x.phase, x.ref_time, iv.interval_code, s.id AS signal_id, s.decision, s.signal_mode, s.generated_at, s.candle_open_time, s.latest_price, TIMESTAMPDIFF(SECOND, s.generated_at, x.ref_time) AS age_seconds FROM crypto_ai.paper_position p JOIN (SELECT 'ENTRY' AS phase UNION ALL SELECT 'EXIT') ph JOIN (SELECT '1m' AS interval_code UNION ALL SELECT '5m' UNION ALL SELECT '1h') iv CROSS JOIN LATERAL (SELECT ph.phase AS phase, CASE WHEN ph.phase='ENTRY' THEN p.opened_at ELSE p.closed_at END AS ref_time) x LEFT JOIN crypto_ai.trade_signal s ON s.id = (SELECT t.id FROM crypto_ai.trade_signal t WHERE t.symbol = p.symbol AND t.interval_code = iv.interval_code AND t.generated_at <= x.ref_time ORDER BY t.generated_at DESC LIMIT 1) WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, x.phase, iv.interval_code;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-005
+Purpose: Bounded signal timeline per trade, from 15 min before entry to 2 min after exit, for 1m/5m/1h (decision flips during the hold).
+SQL:
+SELECT p.id AS position_id, s.id, s.interval_code, s.decision, s.signal_mode, s.candle_open_time, s.generated_at, s.latest_price, s.total_score, s.confidence_score, s.final_entry_allowed, s.primary_blocking_stage FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.symbol = p.symbol AND s.interval_code IN ('1m','5m','1h') AND s.generated_at BETWEEN p.opened_at - INTERVAL 15 MINUTE AND p.closed_at + INTERVAL 2 MINUTE WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, s.generated_at LIMIT 1000;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-006
+Purpose: Wallet executions for each trade's lifecycle: fills, quantities, partial harvests and paper-vs-wallet agreement (U-4). SELECT * is used because the columns are unverified until I1-002.
+SQL:
+SELECT p.id AS position_id, w.* FROM crypto_ai.paper_position p JOIN crypto_ai.wallet_trade w ON w.symbol = p.symbol AND w.executed_at BETWEEN p.opened_at - INTERVAL 60 SECOND AND p.closed_at + INTERVAL 60 SECOND WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, w.executed_at LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-007
+Purpose: Managed position (lock state, highest price, TP) and management events (TP extension, lock) per trade, which decide trade 143 (U-5, F-3).
+SQL:
+SELECT p.id AS position_id, m.* FROM crypto_ai.paper_position p JOIN crypto_ai.wallet_managed_position m ON m.symbol = p.symbol AND m.opened_at BETWEEN p.opened_at - INTERVAL 60 SECOND AND p.opened_at + INTERVAL 60 SECOND WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id;
+SELECT p.id AS position_id, e.* FROM crypto_ai.paper_position p JOIN crypto_ai.position_management_event e ON e.symbol = p.symbol AND e.occurred_at BETWEEN p.opened_at AND p.closed_at + INTERVAL 5 SECOND WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, e.occurred_at LIMIT 300;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-008
+Purpose: Recency and selection scope (F-5, F-8). Checks activity after the newest frozen loser and STOPPED losers inside the frozen window.
+SQL:
+SELECT MAX(opened_at) AS last_open, MAX(closed_at) AS last_close, SUM(opened_at > '2026-10-12 10:05:20') AS opened_after_182, SUM(status='OPEN') AS open_now FROM crypto_ai.paper_position;
+SELECT id, symbol, status, close_reason, realized_pnl, opened_at, closed_at FROM crypto_ai.paper_position WHERE status='STOPPED' AND closed_at BETWEEN '2026-10-11 20:00:00' AND '2026-10-17 07:00:04' ORDER BY closed_at DESC LIMIT 50;
+### END_DB_REQUEST
+
+---
+
+## Self-review for iteration 1
+
+- All timestamps above are raw UTC from the DB, each paired with its +3h KSA value. Times crossing midnight (trades 143 and 137) are dated explicitly.
+- No cause has been assigned yet. F-2, F-3 and F-7 are hypotheses that DB-I1-001, 003, 004 and 007 will confirm or reject.
+- **Iteration 2 plan:** read `market_price_event` and `production_exit_audit` once their schemas are known. Identify the exact exit tick and trigger for each trade. Check paper-vs-wallet agreement. Assess entry quality using only information available at entry.

@@ -1,0 +1,1 @@
+SELECT s.id, s.interval_code, s.signal_mode, s.data_quality_valid, s.generated_at FROM trade_signal s WHERE s.id IN (SELECT signal_id FROM paper_position WHERE id IN (182,172,162,158,143,137) UNION SELECT exit_signal_id FROM paper_position WHERE id IN (182,172,162,158,143,137) AND exit_signal_id IS NOT NULL) ORDER BY s.id

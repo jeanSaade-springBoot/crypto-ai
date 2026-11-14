@@ -1,0 +1,235 @@
+# FTS WINDOW1: Claude, Iteration 6, root cause and research (self-review only)
+
+This was analysis only. I made no code, config, database, git or deploy changes. I did not read `private/CODEX/`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or Codex memory. Plan mode is active, but this session has no plan-file write tool and no exit-plan tool, so this message is the iteration output.
+
+**Inputs:**
+- My database results I5-001 to I5-005, plus I4-002 (re-read).
+- Code:
+  - `ExecutionIntelligenceService` (EIS) `:459-499`, `:865-1030`, `:2241-2345`, and the grep of `getOriginalDecision`.
+  - `TradeExecutionValidationService` (TEVS) `:49`, `:62-113`, `:218-321`.
+  - `PaperPosition` fields.
+- External: the Binance `exchangeInfo` API and two web searches.
+
+**Finding 0 (unchanged):** the database stores UTC, but the wrapper displays `TIMESTAMP` columns in KSA. Times below are written **KSA (UTC)**.
+
+---
+
+## EVIDENCE A: every Entry Quality score rebuilt from code (PROJECT EVIDENCE; resolves U-29)
+
+The rules applied are in `EIS:935-1022`:
+- **Reference price:** the lowest 1m signal price in the last 30 minutes, or the opportunity's anchor/best price if that is lower and less than 120 minutes old.
+- **Opportunity age:** measured with `Duration.toMinutes()` (truncated) from the opportunity's `started_at` to the signal's `generatedAt`.
+
+| Trade | Reference price (source) | Expansion | ATR extension (ATR used) | Age | R/R | Rejection penalty | Rebuilt | Persisted |
+|---|---|---|---|---|---|---|---|---|
+| 137 | 3.992 (30m low) | 0.18% → 0 | 1.63 (1m) → 0 | 1 → 0 | 0.64 → −30 | High 4.005 at 20:40:01 (17:40:01); price 0.15% below it; ≥ 2 lower prints → **−12** | **58** | 58 ✓ |
+| 143, at decision | 3.972 (30m low) | 1.51% → **−10** | 6.61 (**5m ATR** 0.009073) → **−30** | 5 → 0 | 1.50 → 0 | none | **60** | — |
+| 143, at fill | 3.972 | 1.54% → −10 | 5.60 (**1m ATR** 0.010899) → −20 | 5 → 0 | 1.50 → 0 | none | **70** | 70 ✓ |
+| 158 | 1.4084 (30m low) | 0.17% → 0 | 3.1–3.25 (1m) → −10 | **?** | 0.33 → −30 | only 1 lower print → none | **60** | **50 ✗** |
+| 162 | 0.08672 (30m low; the opportunity's best price 0.08675 is higher) | 0.38% → 0 | 5.19 (1m) → −20 | **20 min 59.976 s → 20** → 0 | 0.44 → −30 | none | **50** | 50 ✓ |
+| 172 | 5.47e-6 (30m low) | 0.37% → 0 | 2.94 (1m) → −10 | no opportunity → 0 | 0.74 → −30 | none | **60** | 60 ✓ |
+| 182 | 0.1875 (30m low; the anchor 0.1879 is higher) | 0.48% → 0 | **5.95** (1m) → −20 | 1 → 0 | 0.48 → −30 | High 0.1895, 0.58% away (> 0.50) → none | **50** | 50 ✓ |
+
+- Five of six scores reproduce exactly. This confirms my F-34 inference: for 143, the 5m ATR is smaller than the 1m ATR (the 1m was inflated by an RVOL 21.9× candle), so the 5m-ATR score is lower.
+- **158 does not reproduce (60 rebuilt, 50 persisted).** My hypothesis is an active XRP opportunity more than 40 minutes old (−10) that my I5-003 filter excluded. Pending I6-001.
+
+---
+
+## FINDINGS
+
+### F-37: a STRONG_SELL ends the opportunity's memory, so a first bullish bar after a sell-off is scored as a clean new opportunity (PROJECT EVIDENCE; root-cause candidate for 137, 143 and 182)
+
+How the code behaves:
+- `evidence()` stops at the most recent 1m STRONG_SELL: `break; // a strong bearish 1m event is still a true memory boundary` (`EIS:2270-2275`).
+- Each hard-bearish 1m also writes its own one-signal `CANCELLED / BEARISH_REVERSAL` opportunity (`EIS:474-481`).
+- The next opportunity therefore starts from `OPPORTUNITY_HEALTH_START` plus whatever the 5m and 1h contribute. None of the earlier sell streak is counted.
+
+What I5-002 and I5-003 show:
+
+| Trade | STRONG_SELL 1m signals just before entry | Executing opportunity | Evidence counted (buy/neutral/bearish) | Health |
+|---|---|---|---|---|
+| 137 | 12 (20:41–20:52) | 35535, started 20:54 | 2 (1/0/1) | **85** |
+| 143 | 10 (22:26–22:34) | 36481, started 22:35 | 3 (1 BUY / 1 WATCH / 1 bearish) | **85** |
+| 182 | 16 (09:39–09:54) | 40290, started 09:55 | 4 (2/1/1) | **86** |
+
+- Each of these entries came 1–6 minutes after the last STRONG_SELL.
+- The opportunity rows are exactly what the `break` predicts. For example, 40290 contains BUY 176710, BUY 176692, NEUTRAL 176654 and one bearish signal. The other 15 STRONG_SELLs are invisible.
+- **AGENT INFERENCE:** this is a design choice, not a bug. Its consequence is that "opportunity health 85" means "healthy since the last STRONG_SELL", not "healthy". Whether this loses money across the system is pending I6-002.
+- **EXTERNAL RESEARCH, context only:** published crypto studies find short-horizon reversal in illiquid coins and momentum in the most liquid ones. None covers minute-level data. So I can make no evidence-based claim that first-bar reversal entries have an edge.
+
+### F-38: confirmed inconsistency. The direct-BUY path cannot see a 5m's original bearish decision, but the other EIS routes can (PROJECT EVIDENCE; root cause for 182)
+
+- **Why 176655 became NEUTRAL (I5-005, resolves U-30):** at `decision_path` step 5 (`MULTI_TIMEFRAME`), its STRONG_SELL was downgraded to NEUTRAL because "Bearish signal conflicts with bullish higher-timeframe structure… 1h=WATCH (trend 16/25, regime WEAK_UPTREND)".
+- **The same 1h WATCH was then counted a second time.** FIX-11G grants authority for "5m NEUTRAL + 1h WATCH" (`TEVS:263-284`). So the 1h WATCH first erased the 5m bearish evidence and then served as the bullish half of the authority.
+- **The direct path only receives the effective label.** `validateBuy` passes `assessment.effectiveFiveMinute()` as a bare `SignalDecision` (`TEVS:102-108`), and FIX-154 recorded `five_minute_raw_decision = NEUTRAL` (I4-004).
+- **Other EIS routes do check the original decision of the 5m,** using `isBearish(five.getOriginalDecision())` or `strongerDecision(decision, original)`. Examples: `EIS:1542`, `:1634`, `:1865`, `:1915`, `:2100`.
+- **The code contradicts its own stated premise.** The FIX-11G comment says "neither timeframe is bearish" (`TEVS:252-253`). That is false for 176655.
+- **182 also missed the stricter exception.** It had confidence 68 (< 72) and EQ 50 (< 70), so it skipped `BALANCED_NEUTRAL_5M` (`TEVS:234-236`) and fell through to FIX-11G, which has no confidence floor and only requires EQ ≥ 50.
+- **System-wide (I4-002):** BUYs whose 5m was a downgraded bearish signal numbered 8, with 3 losers and −0.431 USDT. That is −0.054 per BUY, against −0.015 for all other BUYs. The sample is small.
+- **Status:** a confirmed logic inconsistency, and a candidate defect for dual-agent agreement.
+
+### F-39: Entry Quality is anti-correlated with outcome, so "tighten the Entry Quality cutoff" is rejected as a fix (PROJECT EVIDENCE, I5-004; disproves the F-30 hypothesis)
+
+| EQ band | n | Loss rate | Gross P&L (USDT) |
+|---|---|---|---|
+| 50–54 | 61 | **41%** | **+0.687** |
+| 55–69 | 57 | 49% | −1.284 |
+| 70–84 | 47 | **64%** | −2.460 |
+| 85+ | 28 | 64% | −1.114 |
+
+- The 193 rows equal the take-profit-bucket total in I5-004, so the join did not double-count.
+- Lower-EQ trades are also smaller (25% cap), which affects the P&L column, but the loss rate does not depend on size.
+- **AGENT INFERENCE:** the design behind F-30 (R/R < 1 is only penalised, never rejected) is real, but the data does not support it as a loss driver. The score is miscalibrated as a predictor.
+- **Knife-edges, recorded as fact:**
+  - **162** passed at 50 because its opportunity age was **20 min 59.976 s**. 24 ms more would have made the age 21 minutes, cost −5, and given 45, a `CHASE_ENTRY` block.
+  - **182's** ATR extension was 5.95 against a −30 threshold of 6.0. One ACE tick (0.0001 = 0.66 ATR) higher would have given 40, also a block.
+
+### F-40: Replay-parity candidate. The age arithmetic for trade 162 depends on milliseconds of wall-clock time (PROJECT EVIDENCE + AGENT INFERENCE)
+
+- In Production, `started_at` (03:41:02.837) and the current `generatedAt` (04:02:02.813) are both wall-clock times about 2.8 s after their candle closes. The second came 24 ms "earlier" relative to its close, which is why the truncated age is 20.
+- Replay sets `evaluationTime` to the exact candle close (`RegressionTestWorker.java:584`, F-18). That gives an age of exactly 21:00, so −5 and EQ 45, and **Replay would likely block 162**, provided the opportunity starts on the same signal.
+- This joins F-18 (143) and F-24 as a class: wall-clock ordering and timing feed decisions that Replay evaluates on candle time. Not confirmed without a Replay run (U-21).
+
+### F-41: route-level outcomes (PROJECT EVIDENCE, I5-005; downgrades F-32 and F-33)
+
+| Route | Initial BUYs with a paper row | Loss rate | Gross P&L (USDT) | Average EQ |
+|---|---|---|---|---|
+| IMMEDIATE_VALIDATION (excluding FIX-11G) | 28 | **64%** | **−2.038** | 74.9 |
+| SETUP_CONFIRMATION_WAKEUP | 41 | 63% | −0.905 | 60.5 |
+| SETUP_TIMEFRAME_ATR | 24 | 46% | −0.773 | 58.3 |
+| FIX-11G | 35 | 46% | −0.288 | 62.8 |
+| ACCUMULATED_EVIDENCE, LATE_ENTRY | 17 | 41% | **+0.150** | 50.8 |
+| ACCUMULATED_EVIDENCE, other | 27 | 44% | +0.049 | 78.7 |
+
+- **F-32 (FIX-11G) and F-33 (the single-BUY release in FIX-119) are not loss drivers system-wide.** I'm keeping them as consistency gaps only.
+- **AGENT INFERENCE:**
+  - The routes that act fast on a single signal are the worst.
+  - The two accumulated-evidence routes are the only positive ones.
+  - This fits F-37: evidence that persists across time is worth more than a fresh label.
+- Statistical weakness: 64% versus about 43% at these sample sizes is suggestive, not significant.
+
+### F-42: the frozen six belong to a loss class that is roughly break-even gross; fees decide the sign (PROJECT EVIDENCE + EXTERNAL RESEARCH; reframes F-10 and F-31)
+
+**Geometry.** For all five 1m entries, `stop_loss = price × 0.995` exactly. For example, 0.1884 × 0.995 = 0.187458, which is the stored value for 176710. Take-profit = 3 × the 1m ATR. With the 1m ATR at only 0.054–0.124% of price, the stop sits 4–9 ATR away.
+
+**Consequence:**
+- These positions almost never reach the stop.
+- The take-profit < 0.40% buckets show 8 stopped out of 49.
+- They end through confirmed SELL or HTF exits at −0.13% to −0.35%.
+
+**System-wide, take-profit < 0.40% (I5-004):**
+- **CLOSED:** 41 trades, 13 losers, +0.312 USDT gross.
+- **Including STOPPED:** −0.580 USDT gross.
+- `fee_usdt = 0` on every row, so paper P&L ignores fees.
+
+**External research (third-party sources):**
+- The standard Binance spot fee for a regular user is 0.10% per side (0.075% if paid in BNB), so a round trip costs 0.15–0.20%.
+- At those rates this class is clearly net-negative. The exact figure is pending I6-003.
+
+**Tick sizes (verified from Binance `exchangeInfo`):**
+
+| Symbol | Tick size | One tick as % of entry price |
+|---|---|---|
+| SHIB | 1e-8 | **0.18%** |
+| ACE | 0.0001 | **0.053%** |
+| DOGE | 0.00001 | 0.011% |
+| XRP | 0.0001 | 0.007% |
+| EGLD | 0.001 | 0.025% |
+
+This confirms F-13 for 172 (SHIB) and partly for 182 (ACE).
+
+---
+
+## ROOT-CAUSE SYNTHESIS (AGENT INFERENCE on PROJECT EVIDENCE; entry judged only on information available at decision time)
+
+| Trade | Primary root cause | Contributing | Classification |
+|---|---|---|---|
+| 137 | Reversal entry on the first bar after a 12-bar STRONG_SELL streak (F-37) | Floor-stop geometry R/R 0.64 (F-42); target sat at an ask wall | **Valid losing trade**; rules followed |
+| 143 | Entry authority from a superseded 5m, decided by a 2 ms race (F-11, F-18) | Target extension, then a sub-second sweep through the floor (F-12, F-22); F-37 | **Candidate defect at entry** (likely diverges in Replay); exit valid |
+| 158 | Plan with the target below the round-trip fee, R/R 0.33 (F-42) | Asymmetric timeframe ordering in the wake-up path; EQ 50 unexplained | **Valid losing trade by design**; EQ evidence incomplete (U-32) |
+| 162 | Late entry above the upper Bollinger band (F-14) | Passed the chase cutoff by 24 ms of age (F-39, F-40); F-42 | **Valid by Production rules**; **candidate parity defect** (F-40) |
+| 172 | A 5m whose own entry was blocked was used as BUY confirmation (F-25) | Range guard sidestepped by a regime relabel; 0.18% tick geometry | **Candidate design gap** |
+| 182 | A downgraded STRONG_SELL 5m plus double counting of the 1h WATCH (F-38) | F-37 (16 STRONG_SELLs); ATR extension 0.05 below the block threshold; ACE tick | **Confirmed logic inconsistency** (candidate defect) |
+
+**Cross-trade mechanisms:**
+- **M1 (F-37):** fresh-reversal entries. Seen in 137, 143 and 182.
+- **M2 (F-42):** a 0.5% floor stop paired with a 3-ATR target. Seen in 5 of 6 trades.
+- **M3:** the timeframe authority reads labels rather than evidence (F-11, F-25, F-38). Seen in 143, 172 and 182.
+
+Stale data, latency and exit-logic defects are **ruled out** for all six (F-15, F-16, F-22, F-23).
+
+**Rejected approaches (evidence-backed):**
+- **Raise the Entry Quality cutoff:** rejected by F-39.
+- **Tighten FIX-11G's EQ threshold, or FIX-119's single-BUY release:** rejected; no system-wide support (F-41).
+- **Treat latency as a cause:** rejected (iteration 3).
+
+**Candidate correction directions** (not implementations; each needs a specification and approval):
+1. Pass the 5m's original decision (or `strongerDecision`) into `validateBuy`, matching the other EIS routes, and stop the 1h from counting twice. Regression check: 182 is rejected; other FIX-11G grants are unchanged.
+2. Order timeframe lookups by candle close time, not wall clock, extending FIX-141. Regression checks: 143, 158 and 162 produce identical Production/Replay decisions.
+3. Make the BUY authorities respect `final_entry_allowed` on the 5m. Regression check: 172.
+4. Add fee and tick awareness to plan geometry and R/R.
+5. Make the opportunity's memory of a recent STRONG_SELL streak visible to health scoring.
+
+Directions 4 and 5 need I6-002 and I6-003 first.
+
+---
+
+## UNKNOWNS
+- **U-18:** the logs are gzipped and I cannot read them. The FIX-11G grant lines for 156723 and 176710 (`TEVS:273`) and the FIX-105 debug lines are **MISSING**.
+- **U-21:** no Replay run was available to confirm F-18 or F-40.
+- **U-32:** the source of 158's EQ 50 (I6-001).
+- **U-33:** whether fresh-reversal entries lose money system-wide (I6-002).
+- **U-34:** P&L net of fees for the floor-stop class (I6-003).
+- **U-35:** the authoritative live fee tier for this account. Paper mode records 0.
+
+---
+
+## DB REQUESTS
+Time literals are read in the wrapper's +03:00 session.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: U-32. Find any XRP or SHIB opportunity active at entry time, which my I5-003 filter excluded, plus the BUY message for 158 that holds the decision-time EQ.
+SQL:
+SELECT id, symbol, status, started_at, last_evidence_at, anchor_entry_price, best_entry_price, evidence_count, buy_count, watch_count, neutral_count, bearish_count, opportunity_health, execution_source, decision_code, latest_signal_id, executed_at, updated_at FROM crypto_ai.execution_opportunity WHERE (symbol='XRPUSDT' AND started_at BETWEEN '2026-10-12 00:30:00' AND '2026-10-12 02:35:04') OR (symbol='SHIBUSDT' AND started_at BETWEEN '2026-10-12 04:30:00' AND '2026-10-12 06:36:04') ORDER BY symbol, started_at LIMIT 80;
+SELECT id, signal_id, execution_reason, LEFT(execution_message,2000) AS msg, executed_at FROM crypto_ai.wallet_trade WHERE side='BUY' AND signal_id IN (165412,165415) LIMIT 5;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: U-33 / F-37. Outcome by the number of 1m STRONG_SELL signals (effective or original) in the 15 minutes before each entry signal, across all closed paper positions.
+SQL:
+SELECT CASE WHEN x.ss15=0 THEN 'SS0' WHEN x.ss15<5 THEN 'SS1-4' ELSE 'SS5+' END AS bucket, COUNT(*) AS n, SUM(x.realized_pnl<0) AS losers, SUM(x.status='STOPPED') AS stopped, ROUND(SUM(x.realized_pnl),6) AS pnl_sum FROM (SELECT p.id, p.status, p.realized_pnl, (SELECT COUNT(*) FROM crypto_ai.trade_signal s WHERE s.symbol=e.symbol AND s.interval_code='1m' AND s.generated_at >= e.generated_at - INTERVAL 15 MINUTE AND s.generated_at < e.generated_at AND (s.decision='STRONG_SELL' OR s.original_decision='STRONG_SELL')) AS ss15 FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal e ON e.id=p.signal_id WHERE p.status IN ('CLOSED','STOPPED')) x GROUP BY bucket ORDER BY bucket;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: U-34 / F-42. Confirm the schema, then compare floor-stop and ATR-stop classes by status and close reason, with gross P&L and an estimated 0.2% round-trip fee.
+SQL:
+SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME='paper_position' ORDER BY ORDINAL_POSITION;
+SELECT CASE WHEN ABS((p.entry_price-p.stop_loss)/p.entry_price*100-0.5)<=0.02 THEN 'FLOOR_STOP' ELSE 'ATR_STOP' END AS stop_type, p.status, p.close_reason, COUNT(*) AS n, SUM(p.realized_pnl<0) AS losers, ROUND(SUM(p.realized_pnl),6) AS gross_pnl, ROUND(SUM(p.quantity*p.entry_price)*0.002,6) AS est_fee_0_2pct, ROUND(SUM(p.realized_pnl)-SUM(p.quantity*p.entry_price)*0.002,6) AS est_net_pnl, ROUND(AVG((p.take_profit-p.entry_price)/p.entry_price*100),3) AS avg_tp_pct FROM crypto_ai.paper_position p WHERE p.status IN ('CLOSED','STOPPED') GROUP BY stop_type, p.status, p.close_reason ORDER BY stop_type, p.status, p.close_reason;
+### END_DB_REQUEST
+
+---
+
+## Self-review for iteration 6
+- **One of my own hypotheses is falsified with data:** F-30 does not hold system-wide (F-39).
+- **Two candidate gaps downgraded:** F-32 and F-33 are now consistency observations (F-41).
+- **F-26 is now confirmed at code level** as F-38, citing both the persisted `decision_path` and the code path. It stays a candidate defect until both agents agree.
+- **Score reconstruction:** 5 of 6 reproduce from code; the one mismatch (158) is stated, not explained away.
+- **New Replay-parity candidate (F-40)** comes from arithmetic on persisted times. It is not confirmed without a Replay run.
+- **External research is labelled.** The fee figures come from third-party sources (no official page was found). The tick sizes come from Binance's API. The momentum/reversal literature is context only.
+- **Iteration 7 plan:**
+  - Combine I6-001 to I6-003.
+  - Finish the stop/exit-geometry review.
+  - Freeze each trade's classification and the defect registry with evidence IDs.
+
+**Sources (external research):**
+- [Binance API exchangeInfo (tick sizes)](https://data-api.binance.vision/api/v3/exchangeInfo?symbols=["SHIBUSDT","ACEUSDT","DOGEUSDT","XRPUSDT","EGLDUSDT"])
+- [Koinly: lowest-fee exchanges](https://koinly.io/blog/crypto-exchange-with-lowest-fees/)
+- [Finhay: Binance fees 2026](https://www.finhay.com.vn/en/phi-giao-dich-binance)
+- [Binance fees explained 2026](https://hijri-calendars.com/blog/binance-fees-explained-2026?lang=en)
+- [Binance.US zero-fee announcement (different platform, not applicable)](https://blog.binance.us/zero-fee-trading/)
+- [Zaremba et al.: short-term reversal, momentum and liquidity in crypto](https://earsiv.medeniyet.edu.tr/items/23a96c9f-3952-4bdf-aec5-abafb3aaab70)
+- [Caporale and Plastun: momentum after one-day abnormal returns](https://cesifo.org/en/publications/2019/working-paper/momentum-effects-cryptocurrency-market-after-one-day-abnormal)
+- [Springer: Bitcoin intraday mean reversion](https://link.springer.com/doi/10.1007/s11408-020-00357-1)

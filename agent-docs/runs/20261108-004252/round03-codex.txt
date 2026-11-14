@@ -1,0 +1,65 @@
+No files, configuration, database, runtime, or Git state were changed. No production systems or external research were used.
+
+## FINDINGS
+
+- **PROJECT EVIDENCE — FIX-156 cannot be safely “finished” or reconciled to approved scope.** The exact reviewed RPR-0.9.12 document is absent from the repository; the canonical specification remains `RPR-0.4-DRAFT` and explicitly forbids implementation.
+
+- **PROJECT EVIDENCE — The active Replay BUY path still reaches wallet-dependent Production validation.** `ShadowProductionReplayService` calls `ExecutionIntelligenceService.evaluateBuy`, which calls `TradeExecutionValidationService.validateBuy`; that loads `WalletSettingsRepository`. This violates Jean’s stated no-shared-`validateBuy` boundary.
+
+- **PROJECT EVIDENCE — The access policy is operation-labelled but opt-in, not an enforced Replay boundary.** The worker, shadow lifecycle, and service/controller paths use direct `JdbcTemplate`; callers can bypass `ReplayAccessPolicy`. The profile read also joins `replay_policy_profile_detail` without separately guarding that table read.
+
+- **PROJECT EVIDENCE — A forbidden shared-table write remains reachable.** If `shared-market.mode=LIVE`, Replay opens `CandleInputAudit`; candle reads then insert into `shared_candle_input_audit` in a new transaction. This is outside the sole authorized `fix122_evaluation` exception. Default configuration is OFF, but environment overrides can enable LIVE.
+
+- **PROJECT EVIDENCE — The O-8 exception is bypassed in the actual decision path.** Replay-active `StopLossEvidenceService` writes `fix122_evaluation` through Production `StopLossEvidenceStore`, not through `ReplayFix122EvaluationStore` or `ReplayAccessPolicy`. The diagnostics controller also reads the Production store directly.
+
+- **PROJECT EVIDENCE — Frozen-profile lifecycle is incomplete and has a stale-run risk.** No main-source caller inserts a profile. A normal run therefore refuses at `require(runId)`. If profiles are later inserted, Delete Data deletes and resets `analysis_test_run` but does not delete `replay_*`; a reused run ID can select stale profile evidence.
+
+- **PROJECT EVIDENCE — Certificate, fixture, trace, output, and price-coverage persistence are not wired.** Apart from the profile-detail store, searches found no main-source writers for the V110/V111 Replay evidence tables. `EXACT_PRICE_REPLAY` is still selected merely when the supplied accepted-price list is non-empty, not after persisted coverage qualification.
+
+- **PROJECT EVIDENCE — V111 requires a Jean governance disposition.** Jean’s corrective authorization names additive V110; V111 exists in source but is not in that stated file boundary. The saved V111 database-check result is empty, so this review cannot verify any claim that V111 was applied.
+
+- **PROJECT EVIDENCE — Required guard evidence is absent.** There is no T156-09a static-reachability test. The existing policy tests only exercise caller-declared categories; they do not prove the active Replay graph cannot use raw JDBC, shared stores, wallet dependencies, or HTTP.
+
+- **PROJECT EVIDENCE — Corrections to prior claims:**
+  - Jean’s two findings are now recorded as **ACCEPTED BY JEAN**; the status report calling them OPEN is stale.
+  - `allTradesChart` no longer reads `wallet_trade`; it reads Replay execution rows.
+  - The current shadow service uses `ReplayMinimumExecutionPolicy`, not `BinanceMinimumExecutionPolicy`.
+  - The price SQL orders by `(observed_at, id)`. The Replay DTO drops ID and delivery status, but nondeterministic ordering was not established by this review.
+  - `wallet_execution_test` is not evidence of a write to Production `wallet_trade`.
+
+## EVIDENCE
+
+- Contract gap: [FINAL_CHANGE_SPECIFICATION.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION.md:3), [FIX-156_IMPLEMENTATION_PREPARATION.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/FIX-156_IMPLEMENTATION_PREPARATION.md:53), [JEAN_REVIEW_FIX-156.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/JEAN_REVIEW_FIX-156.md:9).
+
+- Jean boundary, V110-only authorization, and closure: [JEAN_REVIEW_FIX-156.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/JEAN_REVIEW_FIX-156.md:14), [JEAN_REVIEW_FIX-156.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/JEAN_REVIEW_FIX-156.md:119), [JEAN_REVIEW_FIX-156.md](C:/workspace/crypto-ai-trader-mysql/agent-docs/JEAN_REVIEW_FIX-156.md:139).
+
+- Shared BUY/wallet path: [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:257), [ExecutionIntelligenceService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:651), [TradeExecutionValidationService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:62), [TradeExecutionValidationService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:400).
+
+- Guard bypasses: [ReplayAccessPolicy.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/replay/ReplayAccessPolicy.java:55), [ReplayPolicyProfileStore.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/replay/ReplayPolicyProfileStore.java:20), [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:117), [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:363).
+
+- Shared audit write: [CandleInputAudit.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/shared/CandleInputAudit.java:40), [CandleRepository.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/repository/CandleRepository.java:32), [RegressionTestWorker.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:42).
+
+- O-8 bypass: [StopLossEvidenceService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/StopLossEvidenceService.java:157), [StopLossEvidenceStore.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/StopLossEvidenceStore.java:48), [Fix122DiagnosticsController.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/controller/Fix122DiagnosticsController.java:39).
+
+- Stale-run risk: [ReplayPolicyProfileStore.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/replay/ReplayPolicyProfileStore.java:50), [RegressionTestService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:352), [RegressionTestService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:403).
+
+- Unwired evidence model and weak price label: [V110 migration](C:/workspace/crypto-ai-trader-mysql/src/main/resources/db/migration/V110__fix_156_replay_owned_tables.sql:15), [V111 migration](C:/workspace/crypto-ai-trader-mysql/src/main/resources/db/migration/V111__fix_156_replay_profile_evidence.sql:18), [ShadowProductionReplayService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:91), [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:120).
+
+## OBJECTIONS
+
+- **AGENT INFERENCE — Do not claim `ANALYSIS_PARITY`, `LIFECYCLE_PARITY`, or “not measured but safely isolated.”** Current Replay can consume current wallet settings, shared services, unguarded SQL, and a conditionally enabled shared-audit write.
+
+- **AGENT INFERENCE — Do not start remaining wiring until Jean resolves V111 and supplies the exact frozen RPR-0.9.12 artifact.** Without it, a master-registry reconciliation would be invented rather than evidenced.
+
+- **AGENT INFERENCE — Do not fix this through additional call-site guard declarations.** The active bypasses demonstrate that a caller-declared operation is not structural enforcement. The approved scope needs a bounded Replay-owned data layer and a static/async reachability test before parity logic is extended.
+
+- **AGENT INFERENCE — Resolve run identity before profile seeding.** Otherwise fail-closed behavior can turn into silent use of another run’s profile after Delete Data resets IDs.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE — The exact RPR-0.9.12 content, master registry, and frozen PDF are unavailable locally.**
+- **PROJECT EVIDENCE — No Java 21 tests, disposable-MySQL validation, database query, Replay execution, or runtime inspection was performed in this review.**
+- **PROJECT EVIDENCE — The effective environment value of `SHARED_MARKET_MODE` is unknown; therefore the shared-audit path is confirmed reachable but not confirmed exercised.**
+- **EXTERNAL RESEARCH — None.** Public research cannot prove this implementation’s parity or trading performance.
+
+VERDICT: REJECTED

@@ -51,8 +51,13 @@ public class TradeExecutionValidationService {
     private final TradeSignalRepository signalRepository;
     private final WalletSettingsRepository settingsRepository;
     private final EntryConsumptionPolicy entryConsumptionPolicy;
+    private final HigherTimeframeBuyAssessmentService htfAssessment;
     @Autowired(required = false)
     private ExecutionReplayScope replayScope;
+    @Autowired(required = false)
+    private BuyHtfAssessmentAuditStore htfAuditStore;
+    @Autowired(required = false)
+    private Fix154Metrics fix154Metrics;
 
     public ValidationResult validateBuy(TradeSignal executionSignal, int entryQualityScore) {
         ValidationResult structural = validateBaseSignal(executionSignal, true);
@@ -85,25 +90,26 @@ public class TradeExecutionValidationService {
                     "No fresh 1h strategic context was available for the 1m BUY signal.");
         }
 
-        if (isBearish(fiveMinute.getDecision())) {
-            return ValidationResult.reject("5M_BEARISH_VETO",
-                    "1m BUY was blocked because the fresh 5m decision was " + fiveMinute.getDecision() + ".");
-        }
-        if (isBearish(oneHour.getDecision())) {
-            return ValidationResult.reject("1H_BEARISH_VETO",
-                    "1m BUY was blocked because the fresh 1h strategic decision was " + oneHour.getDecision() + ".");
+        HigherTimeframeBuyAssessmentService.Assessment assessment=htfAssessment.assess(fiveMinute,true,oneHour,true);
+        if(!assessment.allowed()) {
+            recordAssessmentMetric(assessment);
+            audit(executionSignal, "DIRECT_BUY", assessment, assessment.code(), "FIX-154 higher-timeframe assessment rejected this BUY.");
+            return ValidationResult.reject(assessment.code(), "FIX-154 higher-timeframe assessment rejected this BUY.");
         }
 
         ExecutionProfile profile = ExecutionProfile.from(settings.getExecutionProfile());
-        return switch (profile) {
-            case CONSERVATIVE -> conservativeBuy(fiveMinute, oneHour);
+        ValidationResult profileResult = switch (profile) {
+            case CONSERVATIVE -> conservativeBuy(assessment.effectiveFiveMinute(), assessment.effectiveOneHour());
             // FIX-112B: only the fresh direct-BUY BALANCED path receives the narrow
             // 5m-NEUTRAL exception. validateBuyContext() and AGGRESSIVE fallback keep
             // calling balancedBuy() directly so their proven Production behavior is unchanged.
             case BALANCED -> balancedBuyWithNeutralFiveException(
-                    executionSignal, fiveMinute, oneHour, entryQualityScore);
-            case AGGRESSIVE -> aggressiveBuy(executionSignal, fiveMinute, oneHour);
+                    executionSignal, assessment.effectiveFiveMinute(), assessment.effectiveOneHour(), entryQualityScore);
+            case AGGRESSIVE -> aggressiveBuy(executionSignal, assessment.effectiveFiveMinute(), assessment.effectiveOneHour());
         };
+        ValidationResult result = cap(profileResult, assessment);
+        audit(executionSignal, "DIRECT_BUY", assessment, result.code(), result.explanation());
+        return result;
     }
 
     /**
@@ -115,6 +121,11 @@ public class TradeExecutionValidationService {
      * normal BUY path would accept.
      */
     public ValidationResult validateBuyContext(TradeSignal referenceSignal) {
+        return validateBuyContext(referenceSignal, "ACCUMULATED_EVIDENCE");
+    }
+
+    /** The caller path is audit evidence only; context eligibility remains identical. */
+    public ValidationResult validateBuyContext(TradeSignal referenceSignal, String auditPath) {
         if (referenceSignal == null || referenceSignal.getGeneratedAt() == null) {
             return ValidationResult.reject("INVALID_SIGNAL", "Execution reference signal is missing required timing data.");
         }
@@ -131,23 +142,24 @@ public class TradeExecutionValidationService {
                     "No fresh 1h strategic context was available for accumulated-evidence authority.");
         }
 
-        if (isBearish(fiveMinute.getDecision())) {
-            return ValidationResult.reject("5M_BEARISH_VETO",
-                    "Accumulated evidence was blocked because fresh 5m context is " + fiveMinute.getDecision() + ".");
-        }
-        if (isBearish(oneHour.getDecision())) {
-            return ValidationResult.reject("1H_BEARISH_VETO",
-                    "Accumulated evidence was blocked because fresh 1h context is " + oneHour.getDecision() + ".");
+        HigherTimeframeBuyAssessmentService.Assessment assessment=htfAssessment.assess(fiveMinute,true,oneHour,true);
+        if(!assessment.allowed()) {
+            recordAssessmentMetric(assessment);
+            audit(referenceSignal, auditPath, assessment, assessment.code(), "FIX-154 higher-timeframe assessment rejected this BUY context.");
+            return ValidationResult.reject(assessment.code(), "FIX-154 higher-timeframe assessment rejected this BUY context.");
         }
 
         ExecutionProfile profile = ExecutionProfile.from(settings().getExecutionProfile());
         TradeSignal oneMinuteQuality = latestAtOrBefore(referenceSignal, EXECUTION_INTERVAL);
         TradeSignal qualitySignal = oneMinuteQuality == null ? referenceSignal : oneMinuteQuality;
-        return switch (profile) {
-            case CONSERVATIVE -> conservativeBuy(fiveMinute, oneHour);
-            case BALANCED -> balancedBuy(fiveMinute, oneHour);
-            case AGGRESSIVE -> aggressiveBuy(qualitySignal, fiveMinute, oneHour);
+        ValidationResult profileResult = switch (profile) {
+            case CONSERVATIVE -> conservativeBuy(assessment.effectiveFiveMinute(), assessment.effectiveOneHour());
+            case BALANCED -> balancedBuy(assessment.effectiveFiveMinute(), assessment.effectiveOneHour());
+            case AGGRESSIVE -> aggressiveBuy(qualitySignal, assessment.effectiveFiveMinute(), assessment.effectiveOneHour());
         };
+        ValidationResult result = cap(profileResult, assessment);
+        audit(referenceSignal, auditPath, assessment, result.code(), result.explanation());
+        return result;
     }
 
     public ValidationResult validateSell(TradeSignal executionSignal) {
@@ -178,10 +190,10 @@ public class TradeExecutionValidationService {
                 "1m SELL confirmed by fresh bearish 5m context; 1h is not bullish.");
     }
 
-    private ValidationResult conservativeBuy(TradeSignal fiveMinute, TradeSignal oneHour) {
-        if (!isBullish(fiveMinute.getDecision())) {
+    private ValidationResult conservativeBuy(SignalDecision fiveMinute, SignalDecision oneHour) {
+        if (!isBullish(fiveMinute)) {
             return ValidationResult.reject("5M_NOT_BULLISH",
-                    "Conservative profile requires 5m BUY/STRONG_BUY; fresh 5m is " + fiveMinute.getDecision() + ".");
+                    "Conservative profile requires 5m BUY/STRONG_BUY; fresh 5m is " + fiveMinute + ".");
         }
         return ValidationResult.allow(100, "CONSERVATIVE_FULL",
                 "Conservative profile approved a full-size entry: 1m BUY, bullish 5m confirmation, and non-bearish 1h context.");
@@ -204,12 +216,11 @@ public class TradeExecutionValidationService {
      * 5m=NEUTRAL + 1h=WATCH transitional authority documented below.
      */
     private ValidationResult balancedBuyWithNeutralFiveException(
-            TradeSignal executionSignal, TradeSignal fiveMinute, TradeSignal oneHour, int entryQualityScore) {
+            TradeSignal executionSignal, SignalDecision fiveMinute, SignalDecision oneHour, int entryQualityScore) {
         ValidationResult balanced = balancedBuy(fiveMinute, oneHour);
         if (balanced.allowed()) return balanced;
 
-        boolean neutralFiveBullishOne = fiveMinute.getDecision() == SignalDecision.NEUTRAL
-                && isBullish(oneHour.getDecision());
+        boolean neutralFiveBullishOne = fiveMinute == SignalDecision.NEUTRAL && isBullish(oneHour);
         BtcContextStatus btcStatus = executionSignal.getBtcContextStatus();
         // FIX-112B: plain/strong BTC conflict cannot be rescued by this exception.
         // FIX-141: nor can a failed freshness guard - STALE_CONTEXT is a real, evidenced
@@ -227,10 +238,10 @@ public class TradeExecutionValidationService {
         if (neutralFiveBullishOne && strongEnough) {
             return ValidationResult.allow(25, "BALANCED_NEUTRAL_5M",
                     "BALANCED_NEUTRAL_5M: 25% exploratory entry approved because 5m is NEUTRAL "
-                            + "rather than bearish while 1h remains " + oneHour.getDecision()
+                             + "rather than bearish while 1h remains " + oneHour
                             + ". 1m=" + executionSignal.getDecision()
                             + ", confidence=" + executionSignal.getConfidenceScore()
-                            + ", 5m=NEUTRAL, 1h=" + oneHour.getDecision()
+                             + ", 5m=NEUTRAL, 1h=" + oneHour
                             + ", entryQuality=" + entryQualityScore
                             + ", btcStatus=" + btcStatus
                             + ", position=25%.");
@@ -249,8 +260,7 @@ public class TradeExecutionValidationService {
         // through ExecutionReplayScope historical 5m/1h lookups; there is no Replay-only
         // copy, threshold, or special execution behavior. validateBuyContext() remains
         // intentionally unchanged so accumulated-evidence/recovery authority is not widened.
-        boolean neutralFiveWatchOne = fiveMinute.getDecision() == SignalDecision.NEUTRAL
-                && oneHour.getDecision() == SignalDecision.WATCH;
+        boolean neutralFiveWatchOne = fiveMinute == SignalDecision.NEUTRAL && oneHour == SignalDecision.WATCH;
         if (neutralFiveWatchOne) {
             boolean upstreamApproved = executionSignal.isFinalEntryAllowed();
             boolean entryQualitySafe = entryQualityScore >= BALANCED_TRANSITIONAL_MIN_ENTRY_QUALITY;
@@ -264,7 +274,7 @@ public class TradeExecutionValidationService {
                                 + "decision={}, confidence={}, 5m={}, 1h={}, entryQuality={}, btcStatus={}, positionPercent=25",
                         executionSignal.getId(), executionSignal.getSymbol(), executionSignal.getGeneratedAt(),
                         executionSignal.getDecision(), executionSignal.getConfidenceScore(),
-                        fiveMinute.getDecision(), oneHour.getDecision(), entryQualityScore, btcStatus);
+                        fiveMinute, oneHour, entryQualityScore, btcStatus);
                 return ValidationResult.allow(25, "BALANCED_NEUTRAL_5M_WATCH_1H",
                         "BALANCED_NEUTRAL_5M_WATCH_1H: 25% exploratory entry approved for an already-approved "
                                 + "1m BUY while 5m is NEUTRAL and 1h is WATCH. "
@@ -281,15 +291,13 @@ public class TradeExecutionValidationService {
                             + "minEntryQuality={}, btcStatus={}",
                     executionSignal.getId(), executionSignal.getSymbol(), executionSignal.getGeneratedAt(),
                     executionSignal.getDecision(), executionSignal.getConfidenceScore(), upstreamApproved,
-                    fiveMinute.getDecision(), oneHour.getDecision(), entryQualityScore,
+                    fiveMinute, oneHour, entryQualityScore,
                     BALANCED_TRANSITIONAL_MIN_ENTRY_QUALITY, btcStatus);
         }
         return balanced;
     }
 
-    private ValidationResult balancedBuy(TradeSignal fiveMinute, TradeSignal oneHour) {
-        SignalDecision five = fiveMinute.getDecision();
-        SignalDecision one = oneHour.getDecision();
+    private ValidationResult balancedBuy(SignalDecision five, SignalDecision one) {
 
         if (isBullish(five) && isBullish(one)) {
             return ValidationResult.allow(100, "BALANCED_FULL",
@@ -312,12 +320,10 @@ public class TradeExecutionValidationService {
                 "Balanced profile requires bullish/WATCH confirmation. Current 5m=" + five + ", 1h=" + one + ".");
     }
 
-    private ValidationResult aggressiveBuy(TradeSignal executionSignal, TradeSignal fiveMinute, TradeSignal oneHour) {
-        ValidationResult balanced = balancedBuy(fiveMinute, oneHour);
+    private ValidationResult aggressiveBuy(TradeSignal executionSignal, SignalDecision five, SignalDecision one) {
+        ValidationResult balanced = balancedBuy(five, one);
         if (balanced.allowed()) return balanced;
 
-        SignalDecision five = fiveMinute.getDecision();
-        SignalDecision one = oneHour.getDecision();
         boolean probeAlignment = five == SignalDecision.WATCH && one == SignalDecision.NEUTRAL;
         if (!probeAlignment) {
             return ValidationResult.reject("AGGRESSIVE_CONFIRMATION_INSUFFICIENT",
@@ -402,6 +408,47 @@ public class TradeExecutionValidationService {
                         .profitLockInitialPercent(BigDecimal.valueOf(40))
                         .profitLockTrailStepPercent(BigDecimal.valueOf(10))
                         .build());
+    }
+
+    private ValidationResult cap(ValidationResult result, HigherTimeframeBuyAssessmentService.Assessment assessment) {
+        if (!result.allowed() || assessment.maxInitialPercent()==null) return result;
+        int capped=Math.min(result.positionPercent(),assessment.maxInitialPercent());
+        if (capped != result.positionPercent() && fix154Metrics != null) fix154Metrics.softCappedEntry();
+        return capped==result.positionPercent()?result:ValidationResult.allow(capped,result.code(),result.explanation()+" FIX-154 soft-HTF cap="+capped+"%.");
+    }
+
+    /** Used only after progressive raw-HTF checks have already failed; never changes an add decision. */
+    public void recordProgressiveAssessmentIfSoftBlocked(TradeSignal referenceSignal) {
+        if (referenceSignal == null || referenceSignal.getGeneratedAt() == null) return;
+        TradeSignal five = latestAtOrBefore(referenceSignal, CONFIRMATION_INTERVAL);
+        TradeSignal one = latestAtOrBefore(referenceSignal, TREND_INTERVAL);
+        if (!isFresh(five, referenceSignal.getGeneratedAt(), FIVE_MINUTE_MAX_AGE)
+                || !isFresh(one, referenceSignal.getGeneratedAt(), ONE_HOUR_MAX_AGE)) return;
+        HigherTimeframeBuyAssessmentService.Assessment assessment = htfAssessment.assess(five, true, one, true);
+        if (assessment.band() == HigherTimeframeBuyAssessmentService.Band.SOFT_CONFLICT) {
+            if (fix154Metrics != null) fix154Metrics.softAddBlocked();
+            audit(referenceSignal, "PROGRESSIVE_ADD", assessment, "SOFT_HTF_ADD_BLOCKED",
+                    "Existing raw 1h progressive-add guard blocked this add; FIX-154 audit only.");
+        }
+    }
+
+    private void audit(TradeSignal referenceSignal, String path,
+                       HigherTimeframeBuyAssessmentService.Assessment assessment, String finalResult, String reason) {
+        if (htfAuditStore == null) return;
+        try {
+            htfAuditStore.record(referenceSignal, path, assessment, finalResult, reason);
+        } catch (RuntimeException auditFailure) {
+            if (fix154Metrics != null) fix154Metrics.auditWriteFailed();
+            log.warn("FIX-154 audit handoff failed; BUY decision remains unchanged: path={}, signalId={}",
+                    path, referenceSignal == null ? null : referenceSignal.getId(), auditFailure);
+        }
+    }
+
+    private void recordAssessmentMetric(HigherTimeframeBuyAssessmentService.Assessment assessment) {
+        if (fix154Metrics != null && "1H_BEARISH_VETO".equals(assessment.code())
+                && assessment.band() == HigherTimeframeBuyAssessmentService.Band.NOT_TRUSTED) {
+            fix154Metrics.untrustedBearishOneHourBlocked();
+        }
     }
 
     public record ValidationResult(boolean allowed, String code, String explanation, int positionPercent) {

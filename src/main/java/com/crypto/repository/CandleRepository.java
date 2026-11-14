@@ -11,9 +11,9 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.*;
 
-/** FIX-132 read facade. Exact predicates and ordering of the original JPA queries
- * are retained. Candle is a read DTO, so local JPA validation no longer requires
- * the retired table. No IDs are translated between the two schemas. */
+/** FIX-153: local candle facade in OFF; shared reads remain a rollback capability.
+ * Exact predicates/order are retained. Candle is a DTO; SQL migrations own its schema.
+ * Runtime and backfill write policies are deliberately distinct. */
 @Repository
 public class CandleRepository {
     private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(CandleRepository.class);
@@ -101,57 +101,114 @@ public class CandleRepository {
         BigDecimal volume,BigDecimal quoteAssetVolume,Long numberOfTrades,BigDecimal takerBuyBaseVolume,
         BigDecimal takerBuyQuoteVolume,boolean closed) {
         source.requireLocalWriter();
-        return local.update("""
-            INSERT INTO crypto_ai.candle (
-                symbol,
-                interval_code,
-                open_time,
-                close_time,
-                open_price,
-                high_price,
-                low_price,
-                close_price,
-                volume,
-                quote_asset_volume,
-                number_of_trades,
-                taker_buy_base_volume,
-                taker_buy_quote_volume,
-                closed,
-                created_at,
-                updated_at
-            )
-            VALUES (
-                ?,
-                ?,
-                ?,
-                ?,
-                ?,
-                ?,
-                ?,
-                ?,
-                ?,
-                ?,
-                ?,
-                ?,
-                ?,
-                ?,
-                CURRENT_TIMESTAMP(6),
-                CURRENT_TIMESTAMP(6)
-            )
-            ON DUPLICATE KEY UPDATE
-                close_time = VALUES(close_time),
-                open_price = VALUES(open_price),
-                high_price = VALUES(high_price),
-                low_price = VALUES(low_price),
-                close_price = VALUES(close_price),
-                volume = VALUES(volume),
-                quote_asset_volume = VALUES(quote_asset_volume),
-                number_of_trades = VALUES(number_of_trades),
-                taker_buy_base_volume = VALUES(taker_buy_base_volume),
-                taker_buy_quote_volume = VALUES(taker_buy_quote_volume),
-                closed = VALUES(closed),
-                updated_at = CURRENT_TIMESTAMP(6)
+        return write(symbol,intervalCode,openTime,closeTime,openPrice,highPrice,lowPrice,closePrice,
+            volume,quoteAssetVolume,numberOfTrades,takerBuyBaseVolume,takerBuyQuoteVolume,closed,"BACKFILL",null);
+    }
+    /** FIX-153: result is valid only after the caller's INPUT transaction commits.
+     * Token read-back compares immutable receipt identity, never a racy pre-read of closed state. */
+    public Transition upsertRuntime(String symbol,String intervalCode,Instant openTime,Instant closeTime,
+        BigDecimal openPrice,BigDecimal highPrice,BigDecimal lowPrice,BigDecimal closePrice,
+        BigDecimal volume,BigDecimal quoteAssetVolume,Long numberOfTrades,BigDecimal takerBuyBaseVolume,
+        BigDecimal takerBuyQuoteVolume,boolean closed,String token) {
+        source.requireLocalWriter();
+        write(symbol,intervalCode,openTime,closeTime,openPrice,highPrice,lowPrice,closePrice,
+            volume,quoteAssetVolume,numberOfTrades,takerBuyBaseVolume,takerBuyQuoteVolume,closed,"RUNTIME",closed?token:null);
+        return local.queryForObject("SELECT closed,close_time,close_transition_token,ingestion_source FROM candle WHERE symbol=? AND interval_code=? AND open_time=?",
+            // Provenance deliberately does not participate here. A legacy NULL row that
+            // the live stream closes is a genuine close transition; BACKFILL never writes
+            // a token, so it cannot manufacture a dispatchable transition.
+            (rs,n)->new Transition(closed && token.equals(rs.getString(3)),
+                rs.getTimestamp(2).toInstant(),rs.getString(3),rs.getBoolean(1)),symbol,intervalCode,Timestamp.from(openTime));
+    }
+    /** `alreadyClosed` is diagnostic only; the matching token is the sole dispatch authority. */
+    public record Transition(boolean transitionedToClosed,Instant closeTime,String token,boolean alreadyClosed) {}
 
-            """, symbol, intervalCode, Timestamp.from(openTime), Timestamp.from(closeTime), openPrice, highPrice, lowPrice, closePrice, volume, quoteAssetVolume, numberOfTrades, takerBuyBaseVolume, takerBuyQuoteVolume, closed);
+    /**
+     * Authoritative recovery is intentionally update-only.  Unlike ordinary
+     * REST backfill it can never insert an absent identity and it never makes a
+     * runtime close token.  This keeps a late recovery from stealing a normal
+     * live close admission.
+     */
+    public boolean finalizeExistingOpenFromAuthoritative(String symbol,String intervalCode,Instant openTime,Instant closeTime,
+        BigDecimal openPrice,BigDecimal highPrice,BigDecimal lowPrice,BigDecimal closePrice,
+        BigDecimal volume,BigDecimal quoteAssetVolume,Long numberOfTrades,BigDecimal takerBuyBaseVolume,
+        BigDecimal takerBuyQuoteVolume) {
+        source.requireLocalWriter();
+        return local.update("""
+            UPDATE candle SET close_time=?,open_price=?,high_price=?,low_price=?,close_price=?,volume=?,
+              quote_asset_volume=?,number_of_trades=?,taker_buy_base_volume=?,taker_buy_quote_volume=?,
+              closed=1,updated_at=CURRENT_TIMESTAMP(6)
+            WHERE symbol=? AND interval_code=? AND open_time=? AND closed=0
+              AND (ingestion_source IS NULL OR ingestion_source<>'BACKFILL')
+            """, Timestamp.from(closeTime),openPrice,highPrice,lowPrice,closePrice,volume,quoteAssetVolume,
+            numberOfTrades,takerBuyBaseVolume,takerBuyQuoteVolume,symbol,intervalCode,Timestamp.from(openTime)) == 1;
+    }
+
+    /**
+     * Exact authoritative gap repair is pure insert-if-absent.  Do not replace
+     * this with ON DUPLICATE KEY UPDATE: a live row may arrive while REST is in
+     * flight and must remain untouched so its normal close can own the token.
+     */
+    public boolean insertAuthoritativeGapBackfill(String symbol,String intervalCode,Instant openTime,Instant closeTime,
+        BigDecimal openPrice,BigDecimal highPrice,BigDecimal lowPrice,BigDecimal closePrice,
+        BigDecimal volume,BigDecimal quoteAssetVolume,Long numberOfTrades,BigDecimal takerBuyBaseVolume,
+        BigDecimal takerBuyQuoteVolume) {
+        source.requireLocalWriter();
+        try {
+            return local.update("""
+                INSERT INTO candle(symbol,interval_code,open_time,close_time,open_price,high_price,low_price,close_price,
+                    volume,quote_asset_volume,number_of_trades,taker_buy_base_volume,taker_buy_quote_volume,
+                    closed,ingestion_source,close_transition_token,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,'BACKFILL',NULL,CURRENT_TIMESTAMP(6),CURRENT_TIMESTAMP(6))
+                """,symbol,intervalCode,Timestamp.from(openTime),Timestamp.from(closeTime),openPrice,highPrice,lowPrice,
+                closePrice,volume,quoteAssetVolume,numberOfTrades,takerBuyBaseVolume,takerBuyQuoteVolume) == 1;
+        } catch (org.springframework.dao.DuplicateKeyException duplicate) {
+            return false;
+        }
+    }
+    private int write(String symbol,String intervalCode,Instant openTime,Instant closeTime,
+        BigDecimal openPrice,BigDecimal highPrice,BigDecimal lowPrice,BigDecimal closePrice,
+        BigDecimal volume,BigDecimal quoteAssetVolume,Long numberOfTrades,BigDecimal takerBuyBaseVolume,
+        BigDecimal takerBuyQuoteVolume,boolean closed,String provenance,String token) {
+        String duplicateClause = "BACKFILL".equals(provenance) ? """
+            ON DUPLICATE KEY UPDATE
+                -- REST/backfill is authoritative enough to finish an interrupted open
+                -- candle, but never changes a completed candle, provenance or token.
+                close_time=IF(closed=1,close_time,VALUES(close_time)),
+                open_price=IF(closed=1,open_price,VALUES(open_price)),
+                high_price=IF(closed=1,high_price,VALUES(high_price)),
+                low_price=IF(closed=1,low_price,VALUES(low_price)),
+                close_price=IF(closed=1,close_price,VALUES(close_price)),
+                volume=IF(closed=1,volume,VALUES(volume)),
+                quote_asset_volume=IF(closed=1,quote_asset_volume,VALUES(quote_asset_volume)),
+                number_of_trades=IF(closed=1,number_of_trades,VALUES(number_of_trades)),
+                taker_buy_base_volume=IF(closed=1,taker_buy_base_volume,VALUES(taker_buy_base_volume)),
+                taker_buy_quote_volume=IF(closed=1,taker_buy_quote_volume,VALUES(taker_buy_quote_volume)),
+                updated_at=IF(closed=1,updated_at,CURRENT_TIMESTAMP(6)),
+                closed=GREATEST(closed,VALUES(closed))
+            """ : """
+            ON DUPLICATE KEY UPDATE
+                close_time=IF(closed=1,close_time,VALUES(close_time)),
+                open_price=IF(closed=1,open_price,VALUES(open_price)),
+                high_price=IF(closed=1,high_price,VALUES(high_price)),
+                low_price=IF(closed=1,low_price,VALUES(low_price)),
+                close_price=IF(closed=1,close_price,VALUES(close_price)),
+                volume=IF(closed=1,volume,VALUES(volume)),
+                quote_asset_volume=IF(closed=1,quote_asset_volume,VALUES(quote_asset_volume)),
+                number_of_trades=IF(closed=1,number_of_trades,VALUES(number_of_trades)),
+                taker_buy_base_volume=IF(closed=1,taker_buy_base_volume,VALUES(taker_buy_base_volume)),
+                taker_buy_quote_volume=IF(closed=1,taker_buy_quote_volume,VALUES(taker_buy_quote_volume)),
+                close_transition_token=IF(closed=0 AND VALUES(closed)=1,VALUES(close_transition_token),close_transition_token),
+                updated_at=IF(closed=1,updated_at,CURRENT_TIMESTAMP(6)),
+                closed=GREATEST(closed,VALUES(closed))
+            """;
+        // FIX-153: backfill inserts missing identities only, so it cannot fabricate a runtime close.
+        return local.update("""
+            INSERT INTO candle(symbol,interval_code,open_time,close_time,open_price,high_price,low_price,close_price,
+                volume,quote_asset_volume,number_of_trades,taker_buy_base_volume,taker_buy_quote_volume,
+                closed,ingestion_source,close_transition_token,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP(6),CURRENT_TIMESTAMP(6))
+            """ + duplicateClause,symbol,intervalCode,Timestamp.from(openTime),Timestamp.from(closeTime),openPrice,highPrice,lowPrice,
+            closePrice,volume,quoteAssetVolume,numberOfTrades,takerBuyBaseVolume,takerBuyQuoteVolume,closed,provenance,token);
     }
 }

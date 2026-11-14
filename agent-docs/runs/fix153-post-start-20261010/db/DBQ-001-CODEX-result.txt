@@ -1,0 +1,7 @@
+exit_code=0
+duration_ms=103
+row_count=n/a
+--- stdout ---
+
+--- stderr ---
+

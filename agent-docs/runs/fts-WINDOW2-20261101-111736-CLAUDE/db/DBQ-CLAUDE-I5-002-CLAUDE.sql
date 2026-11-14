@@ -1,0 +1,1 @@
+SELECT o.* FROM execution_opportunity o WHERE o.id IN (35535,36524,37621,37952,39062,40290) ORDER BY o.id

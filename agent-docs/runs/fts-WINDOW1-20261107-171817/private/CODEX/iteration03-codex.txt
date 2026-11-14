@@ -1,0 +1,69 @@
+## FINDINGS
+
+- Scope retained exactly: `paper_position` IDs `182, 172, 162, 158, 143, 137`.
+- No permitted DB-result artifact exists in `db/CODEX`; no per-trade UTC/KSA timeline or latency can be established.
+- The only directly inspected runtime log is `logs/crypto-ai-trader.log`, spanning UTC `2026-10-19 14:32:18.902` to `14:32:36.235` (KSA `17:32:18.902` to `17:32:36.235`). It precedes the study snapshot by 19 days and contains no labeled match for any frozen paper-position ID.
+- This log records unavailable Binance clock sync at UTC `2026-10-19 14:32:32.109` (KSA `17:32:32.109`), failed bootstrap across symbols/intervals, and WebSocket connection failure at UTC `14:32:34.131` (KSA `17:32:34.131`). It cannot be attributed to any frozen trade without their symbols and lifecycle times.
+- Application logs are UTC-formatted but asynchronous and lossy under queue saturation; retention is bounded. Therefore absent log lines are never proof that an exit/protection event did not occur. [logback-spring.xml](C:/workspace/crypto-ai-trader-mysql/src/main/resources/logback-spring.xml:30)
+
+## EVIDENCE
+
+### PROJECT EVIDENCE
+
+- Protection logs terminal stop, TP, profit-lock, and signal exits by symbol/price—not by `paper_position.id`; some management logs use `wallet_managed_position.id`. [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:168)
+- `production_exit_audit` is the durable bridge from paper position to wallet-position ID, close trigger, source signal, audit timestamp, and thresholds. [ProductionExitAuditService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:29)
+- The current log’s failure sequence is environmental evidence only; no frozen-trade linkage is present.
+- Archived application logs exist for October, but no uncompressed log coverage after `2026-10-19` is available in the workspace.
+
+### EXTERNAL RESEARCH
+
+- None.
+
+### AGENT INFERENCE
+
+- Once the position rows establish symbol, opened/closed UTC times, and the audit establishes `wallet_position_id`, a bounded log search can correlate protection events by symbol and management-position ID. It must not use unrelated symbol-level log events as causation.
+
+## UNKNOWNS
+
+- Every frozen trade’s symbol, UTC/KSA open and close times, close reason, exit signal, and audit timestamp.
+- Whether the `2026-10-19` Binance connectivity failure overlapped any trade.
+- Candle-close → signal → entry, observation → protection, and trigger → committed-exit latencies.
+- Whether a stop/profit-lock threshold was crossed, accepted by protection, and committed without delay.
+- Whether archived or external runtime logs cover each trade’s actual lifecycle.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Establish exact bounded UTC windows and durable position-to-audit/wallet/signal correlation for timing and log forensics, while confirming the actual schema before later joins.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'production_exit_audit',
+      'wallet_managed_position',
+      'trade_signal',
+      'market_price_event',
+      'position_management_event'
+  )
+ORDER BY table_name, ordinal_position;
+
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+
+SELECT *
+FROM crypto_ai.production_exit_audit
+WHERE paper_position_id IN (182, 172, 162, 158, 143, 137)
+ORDER BY paper_position_id, audited_at;
+```
+### END_DB_REQUEST

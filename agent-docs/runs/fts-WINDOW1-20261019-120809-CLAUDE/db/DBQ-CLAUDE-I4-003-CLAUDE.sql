@@ -1,0 +1,1 @@
+SELECT symbol, interval_code, stage, started_at, finished_at, elapsed_ms, outcome, thread_name FROM crypto_ai.fix129_stage_timing WHERE started_at BETWEEN '2026-10-11 22:00:00' AND '2026-10-11 23:00:00' AND elapsed_ms >= 1000 ORDER BY elapsed_ms DESC LIMIT 50

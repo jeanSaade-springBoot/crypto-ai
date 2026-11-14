@@ -1,0 +1,196 @@
+# Iteration 2: database forensics for the six frozen losing trades (Claude)
+
+**Bottom line:** four of the six losses (78, 91, 96, 104) share one cause. The system bought while the 1h signal said SELL, then sold on that same 1h SELL as soon as the 5m signal went NEUTRAL. Each of those four lost 1–2 price ticks within 5–17 minutes. Trade 101 was a "protected-profit" exit that still closed below the entry price. Trade 82 looks like a valid loss, but it was entered with a reward smaller than its risk.
+
+This was analysis only: no code, config, DB, git or deploy changes. I did not read the CODEX folder, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log or the other agent's memory. Plan mode was active, but there was no plan-file write or ExitPlanMode tool, so this text is the whole deliverable. My iteration-1 error log (stderr) was empty.
+
+## FINDINGS
+
+**F1. The FIX-154 BUY change is running in Production; AGENTS.md says it is not built (PROJECT EVIDENCE: DBQ-CLAUDE-I1-001, I1-006)**
+- The FIX-154 schema change V107 was applied 2026-10-10 00:15:21 UTC (03:15:21 KSA). The follow-up V109 was applied at 01:52:45 UTC (04:52:45 KSA).
+- `buy_htf_assessment_audit` holds live rows (`replay_mode=0`) labelled "FIX-154 soft-HTF cap=25%" (row 1362).
+- AGENTS.md still calls FIX-154 "not-yet-implemented". I'm reporting the contradiction, not resolving it.
+
+**F2. Main pattern in trades 78, 91, 96 and 104: the entry ignores a 1h SELL that the exit later acts on (PROJECT EVIDENCE: DB I1-002/004/005/006/008 and code)**
+
+**At entry.** In all four, the newest 1h signal was a quality-valid SELL created 35–48 minutes before entry:
+
+| Trade | 1h SELL signal | Created (UTC) | Created (KSA) |
+|---|---|---|---|
+| 78 | 114160 | 17:00:07 | 20:00:07 |
+| 91 | 120186 | 21:00:06 | 00:00:06 (10-11) |
+| 96 | 121720 | 22:00:06 | 01:00:06 (10-11) |
+| 104 | 132367 | 05:00:07 | 08:00:07 |
+
+- `HigherTimeframeBuyAssessmentService.java:33-34` treats a 1h SELL as a "soft conflict": it relabels it NEUTRAL and caps the position at 25%.
+- The profile check then approves the BUY as `BALANCED_STRONG`.
+- Trade 96 went through the direct-BUY path (audit row 1362: raw 1h SELL, treated as NEUTRAL). Trades 78, 91 and 104 went through the 5m "wake-up" path, `ExecutionIntelligenceService.java:434-449` → `validateBuyContext(...,"SETUP_WAKEUP")`. Their wallet trades say "HTF profile=BALANCED_STRONG".
+
+**At exit.** No new 1h signal appeared between entry and exit in any of the four (DB-004).
+- `PositionExitPolicy.java:25-33` reads the raw 1h decision. When the 1h is SELL and the 5m is not BUY/WATCH, it closes with `HTF_SELL_CONFIRMED`.
+- Each exit fired a few seconds after the first 5m NEUTRAL:
+
+| Trade | 5m NEUTRAL signal | Time (UTC → KSA) | Exit (UTC → KSA) | 5m bars held |
+|---|---|---|---|---|
+| 78 | 115428 | 17:50:04 → 20:50:04 | 17:50:12 → 20:50:12 | 3 |
+| 91 | 121327 | 21:45:04 → 00:45:04 | 21:45:29 → 00:45:29 | 1 |
+| 96 | 122860 | 22:45:04 → 01:45:04 | 22:45:08 → 01:45:08 | 4 |
+| 104 | 133376 | 05:40:03 → 08:40:03 | 05:40:09 → 08:40:09 | 1 |
+
+- Exit times are the wallet execution times; the `paper_position` close times are about 1 s later.
+
+**What the evidence shows:**
+- The exit message says "1h turned SELL". That is false for these four: the 1h was already SELL at entry.
+- The class comment for `PositionExitPolicy.java:14` says "a fresh 1h SELL", but the code checks neither freshness nor whether the signal came after entry.
+- The entry treats the 1h SELL as NEUTRAL; the exit treats the same signal as SELL. So these positions closed at the first 5m NEUTRAL, and a 5m flip between WATCH and NEUTRAL is common (in trade 78's 2h window, about half the 5m bars were NEUTRAL).
+- The FIX-154 design in AGENTS.md only covers the entry, so nothing lines up the exit with it.
+- **Classification:** a confirmed inconsistency between the entry and exit logic (a logic/design defect), not stale data and not a delay.
+- **Caveat:** the working tree has uncommitted changes. I'm assuming the deployed exit logic matches it, because every recorded exit message matches line 30 exactly.
+
+**F3. The losses are 1–2 price ticks; the coins' tick size is about as large as their typical move (AGENT INFERENCE from DB I1-002/008)**
+
+| Trade | Coin | Entry → exit | Tick size | Ticks lost | Typical move (ATR) |
+|---|---|---|---|---|---|
+| 78 | PEPE | 4.06e-6 → 4.05e-6 | 1e-8 (≈0.25%) | 1 | 0.29% |
+| 96 | PEPE | 4.06e-6 → 4.05e-6 | 1e-8 (≈0.25%) | 1 | 0.22% |
+| 91 | SHIB | 5.48e-6 → 5.47e-6 | 1e-8 (≈0.18%) | 1 | 0.09% |
+| 104 | ENA | 0.2248 → 0.2246 | 0.0001 | 2 | 0.18% |
+
+- This explains why 78 and 96 lost exactly the same amount (iteration-1 F6): the same 25 USDT allocation at the same price, minus one tick.
+- With a tick larger than the typical move, the stop and target are effectively rounded to whole ticks. For trade 91 the target is 2 ticks away and the stop 3 ticks.
+
+**F4. Trade 78: the risk/reward was not recalculated for the actual fill price (PROJECT EVIDENCE: DB I1-003/008)**
+- Signal 115049 was priced at 4.05e-6, and its risk/reward ratio (reward ÷ risk) was 1.5.
+- The fill was at 4.06e-6 (wallet trade 195). The stop and target were kept from the signal.
+- At the fill price the real ratio was (4.085487−4.06)/(4.06−4.026342) ≈ **0.76**. I have not confirmed whether any gate re-checks this after the fill.
+
+**F5. Trades 82 and 91 were entered with risk/reward below 1 (PROJECT EVIDENCE: DB I1-003)**
+- Signal 115669 (trade 82) had a ratio of 0.453 and signal 121198 (trade 91) had 0.546. Both were marked `final_entry_allowed=1`.
+- A search of `src/main/java` found no minimum risk/reward check. This needs a code trace in iteration 3.
+- Classification: a candidate entry-quality defect, not confirmed.
+
+**F6. Trade 101: a "protected-profit" exit closed below entry (PROJECT EVIDENCE: DB I1-002/005/008 and code)**
+- The position was built in two buys: 15% at 0.9504 (wallet trade 257, 02:12:04 UTC → 05:12:04 KSA), then 35% at 0.9481 (wallet trade 258, 02:16:04 → 05:16:04). The average entry was 0.948789.
+- The paper position's target of 0.963551424473 equals 0.958630559740 + 0.5 × (0.958630559740 − 0.948788830275). That is the target-extension formula at `LivePositionProtectionService.java:108-110`, applied after the second buy.
+- That code only runs when the price is at or above the target, so a price at or above about 0.9586 (+1.0%) was apparently seen between 02:16:04 and 02:21:25 UTC.
+- The exit then fired at 0.9487 because the price was below the hard profit floor of 0.949263 (= average entry × 1.0005) (code line 191).
+- So the price apparently rose about 1% and fell back below entry within about 5 minutes. No price event between 0.9493 and 0.9487 shows up as triggering the floor, which suggests a jump between price events. A bad or outlier price event is also possible.
+- Result: a loss of 0.009% (−0.0047 USDT) on an exit meant to protect profit.
+- Open: was the 0.9586 print real, and how far apart were the price events? DB requests 002–004 cover this.
+
+**F7. Trade 82 (XLM): a valid loss under the rules, entered on old data (PROJECT EVIDENCE: DB I1-004/005/006)**
+- **Exit was valid:** 1m STRONG_SELL (117760), 5m SELL (117761, 19:25:04 UTC → 22:25:04 KSA), and 1h WATCH. The exit followed `SELL_CONFIRMED` correctly.
+- **Entry used an old 1h signal:**
+  - The entry check (audit row 1132) used 1h signal 114163, which was **3,782 s** old (63 minutes).
+  - The XLM 1h signal for the 17:00 UTC candle and the 5m signal for the 17:55 UTC candle are both **missing** from DB-004. The other symbols have no gap at their hour boundaries.
+  - This was still within the 3-hour limit (`TradeExecutionValidationService.java:43`), so it is not a rule breach. It is a data gap still to be explained.
+
+**F8. The wake-up path was audited under the 5m signal ID, not the 1m (AGENT INFERENCE from code)**
+- `validateBuyContext(fiveMinuteTrigger, …)` records the 5m trigger as the audit reference.
+- My I1-006 query filtered on the 1m IDs, so the SETUP_WAKEUP rows for trades 78, 91 and 104 were not retrieved. They are not proven missing. DB request 001 fixes this.
+
+**F9. Trade 104: the direct BUY was rejected, then the wake-up admitted it a second later (PROJECT EVIDENCE: DB I1-006/004/008)**
+- The direct-BUY check at 05:35:03.05 UTC used 5m signal 133124 (WATCH, 303 s old) and returned `BALANCED_CONFIRMATION_INSUFFICIENT`.
+- The 5m BUY 133251 was created 0.9 s later (05:35:03.96 UTC → 08:35:03 KSA). The wake-up path then admitted the trade at 05:35:05 UTC.
+- This is the intended design for the 1m-before-5m ordering, not a defect. Without F2 it would not have been harmful.
+
+**F10. A side note on FIX-154 (PROJECT EVIDENCE: code vs AGENTS.md)**
+- AGENTS.md says a hard veto needs strong 1h evidence plus fresh bearish 5m confirmation.
+- The code at `HigherTimeframeBuyAssessmentService.java:30-31` hard-vetoes on a 1h STRONG_SELL with confidence ≥70 alone.
+- This did not affect any frozen trade.
+
+**Provisional classification**
+
+| Trade | Classification |
+|---|---|
+| 78 | F2 defect, plus F4 fill-price risk/reward drift |
+| 91 | F2 defect, plus F5 risk/reward < 1 |
+| 96 | F2 defect |
+| 104 | F2 defect |
+| 101 | Protection gap (F6); cause not yet proven |
+| 82 | Valid loss; F5 risk/reward 0.45 and an unexplained 18:00 UTC (21:00 KSA) data gap |
+
+## EVIDENCE
+- **DB results:** DBQ-CLAUDE-I1-001 to I1-009, and DBQ-FTS-005.
+- **Code:**
+  - `PositionExitPolicy.java:14,25-33`
+  - `LivePositionProtectionService.java:95-97,100-133,185-199`
+  - `HigherTimeframeBuyAssessmentService.java:27-37`
+  - `TradeExecutionValidationService.java:43,81-113,128-162`
+  - `ExecutionIntelligenceService.java:66-71,397-457`
+- **External research:** none used.
+
+## UNKNOWNS
+- **U1:** What the wake-up audit rows say for trades 78, 91 and 104 (band and effective 1h).
+- **U2:** Trade 101's price path, target-extension and profit-lock events, and the gaps between price events.
+- **U3:** Why the XLM 17:00 UTC 1h signal and 17:55 UTC 5m signal are missing.
+- **U4:** Where risk/reward is gated, if it is at all; and why the target for 82 and 91 is below 1× the stop distance.
+- **U5:** How far each trade moved in its favour and against it while open (needs the candle schema).
+- **U6:** Whether `HTF_SELL_CONFIRMED` is net negative across all trades before and after FIX-154 (population check).
+- **U7:** Replay reproduction. Not attempted, because running Replay creates state.
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-001
+Purpose: U1/F8. FIX-154 audit for the wake-up 5m triggers and the 1m signals for trades 78/91/104.
+SQL:
+SELECT id, reference_signal_id, evaluation_path, evaluated_at, replay_mode, one_hour_signal_id, one_hour_raw_decision, one_hour_effective_decision, one_hour_age_seconds, five_minute_signal_id, five_minute_raw_decision, five_minute_effective_decision, assessment_band, max_initial_percent, final_result, LEFT(final_reason,400) AS final_reason FROM buy_htf_assessment_audit WHERE reference_signal_id IN (115050,121201,133251,115049,121198) ORDER BY reference_signal_id, evaluated_at LIMIT 50;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-002
+Purpose: U2/F6. Management events (target extension, profit lock, rebase) for the six wallet positions.
+SQL:
+SELECT id, wallet_position_id, symbol, event_type, old_value_usdt, new_value_usdt, market_price_usdt, LEFT(reason,600) AS reason, occurred_at FROM position_management_event WHERE wallet_position_id IN (107,111,120,125,130,133) ORDER BY wallet_position_id, occurred_at LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-003
+Purpose: U2/F6. AERO price events during trade 101 (did 0.9586 print; how far apart were the events).
+SQL:
+SELECT id, observed_at, price, source, source_received_at, delivery_status, outcome_reason, created_at FROM market_price_event WHERE symbol='AEROUSDT' AND observed_at BETWEEN '2026-10-11 02:12:00' AND '2026-10-11 02:22:00' ORDER BY observed_at LIMIT 600;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-004
+Purpose: U2/F6. Final protection state of the six wallet positions.
+SQL:
+SELECT id, symbol, entry_signal_id, quantity, average_entry_price_usdt, stop_loss_usdt, take_profit_usdt, highest_price_usdt, profit_lock_active, profit_lock_price_usdt, profit_lock_progress_percent, profit_lock_activated_at, profit_lock_state, profit_lock_rebase_started_at, entry_stage, allocated_position_percent, entry_quality_score, entry_decision, status, opened_at, updated_at FROM wallet_managed_position WHERE id IN (107,111,120,125,130,133) ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-005
+Purpose: Read the schemas before the candle, data-gap and opportunity queries.
+SQL:
+DESCRIBE candle; DESCRIBE candle_analysis_outcome; DESCRIBE execution_opportunity;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-006
+Purpose: U3/F7. 5m and 1h signal coverage at the 2026-10-10 18:00 UTC boundary across all symbols.
+SQL:
+SELECT symbol, interval_code, candle_open_time, generated_at, signal_mode, decision, data_quality_valid FROM trade_signal WHERE interval_code IN ('5m','1h') AND ((interval_code='5m' AND candle_open_time='2026-10-10 17:55:00') OR (interval_code='1h' AND candle_open_time='2026-10-10 17:00:00')) ORDER BY symbol, interval_code LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-007
+Purpose: U6. Population context: exit reasons by period, before and after V107 (aggregate only; no substitution of frozen trades).
+SQL:
+SELECT close_reason, CASE WHEN opened_at >= '2026-10-10 00:15:21' THEN 'POST_V107' ELSE 'PRE_V107' END AS period, status, COUNT(*) AS n, SUM(realized_pnl < 0) AS losers, ROUND(SUM(realized_pnl),6) AS pnl_sum, ROUND(AVG(TIMESTAMPDIFF(SECOND, opened_at, closed_at)),0) AS avg_hold_s FROM paper_position WHERE status IN ('CLOSED','STOPPED') AND closed_at >= '2026-10-03 00:00:00' GROUP BY close_reason, period, status ORDER BY period, close_reason;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-008
+Purpose: F4/F5. Risk-geometry fields on the entry signals (to trace where risk/reward and target are set).
+SQL:
+SELECT id, symbol, latest_price, stop_loss, take_profit, risk_reward_ratio, atr_percent, entry_authority, final_entry_allowed, primary_blocking_stage FROM trade_signal WHERE id IN (115049,115669,121198,122431,128170,133249,115050,121201,133251) ORDER BY id;
+### END_DB_REQUEST
+
+## Next step (iteration 3)
+- Confirm or reject the wake-up side of F2 from I2-001.
+- Settle F6 from I2-002 to I2-004.
+- Explain the data gap from I2-006, and send the candle queries for U5 once I have the schema (I2-005).
+- Trace where risk/reward and the target are computed (`AtrRiskService`, `AnalysisService`) for F4 and F5.
+
+**Labels:** F1, F2 (the evidence parts), F5, F6 (the arithmetic), F7 and F9 are PROJECT EVIDENCE. F3, F8 and the F6 explanation are AGENT INFERENCE. No EXTERNAL RESEARCH was used.

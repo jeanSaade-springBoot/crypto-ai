@@ -33,10 +33,12 @@ public class SharedMarketSource {
         c.addDataSourceProperty("socketTimeout", "5000");
         c.addDataSourceProperty("connectionTimeZone","UTC");
         c.addDataSourceProperty("forceConnectionTimeZoneToSession","true");
-        pool = new HikariDataSource(c); reader = new JdbcTemplate(pool); reader.setQueryTimeout(5);
+        pool = new HikariDataSource(c); reader = new JdbcTemplate(env.getProperty("diagnostics.jdbc.enabled",Boolean.class,true) ? new com.crypto.infrastructure.diagnostics.JdbcTimingDataSource(pool,"collector-read",env.getProperty("diagnostics.jdbc.slow-ms",Long.class,250L)) : pool); reader.setQueryTimeout(5);
         try {
-            if(!"crypto_ai_v2".equals(reader.queryForObject("SELECT DATABASE()",String.class)))
-                throw new IllegalStateException("FIX-132 shared connection must target crypto_ai_v2");
+            // FIX-149: validate the explicitly configured collector schema, distinct from the trader database.
+            String expectedSchema = env.getProperty("shared-market.source-schema", "crypto_ai_v2");
+            if(!expectedSchema.equals(reader.queryForObject("SELECT DATABASE()",String.class)))
+                throw new IllegalStateException("FIX-132 shared connection must target configured source schema " + expectedSchema);
         } catch(RuntimeException failure) { pool.close();throw failure; }
     }
     public boolean enabled() { return enabled; }

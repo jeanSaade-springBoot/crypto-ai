@@ -1,0 +1,40 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No Codex-owned iteration-1 artifact or database-result file exists at the permitted run locations. Therefore, none of the frozen trades’ records, selection proof queries, or timelines has been independently verified in this iteration.
+- **PROJECT EVIDENCE:** `paper_position` is the correct authoritative entity. It stores entry/exit signals, prices, P&L, reasons, and lifecycle timestamps. [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:12)
+- **PROJECT EVIDENCE:** The primary terminal-cause evidence should be `production_exit_audit`: it preserves `close_trigger` separately from the contextual signal and is unique per paper position. [ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:18)
+- **PROJECT EVIDENCE:** Intra-position protection must be reconstructed from accepted `market_price_event` evidence, not candle OHLC. Current source treats `LEGACY`/`APPLIED` as accepted evidence; `PENDING` is unresolved. [Architecture](/C:/workspace/crypto-ai-trader-mysql/codex-docs/ARCHITECTURE.md:160)
+- **AGENT INFERENCE:** No valid conclusion can yet be made that any of IDs **182, 172, 162, 158, 143, 137** was a strategy loss, execution defect, protection failure, or valid loss.
+
+## Time integrity
+
+- **AGENT INFERENCE:** The supplied snapshot pair is internally inconsistent. `2026-10-30 12:24:16 UTC` converts to `2026-10-30 15:24:16 KSA`, not the supplied `2026-10-29 20:47:57 KSA`.
+- The supplied KSA snapshot converts to `2026-10-29 17:47:57 UTC`. Until database proof is returned, I treat the charter’s selection as frozen scope rather than as a time-verified snapshot.
+
+## UNKNOWNS
+
+- Whether the six IDs satisfy the stated closed/negative-P&L selection at the preserved snapshot.
+- Each trade’s symbol, entry/exit UTC and KSA times, realized P&L, close reason, entry/exit signals, and wallet linkage.
+- Whether a matching `production_exit_audit`, managed position, accepted price event, or signal-processing work record exists.
+- Whether the loss was caused by stop-loss, profit-lock, take-profit handling, signal exit, partial harvest, data-quality interruption, or missing evidence.
+- Replay reproducibility.
+
+## DB_REQUEST
+
+```text
+QueryId: DBQ-CODEX-I2-001
+Purpose: Verify the live crypto_ai schema before selecting columns or joining evidence for the six frozen paper_position IDs.
+SQL:
+SHOW CREATE TABLE paper_position;
+SHOW CREATE TABLE trade_signal;
+SHOW CREATE TABLE production_exit_audit;
+SHOW CREATE TABLE wallet_managed_position;
+SHOW CREATE TABLE wallet_trade;
+SHOW CREATE TABLE position_analysis;
+SHOW CREATE TABLE market_price_event;
+SHOW CREATE TABLE signal_processing_work;
+SHOW CREATE TABLE candle;
+### END_DB_REQUEST
+```
+
+No external research was used. No code, configuration, database, Git, or deployment state was changed.

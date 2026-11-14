@@ -1,0 +1,5 @@
+DESCRIBE wallet_managed_position;
+DESCRIBE market_price_event;
+DESCRIBE position_management_event;
+DESCRIBE candle;
+DESCRIBE signal_processing_work;

@@ -1,0 +1,286 @@
+# FTS WINDOW2: Claude, Iteration 3 of 8 (log and timing forensics, self-review only)
+
+**Iteration headline:** none of the six losses was caused by timing, stale data or clock error. What did turn up:
+
+- **Wait-for-tick exits are slow.** They took 4.2–43.5 s after the candle closed.
+- **Entry-decision race.** On every 5-minute boundary, the 1m entry decision is made in a race with the 5m analysis of the same boundary.
+- **Audit timestamps are uncorrected.** They use the workstation's clock, which runs up to about 0.56 s behind Binance.
+- **The 10-17 outage was a manual launch that was then stopped**, not a pipeline failure.
+
+I changed nothing: no code, config, DB writes, git or deploy. Plan mode is on, and this session has no Write or ExitPlanMode tool, so this message is the iteration output. I did not open `private/CODEX/`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or Codex memory.
+
+**Inputs this iteration:**
+- DB results I2-001 to I2-007 and I2-009. **There is no I2-008 result file**, so that request is reissued below.
+- The uncompressed `logs/crypto-ai-trader.log` (10-17 session only).
+- Code: `MarketPriceEventService`, `ExchangeClockSynchronizer`, `BinanceKlineService:55-129`, `CandleClosedAnalysisWorker`, `AnalysisService:148-173`.
+- One web search.
+
+**Labels:** **[PE]** project evidence · **[ER]** external research · **[AI]** agent inference. All times are **KSA (UTC)**. DB values as displayed are KSA (F2-0). Log lines are UTC.
+
+---
+
+## FINDINGS
+
+### F3-1 [PE]: the stored timestamp columns hold true UTC (resolves U2-1)
+
+- I2-001 shows every audit time column is `timestamp(6)` (paper, wallet, signal, price event, candle and opportunity times).
+- The exceptions are `trade_signal.btc_context_evaluated_at` and `btc_signal_generated_at`, which are `datetime(6)`. They display as raw UTC, without the +3 h shift.
+
+### F3-2 [PE]: the trader and its MySQL database run on this Windows workstation and share one clock
+
+**Log evidence (10-17 session):**
+- `crypto-ai-trader.log:62`: "started by jeane in C:\workspace\crypto-ai-trader-mysql", from `target\classes`, "No active profile set".
+- Database connection `jdbc:mysql://localhost:3307/crypto_ai` (`:73`). Instance lock `C:\workspace\...\runtime\crypto-ai-trader.lock` (`:95`).
+
+**Clock-sync log values:**
+
+| Log line | Binance minus app clock | Binance minus DB clock |
+|---|---|---|
+| `:36` | 489 ms | 489 ms |
+| `:96` | 555 ms | 556 ms |
+| `:165` | 43 ms | 43 ms |
+| `:293` | 36 ms | 35 ms |
+| `:1040` | 263 ms | 263 ms |
+| `:8905` | 50 ms | 51 ms |
+
+- **[AI, strong]** The app and the database are on one machine with one clock. That clock runs 35–556 ms **behind** Binance, and the gap moves by hundreds of ms within minutes.
+- This explains F2-6, where rows were recorded as created before the Binance event they record.
+- Logs for 10-11 and 10-12 exist only as `.gz` files in the same folder. **[AI]** So the six frozen trades were almost certainly executed by this workstation too. The 10-11/10-12 clock values are inside those `.gz` files, which I cannot read (U3-1).
+
+### F3-3 [PE]: price-age checks correct for the clock gap; the audit timestamps do not
+
+**Corrected checks:**
+- Price acceptance (`MarketPriceEventService.java:39-44`) uses the Binance-corrected clock: future skew ≤2 s, maximum age 15 s.
+- Analysis eligibility (`CandleClosedAnalysisWorker.java:60-62, 150, 160`) and the closed-candle detector also use the corrected clock.
+- So the ~0.1–0.5 s gap could not wrongly accept or reject prices or analysis. **No trading effect.**
+
+**Uncorrected timestamps:**
+- A live signal's `generated_at` is the raw app clock (`AnalysisService.java:150`).
+- Database `created_at` defaults are the raw database clock.
+- Visible effect: signal 156820 has `generated_at` 20:58:59.999003, essentially the candle's close boundary. Signal 166141 has `generated_at` 03:02:59.987221 (10-12 00:02:59.987), 12 ms *before* the 1m close it appears to analyse (to be confirmed in I3-001).
+- Opportunity rows (`execution_opportunity`) also start before the minute boundary: 20:52:59.987, 21:00:59.972 (I2-009).
+
+**[AI]** Any latency worked out from these audit columns, including the worker's own `liveCloseToGenerationMs` log field (`CandleClosedAnalysisWorker.java:216-221`), is understated by up to ~0.56 s. A timestamp that seems to come before the candle closes is clock lag, not look-ahead. **It is a forensic-accuracy gap, not a trading defect.**
+
+### F3-4 [PE]: the entry path is fast and costs no slippage
+
+| ID | 1m close | Close → `generated_at` | Wallet BUY (time after close) | Paper row after wallet | Fill vs 1m close |
+|---|---|---|---|---|---|
+| 137 | 20:54:59.999 (17:54:59.999) | 1.58 s | 20:55:03.017 (+3.02 s) | +1.49 s | 3.999 = 3.999 |
+| 143 | 22:39:59.999 (19:39:59.999) | 1.64 s | 22:40:03.115 (+3.12 s) | +1.74 s | 4.033 vs 4.032 (+1 tick) |
+| 158 | 02:34:59.999 (10-11 23:34:59.999) | 1.47 s | 02:35:02.988 (+2.99 s) | +1.82 s | 1.4108 vs 1.4109 |
+| 162 | 04:01:59.999 (01:01:59.999) | 2.81 s | 04:02:04.210 (+4.21 s) | +2.21 s | 0.08705 = 0.08705 |
+| 172 | 06:35:59.999 (03:35:59.999) | 1.51 s | 06:36:02.935 (+2.94 s) | +2.15 s | 5.49e-6 = 5.49e-6 |
+| 182 | 09:56:59.999 (06:56:59.999) | 1.85 s | 09:57:04.232 (+4.23 s) | +2.24 s | 0.1884 = 0.1884 |
+
+- The opportunity row's `executed_at` equals the paper row's `opened_at` to the microsecond: 20:55:04.510238 for 137, 09:57:06.476246 for 182 and 04:02:06.413667 for 162 (2 µs earlier) (I2-009).
+- **[AI]** The paper position and the opportunity row are written together about 1.5–2.2 s *after* the wallet BUY. What runs in that window, and whether protection is already armed during it, is a code question for Iteration 4.
+- **Execution delay is rejected as a loss cause for all six.**
+
+### F3-5 [PE]: the exits that waited for a price update took 4.2–43.5 s after the deciding candle closed
+
+| ID | Exit path | Deciding candle close | Wallet SELL | Close → fill | Price at signal → fill |
+|---|---|---|---|---|---|
+| 137 | waited for update | 20:59:59.999 (17:59:59.999) | 21:00:08.935 | 8.94 s | 3.988 → 3.987 |
+| 158 | waited for update | 03:29:59.999 (00:29:59.999) | 03:30:04.217 | 4.22 s | 1.4089 → 1.409 |
+| 162 | signal (immediate) | 04:25:59.999 (01:25:59.999) | 04:26:04.134 | 4.14 s | filled at the signal's own price, 0.08675 |
+| 172 | waited for update | 07:14:59.999 (04:14:59.999) | 07:15:43.492 | **43.49 s** | 5.48e-6, unchanged |
+| 182 | waited for update | 10:04:59.999 (07:04:59.999) | 10:05:18.504 | **18.51 s** | 0.1880, unchanged |
+| 143 | price-update trigger | update at 22:43:35.021 | 22:43:35.046 | 25 ms | 4.027 |
+
+- The delay cost nothing in these six: about −0.001 for 137 and 0 for the rest.
+- **[AI]** Two exit styles exist. Signal exits (162) fill at once at the signal's price. The others wait for the next Binance price update, so in thinly traded symbols the delay has no upper bound. That is a design property, to be confirmed by code in Iteration 4.
+
+### F3-6 [PE]: analysis runs 1.5–4.5 s later on 5-minute boundaries, which adds directly to exit delay
+
+**Typical 1m `generated_at` after the close (I2-005):**
+
+| Symbol | Normal minute | On a 5-minute boundary |
+|---|---|---|
+| SHIB | :01.5 | :03.0–:06.0 |
+| DOGE | :02.8 | :05.1–:06.1 |
+| ACE | :01.8–:03.2 | :05.7 |
+
+- On a boundary, the 5m and 1h signals are produced within about 1–80 ms of the 1m signal (e.g. 165539/165540 at 02:40:01.44; 172198/172199/172201 at 07:00:06.02–06.11).
+- The time from `generated_at` to the row's `created_at` is about 1.3 s for most symbols, but 1.7–2.8 s for ACE (176857: 2.30 s; 176881: 2.80 s; 176792: 2.59 s).
+- **[AI]** The extra ACE time likely comes from enrichment work, such as liquidity or derivatives REST calls. That is unproven; I3-001 asks for `liquidity_evaluated_at` and `derivatives_evaluated_at`.
+- Exits for 137, 158, 172 and 182 were all decided on 5-minute boundaries.
+
+### F3-7 [PE + AI]: on 5-minute boundaries, the 1m entry decision races the 5m analysis of the same boundary
+
+- **137:** the 5m signal used, 156721, has a lower ID than the 1m signal 156723, so it was inserted first. The entry saw the current 5m signal.
+- **143:** 5m WATCH 159407 was inserted 8 ms before 1m 159408 (I1 F2-7). The entry still cited the previous 5m BUY 159285.
+- **158:** the wake-up came from 5m BUY 165415, generated 23 ms after the 1m WATCH.
+- **172 and 182:** not on a boundary.
+- **[AI]** 3 of the 6 entries happened on boundaries where the result depends on which thread commits first. This is the timing form of candidate F-18. Replay must order these signals the way production committed them, or parity is not guaranteed (U2-9).
+- I3-001 asks for `confluence_higher_signal_generated_at`, which shows which 5m signal each 1m confluence actually read.
+
+### F3-8 [PE + ER + AI]: price-update gaps come from the Binance feed, not from the app dropping updates (partly resolves U2-7)
+
+**Code:**
+- Every 1m kline message becomes a price event. The observed time is Binance's event time `E`, and the event type is set by `canonical="1m"` (`BinanceKlineService.java:94-106`).
+- An unchanged price is not filtered out: 143 shows 4.056 at both 22:40:23 and 22:40:25 (I2-004).
+- Only messages with the same timestamp are rejected (`MarketPriceEventService.java:66-72`).
+
+**External:** Binance documents a 2000 ms update speed for kline streams other than 1s. I found no source saying updates are skipped when nothing trades.
+
+**Data:**
+- EGLD (143) price updates arrive in about 2 s steps, with gaps of 4–14 s (e.g. 22:43:05 → 22:43:19 → 22:43:27 → 22:43:35).
+- In the candles, ACE 09:51 and 09:53 and SHIB 06:32 and 06:34 had 0–1 trades.
+
+**[AI]:** the gaps are the exchange's own update rate plus quiet markets. Whether Binance skips updates when nothing changes is still open; I3-007 tests this.
+
+### F3-9 [PE]: at each candle close, the single WebSocket thread queues price updates by about 40–100 ms
+
+- All ingestion runs on `WebSocketClient-SecureIO-1` (log), with candle, price and protection transactions done inline (`BinanceKlineService.java:101-111`).
+- For 143, the recorded latency (`created_at − observed_at`) is about 0–10 ms mid-minute. At candle closes it was 85 ms (22:41:00), 48 ms (22:42:00) and 104 ms (22:43:00).
+- **[AI]** This is head-of-line delay while about 21 symbols × 3 intervals close at once. It is immaterial at this size and not a defect.
+
+### F3-10 [PE]: correction to F2-11, the 10-17 stoppage
+
+**Run 1 (failed):**
+- PID 29384 started 03:11:41 (00:11:41).
+- It **applied migration V111** at 03:11:55 (00:11:55), which matches the Flyway history row installed at 03:11:55.
+- It then **failed to start** because no `ReplaySizingPolicy` bean existed (`crypto-ai-trader.log:38,47-60`).
+
+**Run 2:**
+- PID 3568 started 03:14:44 (00:14:44) and loaded the last 999–1001 candles per symbol and interval.
+- The last log line is 03:26:34.689 (00:26:34.689). There is **no** `INSTANCE_SHUTDOWN` or connection-pool shutdown line, unlike Run 1 (`:39-42`).
+- **[AI]** The process was stopped from outside (killed, IDE stop or host sleep). Its last line matches the last price event, 03:26:34.612.
+
+**Corrections to Iteration 2:**
+- The "1h stopped 2 days earlier" finding is **withdrawn as an artifact**. That session never reached an hour close: the 03:00 candle closes at 03:59:59.999, and the open 1h row exists (I2-007).
+- The 10-13, 10-14 and 10-15 data likewise look like short sessions run on demand (I2-007).
+
+**[AI] Operational findings, outside the six trades:**
+- The database schema was advanced by a build that could not start.
+- The session ran working-tree code. The git status at session start lists many modified tracked source files, and the log shows a `target\classes` launch.
+
+### F3-11: what the logs can and cannot prove
+
+- The only readable log covers 10-17 03:11:41–03:26:34 (00:11:41–00:26:34).
+- The logs covering the six trades are `.gz` files: `crypto-ai-trader.2026-10-11.*.log.gz` and `2026-10-12.*.log.gz`.
+- **No log evidence for the six trades is claimed.** Everything above about them is from DB rows or code.
+
+---
+
+## SELF-REVIEW OF EARLIER CLAIMS
+
+| Earlier claim | Status |
+|---|---|
+| F2-6 "host clock ~150 ms slow" | **Refined.** It is the workstation clock, 35–556 ms behind and changing. Freshness checks are corrected; audit columns are not (F3-2, F3-3). |
+| F2-11 "1h pipeline stopped 10-15" | **Withdrawn** (F3-10). |
+| F2-3 "exit = next update after the signal" | **Kept.** Close-to-fill figures added (F3-5). |
+| F4 (I1) "decision persisted 1.5–2.8 s after close" | **Kept**, with the caveat that it is understated by ≤0.56 s (F3-3). |
+
+---
+
+## UNKNOWNS
+
+| ID | Unknown | Resolution |
+|---|---|---|
+| U3-1 | Log lines for the six trades: clock-sync values, `SIGNAL_SAVED` delays, FIX-11G authority lines, worker stages. They exist only in `.gz` logs that my tools cannot read. Needed: `logs/crypto-ai-trader.2026-10-11.{9..12}.log.gz` and `2026-10-12.{0..10}.log.gz`, filtered for `CLOCK_SYNC`, `SIGNAL_SAVED`, `FIX-11G`, `WORKER_STAGE` and the six symbols. | Coordinator extraction (no DB path) |
+| U3-2 | Which 5m signal each 1m confluence actually read (F3-7). | I3-001 |
+| U3-3 | What runs in the 1.5–2.2 s between wallet BUY and paper open; whether the wallet `executed_at` is the decision time or the commit time. | I3-002, then code in Iteration 4 |
+| U3-4 | Whether the app restarted during any of the six positions, and whether there was a protection gap. | I3-006 |
+| U3-5 | Whether Binance skips kline updates when nothing trades (F3-8). | I3-007 |
+| U3-6 | Opportunity rows for 143, 158 and 172, which the earlier LIMIT 40 cut off. | I3-003 |
+| U2-9 | Replay has not been run. | Iteration 5 (code trace) |
+
+---
+
+## DB REQUESTS
+
+Time literals are KSA, because the session is +03:00. The `btc_*` DATETIME columns display as UTC. All requests are read-only and bounded.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-001
+Purpose: Signal timing chain, and which higher-timeframe signal each 1m confluence read (U3-2, F3-3, F3-6, F3-7).
+SQL:
+SELECT id, symbol, interval_code, decision, candle_open_time, generated_at, created_at, TIMESTAMPDIFF(MICROSECOND, generated_at, created_at)/1000 AS gen_to_row_ms, confluence_evaluated_at, confluence_higher_signal_generated_at, confluence_higher_decision, btc_context_evaluated_at, btc_signal_generated_at, btc_context_candle_close_time, liquidity_evaluated_at, derivatives_evaluated_at FROM crypto_ai.trade_signal WHERE id IN (156723,156721,159408,159407,159285,165412,165415,167668,167616,171589,171559,176710,176655,156820,166141,156850,156852,166819,166821,168277,168251,172587,172588,176927,176934) ORDER BY symbol, generated_at;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-002
+Purpose: Fill and position write timing (U3-3, F3-4).
+SQL:
+SELECT id, signal_id, side, executed_at, created_at, TIMESTAMPDIFF(MICROSECOND, executed_at, created_at)/1000 AS exec_to_row_ms, execution_price_observed_at FROM crypto_ai.wallet_trade WHERE id IN (344,346,358,359,392,401,403,407,426,429,451,454) ORDER BY id;
+SELECT id, entry_signal_id, opened_at, updated_at, profit_lock_activated_at FROM crypto_ai.wallet_managed_position WHERE id IN (166,172,187,191,201,211) ORDER BY id;
+SELECT id, opened_at, closed_at FROM crypto_ai.paper_position WHERE id IN (182,172,162,158,143,137) ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-003
+Purpose: Get the opportunity rows for entries 143, 158 and 172 that were cut off (U3-6).
+SQL:
+SELECT id, symbol, status, started_at, last_evidence_at, latest_signal_id, five_minute_decision, one_hour_decision, execution_source, recommended_position_percent, decision_code, LEFT(decision_explanation, 400) AS decision_explanation, executed_at, created_at, updated_at FROM crypto_ai.execution_opportunity WHERE (symbol='EGLDUSDT' AND (executed_at BETWEEN '2026-10-11 22:39:55' AND '2026-10-11 22:41:00' OR updated_at BETWEEN '2026-10-11 22:39:55' AND '2026-10-11 22:41:00')) OR (symbol='XRPUSDT' AND (executed_at BETWEEN '2026-10-12 02:34:55' AND '2026-10-12 02:36:00' OR updated_at BETWEEN '2026-10-12 02:34:55' AND '2026-10-12 02:36:00')) OR (symbol='SHIBUSDT' AND (executed_at BETWEEN '2026-10-12 06:35:55' AND '2026-10-12 06:37:00' OR updated_at BETWEEN '2026-10-12 06:35:55' AND '2026-10-12 06:37:00')) ORDER BY symbol, updated_at LIMIT 20;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-004
+Purpose: Processing-work timing for the entry and exit signals, and the schema of the analysis-outcome tables.
+SQL:
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME IN ('candle_analysis_outcome','signal_processing_work') ORDER BY TABLE_NAME, ORDINAL_POSITION;
+SELECT * FROM crypto_ai.signal_processing_work WHERE signal_id IN (156723,159408,165412,165415,167668,171589,176710,156850,156852,166819,166821,168277,168251,172587,172588,176927,176934,159407,159285) ORDER BY signal_id LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-005
+Purpose: System-wide analysis delay across the trading window, by interval and 5-minute boundary (F3-3, F3-6).
+SQL:
+WITH s AS (SELECT symbol, interval_code, generated_at, created_at, CASE interval_code WHEN '1m' THEN DATE_ADD(candle_open_time, INTERVAL 60 SECOND) WHEN '5m' THEN DATE_ADD(candle_open_time, INTERVAL 300 SECOND) ELSE DATE_ADD(candle_open_time, INTERVAL 3600 SECOND) END AS close_excl FROM crypto_ai.trade_signal WHERE signal_mode='LIVE' AND candle_open_time IS NOT NULL AND generated_at BETWEEN '2026-10-11 20:00:00' AND '2026-10-12 10:30:00')
+SELECT interval_code, MOD(MINUTE(close_excl),5)=0 AS on_5m_boundary, COUNT(*) AS n, ROUND(AVG(TIMESTAMPDIFF(MICROSECOND, close_excl, generated_at))/1000) AS avg_close_to_gen_ms, MIN(TIMESTAMPDIFF(MICROSECOND, close_excl, generated_at))/1000 AS min_close_to_gen_ms, MAX(TIMESTAMPDIFF(MICROSECOND, close_excl, generated_at))/1000 AS max_close_to_gen_ms, SUM(generated_at < close_excl) AS gen_before_close, SUM(TIMESTAMPDIFF(MICROSECOND, close_excl, generated_at) > 5000000) AS gt_5s, ROUND(AVG(TIMESTAMPDIFF(MICROSECOND, generated_at, created_at))/1000) AS avg_gen_to_row_ms, MAX(TIMESTAMPDIFF(MICROSECOND, generated_at, created_at))/1000 AS max_gen_to_row_ms FROM s GROUP BY interval_code, on_5m_boundary ORDER BY interval_code, on_5m_boundary;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-006
+Purpose: Detect restarts or outages during the six positions: non-live candle inserts by hour, and BTC price-update gaps over 15 s (U3-4).
+SQL:
+SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:00') AS hour_ksa, ingestion_source, COUNT(*) AS n, MIN(created_at) AS first_created, MAX(created_at) AS last_created FROM crypto_ai.candle WHERE created_at BETWEEN '2026-10-11 19:00:00' AND '2026-10-12 11:00:00' AND (ingestion_source IS NULL OR ingestion_source <> 'RUNTIME') GROUP BY hour_ksa, ingestion_source ORDER BY hour_ksa, ingestion_source LIMIT 100;
+WITH e AS (SELECT observed_at, LAG(observed_at) OVER (ORDER BY observed_at) AS prev_obs FROM crypto_ai.market_price_event WHERE symbol='BTCUSDT' AND observed_at BETWEEN '2026-10-11 19:00:00' AND '2026-10-12 11:00:00') SELECT prev_obs AS gap_start, observed_at AS gap_end, TIMESTAMPDIFF(SECOND, prev_obs, observed_at) AS gap_s FROM e WHERE TIMESTAMPDIFF(SECOND, prev_obs, observed_at) > 15 ORDER BY gap_s DESC LIMIT 30;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-007
+Purpose: Compare price updates per minute with exchange trade count (U3-5, F3-8), and reissue the I2-008 gap summary, which has no result file.
+SQL:
+SELECT c.symbol, c.open_time, c.number_of_trades, c.volume, (SELECT COUNT(*) FROM crypto_ai.market_price_event e WHERE e.symbol=c.symbol AND e.observed_at >= c.open_time AND e.observed_at < DATE_ADD(c.open_time, INTERVAL 60 SECOND)) AS price_events, (SELECT COUNT(DISTINCT e.price) FROM crypto_ai.market_price_event e WHERE e.symbol=c.symbol AND e.observed_at >= c.open_time AND e.observed_at < DATE_ADD(c.open_time, INTERVAL 60 SECOND)) AS distinct_prices FROM crypto_ai.candle c WHERE c.interval_code='1m' AND ((c.symbol='SHIBUSDT' AND c.open_time BETWEEN '2026-10-12 06:36:00' AND '2026-10-12 07:15:00') OR (c.symbol='ACEUSDT' AND c.open_time BETWEEN '2026-10-12 09:57:00' AND '2026-10-12 10:05:00') OR (c.symbol='EGLDUSDT' AND c.open_time BETWEEN '2026-10-11 22:40:00' AND '2026-10-11 22:43:00')) ORDER BY c.symbol, c.open_time LIMIT 80;
+WITH t AS (SELECT p.id AS position_id, TIMESTAMPDIFF(MICROSECOND, LAG(e.observed_at) OVER (PARTITION BY p.id ORDER BY e.observed_at), e.observed_at)/1000000 AS gap_s FROM crypto_ai.paper_position p JOIN crypto_ai.market_price_event e ON e.symbol=p.symbol AND e.observed_at BETWEEN p.opened_at AND p.closed_at WHERE p.id IN (182,172,162,158,143,137)) SELECT position_id, COUNT(*) AS n, ROUND(AVG(gap_s),2) AS avg_gap_s, MAX(gap_s) AS max_gap_s, SUM(gap_s>5) AS gaps_gt5s, SUM(gap_s>15) AS gaps_gt15s FROM t GROUP BY position_id ORDER BY position_id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-008
+Purpose: Price-update ingest latency around each position: candle-close moments vs. mid-minute, and negative values (F3-2, F3-9).
+SQL:
+SELECT p.id AS position_id, SECOND(e.observed_at) <= 1 AS minute_boundary, COUNT(*) AS n, ROUND(AVG(TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at))/1000,1) AS avg_ms, MIN(TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at))/1000 AS min_ms, MAX(TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at))/1000 AS max_ms, SUM(e.created_at < e.observed_at) AS negative_n FROM crypto_ai.paper_position p JOIN crypto_ai.market_price_event e ON e.symbol=p.symbol AND e.observed_at BETWEEN DATE_SUB(p.opened_at, INTERVAL 5 MINUTE) AND p.closed_at WHERE p.id IN (182,172,162,158,143,137) GROUP BY p.id, minute_boundary ORDER BY p.id, minute_boundary;
+### END_DB_REQUEST
+
+---
+
+## STATUS AFTER ITERATION 3
+
+**Rejected as loss causes for all six [PE]:**
+- Stale data.
+- Clock skew affecting price checks or analysis eligibility.
+- Entry execution delay and slippage.
+- Exit delay cost.
+- App-side dropping of price updates.
+
+**Timing observations, not P&L defects:**
+- Exits that wait for a price update have unbounded delay in thin symbols (F3-5).
+- Analysis is 1.5–4.5 s slower on 5-minute boundaries (F3-6).
+- Audit timestamps are uncorrected by up to 0.56 s (F3-3).
+
+**Candidate defect, timing form:** on 5-minute boundaries the 1m entry decision races the 5m analysis of the same boundary (F3-7, linked to F-18). This also carries a Replay-parity risk.
+
+**Operational, outside the six:**
+- The trader runs on the workstation, from working-tree code.
+- V111 was applied by a build that failed to start.
+- The 10-17 session was stopped from outside.
+- The "1h stopped" finding is withdrawn (F3-10).
+
+**Next, Iteration 4:** code trace of the entry routes and the exit and protection paths. That covers wait-for-update vs. immediate signal exits, the gap between the wallet BUY and paper open, and the 5m lookup used in confluence.
+
+Sources:
+- [Binance Spot API: WebSocket Streams (kline update speed)](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)
+- [Binance connector: Spot WebSocket Streams](https://binance-connector.readthedocs.io/en/latest/binance.websocket_stream.spot.html)

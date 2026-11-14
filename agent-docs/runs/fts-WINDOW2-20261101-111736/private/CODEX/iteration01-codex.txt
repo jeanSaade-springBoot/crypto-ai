@@ -1,0 +1,34 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Study scope is exactly `crypto_ai.paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitution was made.
+- **PROJECT EVIDENCE:** The charter’s selection is asserted as six closed, negative-P&L paper positions. It is not yet independently verified because no Codex-specific DB result exists.
+- **PROJECT EVIDENCE:** The current entity maps entry signal, optional exit signal, prices, reasons, P&L, and open/close timestamps on `paper_position` ([PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:45)).
+- **PROJECT EVIDENCE:** A live mechanical exit writes `paper_position.closed_at` and then records a `production_exit_audit`, but this only describes possible code paths—not any frozen trade’s actual path ([LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:405)).
+- **PROJECT EVIDENCE:** `production_exit_audit` is intended to preserve the terminal trigger separately from the contextual signal and is unique per paper position ([ProductionExitAudit.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:29)).
+- **AGENT INFERENCE:** Position-to-wallet correlation may require signal/symbol/time evidence rather than a direct foreign key: the current source identifies an open paper position by symbol, while `wallet_managed_position` retains `entry_signal_id`. This must be verified against actual records.
+
+## UNKNOWNS
+
+- The six symbols, entry/exit timestamps, signals, close reasons, realized P&L components, and whether each exit had durable protection evidence.
+- Whether any loss was a valid stop/strategy outcome, stale-data case, execution delay, protection failure, or accounting discrepancy.
+- The physical database schema and indexes for this snapshot; source mappings are not a substitute.
+- No external research was used.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Establish the actual `crypto_ai` schema, keys, and available forensic columns before querying any frozen trade records.
+
+SQL:
+```sql
+SHOW CREATE TABLE paper_position;
+SHOW CREATE TABLE trade_signal;
+SHOW CREATE TABLE wallet_trade;
+SHOW CREATE TABLE wallet_managed_position;
+SHOW CREATE TABLE production_exit_audit;
+SHOW CREATE TABLE position_management_event;
+SHOW CREATE TABLE market_price_event;
+SHOW CREATE TABLE signal_processing_work;
+```
+
+### END_DB_REQUEST

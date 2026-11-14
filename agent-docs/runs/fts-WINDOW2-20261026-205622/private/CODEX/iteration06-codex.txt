@@ -1,0 +1,126 @@
+## FINDINGS
+
+**PROJECT EVIDENCE:** The frozen WINDOW2 cohort remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. The snapshot is **2026-10-26 18:07:57 UTC / 20:56:22 KSA**; the intended **18:00:00 KSA** state was not preserved.
+
+**PROJECT EVIDENCE:** The permitted `db/CODEX` evidence directory remains empty. No DBQ-FTS result or position row is available. Therefore, no per-trade root cause, entry/exit explanation, P&L reconciliation, or rule-compliance classification is supportable.
+
+**PROJECT EVIDENCE — candidate defect C1:** Live protection accepts `observedAt`, validates it, then invokes an overload that discards it. That overload selects the latest 1m/5m/1h signals without `generated_at <= observedAt` bounds. An accepted delayed observation can therefore use context generated after that observation. This is a source-level temporal-causality risk, not a confirmed cause for any frozen loss. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:54) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:95)
+
+**PROJECT EVIDENCE — candidate defect C2:** Signal-linked closing persists `paper_position` as closed before invoking the wallet exit; wallet exceptions are caught and logged. This can create a closed paper record without a corresponding wallet mutation. Mechanical protection exits are different: they close paper only after `executeMechanicalExit(...)` reports success. This is a reconciliation risk only until the six records are traced. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:165)
+
+**AGENT INFERENCE:** The only defensible current root-cause conclusion is **insufficient durable evidence**. C1 and C2 are testable hypotheses, not attribution to trades 182, 172, 162, 158, 143, or 137.
+
+**EXTERNAL RESEARCH:** None used; this iteration’s research is limited to the isolated project evidence and current source.
+
+## UNKNOWNS
+
+- All six trades’ symbols, entry/exit UTC times, KSA conversions, close reasons, quantities, prices, stops, targets, and losses.
+- Whether each closure was mechanical protection or signal-linked.
+- Whether accepted price observations exist, and whether any relevant context signal was generated after its observation time.
+- Whether paper and wallet execution records reconcile.
+- Historical runtime version/configuration and Replay comparability.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Confirm the actual production forensic schema and foreign-key relationships before interpreting the frozen positions or assuming migration state.  
+SQL:
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key
+FROM information_schema.columns c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'production_exit_audit',
+      'wallet_managed_position',
+      'wallet_trade',
+      'trade_signal',
+      'market_price_event'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+
+SELECT
+    k.table_name,
+    k.constraint_name,
+    k.column_name,
+    k.referenced_table_name,
+    k.referenced_column_name
+FROM information_schema.key_column_usage k
+WHERE k.table_schema = 'crypto_ai'
+  AND (
+      k.table_name IN (
+          'paper_position',
+          'production_exit_audit',
+          'wallet_managed_position',
+          'wallet_trade',
+          'trade_signal',
+          'market_price_event'
+      )
+      OR k.referenced_table_name = 'paper_position'
+  )
+ORDER BY k.table_name, k.constraint_name, k.ordinal_position;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I6-002  
+Purpose: Retrieve the authoritative lifecycle and immutable exit-audit evidence for the six frozen losses only, including the entry and exit-context signal timestamps needed to test C1. All returned timestamps are UTC.  
+SQL:
+SELECT
+    p.*,
+    a.id AS exit_audit_id,
+    a.wallet_position_id,
+    a.close_trigger,
+    a.source_signal_id AS audit_source_signal_id,
+    a.source_signal_decision,
+    a.source_signal_original_decision,
+    a.position_analysis_id,
+    a.position_recommendation,
+    a.entry_price_usdt AS audit_entry_price,
+    a.exit_price_usdt AS audit_exit_price,
+    a.stop_loss_usdt AS audit_stop_loss,
+    a.take_profit_usdt AS audit_take_profit,
+    a.close_explanation,
+    a.audited_at,
+    entry_signal.generated_at AS entry_signal_generated_at_utc,
+    exit_signal.generated_at AS exit_signal_generated_at_utc,
+    audit_signal.generated_at AS audit_source_signal_generated_at_utc
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.production_exit_audit a
+  ON a.paper_position_id = p.id
+LEFT JOIN crypto_ai.trade_signal entry_signal
+  ON entry_signal.id = p.signal_id
+LEFT JOIN crypto_ai.trade_signal exit_signal
+  ON exit_signal.id = p.exit_signal_id
+LEFT JOIN crypto_ai.trade_signal audit_signal
+  ON audit_signal.id = a.source_signal_id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I6-003  
+Purpose: Obtain bounded, in-holding-period price-event evidence for the frozen trades. This is required to identify accepted observation time, outcome, and any possible C1 future-context comparison; it does not substitute candle OHLC for protection evidence.  
+SQL:
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.opened_at AS paper_opened_at_utc,
+    p.closed_at AS paper_closed_at_utc,
+    p.stop_loss,
+    p.take_profit,
+    p.exit_price,
+    p.close_reason,
+    mpe.*
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.market_price_event mpe
+  ON mpe.symbol = p.symbol
+ AND mpe.observed_at >= p.opened_at
+ AND mpe.observed_at <= p.closed_at
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, mpe.observed_at, mpe.id
+LIMIT 5000;
+### END_DB_REQUEST

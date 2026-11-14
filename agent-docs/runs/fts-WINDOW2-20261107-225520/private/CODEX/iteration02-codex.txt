@@ -1,0 +1,37 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The frozen study population remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitute trades were considered.
+- **PROJECT EVIDENCE:** The permitted `db/CODEX` evidence directory exists but contains **0 files**. No database query result has been supplied/executed for this track.
+- **PROJECT EVIDENCE:** Source maps `paper_position` to entry/exit signals, entry/exit price, quantity, stop, target, realized P&L, close reason, and UTC open/close timestamps.
+- **AGENT INFERENCE:** No trade-specific causal conclusion is presently defensible. Entry quality, exit path, protection behavior, and P&L reconciliation require the six durable position rows first.
+- **PROJECT EVIDENCE:** Snapshot timestamps conflict by two seconds: `2026-11-07 19:55:22 UTC` converts to `2026-11-07 22:55:22 KSA`, while the supplied KSA snapshot is `22:55:20`. This does not change the frozen IDs, but it prevents treating the stated KSA snapshot as an exact conversion.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Stored database timestamps must be interpreted as UTC and reported as UTC plus KSA (`UTC+03:00`).
+- **PROJECT EVIDENCE:** Prior iteration’s schema request, `DBQ-CODEX-I1-001`, has no result artifact in the permitted evidence directory.
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- Whether every frozen ID still satisfies the stated closed/loss selection predicate.
+- Symbol, side, quantity, entry/exit prices, stop/target, realized P&L, close reason, and lifecycle times for each position.
+- Entry/exit signal linkage and whether any exit was protection-, signal-, or manually driven.
+- Signal freshness, data quality, strategy/risk context, work status, fees, and accepted price-event evidence.
+- Environment/runtime mode and configuration active at entry.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Retrieve only the six frozen authoritative `crypto_ai.paper_position` records, verify they still meet the stated closed-loss predicate, and obtain the bounded lifecycle evidence needed for subsequent signal/protection forensics.  
+SQL:
+```sql
+SELECT p.*
+FROM crypto_ai.paper_position AS p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+  AND p.status = 'CLOSED'
+  AND p.closed_at IS NOT NULL
+  AND p.realized_pnl < 0
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST

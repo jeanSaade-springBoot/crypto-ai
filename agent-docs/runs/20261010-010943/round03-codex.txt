@@ -1,0 +1,51 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** Position 35 / managed position 64 opened from signal 89469 at `2026-10-09T20:45:05.997Z` (`23:45:05.997 KSA`) and wallet trade 107 sold at `20:58:43.554Z` (`23:58:43.554 KSA`). This excludes the later 90192/65 trade.
+
+- **PROJECT EVIDENCE — Q1:** The system exited through the live-price `PROFIT_LOCK_EXIT` path, not take-profit. The recorded TP was `0.000005433730`; persisted highest protected price was `0.000005430000`, below TP. The lock was armed at `20:58:09.534Z` / `23:58:09.534 KSA`, at `0.000005421865`; the recorded exit price was `0.000005420000`, below that lock.
+
+- **PROJECT EVIDENCE:** The policy arithmetic is consistent: `84.2815%` TP progress activates the 70% lock and completes one 10% trail step, yielding a 50%-progress lock of `0.000005421865`. At the breach, latest context was 1m `WATCH` 89795, 5m `WATCH` 89724, and 1h `NEUTRAL` 88327. `NEUTRAL` 1h satisfies neither protected-hold branch, so the default result is `PROFIT_LOCK_EXIT`.
+
+- **PROJECT EVIDENCE — Q2:** No continuation occurred because live continuation is evaluated only when the live price is at or above TP. That condition was not reached by the system’s accepted/protected price path, and the position closed roughly 39 minutes before the `00:38 KSA` candle on 10 October (`21:38Z`). If “12:38 KSA” means noon, the supplied evidence does not cover it.
+
+- **PROJECT EVIDENCE — Q3:** Protection did not forecast remaining upside after a lock breach. Its ordering is TP checkpoint → stop loss → profit-lock evaluation → lock-breach policy. Continuation is absent from the lock-breach branch. The later rise is outcome-only information.
+
+- **PROJECT EVIDENCE:** Claude’s material correction is valid: `PaperTradingService` has a second, candle-close signal-price mechanical path. It can close at TP or profit lock without calling continuation or the higher-timeframe lock-hold policy. It did not cause this exit: the next eligible 1m signal, 89815, was generated at `20:59:02.743Z`, after trade 107 at `20:58:43.554Z`.
+
+- **AGENT INFERENCE:** Had the live breach been held, signal 89815 would likely have triggered the separate signal-price profit-lock close about 19 seconds later at its stored `0.000005420000` price. This is counterfactual, not proof of an identical runtime outcome.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** The query connection used MySQL `SYSTEM` time (KSA); this report converts its displayed timestamps to UTC by subtracting three hours. [DBQ-005](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-005-CODEX-result.txt:6)
+
+- **PROJECT EVIDENCE:** BUY 106, SELL 107, exact sell reason, price, lock, progress, and decision labels are recorded here. [DBQ-002](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-002-CODEX-result.txt:10)
+
+- **PROJECT EVIDENCE:** Managed position 64 records the TP, high, active lock, lock price, activation time, and closed state. [DBQ-014](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-014-CODEX-result.txt:6)
+
+- **PROJECT EVIDENCE:** Exit-context signals 88327, 89724, 89795 and post-exit 89815 are recorded here. [DBQ-010](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-010-CODEX-result.txt:8)
+
+- **PROJECT EVIDENCE:** The later `00:38 KSA` price candle is after closure. [DBQ-009](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-009-CODEX-result.txt:10)
+
+- **PROJECT EVIDENCE:** Live protection calls continuation only in its TP branch; the triggered-lock branch calls `PositionExitPolicy` and sells on its exit result. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:100) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:219)
+
+- **PROJECT EVIDENCE:** The default lock-breach policy returns `PROFIT_LOCK_EXIT`; the recorded explanation matches that branch. [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:57)
+
+- **PROJECT EVIDENCE:** The signal path has the identified divergence: it directly closes TP and profit-lock cases. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:170) [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:176)
+
+## OBJECTIONS
+
+- **PROJECT EVIDENCE:** “TP was never reached” must mean “no protected/system-accepted price reached TP.” Protection receives Binance kline field `c`, not field `h`; it does not use candle highs for exits. [BinanceKlineService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BinanceKlineService.java:91) [BinanceKlineService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/BinanceKlineService.java:104)
+
+- **PROJECT EVIDENCE:** Exact-price Replay omits the signal-price TP/profit-lock mechanics; fallback Replay models them differently, including continuation and lock-hold policy. Therefore neither proves Production parity for a proposed continuation/hold rule. [ShadowProductionReplayService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:183) [ShadowProductionReplayService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:562)
+
+- **AGENT INFERENCE:** One later upswing cannot support a strategy-improvement claim. Any proposed rule needs out-of-sample testing, fees/slippage, adverse movement, and corrected Replay/Production parity.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** The preserved DB bundle has no `market_price_event` rows for the trigger, and the read-only DB credential is unavailable. I therefore cannot name or independently validate the precise accepted price-event ID.
+
+- **PROJECT EVIDENCE:** The worktree is dirty and no immutable binary hash/configuration snapshot for the pre-exit runtime is preserved. Current source is corroborative; the persisted trade 107 reason/message is the direct runtime evidence.
+
+- **PROJECT EVIDENCE:** There is no evidence that Binance never printed TP between received kline updates; only that this system did not act on such a price.
+
+VERDICT: APPROVED

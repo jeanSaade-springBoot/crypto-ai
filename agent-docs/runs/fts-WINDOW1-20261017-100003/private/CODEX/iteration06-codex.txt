@@ -1,0 +1,78 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No files/results exist in the permitted `db/CODEX` evidence directory. Therefore, the root cause of the losses for frozen positions `182, 172, 162, 158, 143, 137` is **not yet determinable**. This is an evidence limitation, not a conclusion that the trades share one cause.
+
+- **PROJECT EVIDENCE:** Current code has distinct close routes: live price protection can close on `TAKE_PROFIT`, absolute `STOP_LOSS`, protected-profit/profit-lock outcomes, or confirmed multi-timeframe bearish exits; signal processing can also close a paper position. The actual route for each frozen trade requires its persisted position, wallet, audit, signal, and accepted price-event records. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:164), [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:20)
+
+- **PROJECT EVIDENCE:** A direct price event is evidence of successful protection only when its durable state is `APPLIED`; `PENDING`, `NON_CANONICAL`, and `PROTECTION_NOT_APPLIED` cannot establish a committed protection effect. Even `APPLIED` may be a no-op when no position was open, so it must be correlated to the actual position/wallet mutation. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:86)
+
+- **PROJECT EVIDENCE:** `paper_position.realized_pnl` may include prior partial-harvest P&L, so terminal position data alone cannot fully reconcile each loss. Wallet execution and immutable exit-audit evidence are required. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:391)
+
+- **EXTERNAL RESEARCH:** Binance kline payload timestamps are UTC Unix timestamps, and `k.x` is the exchange’s closed-kline flag. This supports using persisted accepted price/candle evidence for reconstruction, but does not establish what this application received or executed for any frozen trade. [Binance WebSocket kline documentation](https://developers.binance.com/zh-CN/docs/products/spot/testnet/web-socket-streams)
+
+- **AGENT INFERENCE:** There is no defensible common “root cause” across the six losses yet. Possible classifications—valid stop-losses, profit-lock exits, bearish exit policy, late/stale entry, protection failure, or accounting mismatch—remain mutually unresolved.
+
+- **PROJECT EVIDENCE:** The supplied snapshot clocks have a one-second inconsistency: `2026-10-17 07:00:04 UTC` converts to `2026-10-17 10:00:04 KSA`, whereas the supplied snapshot KSA is `2026-10-17 10:00:03`. Both supplied values are retained unchanged.
+
+## EVIDENCE
+
+- Frozen scope preserved exactly: `182, 172, 162, 158, 143, 137`.
+- No DB, source, configuration, Git, deployment, or other mutation occurred.
+- No broad log search was performed: without actual symbols and UTC lifecycles, it would not be a targeted trade investigation.
+
+## UNKNOWNS
+
+- For every frozen trade: symbol, entry/close UTC and KSA times, loss amount, close reason, entry/exit links, and partial-harvest status.
+- Whether each closure has a matching wallet SELL, immutable `production_exit_audit`, and accepted price event.
+- Whether entry evidence was fresh/valid and whether the deployed code/configuration matched the current source.
+- Whether the supplied six-row selection can be independently reproduced after the snapshot; a later query cannot prove historical snapshot state without durable snapshot evidence.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Obtain the authoritative six frozen positions, verify the physical `paper_position` schema, compare the current predicate result without claiming it recreates the historical snapshot, and discover exact related-evidence schemas for a bounded root-cause reconstruction.  
+SQL:
+
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+
+SELECT *
+FROM (
+    SELECT *
+    FROM crypto_ai.paper_position
+    WHERE status = 'CLOSED'
+      AND closed_at IS NOT NULL
+      AND realized_pnl < 0
+    ORDER BY closed_at DESC
+    LIMIT 6
+) AS current_selection_check
+ORDER BY closed_at DESC;
+
+SELECT table_name,
+       ordinal_position,
+       column_name,
+       column_type,
+       is_nullable,
+       column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'position_analysis',
+      'position_management_event',
+      'signal_processing_work',
+      'execution_opportunity'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST

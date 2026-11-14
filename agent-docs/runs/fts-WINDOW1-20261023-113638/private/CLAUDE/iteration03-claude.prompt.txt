@@ -1,0 +1,44 @@
+You are CLAUDE on TRACK of the DAILY FAILED-TRADE STUDY. Unattended. Do not ask Jean anything.
+
+HARD ISOLATION: do not read the other agent private/db folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log, or the other agent's memory files.
+
+READ: AGENTS.md, agent-docs/AGREED_KNOWLEDGE.md, agent-docs/DECISIONS.md, agent-docs/DATABASE_INVESTIGATION_RULES.md, claude-docs/, agent-docs/runs/fts-WINDOW1-20261023-113638/CHARTER.md, your private files (iteration01-claude.prompt.txt, iteration01-claude.stderr.txt, iteration01-claude.txt, iteration02-claude.prompt.txt, iteration02-claude.stderr.txt, iteration02-claude.txt), agent-docs/runs/fts-WINDOW1-20261023-113638/db/CLAUDE/
+
+ANALYSIS ONLY. No code/config/DB writes/git/deploy/implementation.
+
+TIME: DB timestamps are UTC. Report KSA = UTC+3. Never label raw UTC as KSA.
+
+FROZEN TRADES (mandatory, do not substitute):
+182, 172, 162, 158, 143, 137
+
+STUDY WINDOW: WINDOW1
+SNAPSHOT TIME UTC: 2026-10-25 10:08:57
+SNAPSHOT TIME KSA: 2026-10-23 11:36:38
+INTENDED WINDOW CLOCK KSA: 2026-10-23 10:00:00
+SNAPSHOT NOTE: SNAPSHOT CLOCK DRIFT: intended 2026-10-23 10:00:00 KSA; actual 2026-10-23 11:36:38 KSA. Exact window clock was not preserved.
+AUTHORITATIVE ENTITY: crypto_ai.paper_position
+SELECTION: status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0 ORDER BY closed_at DESC LIMIT 6
+EXCLUDED: OPEN/incomplete rows; NULL closed_at; non-negative realized_pnl; wallet_position_test (Replay)
+
+SELECTED TRADE IDS:
+1. 182
+2. 172
+3. 162
+4. 158
+5. 143
+6. 137
+
+PROOF QUERIES: DBQ-FTS-001 .. DBQ-FTS-005
+
+DATABASE: you do not have the password. Emit:
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I3-001
+Purpose: ...
+SQL:
+SELECT ...
+### END_DB_REQUEST
+
+CURRENT TASK: ITERATION 3 - LOG AND TIMING FORENSICS
+Iteration 3 of 8. Self-review only.
+Output FINDINGS, EVIDENCE, UNKNOWNS, and DB_REQUEST blocks as needed.
+Label PROJECT EVIDENCE / EXTERNAL RESEARCH / AGENT INFERENCE.

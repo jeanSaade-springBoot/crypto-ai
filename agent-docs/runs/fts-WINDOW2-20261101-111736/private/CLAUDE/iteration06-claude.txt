@@ -1,0 +1,230 @@
+# Claude: FTS WINDOW2, Iteration 6 (root cause and research, self-review)
+
+This iteration does three things:
+
+- **Rebuilds the entry scores exactly from the I5 data.** Every reconstructed Entry Quality score now matches the logged value, and two of my iteration-5 explanations were wrong.
+- **Finds a structural root cause shared by five of the six losses.** The stop has a 0.5% minimum while the target is 3×ATR. On calm 1m markets that gives a reward/risk below 1, and no general gate stops it.
+- **Settles U19.** Replay prices exits from the real production ticks. It does not, however, make signals visible at the same moment Production does.
+
+All times are KSA (UTC+3), converted from the stored UTC values.
+
+**What I read:** AGENTS.md, CHARTER.md, my iteration 4 and 5 outputs, the I5-001 to I5-005 results, the I4-001 result, and the I1-001 schema. Code: `ExecutionIntelligenceService.java:47-71, :212, :236, :845-1030, :1539, :1807-1817, :2601-2613`, `AtrRiskService.java:27-45`, `application.yml:135-144`, `WalletAutoExecutionService.java` (fee lines) and `ShadowProductionReplayService.java:84-183`. Docs: `claude-docs/TRADING_RULES.md §6` and `INVESTIGATION_LOG.md` (the zero-fee entry). I also ran one web search on Binance fees.
+
+**What I didn't do:** no writes, no git, no deploy, no code or config changes. Plan mode is on, but this session has no Write or ExitPlanMode tool, so I created no plan file. I did not open LIVE_TEAM_STATUS.md, LIVE_EVENTS.log or any Codex file.
+
+---
+
+## EVIDENCE
+
+### E31: Entry Quality works differently from what I assumed (PROJECT EVIDENCE, code)
+
+- **The reference price is the lowest of three values** (`:874-926`): the lowest 1m signal price in the window, the opportunity's anchor price, and its best price.
+- **The window is the last 20 1m signals, not 30 minutes.** Production loads `findTop20BySymbolAndIntervalOrderByGeneratedAtDesc` (`:2603`), which is not bounded by the decision time. Replay loads `recent(...,20)` (`:2602`). The 30-minute `EVIDENCE_WINDOW` is only a secondary limit, so in practice the window is about 20 minutes.
+- **The rejection penalty only applies in a narrow case** (`:961-974`). The earlier high must come before the current signal, at least 2 later prices must be below it, and the current price must be within 0.5% of it. The current price only replaces the high if it is strictly above it.
+- **Opportunity age is rounded down to whole minutes** (`:950`).
+- **There is a separate penalty of −15 when the stop is exposed** (`:65, :1010`).
+
+### E32: Every score now reconstructs exactly (PROJECT EVIDENCE: I5-002, I5-003, I5-001)
+
+| id | Reference price (source, KSA) | Expansion | ATR used, extension | Age | R:R | Rejection | Score |
+|---|---|---|---|---|---|---|---|
+| 137 | 3.992, rolling low (23:42 / 23:51) | 0.18% | 1m 0.004292, 1.63 → 0 | 1 min | 0.64 → −30 | high 4.005 at 23:40, 0.15% away → −12 | **58 ✓** |
+| 143 decision | 3.972, rolling low (01:33) | 1.51% → −10 | **5m #159285: 0.009073**, 6.61 → −30 | 0 | 1.50 → 0 | none (the current price is the high) | **60 ✓** |
+| 143 stored | 3.972 | 1.54% → −10 | **1m: 0.010899**, 5.60 → −20 | 0 | 1.50 | none | **70 ✓** |
+| 162 | 0.08675, rolling low and opportunity best (06:54) | 0.35% | 1m 0.0000636, **4.72 → −20** | 20 m 59.976 s, rounded to **20 → 0** | 0.44 → −30 | none (the current price is the high) | **50 ✓** |
+| 172 | 547e-8, rolling low (09:18 / 09:21) | 0.37% | 1m 6.806e-9, 2.94 → −10 | 14 | 0.74 → −30 | none (549 equals the high, not above it) | **60 ✓** |
+| 182 | 0.1875, rolling low (12:50) | 0.48% | 1m 0.000151, **5.95 → −20** | 1 | 0.48 → −30 | high 0.1890 at 12:37, 0.32% away, **triggered but raised back to 50** | **50 ✓** |
+| 158 decision (predicted) | 1.4082, opportunity best | 0.19% | 5m #165415 0.001879, 1.44 → 0 | 53 → −10 | 0.33 → −30 | none | **60 (predicted)** |
+| 158 stored (predicted) | 1.4082 | | 1m 0.00077, 3.38 → −10 | 53 → −10 | 0.33 | | **50 (predicted)** |
+
+What this shows:
+
+- **No entry was blocked at decision time by penalties beyond reward/risk and ATR extension.** On 182, the rejection penalty fired but the floor at `:1000-1001` cancelled it.
+- **162 escaped the age penalty by 24 ms**, which is a side effect of rounding down to whole minutes. It had no effect on the outcome.
+
+### E33: The 5m signal that authorized trade 143 was already one bar old (PROJECT EVIDENCE: I5-001, I5-002)
+
+| Signal | Created (visible) | Decision | Entry type | Immediate entry allowed | ATR |
+|---|---|---|---|---|---|
+| 5m #159285, candle 01:30–01:35 | 01:35:03.011 | BUY 83 | STANDARD_ENTRY | 1 | 0.009073 |
+| 5m #159407, candle 01:35–01:40 | 01:40:02.941 | **WATCH 76** | **PULLBACK_ENTRY** | **0** | 0.013497 |
+
+- The 1m #159408 was generated at 01:40:01.634.
+- The logged score of 60 can only be produced with the ATR of #159285 (E32). That is proof the route's "fresh 5m BUY … explicitly allows immediate entry at 100%" came from the bar that closed at 01:35. U23 is closed.
+- The 5m for the bar that had just closed became visible 174 ms before the wallet BUY at 01:40:03.115.
+- **AGENT INFERENCE (counterfactual):** with #159407 as the authority, the SETUP_TIMEFRAME_ATR claim of immediate entry would have been false, so 143 would most likely not have been entered.
+- Replay picks the same old 5m, because #159407's `generated_at` is 2 ms after the 1m. It matches here by chance, not by design.
+
+### E34: How stop and target are built (PROJECT EVIDENCE: `AtrRiskService.java:34-45`, `application.yml:137-144`)
+
+- The stop distance is the larger of 2×ATR and 0.50% of price, capped at 8%. The target distance is always 3×ATR.
+- So whenever ATR is below 0.25% of price, reward/risk works out to 3 × ATR% ÷ 0.5. It falls below 1 once ATR is below 0.167% of price.
+- Applying this to each trade's ATR% reproduces every reward/risk exactly: 137 → 0.64, 158 → 0.33, 162 → 0.44, 172 → 0.74, 182 → 0.48, 143 → 1.50 (its ATR of 0.27% is above the 0.25% point).
+- Only one route has a minimum reward/risk: `BREAKOUT_RETRACEMENT_MIN_RR=1.15` at `:212` and `:1539`. In every other route, a reward/risk below 1 costs a flat −30 Entry Quality points and is never blocked.
+- I found no record that this was intended in AGREED_KNOWLEDGE, DECISIONS or claude-docs.
+
+### E35: Fees (PROJECT EVIDENCE plus EXTERNAL RESEARCH)
+
+- **PROJECT EVIDENCE:** automatic paper trades record `feeUsdt(ZERO)` (`WalletAutoExecutionService.java:173, 260, 349, 443, 540, 653`). This was already known (`claude-docs/TRADING_RULES.md §6`). All P&L figures are before fees.
+- **EXTERNAL RESEARCH:** the regular Binance spot rate (VIP 0) is about 0.10% per side, or about 0.075% when paid in BNB. These are secondary sources, not the official fee page. That puts a round trip at about 0.15–0.20%.
+
+| id | Gross target / stop | Win rate needed, gross | Win rate needed, net at 0.2% round trip |
+|---|---|---|---|
+| 137 | +0.32 / −0.50 | 61% | 85% |
+| 143 | +0.81 / −0.54 | 40% | 55% |
+| 158 | +0.165 / −0.50 | 75% | **not possible**: the target is −0.035% after fees |
+| 162 | +0.22 / −0.50 | 69% | 97% |
+| 172 | +0.37 / −0.50 | 57% | 80% |
+| 182 | +0.24 / −0.50 | 68% | 94% |
+
+### E36: Results across the population (PROJECT EVIDENCE: I5-004; 95 production entries since 10-11)
+
+**Overall**
+
+- 48 wins, 46 losses, 1 flat.
+- Weighted average gross result: **−0.028% per trade**. After about 0.2% round-trip fees (EXTERNAL), that is about **−0.23% per trade**. Caveat: the average comes from exit versus entry price and ignores partial sales and position size.
+
+**By the 1m decision at entry**
+
+| 1m decision | n | Wins | Losses | Win rate |
+|---|---|---|---|---|
+| WATCH | 56 | 33 | 22 | 59% |
+| BUY | 27 | 9 | 18 | 33% |
+
+Average gross: WEAK_UPTREND BUY −0.15%, BREAKOUT BUY −0.41%.
+
+**By stored Entry Quality score**
+
+| Score | n | Wins | Win rate | Average gross |
+|---|---|---|---|---|
+| 50–54 | 31 | 22 | 71% | +0.146% |
+| 55–59 | 8 | 4 | 50% | |
+| 60–69 | 21 | 10 | 48% | |
+| 70+ | 35 | 12 | 34% | −0.164% |
+
+The win rate falls steadily as the score rises. A rough chi-square test of the lowest bucket against the highest gives p ≈ 0.003 (AGENT INFERENCE). The test was chosen after seeing the data, the stored score is the 1m-ATR version (F17), several routes are mixed together, and the sample covers only 5 days.
+
+**Downtrend regime:** 3 entries (2 BUY, 1 WATCH), 2 wins and 1 loss. F19 has a small effect on the population.
+
+### E37: How Replay prices exits (PROJECT EVIDENCE: `ShadowProductionReplayService.java:87-159`). U19 closed
+
+- When production price events exist, Replay replays them, sorted by `observedAt`, as the clock for exits. It fills at the tick price with no slippage, so 143's gap fill at 4.027 reproduces.
+- **Signals are ordered differently.** Replay processes every tick up to a signal's `generated_at` and only then makes that signal visible (`:127-168`). In Production a signal becomes visible at `created_at`, which is 1.3–2.3 s later (I4-001).
+- **Concrete case, 158:**
+  - The STRONG_SELL #166819 was generated at 06:30:01.397 and created at 06:30:02.688.
+  - The tick was observed at 06:30:02.320.
+  - Replay would evaluate that tick with the STRONG_SELL already visible. Production did not see it yet (E27).
+  - The exit price was 1.4090 either way, so the P&L is the same. Only the timing differs.
+
+---
+
+## FINDINGS (Iteration 6; I have reviewed only my own work)
+
+### Corrections to my own earlier work
+
+- **E25 / U21 retracted and closed.** I said trade 143's two scores pointed to an anchor reset. That was wrong. The 60 used the 5m-authority ATR of 0.009073; the stored 70 used the 1m ATR of 0.010899, which the burst had inflated. The 1m ATR was larger, not smaller, and the anchor plays no part (E32). F17 stands, and this is its concrete instance.
+- **E24, trade 162 corrected.** I suggested its 50 came from the rejection floor. It did not: 50 = −30 (reward/risk) −20 (ATR extension), with no age penalty and no rejection (E32).
+- **E24 breakdowns for 137, 172 and 182 confirmed exactly.** On 182, a real rejection signal was raised back to 50 by the floor.
+- **F20 ranking qualified.** My entry ranking in iteration 5 leaned partly on Entry Quality. E36 shows that score has not been validated as predictive, and in this sample it runs the wrong way.
+
+### New findings
+
+- **F22, root-cause candidate: the 1m decision at a 5-minute boundary reads 5m authority that is one bar old** (E33; PROJECT EVIDENCE plus a counterfactual INFERENCE).
+  - The newer 5m candle has closed but has not yet been analyzed. `FIVE_MINUTE_MAX_AGE` is 20 minutes (`:66`), so a 5-minute-old 5m counts as fresh.
+  - On 143, the old 5m granted the route's immediate-entry claim. The current 5m (WATCH, pullback, immediate entry not allowed) committed 174 ms before the BUY.
+  - I have not verified whether the execution-time recheck rereads the 5m.
+  - **Severity: medium.** It authorized one frozen entry, but 143 lost because of a market gap, not because of the entry itself.
+
+- **F23, root-cause candidate: the stop/target geometry builds reward/risk below 1 into every low-volatility entry, with no gate against it** (E34, E35).
+  - 5 of 6 frozen trades had reward/risk 0.33–0.74 and gross targets of +0.165% to +0.37%.
+  - At standard fees, 158's target was below zero, and 162 and 182 needed win rates of 94–97%.
+  - This is designed behavior (an undocumented interaction between configuration and code), not a code defect. Whether it is intended is a trading-rule decision.
+
+- **F24, systemic (INFERENCE from E36): the population shows almost no edge before fees and a loss after fees.**
+  - About −0.03% per trade gross, about −0.23% per trade at real fees.
+  - The frozen losses are typical of this pattern, not outliers. I6-001 tests whether reward/risk or ATR% separates winners from losers.
+
+- **F25, calibration (INFERENCE): Entry Quality runs opposite to outcomes in this sample, and so does the 1m BUY decision compared with WATCH.**
+  - Both point to 1m BUY signals firing at the close of an impulse candle, the burst-top pattern behind 137, 162 and 182.
+  - There are confounders (route mix, F17). This needs a Replay or population study before anyone relies on it.
+
+- **F26, low code observation:** the documented 30-minute window is actually the last 20 signals. In Production the query is not bounded by the decision time; Replay's is (E31). Parity holds when the deciding signal is the newest one, so I found no loss effect.
+
+- **F18, extended to exits:** Replay makes signals visible at `generated_at`, 1.3–2.3 s earlier than Production relative to the ticks (E37). Exits and entries near a candle close can diverge. No P&L effect is proven yet (158's price was the same).
+
+- **F15 (defect), F19 (rule gap, small population effect), F21 (rule question) and F7 (contradiction with AGENTS.md, needs both agents) are unchanged.**
+
+### Root cause per trade
+
+| id | Primary cause | Contributing causes | Exit and largest gain before exit | Classification |
+|---|---|---|---|---|
+| 137 | No follow-through after a 2-candle micro-burst in a calm range | F23 (R:R 0.64), F25 | 5m SELL at −0.30%; best +0.15% (47% of the way to target) | valid loss, structural (F23/F24) |
+| 143 | Market gap through the profit lock | **F22** authorized the entry | lock hard exit at −0.15% after reaching +1.69% | valid loss (gap) plus timing gap F22 |
+| 158 | No follow-through | F23 (R:R 0.33; the target loses money after fees) | SELL at −0.13%; best +0.06% | valid loss; **entry not viable after fees** |
+| 162 | Late WATCH entry at the top of a burst (4.7 ATR above the low) | F21, F23 (R:R 0.44) | STRONG_SELL at −0.345%; best +0.07% | valid loss under the rules |
+| 172 | Illiquid market moving in single ticks (one tick is about 0.18%) | F23 (R:R 0.74) | 1h SELL, one tick down, −0.18%; best +0.18% | valid loss |
+| 182 | **F15 masked a 5m STRONG_SELL veto** | F19, the rejection floor cancelling a real rejection, F23 | SELL at −0.21%; never above entry | **logic defect** |
+
+**Common root cause (AGENT INFERENCE, strong project evidence):**
+
+- Five of six losses share one pattern: low-volatility 1m entries (ATR 0.055–0.124% of price), bought at the top of a micro-burst through an exploratory route, under a stop/target geometry with reward/risk below 1.
+- The trades needed immediate continuation. It did not come: largest gains before exit were +0.18% or less. The signal exits then closed them at small losses of −0.13% to −0.35%.
+- No exit hit the −0.5% stop. The exits did their job; the losses come from the entries.
+
+### Recommended direction (not authorized; for the spec phase)
+
+1. **For F15:** BUY hard vetoes should take a relabelled bearish `original_decision` into account. Regression: 182 must veto in Replay.
+2. **For F23/F24:** use Replay to study a fee-aware viability gate. Candidates are a minimum reward/risk of 1, a minimum ATR% of about 0.167%, or a target distance of at least a multiple of round-trip fees. I6-001 provides the evidence for this.
+3. **For F22:** when a 1m decision falls on a 5m boundary, use or wait for the 5m analysis of the bar that just closed. This lines up with AGENTS.md's "freshness from persisted candle close time" direction. Regression: 143 should not be entered.
+4. **For F18/E37:** make Replay signal visibility follow commit time (or a measured delay), not `generated_at`.
+5. **For F25:** validate Entry Quality against Replay outcomes before using it to size positions.
+6. **Reporting:** keep calculating fees separately in every study, since paper P&L is gross.
+
+## UNKNOWNS
+
+- **U26:** whether the execution-time recheck rereads the 5m signal (F22). Not traced.
+- **U27:** whether stored Entry Quality for 158 is 50 as predicted, and whether each signal's `liquidity_status` was STOP_EXPOSED (I6-002).
+- **U28:** how often F22 changed the 5m authority across the population (I6-003).
+- **U29:** whether any Replay run covers 10-11 and 10-12 for a direct parity comparison (I6-004).
+- **U22, U7/F7:** still open. **Logs:** production logs are still unavailable; the FIX-105 debug line at `:931` would confirm the reference source.
+- **EXTERNAL:** the fee figures are secondary sources, and the actual account fee tier is unknown.
+
+---
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: Test F23/F24. Population outcomes grouped by entry reward/risk bucket and ATR% bucket, with a net figure assuming 0.20% round-trip fees.
+SQL:
+SELECT CASE WHEN s.risk_reward_ratio<0.5 THEN 'a<0.5' WHEN s.risk_reward_ratio<1 THEN 'b0.5-1' WHEN s.risk_reward_ratio<1.5 THEN 'c1-1.5' ELSE 'd>=1.5' END AS rr_bucket, CASE WHEN s.atr_percent<0.08 THEN 'a<0.08' WHEN s.atr_percent<0.1667 THEN 'b0.08-0.167' WHEN s.atr_percent<0.25 THEN 'c0.167-0.25' ELSE 'd>=0.25' END AS atr_bucket, COUNT(*) AS n, SUM(p.realized_pnl>0) AS wins, SUM(p.realized_pnl<0) AS losses, ROUND(AVG((p.exit_price-p.entry_price)/p.entry_price*100),4) AS avg_gross_pct, ROUND(AVG((p.exit_price-p.entry_price)/p.entry_price*100)-0.20,4) AS avg_net_pct_0_20rt FROM paper_position p JOIN trade_signal s ON s.id=p.signal_id WHERE p.opened_at>='2026-10-11 00:00:00' AND p.status IN ('CLOSED','STOPPED') GROUP BY rr_bucket, atr_bucket ORDER BY rr_bucket, atr_bucket LIMIT 40
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: For U27/E32, check the predicted scores. Stored Entry Quality, entry price and stage, plus each entry signal's liquidity and stop-exposure flags and its stored reward/risk and ATR%.
+SQL:
+SELECT p.id AS position_id, p.entry_price, m.entry_quality_score, m.entry_stage, m.allocated_position_percent, s.id AS signal_id, s.latest_price, s.liquidity_status, s.order_book_stop_exposed, s.risk_reward_ratio, s.atr_percent, s.stop_loss, s.take_profit FROM paper_position p JOIN trade_signal s ON s.id=p.signal_id LEFT JOIN wallet_managed_position m ON m.entry_signal_id=p.signal_id WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: For U28/F22, measure the 5-minute-boundary authority gap across the population. For each entry, find the 5m signal generated within −3 s to +5 s of the entry's 1m signal but not yet committed at 1m generation, and the latest 5m committed before it. Compares their decisions and immediate-entry flags with the outcome.
+SQL:
+SELECT p.id AS position_id, w.execution_reason, e.generated_at AS e_gen, n.id AS late5_id, n.created_at AS late5_created, n.decision AS late5_decision, n.atr_immediate_entry_allowed AS late5_immediate, pv.id AS prev5_id, pv.decision AS prev5_decision, pv.atr_immediate_entry_allowed AS prev5_immediate, p.realized_pnl FROM paper_position p JOIN trade_signal e ON e.id=p.signal_id JOIN wallet_trade w ON w.signal_id=p.signal_id AND w.side='BUY' JOIN trade_signal n ON n.symbol=p.symbol AND n.interval_code='5m' AND n.generated_at BETWEEN e.generated_at - INTERVAL 3 SECOND AND e.generated_at + INTERVAL 5 SECOND AND n.created_at > e.generated_at LEFT JOIN trade_signal pv ON pv.id=(SELECT MAX(x.id) FROM trade_signal x WHERE x.symbol=p.symbol AND x.interval_code='5m' AND x.created_at <= e.generated_at) WHERE p.opened_at>='2026-10-11 00:00:00' ORDER BY p.id LIMIT 120
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-004
+Purpose: For U29, find the Replay test tables and their columns, so a bounded parity query can be written for 10-11 to 10-12 without guessing the schema.
+SQL:
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='crypto_ai' AND (TABLE_NAME LIKE '%\_test' OR TABLE_NAME LIKE 'regression\_%' OR TABLE_NAME LIKE 'replay\_%') ORDER BY TABLE_NAME, ORDINAL_POSITION LIMIT 300
+### END_DB_REQUEST
+
+---
+
+**Next (iteration 7):** use I6-001 to confirm or reject F23/F24 as the population root cause, I6-002 to close U27, and I6-003 to size F22. Trace U26 (does the execution-time recheck reread the 5m), then use I6-004 to design the Replay parity check for 182 (F15) and 143 (F22).
+
+Sources (EXTERNAL RESEARCH, fees):
+- [Bitget Academy: Binance fees comparison](https://www.bitget.cloud/academy/binance-fees-compare-1)
+- [Trade Reclaim: Binance](https://trade-reclaim.com/hi/exchange/binance)
+- [Binance Square #binancefees](https://www.binance.com/ru-KZ/square/hashtag/binancefees)
+- [Coinspot: Binance fees guide](https://coinspot.io/en/analysis/binance-fees-2025-the-ultimate-guide/)

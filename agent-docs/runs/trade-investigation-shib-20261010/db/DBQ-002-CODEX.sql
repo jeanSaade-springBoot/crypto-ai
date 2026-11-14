@@ -1,0 +1,1 @@
+SELECT id,signal_id,position_analysis_id,symbol,side,quantity,price_usdt,realized_pnl_usdt,realized_pnl_percent,execution_reason,status,executed_at,execution_message FROM wallet_trade WHERE symbol='SHIBUSDT' AND executed_at >= '2026-10-08 00:00:00' AND executed_at < '2026-10-11 00:00:00' ORDER BY executed_at

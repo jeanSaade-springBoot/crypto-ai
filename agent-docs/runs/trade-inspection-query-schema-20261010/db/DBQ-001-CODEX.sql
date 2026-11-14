@@ -1,0 +1,1 @@
+SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name IN ('wallet_trade','paper_position','wallet_managed_position','trade_signal') ORDER BY table_name, ordinal_position

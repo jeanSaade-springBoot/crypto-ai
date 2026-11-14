@@ -1,0 +1,51 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** This is an analysis-only reconstruction of the frozen `crypto_ai.paper_position` losses: **182, 172, 162, 158, 143, 137**. No trades were substituted.
+- **PROJECT EVIDENCE:** `PaperPosition` links an entry `signal_id`, optional `exit_signal_id`, entry/exit prices, stop, target, close reason, realized P&L, and UTC lifecycle timestamps ([PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:10)).
+- **PROJECT EVIDENCE:** The CODEX-scoped evidence directory `agent-docs/runs/fts-WINDOW2-20261107-225520/db/CODEX/` does not yet exist; therefore no executed DB evidence is available for trade timelines, entry/exit causes, protection, or P&L reconciliation.
+- **AGENT INFERENCE:** Reconstruction cannot responsibly begin from source mappings alone. The actual current schema and durable records must be read first.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Snapshot supplied: UTC `2026-11-07 19:55:22`; stated KSA snapshot `2026-11-07 22:55:20`. The supplied snapshot notes a clock drift from intended WINDOW2 time `2026-11-07 18:00:00 KSA`.
+- **PROJECT EVIDENCE:** Database investigation rules require UTC interpretation of stored timestamps and bounded read-only queries.
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- Symbols, entry/exit signal IDs, actual entry/exit timestamps, prices, close reasons, and realized P&L for all six positions.
+- Whether each exit was stop-loss, trailing/profit lock, take-profit, signal exit, or another route.
+- Position-to-wallet-trade and price-event linkage.
+- Data-quality, signal freshness, higher-timeframe context, execution-work status, and contemporaneous candle evidence.
+- Runtime mode/version/configuration at each trade’s entry.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual `crypto_ai` schema before choosing reconstruction columns or joins for the six frozen `paper_position` records.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    column_default,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'position_analysis',
+      'market_price_event',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

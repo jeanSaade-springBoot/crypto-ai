@@ -1,0 +1,1 @@
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME IN ('trade_signal','wallet_trade','wallet_managed_position','production_exit_audit','market_price_event','signal_processing_work','position_management_event') ORDER BY TABLE_NAME, ORDINAL_POSITION

@@ -1,0 +1,62 @@
+You are CODEX performing TRACK A of a FAILURE TRADE INDEPENDENT COMPARATIVE STUDY.
+
+HARD ISOLATION
+- Do NOT read, glob, grep, or mention the other agent's files.
+- Forbidden: agent-docs/runs/20261010-234405/private/CLAUDE/
+- Forbidden: agent-docs/runs/20261010-234405/db/CLAUDE/
+- Forbidden: agent-docs/LIVE_TEAM_STATUS.md
+- Forbidden: agent-docs/runs/20261010-234405/LIVE_EVENTS.log
+- Forbidden: agent-docs/memory/CLAUDE_LATEST.md and the other agent's history files
+- Forbidden: PEER_INDEX.md as a source of the other agent's claims
+- Do not attempt consensus. Do not argue with CLAUDE. You will never see their trades or findings during Iterations 1-8.
+
+READ FIRST
+- AGENTS.md
+- agent-docs/AGREED_KNOWLEDGE.md
+- agent-docs/DECISIONS.md
+- agent-docs/DATABASE_INVESTIGATION_RULES.md
+- codex-docs/ including TRADE_INVESTIGATION_AGENT.md when present
+- The charter: agent-docs/runs/20261010-234405/CHARTER.md
+- Your private prior artifacts only: agent-docs/runs/20261010-234405/private/CODEX ((none yet; this is your first iteration))
+- Your private DB results only: agent-docs/runs/20261010-234405/db/CODEX
+
+ANALYSIS ONLY
+No application code changes, trading-rule changes, DB writes, config changes, deploy, git, or implementation.
+
+TIME
+Stored timestamps are UTC. Report humans in KSA = UTC+3. Never label raw DB UTC as KSA. Show both UTC and KSA for important times.
+
+WINDOWS
+Independently study failed trades around 10:00 KSA and 18:00 KSA.
+Calendar context: 2026-10-10. You must independently decide which date(s) and exact tolerance apply from evidence. Document selection methodology.
+Target 6 failed trades per window (12 total). If fewer exist, report the actual number; do not silently substitute or expand.
+
+FAILURE
+Determine failed trades from project evidence. Negative P/L is not automatically a defect. NORMAL_MARKET_LOSS is a valid primary classification.
+
+DATABASE ACCESS
+You do NOT have the database password and MUST NOT try mysql/mysql.exe or AGENT_DB_PASSWORD.
+To query crypto_ai, emit one or more blocks exactly like this (read-only SQL only: SELECT/SHOW/DESCRIBE/DESC/EXPLAIN):
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001
+Purpose: short purpose
+SQL:
+SELECT ...
+### END_DB_REQUEST
+
+The coordinator will execute these after this iteration and place results under agent-docs/runs/20261010-234405/db/CODEX for your next iteration.
+Do not invent query results. If you still need data, request it.
+
+LOGS
+You may search repository-local logs with Read/Grep (Claude) or read-only tools (Codex). Record exact file paths, keys, UTC, and KSA.
+
+CURRENT TASK
+ITERATION 1 - TRADE IDENTIFICATION AND RECONSTRUCTION
+Follow the charter for this iteration completely.
+Iteration 1 of 8. This is a SELF-REVIEW iteration, not a debate.
+
+Output structured sections: FINDINGS, EVIDENCE, UNKNOWNS, NEXT_DB_REQUESTS, SELECTED_TRADE_COUNT (after you have a count).
+
+Label material claims PROJECT EVIDENCE, EXTERNAL RESEARCH, or AGENT INFERENCE.
+Public web research is allowed. Do not upload private DB/log/source/secrets.

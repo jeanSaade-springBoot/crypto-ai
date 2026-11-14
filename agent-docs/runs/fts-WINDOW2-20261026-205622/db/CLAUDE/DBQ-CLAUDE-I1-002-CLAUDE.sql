@@ -1,0 +1,1 @@
+SELECT id, symbol, status, close_reason, realized_pnl, closed_at FROM crypto_ai.paper_position WHERE status IN ('CLOSED','STOPPED') AND closed_at IS NOT NULL AND realized_pnl < 0 AND closed_at >= (SELECT MIN(closed_at) FROM crypto_ai.paper_position WHERE id IN (182,172,162,158,143,137)) AND closed_at <= '2026-10-26 18:10:00' ORDER BY closed_at DESC LIMIT 50;

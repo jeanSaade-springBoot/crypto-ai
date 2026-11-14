@@ -1,0 +1,84 @@
+## Iteration 2 — Database forensics
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+- Frozen scope retained exactly: `paper_position` IDs **182, 172, 162, 158, 143, 137**.
+- The permitted `db/CODEX/` evidence folder is empty. No DBQ-FTS result, schema output, or trade-specific record is available.
+- The charter defines these as the six latest closed negative-P&L rows from `crypto_ai.paper_position`; this is scope evidence, not independently verified DB evidence.
+- Per [TRADE_INVESTIGATION_AGENT.md](C:/workspace/crypto-ai-trader-mysql/codex-docs/TRADE_INVESTIGATION_AGENT.md), `paper_position` establishes lifecycle/entry/exit/stop/target, but related execution, price-protection, and signal evidence must be joined only after schema confirmation.
+- Supplied snapshot metadata is internally inconsistent: `2026-10-22 10:28:18 UTC` converts to `2026-10-22 13:28:18 KSA`, not the separately supplied `2026-10-21 12:50:52 KSA`. Neither is treated as a reliable conversion of the other.
+
+**AGENT INFERENCE**
+
+- No loss can yet be classified as a valid strategy loss, protection failure, execution defect, or accounting discrepancy.
+- Schema plus the six authoritative rows are the smallest next evidence bundle; related-table joins should be derived from their actual link columns.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+### UNKNOWNS
+
+- Symbols; entry/exit timestamps, prices, quantities, stops, targets, fees, P&L, and close reasons.
+- Linked signals, processing work, execution records, and price-event/protection records.
+- Active runtime version, ingestion mode, and historical configuration for each trade.
+- Whether the charter’s frozen selection remains reproducible from DBQ-FTS-001 through DBQ-FTS-005.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Obtain the authoritative entity’s actual schema and its six bounded lifecycle records before selecting specific fields or constructing joins.  
+SQL:
+```sql
+SELECT
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    column_default,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name = 'paper_position'
+ORDER BY ordinal_position;
+
+SELECT p.*
+FROM crypto_ai.paper_position AS p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-002  
+Purpose: Confirm the schemas of documented candidate evidence entities, without assuming their existence or join columns.  
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key
+FROM information_schema.columns AS c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'wallet_trade',
+      'wallet_managed_position',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'position_management_event',
+      'production_exit_audit',
+      'position_analysis',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+```
+### END_DB_REQUEST

@@ -1,0 +1,88 @@
+## FINDINGS
+
+- Frozen scope retained exactly: `paper_position` IDs `182, 172, 162, 158, 143, 137`. No substitute trades were considered.
+- No permitted database-result artifacts exist in `db/CODEX`; therefore no trade-specific database fact—including symbol, entry/exit, loss amount, exit reason, or selected-row proof—can yet be established.
+- The prior Iteration 1 schema request has no recorded execution result. Database forensics cannot safely select relationship columns until actual `crypto_ai` schema evidence is returned.
+- Project mappings identify the expected forensic chain: `paper_position` → entry/optional exit `trade_signal`; terminal-close evidence may be in `production_exit_audit`; protection evidence may be in `market_price_event`, `wallet_managed_position`, and `position_management_event`. This is an evidence map, not proof that records exist for any frozen trade.
+- Current project documentation describes historical and pending changes across multiple dates. It does not establish the deployed version, configuration, or rules active at any frozen trade’s timestamp.
+
+## EVIDENCE
+
+### PROJECT EVIDENCE
+
+- `PaperPosition` maps the authoritative lifecycle fields: `signal_id`, `exit_signal_id`, prices, quantity, stop/target, `realized_pnl`, close fields, and UTC `opened_at`/`closed_at`.
+- `PaperTradingService` persists a terminal close reason and invokes immutable `production_exit_audit` recording after a close.
+- `ProductionExitAudit` separates the terminal trigger from the latest contextual signal.
+- `LivePositionProtectionService` shows the intended mechanical order: take-profit handling, absolute stop loss, then subsequent protection logic.
+- Permitted folders inspected:
+  - `agent-docs/runs/fts-WINDOW1-20261107-171817/private/CODEX/`
+  - `agent-docs/runs/fts-WINDOW1-20261107-171817/db/CODEX/`
+- No database query result was present in the permitted DB folder.
+
+### EXTERNAL RESEARCH
+
+- None.
+
+### AGENT INFERENCE
+
+- The correct next operation is schema-first DB evidence, followed by exact-ID retrieval only. A loss cannot be classified as valid, strategy-related, or defective without the selected positions and their directly linked evidence.
+
+## UNKNOWNS
+
+- Whether the six IDs satisfy the frozen selection criteria in the recorded snapshot.
+- Each trade’s symbol, side, UTC/KSA lifecycle, entry/exit signal IDs, prices, quantity, gross/net P&L, and exit trigger.
+- Whether protection received an accepted price event, whether a stop or profit lock was crossed, and whether wallet/managed-position evidence reconciles.
+- Runtime version, active configuration, ingestion mode, and Replay comparability.
+- Any causal explanation for the failed trades.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Schema-first forensic discovery for the authoritative frozen-position investigation. Confirms actual tables, columns, and indexes before record-level queries.  
+SQL:
+```sql
+SELECT
+    c.table_name,
+    c.ordinal_position,
+    c.column_name,
+    c.column_type,
+    c.is_nullable,
+    c.column_key,
+    c.extra
+FROM information_schema.columns c
+WHERE c.table_schema = 'crypto_ai'
+  AND c.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'production_exit_audit',
+      'wallet_trade',
+      'wallet_managed_position',
+      'position_management_event',
+      'market_price_event',
+      'signal_processing_work',
+      'position_analysis'
+  )
+ORDER BY c.table_name, c.ordinal_position;
+
+SELECT
+    s.table_name,
+    s.index_name,
+    s.seq_in_index,
+    s.column_name,
+    s.non_unique
+FROM information_schema.statistics s
+WHERE s.table_schema = 'crypto_ai'
+  AND s.table_name IN (
+      'paper_position',
+      'trade_signal',
+      'production_exit_audit',
+      'wallet_trade',
+      'wallet_managed_position',
+      'position_management_event',
+      'market_price_event',
+      'signal_processing_work',
+      'position_analysis'
+  )
+ORDER BY s.table_name, s.index_name, s.seq_in_index;
+```
+### END_DB_REQUEST

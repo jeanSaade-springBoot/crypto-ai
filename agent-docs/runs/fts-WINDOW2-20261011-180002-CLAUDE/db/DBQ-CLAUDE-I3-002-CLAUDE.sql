@@ -1,0 +1,1 @@
+SELECT interval_code, candle_open_time, COUNT(*) AS n_signals, MIN(generated_at) AS first_gen, MAX(generated_at) AS last_gen FROM trade_signal WHERE generated_at BETWEEN '2026-10-10 17:50:00' AND '2026-10-10 18:10:00' GROUP BY interval_code, candle_open_time ORDER BY candle_open_time, interval_code LIMIT 200;

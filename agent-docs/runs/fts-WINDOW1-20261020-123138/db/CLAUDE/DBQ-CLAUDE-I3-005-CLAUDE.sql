@@ -1,0 +1,3 @@
+SELECT symbol, MAX(open_time) AS last_1m_open_ksa, MAX(updated_at) AS last_update_ksa FROM crypto_ai.candle WHERE interval_code='1m' AND open_time >= '2026-10-16 00:00:00' GROUP BY symbol ORDER BY last_update_ksa LIMIT 30;
+SELECT MAX(observed_at) AS last_price_event_ksa, UNIX_TIMESTAMP(MAX(observed_at)) AS last_price_event_epoch_utc FROM crypto_ai.market_price_event;
+SELECT status, COUNT(*) AS n, MAX(updated_at) AS last_updated_ksa FROM crypto_ai.signal_processing_work GROUP BY status;

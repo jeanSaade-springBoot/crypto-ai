@@ -65,7 +65,7 @@ class SignalProcessingCoordinatorTest {
         jdbc.update("INSERT INTO candle VALUES('PEPEUSDT','1m',?,?,1)",Timestamp.from(open),Timestamp.from(Instant.now().minusSeconds(5)));
     }
     @Test void normalProcessingCompletesAtomicallyAndDuplicateCallDoesNotRepeatBody() {
-        AtomicInteger calls=new AtomicInteger();
+        freshCandle();AtomicInteger calls=new AtomicInteger();
         coordinator.process(127,false,s->{calls.incrementAndGet();jdbc.update("INSERT INTO writes VALUES(1,'wallet')");return Optional.empty();});
         assertEquals("COMPLETED",status());assertEquals(1,countWrites());
         coordinator.process(127,false,s->{fail("completed signals must not execute twice");return Optional.empty();});
@@ -83,7 +83,7 @@ class SignalProcessingCoordinatorTest {
         assertEquals("INITIAL_POSITION_LOCK",jdbc.queryForObject("SELECT failure_stage FROM signal_processing_work",String.class));
     }
     @Test void lateDeadlockRollsBackAllWritesAndIsNeverRetried() {
-        AtomicInteger calls=new AtomicInteger();
+        freshCandle();AtomicInteger calls=new AtomicInteger();
         assertThrows(RuntimeException.class,()->coordinator.process(127,false,s->{
             calls.incrementAndGet();jdbc.update("INSERT INTO writes VALUES(1,'advisory'),(2,'wallet')");throw deadlock();
         }));
@@ -91,14 +91,14 @@ class SignalProcessingCoordinatorTest {
         assertNull(store.claim(127,true));
     }
     @Test void evenAnInitialLockMarkerFromALaterBodyCannotAuthorizeRetry() {
-        AtomicInteger calls=new AtomicInteger();
+        freshCandle();AtomicInteger calls=new AtomicInteger();
         assertThrows(RuntimeException.class,()->coordinator.process(127,false,s->{
             calls.incrementAndGet();throw new InitialPositionLockDeadlock(deadlock());
         }));
         assertEquals(1,calls.get());assertEquals("REVIEW_REQUIRED",status());
     }
     @Test void beforeCommitFailureRollsBackWithoutRetry() {
-        AtomicInteger calls=new AtomicInteger();
+        freshCandle();AtomicInteger calls=new AtomicInteger();
         assertThrows(IllegalStateException.class,()->coordinator.process(127,false,s->{
             calls.incrementAndGet();jdbc.update("INSERT INTO writes VALUES(1,'wallet')");
             org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
@@ -110,7 +110,7 @@ class SignalProcessingCoordinatorTest {
         assertEquals(1,calls.get());assertEquals(0,countWrites());assertEquals("REVIEW_REQUIRED",status());
     }
     @Test void afterCommitExceptionCannotEraseDurableCompletionOrRepeatBusiness() {
-        AtomicInteger calls=new AtomicInteger();
+        freshCandle();AtomicInteger calls=new AtomicInteger();
         assertThrows(IllegalStateException.class,()->coordinator.process(127,false,s->{
             calls.incrementAndGet();jdbc.update("INSERT INTO writes VALUES(1,'wallet')");
             org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
@@ -143,6 +143,17 @@ class SignalProcessingCoordinatorTest {
                 .thenThrow(new RuntimeException(new SQLException("timeout","HY000",1205)));
         assertThrows(RuntimeException.class,()->coordinator.process(127,false,s->Optional.empty()));
         verify(positions).findFirstBySymbolAndStatusOrderByOpenedAtDesc("PEPEUSDT","OPEN");assertEquals("REVIEW_REQUIRED",status());
+    }
+    // FIX-153 first direct automatic attempts must expire after the position lock too.
+    @Test void attributedSharedPendingWorkIsNeverOffRecovery(){
+        register(ProcessingOrigin.WORKER);jdbc.update("UPDATE signal_processing_work SET source_event_id=77");
+        assertTrue(store.due().isEmpty());assertEquals("PENDING",status());
+    }
+    @Test void staleFirstDirectWorkerAttemptExpiresWithoutBusiness(){
+        register(ProcessingOrigin.WORKER);
+        coordinator.process(127,false,s->{fail("stale first attempt cannot call wallet");return Optional.empty();});
+        assertEquals("EXPIRED",status());assertEquals(1,jdbc.queryForObject("SELECT attempts FROM signal_processing_work",Integer.class));
+        assertEquals(0,countWrites());
     }
     @Test void expiredRegisteredWorkCannotReachBusinessAfterLock() {
         register(ProcessingOrigin.WORKER);
@@ -350,5 +361,14 @@ class SignalProcessingCoordinatorTest {
     @Test void fix140CommunicationsFailureNeverClassifiedAsSafeLockRetry() {
         assertFalse(SignalProcessingCoordinator.retryableSymbolLock(new org.springframework.dao.QueryTimeoutException("timeout",new SQLException("communications","08S01"))));
         assertTrue(SignalProcessingCoordinator.retryableSymbolLock(new RuntimeException(new SQLException("lock wait","HY000",1205))));
+    }
+    @Test void operatorCancelledWorkCannotBeClaimedScheduledOrResetByRegistration() {
+        register(ProcessingOrigin.WORKER);
+        jdbc.update("UPDATE signal_processing_work SET status='OPERATOR_CANCELLED',error_message='original uncertainty' WHERE signal_id=127");
+        assertNull(store.claim(127,false));assertNull(store.claim(127,true));assertTrue(store.due().isEmpty());
+        register(ProcessingOrigin.WORKER);
+        assertEquals("OPERATOR_CANCELLED",status());
+        assertEquals("original uncertainty",jdbc.queryForObject("SELECT error_message FROM signal_processing_work WHERE signal_id=127",String.class));
+        assertNull(jdbc.queryForObject("SELECT completed_at FROM signal_processing_work WHERE signal_id=127",Timestamp.class));
     }
 }

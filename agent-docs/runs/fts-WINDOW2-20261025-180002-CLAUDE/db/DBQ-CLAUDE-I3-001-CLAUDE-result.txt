@@ -1,0 +1,2 @@
+session_tz	global_tz	system_tz	now_session	now_utc	p143_opened_epoch	tick_1789409_epoch	wt451_obs_epoch
+SYSTEM	SYSTEM	Arab Standard Time	2026-10-25 18:19:33.025059	2026-10-25 15:19:33.025059	1791747604.857700	1791747815.021000	1791788222.437000

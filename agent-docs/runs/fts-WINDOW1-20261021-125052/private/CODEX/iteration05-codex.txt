@@ -1,0 +1,84 @@
+## Iteration 5 — Entry quality
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+- Frozen scope retained exactly: positions **182, 172, 162, 158, 143, 137**. No substitutes used.
+- The permitted `db/CODEX/` folder remains empty. There is no durable position, signal, execution-price, candle, or indicator evidence for a per-trade entry-quality verdict.
+- Current source applies entry quality twice: at signal evaluation and again immediately before wallet execution using a fresh canonical execution price. It rejects a BUY at/below stop, at/above target, or if final quality falls below the chase cutoff; otherwise quality can cap allocation. This is current-route evidence, not proof of the historical version/configuration.
+- The existing log evidence for position **182** records `BREAKOUT_CONTINUATION_ENTRY allowed=true`, signal `164053`, and `paperPositionOpened=true`. The logged entry/protection state was entry `3.493`, stop `3.465026371152`, target `3.537460443272`.
+
+  From those contemporaneous logged values:
+  - Reward: `0.044460443272`
+  - Risk: `0.027973628848`
+  - Static reward/risk: **1.589370**
+
+  This clears the current continuation route’s stated minimum 1:1 reward/risk condition. It does not establish full entry quality, because the execution-time reference price, ATR extension, rolling/opportunity anchor, age, liquidity, BTC context, and higher-timeframe evidence are absent.
+
+| Position | Entry-quality conclusion | Evidence status |
+|---|---|---|
+| 182 | **Unverifiable overall; static R/R supported** | Logs support a permitted continuation route and R/R ≈ 1.589; DB linkage and contemporaneous quality inputs absent. |
+| 172 | **Unverifiable** | No position-correlated log or permitted DB evidence. |
+| 162 | **Unverifiable** | No position-correlated log or permitted DB evidence. |
+| 158 | **Unverifiable** | No position-correlated log or permitted DB evidence. |
+| 143 | **Unverifiable** | No position-correlated log or permitted DB evidence. |
+| 137 | **Unverifiable** | No position-correlated log or permitted DB evidence. |
+
+**AGENT INFERENCE**
+
+- Position 182’s loss cannot be attributed to poor entry quality from the later stop-out. The available pre-exit log evidence supports only that its static stop/target geometry was not below the current route’s minimum R/R threshold.
+- No classification of any loss as a late chase, stale entry, weak setup, data-quality failure, or valid loss is justified yet.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+### EVIDENCE
+
+- `ExecutionIntelligenceService.assessEntryQualityAtPrice()` scores execution-price expansion, ATR extension, opportunity age, reward/risk, recent rejection, volatility, liquidity status, BTC conflict, and authority caps.
+- `PaperTradingService.processSignalBody()` resolves a fresh canonical price after approval, revalidates entry quality, then persists the wallet BUY and `paper_position`.
+- Prior private iteration-3 log evidence for 182:
+  - candle close UTC `2026-10-11 22:40:59.999`; KSA `2026-10-12 01:40:59.999`
+  - execution completed UTC `2026-10-11 22:41:04.863`; KSA `2026-10-12 01:41:04.863`
+- The supplied snapshot UTC/KSA metadata remains internally inconsistent and is not used for any conversion.
+
+### UNKNOWNS
+
+- The authoritative `paper_position` row and entry-signal ID for every frozen position.
+- Whether signal `164053` is durably linked to position 182.
+- Execution-time versus signal-time price, entry-quality score/classification, and final allocation.
+- The closed-candle, signal freshness, data-quality, BTC, 5m/1h, ATR, liquidity, risk-limit, and duplicate-entry evidence available at each entry.
+- Historical deployed version, configuration, and ingestion mode for all six positions.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Establish actual schema and retrieve the six authoritative lifecycle rows before selecting entry-signal and execution evidence columns.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'signal_processing_work',
+      'market_price_event'
+  )
+ORDER BY table_name, ordinal_position;
+
+SELECT p.*
+FROM crypto_ai.paper_position AS p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST

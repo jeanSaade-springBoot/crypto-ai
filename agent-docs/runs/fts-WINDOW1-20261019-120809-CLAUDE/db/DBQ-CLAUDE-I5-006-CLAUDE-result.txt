@@ -1,0 +1,4 @@
+tp_bucket	n	wins	losses	gross_pnl	est_net_pnl_0p2pct
+a_tp_lt_0.20pct	16	10	6	0.026435	-0.723565
+b_0.20-0.40pct	40	25	15	0.084039	-1.695961
+c_ge_0.40pct	137	55	80	-4.281214	-14.141214

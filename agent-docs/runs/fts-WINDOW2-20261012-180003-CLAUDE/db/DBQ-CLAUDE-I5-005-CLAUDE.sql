@@ -1,0 +1,2 @@
+SELECT id, atr_recommended_position_percent, atr_entry_type, atr_immediate_entry_allowed, atr_at_signal FROM trade_signal WHERE id IN (156723,159408,165412,167668,171589,176710);
+SELECT CASE WHEN s.atr_recommended_position_percent <= 0 THEN 'REC_0' ELSE 'REC_POS' END AS rec_bucket, s.atr_entry_type, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS winners, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id WHERE p.closed_at IS NOT NULL GROUP BY rec_bucket, s.atr_entry_type ORDER BY rec_bucket, s.atr_entry_type

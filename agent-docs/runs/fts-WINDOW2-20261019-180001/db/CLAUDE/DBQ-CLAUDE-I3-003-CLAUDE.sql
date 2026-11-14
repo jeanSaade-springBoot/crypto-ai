@@ -1,0 +1,1 @@
+SELECT symbol, observed_at, created_at, TIMESTAMPDIFF(MICROSECOND, observed_at, created_at) / 1000 AS lag_ms, delivery_status FROM crypto_ai.market_price_event WHERE (observed_at BETWEEN '2026-10-11 22:43:33' AND '2026-10-11 22:43:40') OR (observed_at BETWEEN '2026-10-11 21:00:07' AND '2026-10-11 21:00:14') ORDER BY observed_at LIMIT 300;

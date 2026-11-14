@@ -1,0 +1,174 @@
+# Claude: FTS WINDOW2, Iteration 7 (self-challenge)
+
+This iteration tested my iteration-6 root-cause claims against the I6-001 to I6-004 results and traced three code paths again. Two of my main claims fail, one gets narrower, and one new mechanism appears.
+
+**The four changes:**
+- **F23 is withdrawn as the shared root cause.** Across the population, the calm-market entries with reward/risk below 1 are the only groups that make money before fees.
+- **F25 is most likely the same volatility effect, not a separate finding.**
+- **F22 is confirmed for trade 143 only.**
+- **New finding F28:** the stop-exposure penalty from FIX-055 never fires when the order book also shows buying pressure. If it had fired, trades 172 and 182 would most likely have been blocked.
+
+All times are KSA (UTC+3), converted from the stored UTC values. There were no writes, no git and no deploys. No Write or ExitPlanMode tool was available, so I created no plan file. I did not read any Codex file, LIVE_TEAM_STATUS.md or LIVE_EVENTS.log.
+
+---
+
+## EVIDENCE
+
+### E38: Outcomes by reward/risk and volatility bucket (PROJECT EVIDENCE: I6-001, 95 entries)
+
+The two bucket columns line up exactly, as the E34 formula predicts. Reward/risk depends only on ATR% (ATR as a percentage of price), so these really are volatility buckets.
+
+| R:R | ATR% | n | Wins | Losses | Win rate | Gross average | Net at 0.2% round trip | Frozen losses here |
+|---|---|---|---|---|---|---|---|---|
+| <0.5 | <0.08 | 10 | 8 | 2 | 80% | **+0.094%** | −0.107% | **158, 162** (the bucket's only two losses) |
+| <0.5 | 0.08–0.167 | 2 | 1 | 1 | 50% | −0.035% | −0.235% | **182** |
+| 0.5–1 | 0.08–0.167 | 17 | 11 | 5 | 65% | **+0.039%** | −0.161% | **137, 172** |
+| 1–1.5 | 0.167–0.25 | 31 | 17 | 14 | 55% | +0.035% | −0.165% | none |
+| =1.5 | ≥0.25 | 35 | 11 | 24 | **31%** | **−0.150%** | −0.350% | **143** |
+
+- The weighted total works out to −0.028% per trade, which matches E36, so the data is consistent.
+- All gross losses come from the ATR ≥ 0.25% group: 35 entries contribute about −5.26 percentage points in total. The four lower-volatility groups together add about +2.60.
+
+### E39: FIX-055's stop-exposure penalty is hidden by the liquidity status order (PROJECT EVIDENCE: code, I6-002)
+
+- `OrderBookLiquidityService.java:550-570` assigns the liquidity status in a fixed order: TARGET_BLOCKED, then BEARISH_PRESSURE, then **BULLISH_SUPPORT**, and only after that STOP_EXPOSED. So when buying pressure is above the moderate threshold, the status is BULLISH_SUPPORT even if the stop is exposed.
+- The −15 penalty only applies when the status is exactly STOP_EXPOSED (`ExecutionIntelligenceService.java:1010-1012`). It never checks the separate stop-exposed flag.
+- I6-002: trades **172 and 182** had `liquidity_status=BULLISH_SUPPORT` with `order_book_stop_exposed=1`. Their stored scores (60 and 50) match my E32 rebuilds, which had no −15. That confirms the penalty did not fire.
+- Entries scoring below 50 are blocked as CHASE_ENTRY_BLOCKED (`:229`, `:1171-1175`). That check runs on the IMMEDIATE_VALIDATION route that both trades used (`:686-694`) and again at execution time (`:1167-1168`).
+- The change log describes the penalty as keyed on the STOP_EXPOSED status (`docs/CHANGE_LOG.md:7`). It does not say whether a stop exposure hidden under BULLISH_SUPPORT was meant to escape it.
+
+### E40: The execution-time recheck does not reread the 5m signal (PROJECT EVIDENCE: code). Closes U26
+
+- `revalidateAtExecutionPrice` (`:1150-1169`) calls `assessEntryQualityAtPrice(signal, executionPrice)`, which uses the 1m signal's own ATR (`:857-858`).
+- It never looks up the 5m signal, so the 5m that committed 174 ms before the BUY on 143 could not change the decision.
+- This is also how F17 happens. The setup route deliberately scores with the 5m ATR (`:631-634`), but the execution-time recheck scores again with the 1m ATR. That explains 143's stored 70 against the 60 it was decided on.
+- I6-002 confirms 143's stop and target were built from the 1m ATR as well: stop distance 0.021798 = 2 × 0.010899, target distance = 3 × 0.010899.
+
+### E41: How often the 5m authority changed at a 5-minute boundary (PROJECT EVIDENCE: I6-003, 32 entries)
+
+- In 3 of the 32 boundary entries, the newer 5m was weaker than the one available at decision time:
+
+  | Entry | Older 5m → newer 5m | Route | Result (USDT) |
+  |---|---|---|---|
+  | 100 | STRONG_BUY → WATCH | SETUP_TIMEFRAME_ATR | win, +0.03 |
+  | **123** | BUY → WATCH | IMMEDIATE_VALIDATION | **loss, −0.698, the largest loss in this set** |
+  | **143** | BUY (immediate entry allowed) → WATCH (not allowed) | SETUP_TIMEFRAME_ATR | loss |
+
+- Several wake-up and setup-route entries clearly used the *newer* 5m: 158 (#165415), 175 (the older 5m was NEUTRAL, the newer one BUY) and 166 (SELL → BUY). These routes are triggered by the 5m commit itself, so they cannot read a stale one.
+- So F22 is a race affecting entries triggered by the 1m signal, not a general boundary effect.
+
+### E42: Stop/target arithmetic checked against stored values (PROJECT EVIDENCE: I6-002)
+
+Trade 158: stop distance 0.0070545 = 0.5% × 1.4109. Target distance 0.0023089 = 3 × ATR, giving ATR% 0.05455, which equals the stored `atr_percent`. The E34 geometry is confirmed directly from stored values.
+
+---
+
+## FINDINGS (Iteration 7; self-challenge, no cross-review)
+
+### Claims I withdraw or narrow
+
+- **F23: withdrawn as the shared root cause; narrowed to a fee-viability concern (AGENT INFERENCE from E38).**
+  - In iteration 6 I said 5 of 6 losses came from a geometry with reward/risk below 1. The population contradicts that. Entries with reward/risk below 1 have win rates of 65–80% and positive gross results (+0.04% to +0.09%).
+  - Trades 158, 162, 137 and 172 are the normal losing tail of a setup that wins often but wins small. Paper trading charges no fees (E35), so by the system's own accounting this group is profitable.
+  - F23 still matters for any future live trading with fees: every group turns negative at about 0.2% round trip.
+  - Correct classification: valid losses under the rules. Calling them "structural" was an overstatement.
+
+- **F24: restated.** The gross loss in the population comes from the **ATR ≥ 0.25% group** (31% win rate, −0.15% gross, 35 of 95 entries). The low-volatility entries are not the problem. This is new finding **F27**.
+
+- **F25: probably confounded (AGENT INFERENCE).**
+  - Entry Quality takes 30 points off any entry with reward/risk below 1 (`:991`). So the 50–54 score group (n=31) is mostly the reward/risk-below-1 groups (n=29).
+  - The score running opposite to outcomes probably just reflects volatility. I7-003 tests this.
+  - Win rate was also the wrong measure for comparing setups whose targets are this close. Expected gain per trade is the right one.
+
+- **F22: confirmed for 143; impact across the population is small and unproven.**
+  - It is a race in the routes triggered by the 1m signal. The execution-time recheck cannot catch it (E40).
+  - One more possible case: 123, which needs I7-004.
+  - Severity stays **medium**. The proposed fix should target the 1m-triggered setup lookup (`:628`, `:614`), not the wake-up routes.
+
+- **Root-cause table for 182:** still classed as a logic defect (F15), now with F28 as a second, independent miss.
+
+### New findings
+
+- **F27: the population's gross losses sit in the high-volatility group (AGENT INFERENCE from E38).**
+  - ATR% of 0.25% or more means a 2×ATR stop and a 3×ATR target, so reward/risk is exactly 1.5. Even so, the win rate there is only 31%.
+  - Only trade 143 is in this group, so this is mostly outside the frozen sample but systemically the most important result.
+  - The route and decision mix in this group is unknown (I7-002).
+
+- **F28: the FIX-055 stop-exposure penalty cannot fire when the order book shows buying pressure (E39; PROJECT EVIDENCE plus a counterfactual INFERENCE).**
+  - If the penalty had keyed on `order_book_stop_exposed`, 172 would have scored 45 and 182 would have scored 35. Both are below 50, so both would most likely have been blocked by the entry check and again at execution time.
+  - Whether this is a defect or intended depends on what FIX-055 meant. The documented key is the status.
+  - It follows the same pattern as F15: a higher-priority label hides a risk flag.
+  - Severity: medium. It affects 2 of the 6 frozen losses. How often it happens across the population is unknown (I7-001).
+
+### Revised root cause per trade
+
+| id | Classification (revised) |
+|---|---|
+| 137 | Valid loss: losing tail of a setup that wins often but wins small (F23 is fee-only) |
+| 143 | Valid loss from a market gap. F22 race authorized the entry. In the losing high-volatility group (F27) |
+| 158 | Valid loss: one of only 2 losses among 10 in its group. Not viable after fees if traded live |
+| 162 | Valid loss under the rules (F21 late WATCH entry) |
+| 172 | Valid loss under the current rules. **F28 counterfactual: likely would have been blocked** |
+| 182 | **Logic defect, F15.** F28 is a second, independent miss. The rejection floor also cancelled a real rejection signal |
+
+### Recommendations (not authorized; for the spec phase)
+
+These replace iteration-6 items 2 and 5. Items 1, 3, 4 and 6 are unchanged.
+
+- **F28:** decide whether the stop-exposure penalty should key on the order-book flag rather than the status. Replay regression check: 172 and 182 should be blocked as chase entries, and no PEPE FIX-055 case should regress.
+- **F27:** study the high-volatility group by route in Replay before going any further with F23.
+- **F23:** treat it as fee viability for live trading only.
+
+---
+
+## UNKNOWNS
+
+- **U26: closed (E40).**
+- **U27: closed.** 158's stored score was 50, as predicted. Liquidity flags are covered in E39.
+- **U28: partly closed (E41).** Case 123 still needs checking.
+- **U29: open.** The Replay table schemas are now known (I6-004), but I have not found a run for 10-11 to 10-12. I7-005 searches for one.
+- **U30 (new):** how often a stop exposure is hidden under another liquidity status across the population, and what those entries returned.
+- **U31 (new):** the route and decision mix in the high-volatility (ATR% ≥ 0.25) group.
+- **Assumption:** I7-004 uses `confluence_higher_signal_generated_at` on `trade_signal`. I only saw it on `trade_signal_test`, so it may not exist on `trade_signal`.
+- U22 and U7/F7 are still open. Production logs are still unavailable.
+
+---
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-001
+Purpose: F28 / U30. Count entries whose stop was exposed in the order book, by the liquidity status they were given, with outcomes and stored Entry Quality.
+SQL:
+SELECT s.liquidity_status, s.order_book_stop_exposed, COUNT(*) AS n, SUM(p.realized_pnl>0) AS wins, SUM(p.realized_pnl<0) AS losses, ROUND(AVG((p.exit_price-p.entry_price)/p.entry_price*100),4) AS avg_gross_pct, MIN(m.entry_quality_score) AS min_eq, MAX(m.entry_quality_score) AS max_eq, GROUP_CONCAT(p.id ORDER BY p.id) AS ids FROM paper_position p JOIN trade_signal s ON s.id=p.signal_id LEFT JOIN wallet_managed_position m ON m.entry_signal_id=p.signal_id WHERE p.opened_at>='2026-10-11 00:00:00' AND p.status IN ('CLOSED','STOPPED') GROUP BY s.liquidity_status, s.order_book_stop_exposed ORDER BY s.liquidity_status, s.order_book_stop_exposed LIMIT 40
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-002
+Purpose: F27 / U31. Route, 1m decision and regime mix of the high-volatility (ATR% ≥ 0.25) group compared with the rest.
+SQL:
+SELECT (s.atr_percent>=0.25) AS high_atr, w.execution_reason, s.decision, s.market_regime, COUNT(*) AS n, SUM(p.realized_pnl>0) AS wins, SUM(p.realized_pnl<0) AS losses, ROUND(AVG((p.exit_price-p.entry_price)/p.entry_price*100),4) AS avg_gross_pct FROM paper_position p JOIN trade_signal s ON s.id=p.signal_id JOIN wallet_trade w ON w.signal_id=p.signal_id AND w.side='BUY' WHERE p.opened_at>='2026-10-11 00:00:00' AND p.status IN ('CLOSED','STOPPED') GROUP BY high_atr, w.execution_reason, s.decision, s.market_regime ORDER BY high_atr DESC, n DESC LIMIT 80
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-003
+Purpose: Test whether F25 is confounded. Cross-tab stored Entry Quality bucket against the ATR% bucket.
+SQL:
+SELECT CASE WHEN m.entry_quality_score<55 THEN 'a50-54' WHEN m.entry_quality_score<60 THEN 'b55-59' WHEN m.entry_quality_score<70 THEN 'c60-69' ELSE 'd70+' END AS eq_bucket, CASE WHEN s.atr_percent<0.1667 THEN 'lo<0.167' WHEN s.atr_percent<0.25 THEN 'mid' ELSE 'hi>=0.25' END AS atr_bucket, COUNT(*) AS n, SUM(p.realized_pnl>0) AS wins, ROUND(AVG((p.exit_price-p.entry_price)/p.entry_price*100),4) AS avg_gross_pct FROM paper_position p JOIN trade_signal s ON s.id=p.signal_id LEFT JOIN wallet_managed_position m ON m.entry_signal_id=p.signal_id WHERE p.opened_at>='2026-10-11 00:00:00' AND p.status IN ('CLOSED','STOPPED') GROUP BY eq_bucket, atr_bucket ORDER BY eq_bucket, atr_bucket LIMIT 40
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-004
+Purpose: F22 / U28, case 123 (with 143 as a control). Which 5m signal the 1m entry signal's confluence step actually read, compared with the 5m signals committed around the boundary.
+SQL:
+SELECT p.id AS position_id, e.id AS sig_1m, e.generated_at, e.created_at, e.decision, e.confluence_status, e.confluence_higher_interval, e.confluence_higher_decision, e.confluence_higher_signal_generated_at, e.atr_immediate_entry_allowed, w.execution_reason, w.created_at AS buy_at FROM paper_position p JOIN trade_signal e ON e.id=p.signal_id JOIN wallet_trade w ON w.signal_id=p.signal_id AND w.side='BUY' WHERE p.id IN (123,143,100) ORDER BY p.id LIMIT 10
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I7-005
+Purpose: U29. Find any Replay run whose replayed signals cover the frozen trades' window (UTC 2026-10-11 17:00 to 2026-10-12 12:00), so 182 (F15/F28) and 143 (F22) can be checked for parity.
+SQL:
+SELECT t.test_run_id, MIN(t.generated_at) AS first_gen, MAX(t.generated_at) AS last_gen, COUNT(*) AS n_signals, COUNT(DISTINCT t.symbol) AS n_symbols, SUM(t.source_signal_id IN (156723,159408,165412,167668,171589,176710)) AS frozen_entry_signals FROM trade_signal_test t WHERE t.generated_at BETWEEN '2026-10-11 17:00:00' AND '2026-10-12 12:00:00' GROUP BY t.test_run_id ORDER BY frozen_entry_signals DESC, t.test_run_id DESC LIMIT 20
+### END_DB_REQUEST
+
+---
+
+**Next (iteration 8, freeze):** check F28 against I7-001, F27 against I7-002, F25's confounding against I7-003, and case 123 against I7-004. Then freeze the per-trade classifications and the defect list (F15, F28 and F22 as candidates; F23 as fee-only), with each record and code reference stated.

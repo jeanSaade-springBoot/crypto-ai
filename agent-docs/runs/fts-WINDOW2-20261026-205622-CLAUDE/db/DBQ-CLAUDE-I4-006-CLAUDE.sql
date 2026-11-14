@@ -1,0 +1,1 @@
+SELECT symbol, open_time, close_price, number_of_trades, volume, updated_at FROM crypto_ai.candle WHERE interval_code = '1m' AND ((symbol = 'SHIBUSDT' AND open_time BETWEEN '2026-10-12 07:14:00' AND '2026-10-12 07:16:00') OR (symbol = 'ACEUSDT' AND open_time BETWEEN '2026-10-12 10:04:00' AND '2026-10-12 10:06:00')) ORDER BY symbol, open_time LIMIT 10;

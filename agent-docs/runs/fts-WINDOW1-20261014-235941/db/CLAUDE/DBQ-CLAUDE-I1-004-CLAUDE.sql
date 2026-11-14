@@ -1,0 +1,1 @@
+SELECT p.id AS position_id, s.id, s.interval_code, s.candle_open_time, s.generated_at, s.decision, s.original_decision, s.confluence_higher_decision, s.latest_price, s.total_score, s.confidence_score, LEFT(s.final_decision_explanation,600) AS final_expl FROM paper_position p JOIN trade_signal s ON s.id = p.exit_signal_id WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id

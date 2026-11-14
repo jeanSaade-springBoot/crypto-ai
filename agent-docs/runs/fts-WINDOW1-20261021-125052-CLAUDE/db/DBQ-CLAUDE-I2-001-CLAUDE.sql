@@ -1,0 +1,4 @@
+SELECT id, symbol, interval_code, candle_open_time, decision, original_decision, total_score, confidence_score, final_entry_allowed, atr_immediate_entry_allowed, atr_entry_type, atr_recommended_position_percent, atr_overextended, risk_reward_ratio, strategy_entry_allowed, btc_context_entry_allowed, derivatives_entry_allowed, liquidity_entry_allowed, selected_strategy, data_quality_valid, generated_at, created_at
+FROM trade_signal
+WHERE id IN (159285,159407,159408,165289,165412,165415,167616,167646,167668,171433,171559,171589,176655,176692,176710,156594,156721,156723)
+ORDER BY symbol, generated_at

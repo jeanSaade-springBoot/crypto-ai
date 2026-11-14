@@ -1,0 +1,4 @@
+interval_code	n	last_generated_at	stale_vs_session_now_min
+1h	21	2026-10-10 17:00:13.298087	111
+1m	22	2026-10-10 18:51:02.988225	0
+5m	21	2026-10-10 18:50:07.443466	1

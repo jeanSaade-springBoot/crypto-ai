@@ -1,0 +1,1 @@
+SELECT s.id, s.interval_code, s.latest_price, s.stop_loss, s.take_profit, s.atr_at_signal, s.atr_recommended_position_percent, s.atr_immediate_entry_allowed, s.final_entry_allowed FROM trade_signal s WHERE s.id IN (159285, 159407, 159408, 159321) ORDER BY s.id

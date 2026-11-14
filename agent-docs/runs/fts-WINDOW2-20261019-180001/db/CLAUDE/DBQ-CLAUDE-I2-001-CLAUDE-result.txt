@@ -1,0 +1,2 @@
+session_tz	global_tz	system_tz	now_session	now_utc	wt344_epoch	mpe1789409_epoch
+SYSTEM	SYSTEM	Arab Standard Time	2026-10-19 18:10:53.601816	2026-10-19 15:10:53.601816	1791741300.032000	1791747815.021000

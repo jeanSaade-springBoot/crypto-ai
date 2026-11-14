@@ -1,0 +1,205 @@
+# Claude, failed-trade study WINDOW1, iteration 5: entry quality
+
+All six entries followed the rules, and every input was fresh. Judged only on what the system knew at the moment of entry, four of the six were weak trades:
+
+- **Trade 82** had a reward/risk of 0.45. It was admitted at exactly the minimum entry-quality score of 50, because a rule clamps the score there.
+- **Trades 91 and 78** were entered on 1m WATCH signals sitting exactly at the support threshold (score 60), with low volume. Their reward/risk at the fill price was below 1.
+- **Trade 104** bought into an over-extended volume spike while the hourly signal was SELL.
+
+The other two entries were sound:
+
+- **Trade 96** had a decent signal, but its stop and target were only 2–3 price ticks away.
+- **Trade 101** was a good entry. It reached its target and was lost by the exit policy, not the entry.
+
+This round is analysis only: no code, config, DB, git, doc or deploy writes. I didn't open Codex's private or db folders, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or Codex memory. I analysed the frozen trades **104, 101, 96, 91, 82, 78** and substituted none. This session has no Write or ExitPlanMode tool, so the plan file was not written and the findings are in this message only.
+
+**Time basis:** the DB wrapper displays and accepts times in KSA (confirmed in I3-001/002). Below, KSA = the displayed value and UTC = displayed − 3 h. All DB_REQUEST literals are in KSA on purpose.
+
+## 0. Results from iteration 4
+
+| Query | Result | Effect |
+|---|---|---|
+| I4-003/004 | **F-21 is confirmed.** At 18:00 KSA (15:00 UTC) on 10-10, the open 1h candle 17:00 KSA was closed with `ingestion_source=RUNTIME`, no close-transition token, no analysis outcome and 0 signals for **19 of 21 symbols** (XLM included, updated 18:02:12 KSA). Only AERO and ACE got `SKIPPED_NOT_LIVE/AUTHORITATIVE_RECOVERY`. The same footprint appears for 19 of 21 symbols at 5m and 11 at 1m. | F-21 confirmed in the DB. |
+| I4-003 | **A second episode** on 10-11 at 02:42–02:43 KSA (23:42–23:43 UTC on 10-10): 21 of 21 5m and 4 1m RUNTIME rows were closed with no outcome. There were also 16 1m `BACKFILL` rows with no outcome across both episodes. | F-21 has happened twice. The BACKFILL rows with no terminal outcome are a further candidate breach of the AGENTS.md "one durable terminal outcome" rule (AGENT INFERENCE). |
+| I4-006 | Live price events stop at **02:39:19.80 KSA** and resume at **02:43:55.29 KSA**. The created-minus-observed skew is −20…−37 ms before the gap and **−2.71…−2.81 s from the first event after it**. | **U-15 mostly resolved:** the clock step coincides exactly with an ingestion outage, most likely a restart (AGENT INFERENCE). It is not a gradual host drift. |
+| I4-001 | No Flyway migration ran at either outage; the last one is V109 at 10-10 01:52:45 KSA. | Neither restart was a schema deploy. A JAR-only restart isn't excluded. |
+| I4-005 | **U-16: yes.** Paper positions 80 (UNI, later `STOP_LOSS` at 18:15:47 KSA, −0.2349) and 81 (AERO) were open through the 17:59:06–18:02:21 KSA outage. Position 79 (XLM) closed at 17:59:03, 3 s before it. | Real protection gap of about 3 min 15 s with no price events. Both positions are outside the frozen set. Whether UNI crossed its stop during the gap is checked by I5-005. |
+| I4-008 | Since V107, 5 positions were opened while the latest 1h signal was SELL: **4 losses, all `HTF_SELL_CONFIRMED`** (average hold 640 s, −0.1821 USDT) and 1 win (+0.0186). | F-20's business effect: net **−0.1635 USDT** on this sample. |
+| I4-007 | *Outcome only, not used to judge entries.* After the exit: 91 touched its target at 23:40 KSA with no stop touch first; 96 touched neither within 120 min; 78, 82, 101 and 104 later touched their stops (18:11, 20:59, 02:27, 05:51 KSA). | Sharpens F-20: early exits saved money in 4 cases and cost money in 91. |
+
+## 1. Entry scorecard (information available at entry only)
+
+*PROJECT EVIDENCE: I1-001/002, I2-001/002/003/006. The break-even win rates are arithmetic, and the fee rate is unverified (see F-26).*
+
+| | 78 PEPE | 82 XLM | 91 SHIB | 96 PEPE | 101 AERO | 104 ENA |
+|---|---|---|---|---|---|---|
+| Entry KSA / UTC | 10-10 17:35:06.8 / 14:35:06.8 | 18:03:06.2 / 15:03:06.2 | 21:40:07.3 / 18:40:07.3 | 22:28:04.4 / 19:28:04.4 | 10-11 02:12:06.6 / 10-10 23:12:06.6 | 10-11 05:35:07.1 / 02:35:07.1 |
+| Route | 5m setup wake-up | Accumulated evidence | 5m setup wake-up | Direct 1m BUY | Direct 1m BUY, then a 35% add | 5m setup wake-up (direct 1m rejected 0.9 s earlier) |
+| 1m signal (decision / score / confidence) | **WATCH 60** / 72 | WATCH 66 / 74 | **WATCH 60** / 73 | BUY 83 / 76 | BUY 83 / 74 | BUY 79 / 78 |
+| Strategy / regime | TREND / WEAK_UP | TREND / WEAK_UP | TREND / WEAK_UP | BREAKOUT | TREND / WEAK_UP | BREAKOUT |
+| Relative volume (RVOL) / RSI | **0.40** / 58 | 2.41 / 58 | **0.56** / 59 | 1.73 / 67 | 2.44 / 69 | **15.25** / 68 |
+| ATR % / distance from SMA20 in ATR | 0.29 / 0.68 | **0.08** / 0.33 | 0.09 / 0.90 | 0.22 / 1.01 | 0.29 / **2.16** | 0.18 / **2.91** |
+| 5m / 1h at entry | BUY (just flipped) / **SELL c70** | BUY, 8 min old / WATCH, **63 min old (F-21)** | BUY (just flipped) / **SELL c70** | BUY / **SELL c71** | WATCH / BUY with confidence 49, entry-blocked (F-22) | BUY (just flipped) / **SELL c70** |
+| Prior 30 min | 6 opportunities cancelled as `BEARISH_REVERSAL` (5m STRONG_SELL), 17:10–17:18 | Re-entry 3 min after XLM position 79 exited at 0.1983 | **10 `BEARISH_REVERSAL` cancellations**, 21:08–21:33; `QUALITY_DECAY` at 21:38:02 | Clean | Opportunity was 7 h old | 2 `BEARISH_REVERSAL` cancellations |
+| Fill vs signal price | **+1 tick** (4.06 vs 4.05) | Same | Same | Same | 0.9504 (−1 tick), then add at 0.9481 | Same |
+| Stop floored at 0.5%? | No (2·ATR) | **Yes** | **Yes** | **Yes** | No | **Yes** |
+| Stop / target distance (%) | −0.829 / +0.628 | −0.500 / +0.227 | −0.500 / +0.273 | −0.500 / +0.657 | −0.560 / +0.866 | −0.500 / +0.545 |
+| Stop / target distance (ticks) | 3.4 / **2.5** | 9.9 / 4.5 | 2.7 / **1.5** | 2.0 / **2.7** | 53 / 82 | 11 / 12 |
+| Reward/risk at fill | **0.76** (signal said 1.50) | **0.45** | **0.55** | 1.31 | 1.55 | 1.09 |
+| Stored entry-quality score | 60 | **50 (LATE_ENTRY)** | 70 | 100 | 50 at entry, 78 after the add | 65 |
+| Break-even win rate, gross / after 0.2% round-trip fees | 57% / 71% | 69% / **96%** | 65% / **91%** | 43% / 61% | 39% / 53% | 48% / 67% |
+| **Ex-ante verdict** (AGENT INFERENCE) | **Low** | **Lowest** | **Low** | Fair signal, untradeable geometry | **Good** | **Low–moderate** (chasing a spike) |
+
+Data freshness was clean for every trade (F-18): execution prices were 0.9–3.8 s old, signals were generated 2–7 s after candle close, and `data_quality_valid=1` with LIVE mode throughout.
+
+## 2. FINDINGS
+
+### F-23: a clamp kept trade 82 alive at the entry-quality cutoff
+*CONFIRMED in code; that the clamp was binding is AGENT INFERENCE from arithmetic.*
+
+- **The rule:** `ExecutionIntelligenceService.java:995-1003` applies the recent-rejection penalty (−12, `:236`) but never lets it push the score below `CHASE_ENTRY_CUTOFF=50` (`:229`) when the score was at or above 50 before the penalty. Any score below 50 is blocked as a chase entry (`:1173-1180`).
+- **What 82's evidence says:** opportunity 24429 records "Entry Quality 50/100 (LATE_ENTRY); recent rejection zone near 0.198600" (I2-006).
+- **Why the clamp must have fired:** a natural result of exactly 50 needs a pre-penalty score of 62. With the penalty set used here (all penalties are multiples of 5, plus 22 and 12), 62 can't be produced. So the pre-penalty score was between 50 and 61, and the clamp lifted the result to 50. Without the clamp, 82 would have been blocked as a chase entry.
+- **What the system knew at entry:**
+  - reward/risk 0.453, which alone costs −30 (`:991`);
+  - entry at 0.1984, just under a twice-rejected high of 0.1986, with the target (0.19885) above that high;
+  - an 8-minute-old 5m and a 63-minute-old 1h, because the hour-boundary candle was silently closed by the startup import (F-21).
+- **Classification:** followed the FIX-091 Fix-7 design ("penalty only, never a hard veto"). It is a **policy weakness:** the clamp neutralises the one quality signal that would have stopped the weakest entry in the set.
+
+### F-24: the 0.5% stop floor with a 3-ATR target pushes reward/risk below 1, and nothing enforces a minimum on these routes
+*CONFIRMED in code and DB.*
+
+- **How the geometry works:**
+  - stop = max(2·ATR, 0.5% of price) (`AtrRiskService.java:34-45`, `application.yml:143`);
+  - target = 3·ATR;
+  - so whenever ATR% < 0.25%, reward/risk = 3·ATR% / 0.5. It drops below 1 when ATR% < 0.167%.
+- **It matches the data exactly** (I1-002): 82: 3×0.0755/0.5 = 0.453; 91: 3×0.0910/0.5 = 0.546; 104: 3×0.1818/0.5 = 1.09; 96: 3×0.2189/0.5 = 1.31. Four of six frozen trades had a floored stop, and every one was classed "Volatility LOW".
+- **Where reward/risk actually gates entry:**
+  - In the entry-quality score it is only a penalty: −30 below 1, −15 below 1.25 (`:991-992`).
+  - A hard 1:1 minimum exists only on the deferred-continuation route (`:1756-1764`).
+  - The direct, accumulated-evidence and wake-up routes reach `applyInitialEntryQualityGuard`, which blocks only scores below 50.
+  - Other reward/risk thresholds exist at `:1055/:1098/:1128/:1539/:1631` for other routes. I didn't verify whether they apply to these entries.
+- **Correction to my F-11:** reward/risk is not "display only". It is a soft score input, but not a gate on these paths.
+- **Classification:** policy weakness or design gap, not an implementation defect.
+
+### F-25: price drift at execution lowers reward/risk without re-anchoring the stop and target
+*CONFIRMED in code; PROJECT EVIDENCE for trade 78.*
+
+- **The rule:** `revalidateAtExecutionPrice` (`:1150-1168`) rejects a fill only when price is at or above the target, at or below the stop, or entry quality falls below 50. The stop and target stay anchored to the signal.
+- **What happened in 78:** wallet fill 195 executed at 4.06e-6 against a decision price of 4.05e-6, a 1-tick (0.247%) drift. That cut reward/risk from 1.50 to 0.76, and the stored entry quality fell to 60. The entry still passed.
+- **Classification:** followed the rules. The guard lets one tick of drift halve reward/risk on coarse-tick coins.
+
+### F-26: neither the entry-quality score nor reward/risk accounts for fees or tick size
+*PROJECT EVIDENCE for the code and DB; EXTERNAL RESEARCH for the fee rate.*
+
+- **No fees:** fees are recorded as 0 (F-12). Even so, at roughly 0.1% per side, trades 82 and 91 needed about 96% and 91% win rates to break even. Their targets (0.227% and 0.273%) barely cover a 0.2% round trip.
+- **No tick size:** no tick-size handling exists (F-10). Trade 96 scored entry quality **100** with its stop 2.0 ticks and its target 2.7 ticks away. Trade 91 scored 70 with a target 1.5 ticks away.
+- **Fee rate is unverified:** older sources give Binance's regular-user spot fee as 0.10% maker / 0.10% taker, or 0.075% when paid in BNB. A newer report mentions zero maker fees and reduced taker fees. Market fills are taker fills either way. The exact current rate is **unverified**, so I treat 0.075–0.10% per side as a sensitivity range.
+
+### F-27: the soft-conflict entries were counter-trend first-bounce trades labelled as trend-following
+*PROJECT EVIDENCE for the facts; AGENT INFERENCE for the interpretation.*
+
+- **Prior bearish streaks:** in 78, 91 and 104, the opportunity history just before entry is a run of `BEARISH_REVERSAL` cancellations confirmed by 5m SELL/STRONG_SELL (I2-006: 6, 10 and 2 cancellations). Entry came on the **first** 5m flip to BUY (wake-up requires the previous 5m to be non-bullish, `:408-412`) while the 1h stayed SELL with confidence 70.
+- **Strategy label comes from the 1m:** the 1m strategy was TREND_FOLLOWING in a 1m WEAK_UPTREND regime. In the multi-timeframe step, "direction is mixed; no trend-following adjustment was applied".
+- **Wake-up ignored a recent quality warning:** in 91, consolidation flagged `QUALITY_DECAY` at 21:38:02 KSA (audit 1312: average confidence 61, score falling from 83 to 80). The wake-up approved the entry 2 minutes later (audit 1318). The wake-up's eligible statuses are BUILDING, WEAKENING, BLOCKED and CONFIRMED (`:414-418`). It doesn't re-check consolidation quality; whether `QUALITY_DECAY` changes the opportunity's status at all is **unknown**.
+- **Interpretation:** this is the same structure as F-20 seen from the entry side. A one-bar 5m flip against a standing 1h SELL is admitted, and the next 5m flip back exits it.
+
+### F-28: a WATCH signal sitting exactly at the support threshold carried the order in 78 and 91
+*CONFIRMED in code and DB.*
+
+- **The rule:** `isSupportiveCurrentSignal` accepts a WATCH with score ≥ 60 and confidence ≥ 60 (`:73-74, :2214-2219`). Both 1m signals scored exactly 60.
+- **Volume:** both had below-average volume (RVOL 0.40 and 0.56). In 91 the 1m signal's own multi-timeframe read said 5m=NEUTRAL; the 5m BUY arrived 1.4 s later.
+- **Classification:** followed the rules, and these were marginal-quality executions.
+
+### F-29: trade 104 chased an over-extended spike
+*PROJECT EVIDENCE.*
+
+- **The signal:** a 1m BREAKOUT BUY with RVOL 15.25, RSI 67.95, price 2.91 ATR above SMA20 and funding at the 100th percentile (crowded longs). The 1h was SELL with confidence 70.
+- **The routing:** the direct 1m route rejected the entry (audit 1558, 5m=WATCH). 0.9 s later the 5m candle closed BUY and the wake-up approved the **same** 1m signal 133249 (audit 1560). New 5m information legitimately changed the outcome, so this is not an inconsistency.
+- **Sizing:** entry quality 65 and the strategy's REDUCED_POSITION (60%) brought the size down to 15%. The protections worked as designed, but nothing in the entry quality considers the hourly direction.
+
+### F-22 / trade 101: the entry was not the cause
+*PROJECT EVIDENCE.*
+
+- **At entry:** score 83, RVOL 2.44, reward/risk 1.55, and an ask wall 1.04% above, beyond the target. The 1h "BUY" had confidence 49 and was entry-blocked (F-22, still open).
+- **Weaker points:** the opportunity was 7 h old (the age penalty is capped at −15), and the initial entry quality was 50.
+- **The add:** the 35% add filled 0.24% lower, at 0.9481, which lowered the average entry.
+- **Outcome:** the trade reached its target, then lost through the FIX-118 rebase (F-13). The entry was valid.
+
+## 3. Updated verdicts (AGENT INFERENCE)
+
+| Trade | Entry quality (ex-ante) | Overall |
+|---|---|---|
+| 78 | Low (F-25, F-27, F-28) | Followed the rules. A weak entry plus F-20's by-construction exit. Logic-defect candidate (policy inconsistency). |
+| 82 | Lowest (F-23, F-24, plus the stale-by-gap context from F-21) | Followed the rules, with a confirmed data-path defect upstream (F-21) and a policy weakness (F-23, F-24). The causal link from F-21 to the loss is still unproven. |
+| 91 | Low (F-24, F-26, F-27, F-28) | Followed the rules. Weak entry plus F-20. |
+| 96 | Fair signal, untradeable geometry (F-26) | Followed the rules. Geometry plus F-20. |
+| 101 | Good | Valid entry. The loss came from FIX-118 exit policy (F-13). |
+| 104 | Low–moderate (F-29, F-24) | Followed the rules. A spike chase plus F-20. |
+
+## 4. UNKNOWNS
+
+- **U-10 (still open):** the rotated `.gz` logs can't be read with my tools. Still needed:
+  - restart lines around 17:58–18:03 KSA on 10-10 and 02:39–02:44 KSA on 10-11;
+  - `[FIX-118]` lines for 101;
+  - the FIX-105 chase-reference debug lines, which would give the exact entry-quality components.
+- **U-17:** the exact entry-quality components (expansion, ATR extension, age) for 78, 82 and 104. I5-001 and I5-004 are meant to settle them.
+- **U-18:** whether `QUALITY_DECAY` updates the opportunity's status and should block a wake-up.
+- **U-19:** whether UNI (position 80) crossed its stop during the 18:00 KSA outage (I5-005).
+- **Replay:** F-23 through F-29 come from deterministic code shared with Replay, so they should reproduce. Not run.
+
+## 5. DB_REQUEST blocks
+All literals are KSA, the wrapper session zone.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: Pre-entry 1m structure from closed candles only (30m low/high, last closed candle OHLCV, average volume) to reconstruct entry-quality expansion/extension inputs
+SQL:
+SELECT p.id, p.symbol, p.opened_at, p.entry_price, MIN(c.low_price) AS low_30m, MAX(c.high_price) AS high_30m, AVG(c.volume) AS avg_vol_30m, SUBSTRING_INDEX(GROUP_CONCAT(CONCAT(c.open_time,'|',c.open_price,'|',c.high_price,'|',c.low_price,'|',c.close_price,'|',c.volume) ORDER BY c.open_time DESC SEPARATOR ';'),';',2) AS last_two_closed, COUNT(*) AS n_candles FROM paper_position p JOIN candle c ON c.symbol = p.symbol AND c.interval_code = '1m' AND c.closed = 1 AND c.open_time >= p.opened_at - INTERVAL 31 MINUTE AND c.open_time <= p.opened_at - INTERVAL 60 SECOND WHERE p.id IN (104,101,96,91,82,78) GROUP BY p.id, p.symbol, p.opened_at, p.entry_price ORDER BY p.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: Quality of the 5m triggers and 1h context signals used at entry (and 101's add signal)
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, generated_at, decision, original_decision, total_score, confidence_score, final_entry_allowed, market_regime, selected_strategy, atr_percent, risk_reward_ratio, data_quality_valid, signal_mode FROM trade_signal WHERE id IN (115050,121201,122356,133251,115556,128124,114160,120186,121720,132367,114163,127870,128274) ORDER BY id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: Base rate (outcome-based prevalence, separate from ex-ante assessment): all closed positions since V107 by stored entry-quality band and signal reward/risk band
+SQL:
+SELECT CASE WHEN m.entry_quality_score >= 85 THEN 'EQ85+' WHEN m.entry_quality_score >= 70 THEN 'EQ70-84' WHEN m.entry_quality_score >= 55 THEN 'EQ55-69' ELSE 'EQ<55' END AS eq_band, CASE WHEN s.risk_reward_ratio < 1 THEN 'RR<1' WHEN s.risk_reward_ratio < 1.25 THEN 'RR1-1.25' ELSE 'RR>=1.25' END AS rr_band, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losses, SUM(p.realized_pnl) AS pnl_sum, SUM(p.status = 'STOPPED') AS stopped FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id JOIN wallet_managed_position m ON m.entry_signal_id = p.signal_id AND m.symbol = p.symbol WHERE p.opened_at BETWEEN '2026-10-10 00:15:21' AND '2026-10-11 10:00:03' AND p.closed_at IS NOT NULL GROUP BY eq_band, rr_band ORDER BY eq_band, rr_band
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: Opportunity anchor/best price, health and evidence for the consumed opportunities (entry-quality reference price, F-23 arithmetic)
+SQL:
+SELECT id, symbol, status, started_at, anchor_entry_price, best_entry_price, opportunity_health, evidence_score, decision_code, executed_at FROM execution_opportunity WHERE id IN (24369,24429,25823,25962,24814,29327) ORDER BY id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-005
+Purpose: U-19: did UNI (position 80, SL 7.628665) or AERO (81, SL 0.908416362414) breach the stop during the 17:59:06-18:02:21 KSA outage
+SQL:
+SELECT symbol, open_time, open_price, high_price, low_price, close_price, closed, ingestion_source FROM candle WHERE symbol IN ('UNIUSDT','AEROUSDT') AND interval_code = '1m' AND open_time BETWEEN '2026-10-10 17:58:00' AND '2026-10-10 18:04:00' ORDER BY symbol, open_time
+### END_DB_REQUEST
+
+## 6. Self-review: what would disprove these findings
+
+- **F-23:** if I5-004 and I5-001 show components that add up to exactly 62 before the penalty (only possible if a constant differs from the working tree), the clamp wasn't binding. The Production JAR could also differ from the working tree; this is unverified.
+- **F-27:** if I5-002 shows the 5m triggers were strong (high score and confidence), "first bounce" is too harsh a label for them. That wouldn't change the contradiction with the standing 1h SELL.
+- **F-29:** if I5-001 shows price was only slightly above the 30m low, the "chase" label is too strong. In that case entry-quality 65 came from the reward/risk penalty and something else.
+
+## 7. Labels
+
+- **PROJECT EVIDENCE:**
+  - Code: `ExecutionIntelligenceService.java:47,65,71-74,229,236,397-457,848-1030,1150-1223,1740-1817,2214-2219`; `OpportunityConsolidationService.java:97-107`; `AtrRiskService.java:34-45`.
+  - DB: I1-001/002/005, I2-001/002/003/006/008, I4-001…008.
+- **EXTERNAL RESEARCH:** the Binance spot fee rate. Sources conflict, so it is unverified:
+  - [Unger Academy](https://ungeracademy.com/?p=6767)
+  - [CryptoPotato](https://cryptopotato.com/binance-fees/)
+  - [Traders Union](https://tradersunion.com/news/brokers-news/show/2241303-binance-revises-trading-fee-structure/)
+  - [Rutland Herald, Binance.US only](https://www.rutlandherald.com/news/business/binance-us-slashes-spot-trading-fees-to-near-zero-for-all-users/article_03c05c3d-289a-557a-aef5-443d71beea8b.html)
+- **AGENT INFERENCE:** that the clamp was binding; the counter-trend interpretation; the ex-ante verdicts; restart as the cause of both outages and of the clock step; Replay reproducibility.

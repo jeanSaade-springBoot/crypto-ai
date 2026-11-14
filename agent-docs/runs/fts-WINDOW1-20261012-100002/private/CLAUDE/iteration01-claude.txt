@@ -1,0 +1,213 @@
+I have the schema I need and am writing the Iteration 1 reconstruction output and DB requests now. I can't save the plan file because no write tool is available in this session, so everything is below.
+
+# CLAUDE — FTS WINDOW1 — Iteration 1: trade reconstruction
+
+**Scope:** `crypto_ai` (trader), paper trading. Frozen trades: `paper_position.id` 172, 162, 158, 143, 137, 131. Snapshot taken 2026-10-12 07:00:03 UTC (10:00:02 KSA). This was analysis only: no writes, no code or config changes, and I did not open the other agent's files or the live status files.
+
+## FINDINGS
+
+**F-I1-01: No database evidence yet, so none of the six trades is reconstructed.** *(PROJECT EVIDENCE)* My DB folder `agent-docs/runs/fts-WINDOW1-20261012-100002/db/CLAUDE/` is empty, and the run folder has no results for DBQ-FTS-001..005. I have no entry or exit times, prices, close reasons or P&L for any trade. Iteration 1 therefore covers the schema, the evidence plan and the requests below. I have not drawn any conclusion about the trades.
+
+**F-I1-02: Project docs conflict with the working tree on FIX-154 and FIX-153.** *(PROJECT EVIDENCE)* `AGENTS.md` and `claude-docs/TRADING_RULES.md` describe FIX-154 as "not-yet-implemented". The working tree, however, contains:
+- `src/main/resources/db/migration/V107__fix_154_trusted_higher_timeframe_buy.sql`, which adds `trade_signal.data_quality_valid` and the `buy_htf_assessment_audit` table.
+- `V109__fix_154_forward_replay_and_audit_columns.sql`.
+- `V108__fix_153_local_candle_reconciliation.sql`, which is newer than the FIX-153 state in `claude-docs/ARCHITECTURE.md` (2026-10-09). That doc says reconnect close-boundary rows are not auto-repaired.
+
+Which code was actually running when these trades happened is **UNKNOWN**. DBQ-CLAUDE-I1-001 checks this through `flyway_schema_history`. Per the "Do Not Start From Zero" rule, I'm reporting the conflict, not accepting either version.
+
+**F-I1-03: Schema facts that shape the requests.** *(PROJECT EVIDENCE: migrations)*
+- `paper_position` (B105:168, V11 ALTER at B105:417): `signal_id`, `exit_signal_id`, `close_reason`, `entry_reason` and `exit_reason` (MEDIUMTEXT since V100), `opened_at`, `closed_at`.
+- `production_exit_audit` (B105:1367) is unique on `paper_position_id` and records the real close trigger.
+- `wallet_trade`: `decision_price_usdt` and `execution_price_observed_at` (V67), and a unique `execution_key`.
+- `market_price_event`: `delivery_status` (V89), plus `ordering_slot` and `outcome_reason` (V106).
+- `trade_signal`: `primary_blocking_stage` and `entry_authority` (V72), `btc_context_age_seconds` (V97), `signal_mode` (V106), and `data_quality_valid` (V107, only if applied).
+- `signal_processing_work` (B105:1949) is keyed by `signal_id`.
+
+**F-I1-04: Fees are not in the recorded P&L.** *(AGENT INFERENCE from my 2026-10-09 code review, not re-verified this run)* Automatic `wallet_trade` rows record `fee_usdt = 0`, so `realized_pnl` is gross. I will work out fee-adjusted P&L separately once the wallet rows arrive.
+
+## EVIDENCE
+
+| ID | Source | Fact |
+|---|---|---|
+| E-01 | `FROZEN_TRADE_SELECTION.md` | 6 frozen IDs, selection rule, snapshot 2026-10-12 07:00:03 UTC / 10:00:02 KSA |
+| E-02 | `AGREED_KNOWLEDGE.md`, `DECISIONS.md` | No agreed entries and no approved decisions yet |
+| E-03 | `V107`, `V108`, `V109` migration files | FIX-154 / FIX-153 reconciliation exist in the working tree (see F-I1-02) |
+| E-04 | `B105__fix_153_trader_only_baseline.sql` | Table and column definitions listed above |
+
+## UNKNOWNS
+
+- **U-01:** Symbol, side, entry and exit price, SL/TP, close reason, and UTC/KSA timeline for each of the six trades.
+- **U-02:** Which migrations and fixes were deployed while each trade was open.
+- **U-03:** Entry signal quality (mode, freshness, blocking stage, BTC and multi-timeframe context, data-quality flag).
+- **U-04:** Delay between candle close, signal, work claim and fill. Also, how old the fill price was (fill price must come from a price event no older than 15s).
+- **U-05:** Price-event coverage during each position's life, and the first accepted observation that crossed the stop-loss or exit threshold.
+- **U-06:** Whether paper P&L matches wallet P&L for each trade.
+- **U-07:** Whether the six trades share a pattern (same symbol, same entry route, same time window).
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-001
+Purpose: Find which migrations are applied in crypto_ai (are FIX-153 V106/V108 and FIX-154 V107/V109 present, and when were they installed).
+SQL:
+SELECT installed_rank, version, description, installed_on, success
+FROM crypto_ai.flyway_schema_history
+ORDER BY installed_rank DESC
+LIMIT 15;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-002
+Purpose: Get the actual column list of the tables used in this study before relying on them.
+SQL:
+SELECT table_name, ordinal_position, column_name, column_type
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN ('paper_position','production_exit_audit','wallet_trade','signal_processing_work','market_price_event','wallet_managed_position','buy_htf_assessment_audit')
+ORDER BY table_name, ordinal_position;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-003
+Purpose: Get the paper_position rows for the frozen trades (identity, lifecycle, prices, P&L, reasons). Reason text is truncated to keep the result bounded.
+SQL:
+SELECT id, symbol, side, status, quantity, entry_price, stop_loss, take_profit,
+       exit_price, realized_pnl, close_reason, signal_id, exit_signal_id,
+       opened_at, closed_at,
+       TIMESTAMPDIFF(SECOND, opened_at, closed_at) AS hold_seconds,
+       LEFT(entry_reason, 1500) AS entry_reason_1500,
+       LEFT(exit_reason, 1500) AS exit_reason_1500
+FROM crypto_ai.paper_position
+WHERE id IN (172,162,158,143,137,131)
+ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-004
+Purpose: Get the recorded close trigger for each frozen trade.
+SQL:
+SELECT id, paper_position_id, wallet_position_id, symbol, close_trigger,
+       source_signal_id, source_signal_decision, source_signal_original_decision,
+       position_analysis_id, position_recommendation, entry_price_usdt,
+       exit_price_usdt, stop_loss_usdt, take_profit_usdt,
+       LEFT(close_explanation, 1000) AS close_explanation_1000, audited_at
+FROM crypto_ai.production_exit_audit
+WHERE paper_position_id IN (172,162,158,143,137,131)
+ORDER BY paper_position_id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-005
+Purpose: Get the entry and exit signals for each frozen trade (decision chain, mode, timing, context).
+SQL:
+SELECT pp.id AS paper_position_id,
+       CASE WHEN s.id = pp.signal_id THEN 'ENTRY' ELSE 'EXIT' END AS role,
+       s.id, s.symbol, s.interval_code, s.candle_open_time, s.generated_at, s.created_at,
+       s.signal_mode, s.decision, s.original_decision, s.total_score, s.confidence_score,
+       s.raw_confidence_score, s.effective_confidence_score, s.final_entry_allowed,
+       s.primary_blocking_stage, s.entry_authority, s.entry_authority_max_position_percent,
+       s.selected_strategy, s.market_regime, s.market_regime_confidence,
+       s.latest_price, s.stop_loss, s.take_profit, s.risk_reward_ratio,
+       s.atr_percent, s.atr_entry_type, s.atr_overextended,
+       s.confluence_status, s.confluence_higher_interval, s.confluence_higher_decision,
+       s.btc_context_status, s.btc_context_entry_allowed, s.btc_correlation,
+       s.btc_context_age_seconds, s.liquidity_status, s.derivatives_status
+FROM crypto_ai.paper_position pp
+JOIN crypto_ai.trade_signal s ON s.id IN (pp.signal_id, pp.exit_signal_id)
+WHERE pp.id IN (172,162,158,143,137,131)
+ORDER BY pp.id, role;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-006
+Purpose: Get the signal-processing claim and attempt record for each entry signal (latency from signal to execution).
+SQL:
+SELECT w.signal_id, w.symbol, w.interval_code, w.candle_open_time, w.origin, w.status,
+       w.attempts, w.next_attempt_at, w.updated_at, w.completed_at,
+       w.paper_position_id, w.failure_stage, LEFT(w.error_message, 500) AS error_500
+FROM crypto_ai.signal_processing_work w
+WHERE w.signal_id IN (SELECT signal_id FROM crypto_ai.paper_position WHERE id IN (172,162,158,143,137,131))
+   OR w.paper_position_id IN (172,162,158,143,137,131)
+ORDER BY w.signal_id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-007
+Purpose: Get the wallet fills linked to each trade (entry and exit price, decision price versus fill price, price-observation age, quantity, P&L). Match by signal or by symbol inside the position lifetime ±2 min.
+SQL:
+SELECT pp.id AS paper_position_id, wt.id, wt.signal_id, wt.execution_key, wt.symbol, wt.side,
+       wt.quantity, wt.price_usdt, wt.decision_price_usdt, wt.execution_price_observed_at,
+       wt.gross_amount_usdt, wt.fee_usdt, wt.net_amount_usdt, wt.cost_basis_usdt,
+       wt.realized_pnl_usdt, wt.realized_pnl_percent, wt.execution_type, wt.status,
+       wt.executed_at, LEFT(wt.notes, 300) AS notes_300
+FROM crypto_ai.paper_position pp
+JOIN crypto_ai.wallet_trade wt
+  ON wt.symbol = pp.symbol
+ AND wt.executed_at BETWEEN pp.opened_at - INTERVAL 2 MINUTE AND pp.closed_at + INTERVAL 2 MINUTE
+WHERE pp.id IN (172,162,158,143,137,131)
+ORDER BY pp.id, wt.executed_at
+LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-008
+Purpose: Summarise price-event coverage while each position was open, grouped by delivery status (to find protection gaps).
+SQL:
+SELECT pp.id AS paper_position_id, e.delivery_status, e.source, COUNT(*) AS events,
+       MIN(e.observed_at) AS first_obs, MAX(e.observed_at) AS last_obs,
+       MIN(e.price) AS min_price, MAX(e.price) AS max_price,
+       MAX(TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at))/1000000 AS max_ingest_lag_s
+FROM crypto_ai.paper_position pp
+JOIN crypto_ai.market_price_event e
+  ON e.symbol = pp.symbol AND e.observed_at BETWEEN pp.opened_at AND pp.closed_at
+WHERE pp.id IN (172,162,158,143,137,131)
+GROUP BY pp.id, e.delivery_status, e.source
+ORDER BY pp.id, e.delivery_status;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-009
+Purpose: Find the first accepted (LEGACY/APPLIED) price observation at or below the stop-loss for each trade, to compare against the actual close time and price.
+SQL:
+SELECT pp.id AS paper_position_id, pp.stop_loss, pp.closed_at,
+       (SELECT CONCAT(e.id,'|',e.observed_at,'|',e.price,'|',e.delivery_status)
+          FROM crypto_ai.market_price_event e
+         WHERE e.symbol = pp.symbol
+           AND e.observed_at BETWEEN pp.opened_at AND pp.closed_at
+           AND e.delivery_status IN ('LEGACY','APPLIED')
+           AND e.price <= pp.stop_loss
+         ORDER BY e.observed_at, e.id LIMIT 1) AS first_sl_breach
+FROM crypto_ai.paper_position pp
+WHERE pp.id IN (172,162,158,143,137,131)
+ORDER BY pp.id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-010
+Purpose: Get the candle each entry signal was built from (closed flag, provenance, close token) to check data freshness and integrity.
+SQL:
+SELECT pp.id AS paper_position_id, c.*
+FROM crypto_ai.paper_position pp
+JOIN crypto_ai.trade_signal s ON s.id = pp.signal_id
+JOIN crypto_ai.candle c
+  ON c.symbol = s.symbol AND c.interval_code = s.interval_code AND c.open_time = s.candle_open_time
+WHERE pp.id IN (172,162,158,143,137,131)
+ORDER BY pp.id;
+### END_DB_REQUEST
+
+## Next (Iteration 2)
+
+Once the results arrive I will build each trade's timeline in UTC and KSA:
+
+```
+candle close → signal → claim → fill → protection → exit
+```
+
+Then I will:
+- Trace the entry route and the exit trigger in code (`ExecutionIntelligenceService`, `LivePositionProtectionService`, `TradeExecutionValidationService`).
+- Assess each entry using only the information available at that moment.
+- Classify each loss as one of: valid loss, logic defect, stale data, execution delay, configuration issue, or missing evidence.
+
+I will query the FIX-154 audit table (`buy_htf_assessment_audit`) only if DBQ-CLAUDE-I1-001 shows V107 is applied.
+
+**Docs:** this iteration produced no confirmed findings, so `claude-docs/` is unchanged. The F-I1-02 conflict will be recorded in `claude-docs/INVESTIGATION_LOG.md` once it is confirmed.

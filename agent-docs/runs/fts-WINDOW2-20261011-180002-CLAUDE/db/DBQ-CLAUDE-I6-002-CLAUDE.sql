@@ -1,0 +1,1 @@
+SELECT DATE(c.updated_at) AS d_ksa, HOUR(c.updated_at) AS h_ksa, MINUTE(c.updated_at) AS m_ksa, COUNT(*) AS n, COUNT(DISTINCT c.symbol) AS symbols FROM candle c WHERE c.closed=1 AND c.ingestion_source='RUNTIME' AND c.close_transition_token IS NULL AND c.created_at >= '2026-10-04 00:00:00' GROUP BY d_ksa, h_ksa, m_ksa ORDER BY d_ksa, h_ksa, m_ksa LIMIT 300;

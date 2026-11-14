@@ -1,0 +1,1 @@
+SELECT m.id, m.entry_signal_id, m.symbol, m.stop_loss_usdt, m.take_profit_usdt, m.highest_price_usdt, m.profit_lock_state, m.profit_lock_price_usdt, m.profit_lock_progress_percent, m.entry_stage, m.opened_at, m.updated_at, m.status FROM wallet_managed_position m WHERE m.id = 171

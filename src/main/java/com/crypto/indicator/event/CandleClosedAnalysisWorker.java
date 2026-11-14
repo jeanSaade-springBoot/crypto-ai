@@ -24,6 +24,8 @@ import java.util.Optional;
  */
 @Component
 public class CandleClosedAnalysisWorker {
+    @org.springframework.beans.factory.annotation.Autowired(required=false) private com.crypto.local.ExchangeClockSynchronizer exchangeClock;
+    @org.springframework.beans.factory.annotation.Autowired(required=false) private com.crypto.local.CandleAnalysisOutcomeStore outcomes;
     // FIX-138 review: required evidence dependency is explicit in production and tests.
     private final org.springframework.jdbc.core.JdbcTemplate sharedWorkEvidence;
 
@@ -55,7 +57,13 @@ public class CandleClosedAnalysisWorker {
         this.sharedWorkEvidence = java.util.Objects.requireNonNull(sharedWorkEvidence, "sharedWorkEvidence");
     }
 
-    public void process(CandleClosedEvent event) { processShared(event,null,true); }
+    private java.time.Instant referenceNow(){
+        java.time.Instant local=java.time.Instant.now();
+        return exchangeClock==null?local:exchangeClock.correctJvm(local);
+    }
+
+    // FIX-153: use persisted close authority; a queued candle can expire before analysis starts.
+    public void process(CandleClosedEvent event) { processShared(event,event.closeTime(),true); }
 
     /** FIX-132 reports actual completion, never enqueue success. Historical-only
      * analysis may persist evidence but never registers or invokes wallet work. */
@@ -114,7 +122,7 @@ public class CandleClosedAnalysisWorker {
                 log.warn(
                         "Automatic analysis blocked by candle data quality: symbol={}, interval={}, warnings={}",
                         event.symbol(), event.intervalCode(), dataQuality.warnings());
-                return "DATA_QUALITY_BLOCKED";
+                return terminal(event,"SKIPPED_DATA_UNAVAILABLE","DATA_QUALITY_BLOCKED","DATA_QUALITY_BLOCKED");
             }
 
             stage = "INDICATORS";
@@ -125,7 +133,7 @@ public class CandleClosedAnalysisWorker {
                 log.info(
                         "Automatic analysis skipped: symbol={}, interval={}, openTime={}, reason=history/as-of candle unavailable",
                         event.symbol(), event.intervalCode(), event.openTime());
-                return "HISTORY_UNAVAILABLE";
+                return terminal(event,"SKIPPED_DATA_UNAVAILABLE","HISTORY_UNAVAILABLE","HISTORY_UNAVAILABLE");
             }
 
             TechnicalIndicator indicator = indicatorResult.get();
@@ -136,11 +144,11 @@ public class CandleClosedAnalysisWorker {
                 log.info(
                         "Automatic analysis skipped: signal already exists for symbol={}, interval={}, candleOpenTime={}",
                         indicator.getSymbol(), indicator.getIntervalCode(), indicator.getCandleOpenTime());
-                if(sourceEventId==null)return "ALREADY_EXISTS";
+                if(sourceEventId==null)return terminal(event,"SKIPPED_ALREADY_ANALYSED","SIGNAL_ALREADY_EXISTS","ALREADY_EXISTS");
                 // FIX-138: an expired source is historical even when originally LIVE.
                 // Never register/replay work for an already existing historical signal.
                 if(!liveSource || (closeTime!=null && !com.crypto.shared.SharedEventPolicy.closeEligible(
-                        event.intervalCode(),closeTime,java.time.Instant.now())))return "HISTORICAL_ALREADY_EXISTS";
+                        event.intervalCode(),closeTime,referenceNow())))return terminal(event,"SKIPPED_ALREADY_ANALYSED","HISTORICAL_SIGNAL_EXISTS","HISTORICAL_ALREADY_EXISTS");
                 // Existing signal is NOT processing completion. Only an attributed,
                 // completed work row establishes a prior shared business outcome.
                 Integer completed=sharedWorkEvidence.queryForObject("SELECT COUNT(*) FROM signal_processing_work w JOIN shared_market_event_delivery d ON d.source_event_id=w.source_event_id WHERE w.symbol=? AND w.interval_code=? AND w.candle_open_time=? AND w.status='COMPLETED' AND d.symbol=w.symbol AND d.interval_code=w.interval_code AND d.candle_open_time=w.candle_open_time",Integer.class,event.symbol(),event.intervalCode(),java.sql.Timestamp.from(event.openTime()));
@@ -149,12 +157,12 @@ public class CandleClosedAnalysisWorker {
                 return completed>0?"ALREADY_COMPLETED":"REVIEW_REQUIRED";
             }
 
-            if (closeTime != null && (!liveSource || !com.crypto.shared.SharedEventPolicy.closeEligible(event.intervalCode(),closeTime,java.time.Instant.now()))) {
+            if (closeTime != null && (!liveSource || !com.crypto.shared.SharedEventPolicy.closeEligible(event.intervalCode(),closeTime,referenceNow()))) {
                 stage = "HISTORICAL_SIGNAL";
                 traceStage(sourceEventId,event,stage,started);
                 TradeSignal historical = analysisService.analyzeRecovered(indicator,closeTime);
                 logSaved(sourceEventId,event,historical,"HISTORY");
-                return "HISTORICAL_ONLY";
+                return terminal(event,"HISTORICAL_ONLY","HISTORICAL_ANALYSIS", "HISTORICAL_ONLY");
             }
             stage = "LIVE_SIGNAL_AND_REGISTRATION";
             traceStage(sourceEventId,event,stage,started);
@@ -171,7 +179,8 @@ public class CandleClosedAnalysisWorker {
                     "Automatic candle flow completed: symbol={}, interval={}, openTime={}, score={}, decision={}, paperPositionOpened={}",
                     indicator.getSymbol(), indicator.getIntervalCode(), indicator.getCandleOpenTime(),
                     signal.getTotalScore(), signal.getDecision(), position.isPresent());
-            return sourceEventId==null?"COMPLETED":processingOutcome(sourceEventId);
+            // FIX-153: Optional.empty is not a completed/expired execution acknowledgment.
+            return sourceEventId==null?localProcessingOutcome(signal.getId()):processingOutcome(sourceEventId);
         } catch (com.crypto.execution.processing.SymbolLockRetryScheduled scheduled) {
             return sourceEventId==null?"REVIEW_REQUIRED":processingOutcome(sourceEventId);
         } catch (Exception exception) {
@@ -203,8 +212,23 @@ public class CandleClosedAnalysisWorker {
                 mode,eventId,event.symbol(),event.intervalCode());
             return;
         }
-        log.info("[FIX-138][SIGNAL_SAVED] mode={}, event={}, signal={}, symbol={}, interval={}, candleOpenUtc={}, generatedAt={}",
-            mode,eventId,signal.getId(),event.symbol(),event.intervalCode(),event.openTime(),signal.getGeneratedAt());
+        java.time.Instant returned=java.time.Instant.now();
+        Long liveDelayMs="LIVE".equals(mode)&&event.closeTime()!=null&&signal.getGeneratedAt()!=null
+            ?java.time.Duration.between(event.closeTime(),signal.getGeneratedAt()).toMillis():null;
+        Long insertionDelayMs="LIVE".equals(mode)&&event.closeTime()!=null&&signal.getCreatedAt()!=null
+            ?java.time.Duration.between(event.closeTime(),signal.getCreatedAt()).toMillis():null;
+        log.info("[FIX-153][SIGNAL_SAVED] mode={}, event={}, signal={}, symbol={}, interval={}, candleOpenUtc={}, candleCloseUtc={}, generatedUtc={}, rowCreatedUtc={}, serviceReturnedUtc={}, serviceReturnedKsa={}, liveCloseToGenerationMs={}, liveCloseToInsertionMs={}; rowCreatedUtc is row creation time, not database commit time; historical generatedUtc is an as-of clock, signal save does not imply a wallet trade",
+            mode,eventId,signal.getId(),event.symbol(),event.intervalCode(),event.openTime(),event.closeTime(),signal.getGeneratedAt(),signal.getCreatedAt(),returned,returned.atOffset(java.time.ZoneOffset.ofHours(3)),liveDelayMs,insertionDelayMs);
+    }
+    private String localProcessingOutcome(Long signalId){
+        if(signalId==null)return "PROCESSING_UNCONFIRMED";
+        var statuses=sharedWorkEvidence.queryForList("SELECT status FROM signal_processing_work WHERE signal_id=?",String.class,signalId);
+        if(statuses.size()!=1)return "PROCESSING_UNCONFIRMED";
+        return switch(statuses.getFirst()){
+            case "COMPLETED"->"COMPLETED";
+            case "EXPIRED"->"EXECUTION_EXPIRED";
+            default->"PROCESSING_UNCONFIRMED";
+        };
     }
     /** FIX-140: Optional.empty is not proof of processing completion. */
     private String processingOutcome(long event) {
@@ -223,6 +247,10 @@ public class CandleClosedAnalysisWorker {
         log.info("[FIX-138][WORKER_STAGE] event={}, symbol={}, interval={}, open={}, stage={}, elapsedMs={}",
                 id,event.symbol(),event.intervalCode(),event.openTime(),stage,
                 (System.nanoTime()-started)/1_000_000);
+    }
+    private String terminal(CandleClosedEvent event,String outcome,String reason,String workerOutcome){
+        if(outcomes!=null)outcomes.record(event.symbol(),event.intervalCode(),event.openTime(),outcome,reason,null,"CANDLE_WORKER");
+        return workerOutcome;
     }
 
 }

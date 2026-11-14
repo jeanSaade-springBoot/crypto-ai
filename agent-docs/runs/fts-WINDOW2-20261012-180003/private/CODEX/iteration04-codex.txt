@@ -1,0 +1,235 @@
+## FINDINGS — Iteration 4: code / trade route
+
+- **PROJECT EVIDENCE:** The six frozen `paper_position` IDs remain unverified at row level: the permitted CODEX DB folder contains schema evidence only, not DBQ-FTS results or trade rows. No individual entry/exit verdict is possible yet.
+
+- **PROJECT EVIDENCE:** A current-source mechanical live-price route is:
+
+```text
+Binance 1m kline
+→ market_price_event PENDING
+→ LivePositionProtectionService.onPrice
+→ wallet mechanical exit (if a threshold/policy exits)
+→ paper_position closure + production_exit_audit
+→ market_price_event APPLIED
+```
+
+  `BinanceKlineService.java:101-111` creates a pending price event for canonical 1m input and schedules protection. `LivePositionProtectionService.java:53-72` rejects stale/future/out-of-order input as `NON_CANONICAL`; otherwise it applies protection then records `APPLIED` only after the callback completes in the same transaction.
+
+- **PROJECT EVIDENCE:** A live mechanical exit has direct route-specific evidence:
+  - `WalletAutoExecutionService.executeMechanicalExit` closes `wallet_managed_position` and writes a SELL `wallet_trade` with an idempotency key of `POSITION:<wallet_position_id>:<reason>`.
+  - `LivePositionProtectionService.closePaper` then sets `paper_position.exit_price`, realized P&L, status, close reason, exit reason, and `closed_at`, and writes `production_exit_audit`.
+  - It does **not** set `paper_position.exit_signal_id` (`LivePositionProtectionService.java:391-412`). Therefore a null `exit_signal_id` cannot rule out a live TP/SL/profit-lock/signal-policy mechanical exit.
+
+- **PROJECT EVIDENCE:** The current source’s signal-driven route is distinct:
+
+```text
+persisted trade_signal
+→ signal_processing_work claimed/locked/freshness-checked
+→ wallet BUY or signal-linked SELL
+→ paper_position created/closed
+→ processing work completed
+```
+
+  `SignalProcessingCoordinator.java:43-135` claims durable work, acquires the symbol/open-position lock, rechecks freshness after locking, invokes the business route, and records the returned `paper_position_id` on completion. A committed processing record is not, by itself, proof of a trade.
+
+- **PROJECT EVIDENCE:** For an initial BUY, `PaperTradingService.java:313-414` requires an allowed execution decision, capacity and daily-loss checks, a fresh canonical execution price, execution-time revalidation, successful wallet BUY, then creates the `paper_position`. The wallet BUY records decision price and execution price separately (`WalletAutoExecutionService.java:163-184`). This enables entry-quality analysis once rows are supplied.
+
+- **PROJECT EVIDENCE:** For an open position, live protection evaluates in this order: TP/extension, stop loss, profit-lock safety/exit, multi-timeframe normal exit, then near-TP partial protection (`LivePositionProtectionService.java:99-248`). The current policy maps normal exits to `HTF_SELL_CONFIRMED` or `SELL_CONFIRMED`; profit-lock exits can be `PROFIT_LOCK_HTF_EXIT`, `PROFIT_LOCK_BEARISH_CONFIRMATION`, or fallback `PROFIT_LOCK_EXIT` (`PositionExitPolicy.java:20-93`).
+
+- **PROJECT EVIDENCE:** `production_exit_audit.close_trigger` is more reliable than a wallet SELL reason for identifying a terminal mechanism. The audit separately records the trigger and the latest source signal’s decision (`ProductionExitAuditService.java:17-58`). This matters because a TP/SL can use a `WATCH` signal only as context.
+
+- **AGENT INFERENCE:** For each frozen loss, the decisive route classification should be based on:
+  1. `paper_position.close_reason` and `production_exit_audit.close_trigger`;
+  2. directly linked wallet exit evidence;
+  3. then the corresponding canonical price event or signal-work record.
+  
+  It must not be inferred from `exit_signal_id` alone, candle OHLC, or a same-symbol price event.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `DBQ-CODEX-I1-001-CODEX-result.txt` confirms:
+  - `paper_position` is the authoritative lifecycle entity;
+  - `production_exit_audit.paper_position_id` is unique;
+  - `wallet_managed_position.entry_signal_id` provides the entry-side relationship;
+  - `wallet_trade` lacks a direct `paper_position_id`;
+  - `market_price_event` has no position ID and is symbol-level evidence only.
+
+- **PROJECT EVIDENCE:** No external research was used.
+
+## UNKNOWNS
+
+- The actual symbols, UTC/KSA lifecycle times, reasons, prices, losses, signal IDs, and route for IDs `182, 172, 162, 158, 143, 137`.
+- Whether any frozen loss was a live mechanical exit, signal-path exit, or a position-management stop-loss.
+- Whether each relevant price event was `APPLIED`, `NON_CANONICAL`, `PENDING`, or absent.
+- The runtime version/configuration in force at each historical trade; current source establishes possible routes, not historical deployment identity.
+- Whether direct wallet and paper-position evidence reconcile for each loss.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Classify the exact entry/exit route and reconstruct directly linked durable evidence for the six frozen failed `paper_position` IDs. All returned timestamps are UTC; report conversions separately as KSA = UTC+03:00. The query deliberately does not use symbol/time matching to infer wallet trades.
+
+SQL:
+
+```sql
+WITH frozen AS (
+    SELECT
+        p.id,
+        p.symbol,
+        p.side,
+        p.status,
+        p.quantity,
+        p.entry_price,
+        p.stop_loss,
+        p.take_profit,
+        p.exit_price,
+        p.realized_pnl,
+        p.close_reason,
+        p.entry_reason,
+        p.exit_reason,
+        p.signal_id,
+        p.exit_signal_id,
+        p.opened_at,
+        p.closed_at
+    FROM crypto_ai.paper_position p
+    WHERE p.id IN (182, 172, 162, 158, 143, 137)
+)
+SELECT
+    f.*,
+    es.interval_code AS entry_interval,
+    es.candle_open_time AS entry_candle_open_time,
+    es.decision AS entry_decision,
+    es.original_decision AS entry_original_decision,
+    es.final_entry_allowed,
+    es.latest_price AS entry_signal_price,
+    es.generated_at AS entry_signal_generated_at,
+    es.signal_mode AS entry_signal_mode,
+    es.data_quality_valid AS entry_data_quality_valid,
+    xs.interval_code AS exit_interval,
+    xs.candle_open_time AS exit_candle_open_time,
+    xs.decision AS exit_decision,
+    xs.original_decision AS exit_original_decision,
+    xs.latest_price AS exit_signal_price,
+    xs.generated_at AS exit_signal_generated_at,
+    pea.id AS exit_audit_id,
+    pea.wallet_position_id AS audited_wallet_position_id,
+    pea.close_trigger AS audited_close_trigger,
+    pea.source_signal_id AS audited_source_signal_id,
+    pea.source_signal_decision AS audited_source_signal_decision,
+    pea.source_signal_original_decision AS audited_source_signal_original_decision,
+    pea.position_analysis_id,
+    pea.position_recommendation,
+    pea.exit_price_usdt AS audited_exit_price,
+    pea.close_explanation,
+    pea.audited_at,
+    wmp.id AS entry_wallet_position_id,
+    wmp.status AS wallet_position_status,
+    wmp.opened_at AS wallet_position_opened_at,
+    wmp.updated_at AS wallet_position_updated_at,
+    wmp.profit_lock_active,
+    wmp.profit_lock_price_usdt,
+    wmp.profit_lock_state,
+    wmp.near_tp_state,
+    wmp.near_tp_harvest_used
+FROM frozen f
+LEFT JOIN crypto_ai.trade_signal es ON es.id = f.signal_id
+LEFT JOIN crypto_ai.trade_signal xs ON xs.id = f.exit_signal_id
+LEFT JOIN crypto_ai.production_exit_audit pea
+    ON pea.paper_position_id = f.id
+LEFT JOIN crypto_ai.wallet_managed_position wmp
+    ON wmp.entry_signal_id = f.signal_id
+ORDER BY f.closed_at DESC, f.id DESC;
+
+WITH frozen AS (
+    SELECT
+        p.id AS paper_position_id,
+        p.signal_id,
+        p.exit_signal_id
+    FROM crypto_ai.paper_position p
+    WHERE p.id IN (182, 172, 162, 158, 143, 137)
+),
+audits AS (
+    SELECT paper_position_id, wallet_position_id
+    FROM crypto_ai.production_exit_audit
+    WHERE paper_position_id IN (182, 172, 162, 158, 143, 137)
+)
+SELECT
+    f.paper_position_id,
+    wt.id AS wallet_trade_id,
+    wt.execution_key,
+    wt.signal_id AS wallet_trade_signal_id,
+    wt.symbol,
+    wt.side,
+    wt.quantity,
+    wt.price_usdt,
+    wt.decision_price_usdt,
+    wt.execution_price_observed_at,
+    wt.gross_amount_usdt,
+    wt.fee_usdt,
+    wt.net_amount_usdt,
+    wt.cost_basis_usdt,
+    wt.realized_pnl_usdt,
+    wt.realized_pnl_percent,
+    wt.execution_type,
+    wt.execution_reason,
+    wt.status,
+    wt.executed_at,
+    wt.execution_message
+FROM frozen f
+LEFT JOIN audits a ON a.paper_position_id = f.paper_position_id
+JOIN crypto_ai.wallet_trade wt
+    ON wt.signal_id IN (f.signal_id, f.exit_signal_id)
+    OR (
+        a.wallet_position_id IS NOT NULL
+        AND wt.execution_key LIKE CONCAT('POSITION:', a.wallet_position_id, ':%')
+    )
+ORDER BY f.paper_position_id, wt.executed_at, wt.id;
+
+WITH audits AS (
+    SELECT paper_position_id, wallet_position_id
+    FROM crypto_ai.production_exit_audit
+    WHERE paper_position_id IN (182, 172, 162, 158, 143, 137)
+)
+SELECT
+    a.paper_position_id,
+    pme.id AS management_event_id,
+    pme.wallet_position_id,
+    pme.symbol,
+    pme.event_type,
+    pme.old_value_usdt,
+    pme.new_value_usdt,
+    pme.market_price_usdt,
+    pme.reason,
+    pme.occurred_at
+FROM audits a
+JOIN crypto_ai.position_management_event pme
+    ON pme.wallet_position_id = a.wallet_position_id
+ORDER BY a.paper_position_id, pme.occurred_at, pme.id;
+
+WITH frozen AS (
+    SELECT id, symbol, opened_at, closed_at
+    FROM crypto_ai.paper_position
+    WHERE id IN (182, 172, 162, 158, 143, 137)
+)
+SELECT
+    f.id AS paper_position_id,
+    mpe.id AS market_price_event_id,
+    mpe.symbol,
+    mpe.observed_at,
+    mpe.price,
+    mpe.source,
+    mpe.created_at,
+    mpe.delivery_status,
+    mpe.ordering_slot,
+    mpe.outcome_reason
+FROM frozen f
+JOIN crypto_ai.market_price_event mpe
+    ON mpe.symbol = f.symbol
+   AND mpe.observed_at >= DATE_SUB(f.closed_at, INTERVAL 3 MINUTE)
+   AND mpe.observed_at <= DATE_ADD(f.closed_at, INTERVAL 1 SECOND)
+ORDER BY f.id, mpe.observed_at, mpe.id;
+```
+
+### END_DB_REQUEST
+
+No documentation update is required: this was analysis only, with no implementation or project-state change.

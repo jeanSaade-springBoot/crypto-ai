@@ -1,0 +1,95 @@
+## WINDOW1 — Iteration 2: database forensics
+
+### FINDINGS
+
+- **PROJECT EVIDENCE:** Scope remains exactly frozen `paper_position` IDs `182, 172, 162, 158, 143, 137`; no substitution made.
+- **PROJECT EVIDENCE:** The permitted `db/CODEX` directory is empty. No actual database result, schema output, or proof-query output is available yet, so no trade-specific causal conclusion is warranted.
+- **PROJECT EVIDENCE:** Current source maps `paper_position` to lifecycle, entry/exit signal links, price/quantity, stop/target, close reasons, P&L, and UTC timestamps. [PaperPosition.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\domain\PaperPosition.java:10)
+- **PROJECT EVIDENCE:** A live close adds the remaining-position P&L to any already-recorded realized P&L. Therefore, `paper_position.realized_pnl` cannot be independently recomputed from terminal exit price and current quantity if a partial harvest occurred; wallet execution records will be required. [LivePositionProtectionService.java](C:\workspace\crypto-ai-trader-mysql\src\main\java\com\crypto\position\service\LivePositionProtectionService.java:391)
+- **AGENT INFERENCE:** The supplied snapshot values differ by one second: `2026-10-17 07:00:04 UTC` converts to `2026-10-17 10:00:04 KSA`, while the supplied snapshot KSA value is `10:00:03`. Both supplied values should remain preserved; neither is silently relabelled or corrected.
+
+### EVIDENCE
+
+- **PROJECT EVIDENCE:** Read-only context loaded, including the charter, prior Codex iteration artifacts, database-investigation rules, and Codex documentation.
+- **PROJECT EVIDENCE:** No database, code, configuration, Git, deployment, or other mutation occurred.
+- **EXTERNAL RESEARCH:** None.
+
+### UNKNOWNS
+
+- Actual `paper_position` schema and row values for all six frozen IDs.
+- Whether the current DB selection still matches the supplied snapshot selection; a later query cannot itself prove historic state at snapshot time without durable snapshot/audit evidence.
+- Symbol, side, entry/close times, close reason, exit signal, loss magnitude, and partial-execution history for every frozen ID.
+- Which related evidence tables exist in the actual schema and their exact columns.
+- Whether any loss is a valid strategy outcome, protection/execution defect, data-quality event, or accounting discrepancy.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Establish the actual authoritative schema, retrieve only the six frozen positions, and verify the current selection predicate without assuming column names beyond the authoritative selection contract.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+
+SELECT *
+FROM (
+    SELECT *
+    FROM crypto_ai.paper_position
+    WHERE status = 'CLOSED'
+      AND closed_at IS NOT NULL
+      AND realized_pnl < 0
+    ORDER BY closed_at DESC
+    LIMIT 6
+) AS frozen_selection_check
+ORDER BY closed_at DESC;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-002  
+Purpose: Discover the actual related trader-evidence tables and columns before requesting signal, execution, protection, or audit records. Candidate names originate from current project source/architecture only and are not asserted as present database facts.  
+SQL:
+```sql
+SELECT table_name
+FROM information_schema.tables
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'signal_processing_work',
+      'production_exit_audit',
+      'position_analysis',
+      'position_management_event',
+      'wallet_position'
+  )
+ORDER BY table_name;
+
+SELECT table_name,
+       ordinal_position,
+       column_name,
+       column_type,
+       is_nullable,
+       column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'signal_processing_work',
+      'production_exit_audit',
+      'position_analysis',
+      'position_management_event',
+      'wallet_position'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

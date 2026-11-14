@@ -1,0 +1,30 @@
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+test_run_id	bigint	NO	MUL	NULL	
+symbol	varchar(30)	NO		NULL	
+status	varchar(20)	NO		NULL	
+entry_time	timestamp(6)	NO		NULL	
+entry_price	decimal(30,12)	NO		NULL	
+quantity	decimal(30,12)	NO		NULL	
+total_cost_usdt	decimal(20,8)	NO		NULL	
+position_percent	int	NO		NULL	
+stop_loss_usdt	decimal(30,12)	YES		NULL	
+take_profit_usdt	decimal(30,12)	YES		NULL	
+highest_price_usdt	decimal(30,12)	YES		NULL	
+profit_lock_active	tinyint(1)	NO		0	
+profit_lock_price_usdt	decimal(30,12)	YES		NULL	
+profit_lock_state	varchar(40)	NO		INACTIVE	
+profit_lock_rebase_started_at	timestamp(6)	YES		NULL	
+near_tp_state	varchar(40)	NO		INACTIVE	
+near_tp_best_price	decimal(30,12)	YES		NULL	
+near_tp_bearish_streak	int	NO		0	
+near_tp_last_1m_signal_id	bigint	YES		NULL	
+near_tp_harvest_used	tinyint(1)	NO		0	
+near_tp_harvested_quantity	decimal(30,12)	YES		NULL	
+exit_time	timestamp(6)	YES		NULL	
+exit_price	decimal(30,12)	YES		NULL	
+exit_reason	varchar(100)	YES		NULL	
+exit_explanation	varchar(2000)	YES		NULL	
+realized_pnl_usdt	decimal(20,8)	YES		NULL	
+realized_pnl_percent	decimal(20,8)	YES		NULL	
+created_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED

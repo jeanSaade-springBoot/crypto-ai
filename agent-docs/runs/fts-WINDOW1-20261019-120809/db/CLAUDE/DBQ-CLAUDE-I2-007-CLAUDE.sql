@@ -1,0 +1,1 @@
+SELECT * FROM crypto_ai.wallet_managed_position WHERE id = 172 LIMIT 1

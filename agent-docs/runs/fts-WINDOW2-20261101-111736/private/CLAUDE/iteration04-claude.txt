@@ -1,0 +1,171 @@
+# Claude: FTS WINDOW2, Iteration 4 (code and trade route, self-review)
+
+Tracing the code confirms a defect in trade 182's entry route, and it corrects my iteration-3 explanation of trade 143.
+
+- **182 is a confirmed defect in the entry route.** The 5m STRONG_SELL was relabelled NEUTRAL, and the 1m BUY was then checked against that NEUTRAL label. That label is the reason the code's own hard veto (strong opposing higher timeframe) did not block the BUY.
+- **143 was not caused by an unprotected extension.** I said in iteration 3 that the floor after an extension was only entry × 1.0005. That was wrong. The lock was at 4.0758, above the original target. The loss came from the price gapping through the lock.
+
+All times are KSA (UTC+3), converted from the stored UTC values.
+
+**What I read:** CHARTER.md, my iteration 1–3 outputs, and the I3-001 to I3-005 results. Code: `TradeExecutionValidationService.java:42-49` and `:62-321`, `MultiTimeframeConfluenceService.java:24-162` and `:320-361`, `LivePositionProtectionService.java:100-139`, `ProfitLockPolicy.java`, and `HigherTimeframeBuyAssessmentService.java:50,64`. I grepped the shared docs and claude-docs for any record of this masking behavior and found none.
+
+**What I didn't do:** no writes, no git, no deploy. Plan mode is on, but this session has no Write or ExitPlanMode tool, so I created no plan file. I did not open LIVE_TEAM_STATUS.md, LIVE_EVENTS.log or any Codex file.
+
+---
+
+## EVIDENCE
+
+### E16: How 182's 5m STRONG_SELL became NEUTRAL (PROJECT EVIDENCE: I3-001 and code)
+
+- The 5m signals #176403, #176529, #176655 and #176792 are each base STRONG_SELL with score 22–25. At the MULTI_TIMEFRAME stage (sequence 5) each was DOWNGRADED from STRONG_SELL to NEUTRAL, with the reason "Bearish signal conflicts with bullish higher-timeframe structure… 1h=WATCH (trend 16/25)".
+- In code, `trendFollowing` (`MultiTimeframeConfluenceService.java:136-138`) neutralizes a bearish signal when `counts.bullish() > 0`.
+- `isBullishContext` (`:337-339`) counts a context as bullish if its decision is BUY or STRONG_BUY, **or if its trend score is at least 15** (`BULLISH_TREND_MINIMUM=15`, `:24`).
+- The 1h was **WATCH**, not BUY. Its trend score of 16 alone made it count as "bullish structure".
+- The other stages (BTC, derivatives, order book) passed and did not change the decision. U15 is closed: **MULTI_TIMEFRAME did the overwrite.**
+
+### E17: How the 1m BUY #176710 consumed the overwritten 5m (PROJECT EVIDENCE: I3-001 and code)
+
+1. The 1m MULTI_TIMEFRAME stage reads the stored `getDecision()` of each context, through `contextAtOrBefore` at `:105-113`.
+2. The hard veto `hasHardBearishOpposition` (`:146-151`) fires only on `decision == STRONG_SELL`. Because the stored decision was NEUTRAL, the veto did not fire.
+3. The 1m BUY went down the "NEUTRAL/WATCH with weak structure" branch (`:128-130`). The stored path for #176710 confirms this: "5m=NEUTRAL (trend 10/25…)". The 5m trend of 10 is also at the bearish-context threshold (`BEARISH_TREND_MAXIMUM=10`).
+4. `validateBuy` (`TradeExecutionValidationService.java:81,93`) takes the same final decision; `HigherTimeframeBuyAssessmentService.java:50,64` also reads `getDecision()`.
+5. `balancedBuy` rejects 5m NEUTRAL with 1h WATCH (`:300-320`).
+6. The FIX-11G exception then grants `BALANCED_NEUTRAL_5M_WATCH_1H` (`:263-284`) when `finalEntryAllowed`, entry quality ≥ 50 and BTC is not in conflict.
+7. 182's entry quality was **50, exactly the cutoff** (`BALANCED_TRANSITIONAL_MIN_ENTRY_QUALITY=50`, `:49`; entry quality from I1-004).
+
+**AGENT INFERENCE (counterfactual):** if either check had read `original_decision`, the 1m BUY would have been vetoed to WATCH as STRONG_CONFLICT (`:120-122`), and no position would have opened.
+
+### E18: Exit side of 182 (PROJECT EVIDENCE: I3-001 and I3-002)
+
+- 5m #176934 STRONG_SELL was **not** neutralized, because the 1h had moved to NEUTRAL with trend 13 (below 15), which no longer counts as bullish.
+- The exit audit records SELL_CONFIRMED from source #176927 (1m SELL).
+- So the same 5m bearish evidence was suppressed for the entry and acted on for the exit eight minutes later. The 1h trend score dropping 16 → 13 is what flipped it.
+
+### E19: How widespread the masking is (PROJECT EVIDENCE: I3-005)
+
+Population: production BUY entries since 10-11, using the newest 5m signal at or before entry.
+
+| 5m original → stored | n | wins | losses | average gross % |
+|---|---|---|---|---|
+| SELL → NEUTRAL | 4 | 3 | 1 | −0.066 |
+| STRONG_SELL → NEUTRAL | 1 (this is 182) | 0 | 1 | −0.212 |
+
+- 5 of 95 entries relied on a bearish 5m that had been relabelled NEUTRAL.
+- The sample is too small to show a loss pattern; the defect claim rests on the logic (E17), not on the statistics.
+- Trade 137's 5m #156721 was genuinely NEUTRAL (original NEUTRAL). **The masking does not apply to 137.**
+
+### E20: 143's lock geometry, recomputed (PROJECT EVIDENCE: `ProfitLockPolicy.java:30-51`, I3-002, I3-004)
+
+**Lock calculation**
+
+- Final target 4.104317; entry 4.033; distance 0.071317; highest price 4.101 → progress 95.35%. This matches the audit.
+- The lock steps up in 10% increments above 70% activation: completed = floor((95.35 − 70) / 10) = 2, so the locked progress is 40% + 2×10% = 60%.
+- Lock = 4.033 + 0.6 × 0.071317 = **4.07579**, which matches the stored value. That is above the original target of 4.0647.
+- The entry × 1.0005 figure (4.0350) is only the minimum the lock can fall to (`:48`), not the lock actually in force.
+
+**Exit**
+
+- The exit branch was PROFIT_LOCK_HARD_EXIT, because the tick price was below the floor (`LivePositionProtectionService.java:210`).
+
+**Market move (U16 closed)**
+
+- The 1m EGLD candle at 01:43 had high 4.100, low 3.994, 433 trades and volume 6,383, about 8× the candle before it. This was a real market dump, not sparse sampling.
+- The paper fill is the tick price 4.027. There is no slippage model and no fill at the lock price.
+
+### E21: Tick gaps at the 172 and 158 exits (PROJECT EVIDENCE: I3-004)
+
+- **172 (SHIB):** ticks at 10:15:00.046, then 10:15:03.470, then nothing until 10:15:43.462. The only tick after the 5m NEUTRAL (#172588, 10:15:04.578) was 38.9 s later, at the same price 548e-8. That fully confirms F14.
+- **158 (XRP):** tick 1862196 has `created_at` 06:30:02.192 but `observed_at` 06:30:02.320, so the local row was created 128 ms before Binance's event time. Tick 1862168 shows the same thing: created 05:59.954, observed 06:30:00.017.
+  - **AGENT INFERENCE:** the server clock runs about 60–130 ms behind Binance time.
+  - That skew is too small to explain 158's skipped exit. U14 is still open, and I4-001 asks for the evidence.
+
+### E22: Replay route (PROJECT EVIDENCE: code comments and calls)
+
+- The confluence and validation routes use `replayScope.latestAtOrBefore` (`MultiTimeframeConfluenceService.java:106-108`). The comments on FIX-112B and FIX-11G (`TradeExecutionValidationService.java:209-211`, `:259-262`) say Replay calls the same shared method.
+- **AGENT INFERENCE:** the F15 masking is deterministic from stored signals, so it should reproduce in Replay.
+- 143's gap-through-lock outcome depends on Replay's price granularity. That is unverified (U19).
+
+---
+
+## FINDINGS (Iteration 4; I have reviewed only my own work)
+
+- **F15, confirmed: an entry-logic defect in how context is read.** PROJECT EVIDENCE (E16–E18) and INFERENCE for the counterfactual.
+  - The MULTI_TIMEFRAME stage rewrites a bearish 5m `decision` to NEUTRAL so that it does not act as a SELL. Downstream BUY gates then read that rewritten value as if it were genuine neutrality:
+    - the 1m confluence hard veto at `:146-151`;
+    - `validateBuy` and the FIX-154 assessment at `:81,93`;
+    - the FIX-11G transitional authority at `:263`.
+  - The trigger is weak: a 1h **WATCH** counts as "bullish structure" on trend score ≥ 15 alone (`:337-339`).
+  - On 182 this removed a hard STRONG_SELL veto, and the entry passed at the exact entry-quality cutoff of 50.
+  - **Severity: medium.** It is a logic defect, but only 5 of 95 entries were affected, and the loss on 182 was −0.21%.
+  - It is not documented as intended in AGREED_KNOWLEDGE, DECISIONS or claude-docs (my grep found nothing).
+  - Possible direction for the root-cause phase, not authorized: BUY context gates should take `original_decision` into account, or the neutralization should not count as non-opposition. I am not proposing a design here.
+- **F13, revised and downgraded.** PROJECT EVIDENCE (E20).
+  - **The extension did not remove protection.** The lock in force was 4.0758, about +1.06%, higher than taking the original target (+0.84%).
+  - **The loss came from the price gapping through the lock.** A 1.8% move between two ticks 8 s apart was filled at the tick price.
+  - The remaining design question is whether the paper fill should model a gap, and whether a stop-limit or lock-price fill assumption is wanted. That is a trading-rule question, not a defect.
+  - **Reclassification of 143:** a valid loss caused by a market gap, with no code defect.
+- **F14 stands (low): exits are evaluated only when a price tick arrives.** E21 confirms the 38.9 s on 172 with no price change, so the cost was zero.
+- **New, F16 (observational): the server clock appears to run about 60–130 ms behind Binance.** It does not affect these trades. It matters for any check that compares `observed_at` with local time.
+- **Route map for the frozen set:**
+
+| id | route (`execution_reason`) | gate code | does the 5m it read match its original decision? |
+|---|---|---|---|
+| 137 | `IMMEDIATE_VALIDATION` → BALANCED_NEUTRAL_5M_WATCH_1H | `:263-284` | yes |
+| 143 | SETUP_TIMEFRAME_ATR | `ExecutionIntelligenceService:1502` | yes (5m WATCH) |
+| 158 | SETUP_CONFIRMATION_WAKEUP | `:443` | yes (5m BUY) |
+| 162 | ACCUMULATED_EVIDENCE → `validateBuyContext` | `:128-163` | yes (5m WATCH) |
+| 172 | `IMMEDIATE_VALIDATION` | `validateBuy` | yes (5m BUY) |
+| 182 | `IMMEDIATE_VALIDATION` → BALANCED_NEUTRAL_5M_WATCH_1H | `:263-284` | **no: STRONG_SELL→NEUTRAL** |
+
+**Classification of the frozen trades:**
+
+| id | classification |
+|---|---|
+| 137 | valid loss |
+| 143 | valid loss (market gap through the lock) |
+| 158 | valid loss; the exit was early in hindsight |
+| 162 | valid loss |
+| 172 | valid loss; the exit was early in hindsight |
+| 182 | **logic defect (F15)** |
+
+## UNKNOWNS
+
+- **U14 (open):** why the tick at 06:30:02.192 (created) did not trigger 158's exit. I am testing whether the signals had not yet committed (I4-001).
+- **U7 (open):** which build was running on 10-11/12. FIX-11G is proven by the `execution_reason` text. Whether the FIX-154 assessment was active is not proven (I4-003).
+- **U18:** the denominator for F15: how many bearish 5m signals were neutralized only by the 1h trend score while its decision was WATCH or NEUTRAL (I4-002).
+- **U19:** whether Replay prices protection with ticks or candles. This decides whether 143's fill at 4.027 reproduces. I will trace the code in iteration 5.
+- **Logs:** production logs are still not available to Claude. The FIX-11G INFO line at `:273` would corroborate 182 (U20).
+
+---
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: For U14, find out whether the signals were committed and visible when 158's 06:30:02.192 tick arrived. Compares `generated_at` with `created_at` for the exit signals and their work items, with 182's entry signals as a control.
+SQL:
+SELECT s.id, s.symbol, s.interval_code, s.decision, s.generated_at, s.created_at, TIMESTAMPDIFF(MICROSECOND, s.generated_at, s.created_at)/1000 AS gen_to_created_ms, w.status, w.completed_at, w.updated_at FROM trade_signal s LEFT JOIN signal_processing_work w ON w.signal_id=s.id WHERE s.id IN (166819,166821,176655,176710,176927,176934,172587,172588) ORDER BY s.generated_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: For U18 and F15, the size of the neutralization. Counts 5m and 1h signals since 10-11 whose bearish original decision was stored as NEUTRAL, grouped by the higher-timeframe context decision. This separates cases neutralized only by trend score (context WATCH or NEUTRAL) from cases with a real bullish decision.
+SQL:
+SELECT s.interval_code, s.original_decision, s.decision, s.confluence_status, s.confluence_higher_decision, COUNT(*) AS n, MIN(s.generated_at) AS first_at, MAX(s.generated_at) AS last_at FROM trade_signal s WHERE s.generated_at >= '2026-10-11 00:00:00' AND s.generated_at < '2026-10-16 00:00:00' AND s.interval_code IN ('5m','1h') AND s.original_decision IN ('SELL','STRONG_SELL') GROUP BY s.interval_code, s.original_decision, s.decision, s.confluence_status, s.confluence_higher_decision ORDER BY n DESC LIMIT 50
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: For U7, bound the deployed build at trade time by the schema migrations installed before and around 10-11/12.
+SQL:
+SELECT installed_rank, version, description, installed_on, success FROM flyway_schema_history WHERE installed_on <= '2026-10-13 00:00:00' ORDER BY installed_rank DESC LIMIT 15
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: For 143 (F13/E20), the final managed-position lock state (state, rebase timestamps) to confirm the lock was ACTIVE, not TP_EXTENSION_REBASE, at exit.
+SQL:
+SELECT m.* FROM wallet_managed_position m WHERE m.id = 172
+### END_DB_REQUEST
+
+---
+
+**Next (iteration 5):** trace how Replay prices protection (U19) and confirm that F15 reproduces in Replay through `ExecutionReplayScope`. Use I4-001 to close U14 and I4-002 to size F15. Then begin the root-cause synthesis per trade.

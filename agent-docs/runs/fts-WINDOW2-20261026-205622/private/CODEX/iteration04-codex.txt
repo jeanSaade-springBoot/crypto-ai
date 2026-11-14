@@ -1,0 +1,177 @@
+## FINDINGS
+
+**PROJECT EVIDENCE — cohort and evidence state:** The frozen cohort remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. The permitted `db/CODEX` directory contains **zero** evidence artifacts, so no route can be assigned to any individual trade.
+
+**PROJECT EVIDENCE — entry route:** A new paper position is created only after the signal-processing coordinator claims fresh durable work, obtains a fresh canonical price, and `WalletAutoExecutionService.executeBuy(...)` reports success. The resulting `paper_position` stores the entry signal, execution price, stop, target, and `opened_at`. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:292)
+
+**PROJECT EVIDENCE — live protection route:** Direct price protection persists a `PENDING` price event, validates observed-time age and ordering inside the protection transaction, performs protection, then marks that same receipt `APPLIED`. A mechanical TP/SL/profit-lock/HTF exit closes the paper position only if wallet mechanical execution returns `true`. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:53) [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:475)
+
+**PROJECT EVIDENCE — signal-driven close route:** `PaperTradingService.completeClose(...)` records the paper close before invoking the signal-linked wallet exit. The wallet method is `void` and can return without a wallet mutation where no open managed position or sellable quantity exists. This is a source-level reconciliation risk, not proof that any frozen trade is affected. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487) [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:211)
+
+**PROJECT EVIDENCE — attribution limits:** An `APPLIED` price event proves a committed protection callback, but may be a no-op with no open position; it does not itself prove a paper-position close. Conversely, a paper close needs reconciliation to wallet trades and `production_exit_audit`. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:81)
+
+**PROJECT EVIDENCE — timing risk to test:** Normal live protection selects the newest 1m/5m/1h signals without constraining them to `generated_at <= observedAt`; only the near-TP path explicitly performs an at-or-before lookup. A delayed but still age-valid price observation could therefore be evaluated against later signal context. This is a code-route risk requiring timestamp evidence, not a confirmed defect or trade cause. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:95) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:251)
+
+**AGENT INFERENCE:** The six losses cannot yet be classified as valid strategy losses, entry defects, protection defects, or accounting inconsistencies. Their exact exit route, trigger evidence, and wallet reconciliation remain unproven.
+
+**EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- Each trade’s symbol, entry/exit timestamps (UTC and KSA), entry/exit signal IDs, close reason, prices, quantity, and realized P&L.
+- Whether each close has a `production_exit_audit` row and what it identifies as the terminal trigger.
+- Whether wallet execution exists and agrees with each `paper_position` result.
+- Whether any relevant `market_price_event` was `APPLIED`, rejected, unresolved, stale, or temporally preceded by the signal context used for exit.
+- Whether retained logs cover any frozen trade; prior Codex evidence shows no WINDOW2 log coverage.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I4-001  
+Purpose: Confirm actual forensic schema before interpreting the six frozen production trades or selecting additional fields.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'production_exit_audit',
+      'wallet_managed_position',
+      'wallet_trade',
+      'trade_signal',
+      'market_price_event'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I4-002  
+Purpose: Retrieve authoritative paper-position lifecycle rows and any immutable exit audit for only the frozen cohort. All returned timestamps are UTC and must be converted to KSA only in reporting.  
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.side,
+    p.status,
+    p.quantity,
+    p.entry_price,
+    p.stop_loss,
+    p.take_profit,
+    p.exit_price,
+    p.realized_pnl,
+    p.signal_id AS entry_signal_id,
+    p.exit_signal_id,
+    p.close_reason,
+    p.entry_reason,
+    p.exit_reason,
+    p.opened_at,
+    p.closed_at,
+    a.id AS exit_audit_id,
+    a.wallet_position_id,
+    a.close_trigger,
+    a.source_signal_id AS audit_source_signal_id,
+    a.source_signal_decision,
+    a.source_signal_original_decision,
+    a.position_analysis_id,
+    a.position_recommendation,
+    a.entry_price_usdt AS audit_entry_price,
+    a.exit_price_usdt AS audit_exit_price,
+    a.stop_loss_usdt AS audit_stop_loss,
+    a.take_profit_usdt AS audit_take_profit,
+    a.close_explanation,
+    a.audited_at
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.production_exit_audit a
+  ON a.paper_position_id = p.id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I4-003  
+Purpose: Reconcile each frozen paper position to its managed-wallet position and executed wallet BUY/SELL evidence, including mechanical exits that have no signal ID.  
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol AS paper_symbol,
+    p.signal_id AS entry_signal_id,
+    p.exit_signal_id,
+    p.opened_at,
+    p.closed_at,
+    a.wallet_position_id,
+    wmp.entry_signal_id AS managed_entry_signal_id,
+    wmp.status AS managed_status,
+    wmp.average_entry_price_usdt,
+    wmp.stop_loss_usdt,
+    wmp.take_profit_usdt,
+    wmp.highest_price_usdt,
+    wmp.profit_lock_active,
+    wmp.profit_lock_price_usdt,
+    wmp.profit_lock_state,
+    wmp.entry_stage,
+    wmp.opened_at AS managed_opened_at,
+    wmp.updated_at AS managed_updated_at,
+    wt.id AS wallet_trade_id,
+    wt.signal_id AS wallet_signal_id,
+    wt.execution_key,
+    wt.side AS wallet_side,
+    wt.quantity AS wallet_quantity,
+    wt.price_usdt,
+    wt.decision_price_usdt,
+    wt.execution_price_observed_at,
+    wt.cost_basis_usdt,
+    wt.realized_pnl_usdt,
+    wt.fee_usdt,
+    wt.execution_reason,
+    wt.status AS wallet_trade_status,
+    wt.executed_at
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.production_exit_audit a
+  ON a.paper_position_id = p.id
+LEFT JOIN crypto_ai.wallet_managed_position wmp
+  ON wmp.id = a.wallet_position_id
+  OR wmp.entry_signal_id = p.signal_id
+LEFT JOIN crypto_ai.wallet_trade wt
+  ON wt.signal_id IN (p.signal_id, p.exit_signal_id)
+  OR wt.execution_key LIKE CONCAT('POSITION:', a.wallet_position_id, ':%')
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, wt.executed_at, wt.id;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I4-004  
+Purpose: Obtain durable in-holding-period price-event evidence for the frozen trades, including accepted, rejected, and unresolved observations; determine whether a claimed protection route is supportable.  
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.opened_at,
+    p.closed_at,
+    mpe.id AS market_price_event_id,
+    mpe.observed_at,
+    mpe.price,
+    mpe.source,
+    mpe.delivery_status,
+    mpe.outcome_reason,
+    mpe.created_at
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.market_price_event mpe
+  ON mpe.symbol = p.symbol
+ AND mpe.observed_at >= p.opened_at
+ AND mpe.observed_at <= p.closed_at
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.id, mpe.observed_at, mpe.id
+LIMIT 5000;
+```
+### END_DB_REQUEST

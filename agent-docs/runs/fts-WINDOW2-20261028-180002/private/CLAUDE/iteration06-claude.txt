@@ -1,0 +1,277 @@
+# CLAUDE: FTS WINDOW2, Iteration 6 of 8 (root cause and research)
+
+**The main result this iteration:** none of the six losses was caused by a code defect. They share one design cause: entries with almost no edge were allowed in. Fixing that would be a policy change, and none of the six trades shows the code doing something other than what it was written to do. Across all of October, these trades fall in a small-loss group. Most of the money was lost through stop-loss hits, and none of these six hit its stop.
+
+**Run:** `fts-WINDOW2-20261028-180002`. This was analysis only, and I reviewed only my own work.
+
+**What I read:**
+- CHARTER, my iteration 4 and 5 outputs, and my I5-001..004 results.
+- The I2-002 result again.
+- `ExecutionIntelligenceService.java` lines 600–710, 840–1030 and 1140–1290.
+- `PaperTradingService.java` lines 320–390 and `PositionExitPolicy.java`.
+- `application.yml` (time-zone settings) and the `DATABASE_INVESTIGATION_RULES.md` time-zone section.
+
+**Isolation:** I did not open any Codex folder, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or any Codex memory.
+
+**Writes:** none.
+
+**Times:** all times come from epoch values. Each is shown as UTC → KSA (UTC+3).
+
+---
+
+## Ingesting the I5 results
+
+| Result | What it shows | Effect |
+|---|---|---|
+| **I5-001** | **182** used validation code `BALANCED_NEUTRAL_5M_WATCH_1H` with entryQuality=50, so not BALANCED_EARLY. **137** used the same code with entryQuality=58. **143**'s fill message says "Entry Quality **60**/100 (ACCEPTABLE_ENTRY) capped … 25%", but the stored score is **70** (I4-001). **162**'s message has the cap text and no "recent rejection zone" text. | The E1 inference for 182 is confirmed. New finding **F6-3** below. |
+| **I5-002** | Opportunity 37952 (162): `buy_count=1`, 9 WATCH, 10 NEUTRAL, HTF authority = BALANCED_EARLY, started 1791765662.837. Opportunity 40290 (182): anchor 0.1879, 2 BUY, 1 NEUTRAL, **1 BEARISH**. | The 162 FIX-119 path is confirmed (F6-2). **Self-correction:** my EGLD filter used a UTC literal (`'14:00'`). The DB wrapper reads literals as KSA (proved in I2-001/I3), so it covered 11:00–17:00 UTC instead of 14:00–20:00 UTC. With `ORDER BY symbol LIMIT 60`, the EGLD rows also crowded out the EGLD, SHIB and XRP rows I needed. Re-requested below with `FROM_UNIXTIME`. |
+| **I5-003** | All rows are 2026-10, so there is no "older sizing era". STOP_LOSS exits: R:R ≥ 1.5 had 37 trades, −10.19 (worst −0.698); R:R 1.0–1.5 had 26 trades, −4.39; R:R < 1 had 12 trades, −1.30. | My iteration-5 "old sizing era" inference is **withdrawn**. The −4.13 in the ≥ 1.5 bucket comes from stop-loss hits that happened this month. |
+| **I5-004** | 159408 (143): RSI 84.32, `rsi_score=1`, `bollinger_score=2`. 167668 (162): RSI 68.35, `rsi_score=3`. 176710 (182): WEAK_DOWNTREND. | E3 confirmed: the oscillators had already marked these entries as stretched, but the entry-quality score has no oscillator input. |
+
+---
+
+## FINDINGS
+
+### F6-1. Shared root cause for 137, 158, 162, 172 and 182: low-edge entries closed by a bearish exit signal (PROJECT EVIDENCE + AGENT INFERENCE)
+
+**How these losses happen (PROJECT EVIDENCE):**
+1. The entry used one of four routes (IMMEDIATE_VALIDATION, SETUP_CONFIRMATION_WAKEUP, ACCUMULATED_EVIDENCE, SETUP_TIMEFRAME_ATR). None of them has an R:R floor (iteration-4 R1).
+2. The entry-quality score blocks only below 50 (`ExecutionIntelligenceService.java:1173`).
+3. The signal's R:R was 0.35–0.74, and the target was only 0.17–0.37% away.
+4. Price went at most 31–47% of the way to target (182 never went above its entry). That is below the 70% level where the profit lock arms, so the lock never armed.
+5. The exit was then decided by `PositionExitPolicy.evaluateNormalExit`: `SELL_CONFIRMED` (`:35-43`) or `HTF_SELL_CONFIRMED` (`:25-33`).
+
+**System-wide (PROJECT EVIDENCE, I5-003):** these signal exits had **0 wins out of 23** in October, for a total of about −1.27. The policy itself does not require the position to be in loss (`:20-50`).
+
+**AGENT INFERENCE:** winning positions usually arm the profit lock first and leave through the `PROFIT_LOCK*` exits. A signal exit therefore mostly catches trades that never worked. The six frozen trades are what you would expect from that group: small losses of −0.13% to −0.34% of the wallet.
+
+**Classification:** each trade was a valid losing trade under the coded rules. The root cause is an **entry-selection policy** that admits setups where even reaching the target barely pays. It is not a logic defect, stale data or a delayed execution.
+
+### F6-2. 162 cleared the cutoff by 30 ms of opportunity age, and was score 50 by exact arithmetic (PROJECT EVIDENCE)
+
+Working through the scoring code at `:976-1022` with the stored values:
+- **R:R:** 0.44 gives −30.
+- **ATR extension:** measured from the opportunity's best price 0.08675 to the 0.08705 fill, with an ATR of 0.0000636. That is 4.72 ATR, which gives −20.
+- **Price expansion:** 0.35%, so no penalty.
+- **BREAKOUT bonus:** not given, because the extension is above 2.5.
+- **Rejection zone:** none. The message has no rejection text (`:1208-1211`).
+- **Result:** 100 − 30 − 20 = **50**.
+
+**Opportunity age:** the signal was generated at 1791766922.813 and the opportunity started at 1791765662.837. The gap is **1259.976 s**. `toMinutes()` truncates that to 20, and the penalty applies only above 20 (`:987-989`), so no age penalty was taken.
+
+**What 30 ms changed:** had the gap been 30 ms longer, the score would have been 45. That is CHASE_ENTRY_BLOCKED, and **162 would not have been opened**.
+
+**FIX-119:** it was bypassed because `buy_count=1` (`:1275-1280`). One BUY among 20 evidence observations is enough to lift the deferral.
+
+**FIX-041:** it does not apply. That block is only on the direct route (`:672`), and the comment at `:668-671` deliberately leaves accumulated evidence out of it.
+
+**Verdict:** the trade followed the design, and the outcome sat right on two boundaries. **AGENT INFERENCE:** this is a policy-sensitivity finding, not a defect.
+
+### F6-3. 143: the stored score does not match the score that sized the trade (PROJECT EVIDENCE + UNKNOWN)
+
+**Where each score comes from:**
+- **The decision-time score was 60.** It was computed with the 5m ATR (`:634`) and is the score that set the 25% cap.
+- **The stored score is 70.** `PaperTradingService.java:377-378` computes it again at the fill price with the **1m** ATR (`:857-858`) and stores it on the position.
+- **Effect on sizing:** none. At the fill, cap = min(25, 40) = 25 (`:1183,1213`).
+
+**Why the direction looks wrong:**
+- On R:R alone, the fill re-score should be lower than the decision score. At the 4.032 decision price, R:R was 1.50, which gets no penalty. At the 4.033 fill, it was 1.39, which gets −15.
+- A smaller ATR should also make the fill-time score lower.
+- Instead it was higher, so something else changed between the decision and the fill: the opportunity's reference price, its age, or the rolling window. The likely candidate is the `saveOpportunity` update at `:636`. This cause is **UNKNOWN (U-I6-1)**.
+
+**Audit impact:** `entry_quality_score` on the position does not reliably record the decision that was made. This is an evidence-integrity gap, not a cause of the loss.
+
+**Correction to iteration-5 E4:** E4 predicted that re-scoring with the 1m ATR would *downgrade* a valid 5m setup. On 143 the observed re-score went *up*. The inconsistency in the code still stands, but the direction of its effect is not proven.
+
+### F6-4. Decomposing 137's score (PROJECT EVIDENCE)
+
+- 58 = 100 − 30 (R:R 0.64) − 12.
+- The other penalties are all multiples of 5, plus 22. The only one that can make −12 is `RECENT_REJECTION_ENTRY_QUALITY_PENALTY` (`:236`).
+- The RANGE regime rules out the +5 BREAKOUT bonus that could otherwise offset a −5.
+- **So 137 entered within 0.5% of a recently rejected high**, with no extension, expansion or age penalty. The iteration-5 inference is now proven by the arithmetic.
+
+### F6-5. 182 and 158 cannot be decomposed yet (PROJECT EVIDENCE + UNKNOWN)
+
+**182:**
+- Measured from the anchor 0.1879, the extension is 3.31 ATR (ATR 0.000151). That gives −10, so the score should have been 60, not 50.
+- One of two things must be true. Either the rolling 30-minute low was ≤ 0.18780, which makes the extension above 4 (−20). Or a rejection zone took 60 − 12 = 48, which the code raises back to the floor of 50 (`:1000-1002`).
+- 182 also entered with **bearish_count=1** in its evidence and a WEAK_DOWNTREND regime.
+
+**158:** the opportunity row was truncated out of I5-002. → I6-001/002.
+
+### F6-6. 143's distinct cause (PROJECT EVIDENCE, carried and now closed)
+
+The entry was on the SETUP_TIMEFRAME_ATR route:
+- The 1m signal was WATCH with RSI 84.3 and `rsi_score` 1/15.
+- The 1m ATR plan said 0%, which the code treats as 100% (iteration-5 E5).
+- It re-entered 22 s after trade 142 exited, and nothing on the route checks for a cooldown (iteration-4 R5).
+- The profit lock armed, then a price gap went straight through it.
+
+**Root cause:** a valid gap loss after a stretched entry. Contributing gaps are no momentum input to entry quality (E3) and no re-entry cooldown.
+
+### F6-7. The real P&L drain is outside the frozen set (PROJECT EVIDENCE, I5-003)
+
+October, net ≈ **−4.17** in total:
+
+| Exit group | Trades | P&L |
+|---|---|---|
+| STOP_LOSS | 75, 0 wins | **−15.88** |
+| Signal exits | 23, 0 wins | −1.27 |
+| PROFIT_LOCK* and TAKE_PROFIT winners | — | +13.11 |
+
+Most stop-loss losses came from the R:R ≥ 1.5 bucket (−10.19).
+
+**AGENT INFERENCE:** the frozen "last six losers" sample is not representative of where the losses are. A high R:R did not protect against stop-outs. This should be flagged to the Coordinator as a scope note; it does not change the frozen-trade verdicts.
+
+### F6-8. Fees (EXTERNAL RESEARCH + PROJECT EVIDENCE)
+
+**External:**
+- Several secondary sources agree that Binance global spot VIP-0 is 0.1% maker and 0.1% taker. That makes a round trip about 0.2%, or about 0.15% when paying with BNB.
+- I did not confirm this on Binance's own fee page, so treat it as moderately reliable.
+- Binance.US fees are different and do not apply here.
+
+**Project:** a grep of `src/main/java` and `application.yml` found no fee or commission model on the paper path. This was a limited search.
+
+**AGENT INFERENCE:**
+- 158's 0.17% target is below the round-trip fee, and 172's target was about one price tick.
+- Even a target hit would have been flat or negative live.
+- Paper P&L probably understates live losses on every trade.
+
+### F6-9. Can it be reproduced in Replay? (PROJECT EVIDENCE + AGENT INFERENCE)
+
+- Entry quality, `revalidateAtExecutionPrice`, the confluence logic and `PositionExitPolicy` are all shared with Replay (`ShadowProductionReplayService.java:300,335`; the comment at `:671`; the policy javadoc at `:8`).
+- Scores depend on persisted signal prices and on the opportunity state measured from candle time (`:894-897`).
+- So F6-1, F6-2 and F6-4 should reproduce, as long as Replay rebuilds the same `execution_opportunity` state.
+- F6-3 depends on how that opportunity state changes between the decision and the fill. Replay can reproduce it only if it applies the same `saveOpportunity` sequence. I have not verified that.
+- 162's 30 ms age margin makes its Replay result **fragile**. Any difference of more than 30 ms in Replay's `generatedAt` or `startedAt` flips it to blocked.
+
+---
+
+## Root cause per trade
+
+| ID | Entry (UTC → KSA) | Root cause | Defect? |
+|---|---|---|---|
+| 137 EGLD | 10-11 17:55:04 → 20:55:04 | Low-edge entry (R:R 0.64) next to a proven rejection zone, closed by a bearish exit signal (F6-1, F6-4) | No. Policy |
+| 143 EGLD | 19:40:04 → 22:40:04 | Overbought re-entry, then the profit lock was gapped through (F6-6) | No. Evidence gap in F6-3 |
+| 158 XRP | 23:35:04 → 10-12 02:35:04 | No edge after fees, closed by a bearish exit signal (F6-1, F6-8) | No. Policy |
+| 162 DOGE | 10-12 01:02:06 → 04:02:06 | LATE_ENTRY at exactly 50; FIX-119 lifted by 1 BUY; age cleared by 30 ms (F6-2) | No. Policy/boundary |
+| 172 SHIB | 03:36:05 → 06:36:05 | ATR smaller than one price tick, BUY against a conflicting higher timeframe, closed by HTF_SELL_CONFIRMED (F6-1) | No. Policy |
+| 182 ACE | 06:57:06 → 09:57:06 | Score-50 BUY with a conflicting higher timeframe in a downtrend, with bearish evidence present (F6-1, F6-5) | No. Policy |
+
+---
+
+## EVIDENCE INDEX
+
+| ID | Source |
+|---|---|
+| C6-1 | `PositionExitPolicy.java:20-50,52-93`; I5-003 |
+| C6-2 | `ExecutionIntelligenceService.java:664-684,976-1022,1257-1280`; I5-001 (403), I5-002 (37952), I2-002 (167668) |
+| C6-3 | `ExecutionIntelligenceService.java:628-641,857-858,1150-1169,1183,1213`; `PaperTradingService.java:349-385`; I5-001 (358), I4-001 |
+| C6-4 | `:236,976-1022`; I5-001 (344); I5-004 (RANGE) |
+| C6-5 | I5-002 (40290); I2-002 (176710 ATR) |
+| TZ | `application.yml:13-35` (the app writes in UTC); the wrapper session is SYSTEM/KSA (I2-001); my own I5-002 literal error |
+| EXT | Binance fee sources listed below |
+
+---
+
+## UNKNOWNS
+
+- **U-I6-1:** why 143's re-score at the fill (70) was higher than its decision score (60) (F6-3).
+- **U-I6-2:** how 182's and 158's scores of 50 break down (F6-5).
+- **U-I6-3:** whether the fee model really is absent from paper trading. My grep was limited.
+- **U-I6-4:** whether Replay reproduces 162's 30 ms age margin.
+- **Still open:**
+  - U-New3: the intent behind the 0.50% stop floor.
+  - U-I5-3: whether "0% ATR size becomes 100%" is intended.
+  - U-I3-1: the EGLD price silence. It needs a 10-11 log, and none exists.
+  - U8: which build was deployed.
+
+---
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: Re-run of the truncated I5-002 with time-zone-safe bounds: opportunities for 137, 143, 158 and 172, plus EGLD opportunities active before 143 (U-I6-1, U-I6-2)
+SQL:
+SELECT id, symbol, status, latest_signal_id, UNIX_TIMESTAMP(started_at) AS started_epoch,
+       anchor_entry_price, best_entry_price, evidence_count, buy_count, watch_count, neutral_count,
+       bearish_count, five_minute_decision, one_hour_decision, execution_source,
+       recommended_position_percent, decision_code, UNIX_TIMESTAMP(executed_at) AS executed_epoch,
+       LEFT(decision_explanation, 500) AS expl
+FROM execution_opportunity
+WHERE latest_signal_id IN (156723,159408,165412,171589)
+   OR (symbol='EGLDUSDT' AND started_at BETWEEN FROM_UNIXTIME(1791740000) AND FROM_UNIXTIME(1791747700)
+       AND status <> 'CANCELLED')
+   OR (symbol='XRPUSDT' AND started_at BETWEEN FROM_UNIXTIME(1791754500) AND FROM_UNIXTIME(1791761710))
+ORDER BY started_at DESC
+LIMIT 80;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: 1m signal prices in each 30-minute entry-quality window (rolling low/high and rejection zone) for 182, 158, 137 and 143 (F6-3, F6-4, F6-5)
+SQL:
+SELECT id, symbol, decision, latest_price, atr_at_signal, UNIX_TIMESTAMP(generated_at) AS gen_epoch
+FROM trade_signal
+WHERE interval_code='1m' AND (
+      (symbol='ACEUSDT'  AND generated_at BETWEEN FROM_UNIXTIME(1791786421) AND FROM_UNIXTIME(1791788222))
+   OR (symbol='XRPUSDT'  AND generated_at BETWEEN FROM_UNIXTIME(1791759901) AND FROM_UNIXTIME(1791761702))
+   OR (symbol='EGLDUSDT' AND generated_at BETWEEN FROM_UNIXTIME(1791739501) AND FROM_UNIXTIME(1791741302))
+   OR (symbol='EGLDUSDT' AND generated_at BETWEEN FROM_UNIXTIME(1791745801) AND FROM_UNIXTIME(1791747602)))
+ORDER BY symbol, generated_at
+LIMIT 160;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: 5m setup signal that owned ATR authority for 143 (decision score 60 used its ATR) (U-I6-1)
+SQL:
+SELECT id, symbol, interval_code, decision, latest_price, atr_at_signal, stop_loss, take_profit,
+       risk_reward_ratio, UNIX_TIMESTAMP(generated_at) AS gen_epoch
+FROM trade_signal
+WHERE symbol='EGLDUSDT' AND interval_code='5m'
+  AND generated_at BETWEEN FROM_UNIXTIME(1791746700) AND FROM_UNIXTIME(1791747602)
+ORDER BY generated_at
+LIMIT 10;
+### END_DB_REQUEST
+
+---
+
+## SELF-REVIEW (iteration 6)
+
+**Coverage:** all six frozen trades have a root-cause statement. None was substituted.
+
+**Corrections:**
+- The "older sizing era" inference is withdrawn (I5-003).
+- The direction of E4's effect is not proven (F6-3).
+- I5-002's time-zone and LIMIT design was my own query error, and it is re-issued.
+
+**Defects:** none confirmed for any of the six trades.
+- F6-3 is an audit-integrity gap: the stored score is not the score that made the decision.
+- E4 and E5 remain code-level inconsistencies with no effect on these outcomes.
+
+**Recommendations only, no implementation:**
+- Store the decision-time entry-quality score, or both scores (F6-3).
+- Require the target distance to exceed estimated round-trip fees plus one price tick.
+- Use one R:R floor across the direct routes, or treat a score of exactly 50 as blocked, so results do not hinge on boundaries (F6-2).
+- Add a momentum or overbought input to entry quality.
+- Add a re-entry cooldown.
+- Separately, investigate the stop-loss cluster (F6-7) outside this frozen study.
+
+All of these are policy decisions for Jean.
+
+**Labels:** every claim is tagged. The fee figure is now from external research, from secondary sources only. I searched no logs this iteration.
+
+**Next (iteration 7):**
+- Ingest I6-001..003.
+- Close U-I6-1 and U-I6-2.
+- Run a Replay counterfactual on 162 and 182, analysis only.
+- Draft the frozen per-trade report in the AGENTS.md five-part format.
+
+Sources:
+- [CryptoPotato – Binance Trading Fees Explained](https://cryptopotato.com/binance-fees/)
+- [BitDegree – Binance fees tutorial](https://www.bitdegree.org/crypto/tutorials/binance-fees)
+- [TradersUnion – Binance fees](https://tradersunion.com/brokers/crypto/view/binance/fees/)
+- [Binance FAQ – check your trading fee rate](https://www.binance.com/bn/amp/support/faq/360033544231)
+- [Binance.US zero-fee trading (excluded; different exchange)](https://blog.binance.us/zero-fee-trading/)

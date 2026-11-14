@@ -1,0 +1,54 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** This is the requested SHIBUSDT trade only: signal **89469**, paper position **35**, managed position **64**, wallet BUY **106**, and wallet SELL **107**. The later 90192/65 trade was excluded. [DBQ-002](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-002-CODEX-result.txt:10) [DBQ-014](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-014-CODEX-result.txt:6)
+
+| Event | UTC | KSA |
+|---|---:|---:|
+| Signal 89469 | 2026-10-09 20:45:03.499 | 23:45:03.499 |
+| BUY 106 | 20:45:05.997 | 23:45:05.997 |
+| Lock armed, event 1085348 | 20:58:09.444 / evaluation 20:58:09.534 | 23:58:09.444 / 23:58:09.534 |
+| Exit trigger, event 1085485 | 20:58:43.449 | 23:58:43.449 |
+| SELL 107 recorded | 20:58:43.554 | 23:58:43.554 |
+| Protection completion | 20:58:43.839 | 23:58:43.839 |
+
+- **PROJECT EVIDENCE — Q1:** It exited on `PROFIT_LOCK_EXIT` because the accepted price never reached the stored TP of `0.000005433730`; the best accepted/protected price was `0.000005430000` (84.2815% progress). The next accepted observation was `0.000005420000`, below the active lock `0.000005421865`. [managed position 64](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-014-CODEX-result.txt:6) [runtime log](/C:/workspace/crypto-ai-trader-mysql/logs/crypto-ai-trader.2026-10-09.14.log.gz:45595)
+
+- **PROJECT EVIDENCE — Q1:** The arithmetic matches the implemented policy and the runtime log: with entry `0.000005410`, TP `0.000005433730`, high `0.000005430`, and applied 70%/40%/10% settings, one completed trail step produces a 50%-progress lock of `0.000005421865`. [ProfitLockPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/ProfitLockPolicy.java:39) [runtime log](/C:/workspace/crypto-ai-trader-mysql/logs/crypto-ai-trader.2026-10-09.14.log.gz:45452)
+
+- **PROJECT EVIDENCE — Q1:** The triggering event was accepted event **1085485**, observed at `20:58:43.449Z`; it evaluated at `20:58:43.543Z`, executed the sell, and completed as `APPLIED` at `20:58:43.839Z`. This closes the previously missing ID-level trigger evidence. [runtime log](/C:/workspace/crypto-ai-trader-mysql/logs/crypto-ai-trader.2026-10-09.14.log.gz:45595)
+
+- **PROJECT EVIDENCE — Q1:** At that breach, the persisted context was 1m `WATCH` (89795), 5m `WATCH` (89724), 1h `NEUTRAL` (88327). `PositionExitPolicy` holds only with bullish 1h plus supportive 5m, or `WATCH` 1h plus supportive 5m and non-bearish 1m. `NEUTRAL` matches neither hold path, so its default is `PROFIT_LOCK_EXIT`. [DBQ-010](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-010-CODEX-result.txt:6) [PositionExitPolicy.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:57)
+
+- **PROJECT EVIDENCE — Q2:** Continuation did not run because it is called only in the `price >= takeProfit` branch. This position never entered that branch and was closed before the later rise. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:100)
+
+- **AGENT INFERENCE:** If “12:38 KSA” means **00:38 KSA** on 10 October, the later `0.000005490` candle was approximately 39 minutes after position 35 closed. That is outcome-only, not available at exit. If it means **12:38 PM**, the supplied candle evidence ends around 00:56 KSA and cannot evaluate that time. [DBQ-009](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-009-CODEX-result.txt:6)
+
+- **PROJECT EVIDENCE — Q3:** Protection did re-evaluate the position repeatedly after the lock armed: at least four accepted `0.000005430` observations remained non-triggering before the final `0.000005420` trigger. [runtime log](/C:/workspace/crypto-ai-trader-mysql/logs/crypto-ai-trader.2026-10-09.14.log.gz:45453)
+
+- **PROJECT EVIDENCE — Q3:** It does not perform a “remaining upside” forecast on a breached lock. The sequence is TP check, stop check, dynamic-lock evaluation, then `PositionExitPolicy`; `PositionContinuationPolicy` is not invoked from the lock-breach path. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:100) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:185) [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:219)
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** The wallet exit explanation independently records the exact lock, progress, profile, and `WATCH/WATCH/NEUTRAL` decision context. [wallet trade 107](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-002-CODEX-result.txt:11)
+
+- **PROJECT EVIDENCE:** The runtime log establishes the actual deployed behavior rather than relying solely on the current working tree: lock activation at decompressed log lines 45452–45454; breach/exit at 45595–45599.
+
+- **PROJECT EVIDENCE:** The initial query artifact’s timestamp policy is wrong for its `TIMESTAMP` display: its session was `SYSTEM`, and the follow-up query proves displayed `23:45` converts to `20:45Z`. This report uses explicit log UTC fields and then KSA=UTC+3. [DBQ-004](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-004-CODEX-result.txt:6) [DBQ-005](/C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-005-CODEX-result.txt:6)
+
+## OBJECTIONS
+
+- **PROJECT EVIDENCE:** “TP was never reached” is supportable only as “no accepted protection observation reached TP.” It is not proof that no external Binance trade ever printed at or above TP.
+
+- **AGENT INFERENCE:** The prior tick-size claim is unnecessary and not proven by a historical exchange-filter record in this evidence bundle. The implemented-rule explanation is already complete without it.
+
+- **AGENT INFERENCE:** Later appreciation cannot establish that retaining the position would improve live performance. Such a claim would require out-of-sample analysis with fees, slippage, adverse excursions, and Production/Replay price-event parity.
+
+- **PROJECT EVIDENCE:** The breach policy does not freshness-check its 1m/5m/1h rows; it selects the latest stored rows. In this trade, the three applied rows pre-date the trigger, so this is a design boundary, not evidence of stale-context execution. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:95)
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No immutable binary hash or historical configuration snapshot was supplied. This does not block the three answers because the runtime log records the applied profile and decision path.
+
+- **PROJECT EVIDENCE:** No controlled Replay was run; therefore this report makes no Replay-parity claim.
+
+VERDICT: APPROVED

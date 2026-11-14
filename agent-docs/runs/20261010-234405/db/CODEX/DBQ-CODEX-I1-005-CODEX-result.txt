@@ -1,0 +1,10 @@
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+wallet_position_id	bigint	NO	MUL	NULL	
+symbol	varchar(30)	NO	MUL	NULL	
+event_type	varchar(40)	NO		NULL	
+old_value_usdt	decimal(30,12)	YES		NULL	
+new_value_usdt	decimal(30,12)	YES		NULL	
+market_price_usdt	decimal(30,12)	YES		NULL	
+reason	varchar(2000)	YES		NULL	
+occurred_at	timestamp(6)	NO		NULL

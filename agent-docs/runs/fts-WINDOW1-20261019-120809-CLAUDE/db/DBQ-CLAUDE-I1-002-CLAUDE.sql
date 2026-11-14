@@ -1,0 +1,1 @@
+SELECT id, LEFT(entry_reason, 3000) AS entry_reason, LEFT(exit_reason, 3000) AS exit_reason FROM crypto_ai.paper_position WHERE id IN (182,172,162,158,143,137) LIMIT 6

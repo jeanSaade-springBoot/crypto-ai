@@ -1,0 +1,95 @@
+## FINDINGS
+
+**PROJECT EVIDENCE:** The frozen WINDOW2 cohort remains exactly `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutions made.
+
+**PROJECT EVIDENCE:** The preserved snapshot is **2026-10-26 18:07:57 UTC / 20:56:22 KSA**; it drifted from the intended 18:00 KSA window clock. No exact intended-clock state is available.
+
+**PROJECT EVIDENCE:** The permitted `db/CODEX` evidence directory contains no query artifacts. The Iteration 1 private record contains requests, not database results.
+
+**AGENT INFERENCE:** No trade-level forensic conclusion is supportable yet—not even symbol, entry/exit linkage, exit reason, P&L reconciliation, or protection correctness—because actual schema and row evidence are absent.
+
+**EXTERNAL RESEARCH:** None used.
+
+## EVIDENCE
+
+- `CHARTER.md`: frozen cohort, authoritative entity, selection rule, and snapshot drift.
+- `private/CODEX/iteration01-codex.txt`: confirms prior requests were emitted but no results were available.
+- Project investigation rules: schema must be read before selecting specific columns; raw database timestamps must be treated as UTC.
+
+## UNKNOWNS
+
+- Actual `paper_position` schema and the six lifecycle rows.
+- Relationships to wallet/execution, signal, work, managed-position, and price-event records.
+- Whether exit-trigger evidence exists as accepted `LEGACY`/`APPLIED` price events.
+- Any contemporaneous data-quality, entry-gate, protection, or accounting defect.
+- Results of proof queries `DBQ-FTS-001` through `DBQ-FTS-005`.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Establish the actual `crypto_ai` schema and identify the available forensic entities before selecting columns.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'wallet_trade',
+      'managed_position',
+      'trade_signal',
+      'signal_processing_work',
+      'market_price_event',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position;
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-002  
+Purpose: Retrieve the authoritative lifecycle records for only the six frozen failed trades.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+```
+
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I2-003  
+Purpose: Determine durable database links into and out of the authoritative position entity, without assuming column names.  
+SQL:
+```sql
+SELECT
+    kcu.table_name,
+    kcu.constraint_name,
+    kcu.column_name,
+    kcu.referenced_table_name,
+    kcu.referenced_column_name
+FROM information_schema.key_column_usage kcu
+WHERE kcu.table_schema = 'crypto_ai'
+  AND (
+      kcu.table_name = 'paper_position'
+      OR kcu.referenced_table_name = 'paper_position'
+  )
+ORDER BY
+    kcu.table_name,
+    kcu.constraint_name,
+    kcu.ordinal_position;
+```
+
+### END_DB_REQUEST

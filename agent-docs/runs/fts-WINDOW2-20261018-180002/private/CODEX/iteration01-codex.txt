@@ -1,0 +1,63 @@
+## Iteration 1 — Trade Reconstruction
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+- The six binding subjects are `paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitutions were made.
+- No query-result artifacts exist in the permitted `db/CODEX/` evidence folder. Therefore no trade-specific timeline, P&L reconciliation, entry assessment, or exit/protection conclusion is yet supportable.
+- `paper_position` is the authoritative position entity. It contains the entry signal link, optional exit signal link, prices, realized P&L, close reason/reason text, and open/close timestamps. [PaperPosition.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:10)
+- `wallet_trade` provides execution-level price, quantity, fee, cost-basis, realized-P&L, status, reason, and observed-price time; it links to a signal, not directly to a paper-position ID. [WalletTrade.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletTrade.java:11)
+- `trade_signal` holds the contemporaneous decision, entry gates, strategy/risk fields, price, stop, target, and generated time. [TradeSignal.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/TradeSignal.java:13)
+- For protection evidence, only `market_price_event` records in `LEGACY` or `APPLIED` are accepted as canonical price observations; a signal or candle OHLC must not replace absent intrabar price evidence. [MarketPriceEventService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:137)
+
+**AGENT INFERENCE**
+
+- A schema-first evidence request is required before selecting trade-specific fields, because deployed `crypto_ai` schema—not source entities or migrations—is authoritative.
+- Once schema is returned, reconstruction will start from all six `paper_position` rows, then join entry/exit signals and correlate wallet executions by signal, symbol, side, and bounded timestamps. No causal conclusion will be drawn solely from such correlation.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+### UNKNOWNS
+
+- Symbols, entry/exit UTC timestamps, KSA conversions, status, close reasons, prices, and realized P&L for every frozen ID.
+- Whether every position has an exit signal and matching wallet execution evidence.
+- The actual deployed columns/tables needed for protection, managed-position, audit, candle, indicator, and signal-processing evidence.
+- Runtime mode/version/configuration active at each entry.
+- Whether exits were stop-loss, target, profit-lock, signal-driven, manual, or unsupported by durable price-event evidence.
+- Replay comparability.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the deployed `crypto_ai` schema before selecting trade-specific evidence. This identifies the actual columns available for the six frozen `paper_position` reconstructions and related signal, execution, protection, audit, work, candle, and indicator evidence.
+
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'position_management_event',
+      'signal_processing_work',
+      'candle',
+      'technical_indicator'
+  )
+ORDER BY table_name, ordinal_position
+LIMIT 1000;
+```
+### END_DB_REQUEST

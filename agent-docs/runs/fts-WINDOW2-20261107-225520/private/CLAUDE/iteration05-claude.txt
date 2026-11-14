@@ -1,0 +1,318 @@
+# CLAUDE: FTS WINDOW2, Iteration 5 (entry quality, self-review only)
+
+## Summary
+
+The entry-quality review found a structural problem shared by five of the six frozen trades.
+
+- **What the problem is.** On low-volatility 1m candles, the stop is pinned to a fixed 0.5% below the entry price. The profit target is only 3 × ATR (Average True Range, a measure of typical candle size) above it.
+- **What it does.** The target ends up closer than the stop: the target is 0.16–0.37% away and the stop 0.5%. Reward:risk is 0.33–0.74.
+- **Why nothing caught it.** The Entry Quality score (0–100) takes 30 points off for this, which on its own still leaves a "GOOD" 70. So it can only shrink the position, never block it.
+- **Fees.** Paper trading charges no fee. At Binance's standard spot fee (VIP 0, about 0.1% per side, unverified for this account), trade 158's whole target would be eaten by fees.
+
+Trade 143 remains the only confirmed entry defect (F-I4-01). This iteration adds that its ATR entry plan was also out of date. Trade 172 exposes a separate gap: for SHIB, the 1m ATR is smaller than one price tick.
+
+**Scope:**
+- I kept the six frozen IDs (182, 172, 162, 158, 143, 137) and did not substitute any.
+- I made no writes, and I did not read the Codex folders, LIVE_TEAM_STATUS.md or LIVE_EVENTS.log.
+- Plan mode is on, but the Write and ExitPlanMode tools are not available in this session. This output exists only here.
+
+**Inputs:**
+- The results of DBQ-CLAUDE-I4-001 to I4-004, I2-007, I2-008, I3-001 and FTS-005.
+- Code: `ExecutionIntelligenceService` (Entry Quality model, guards, the setup ATR route), `AtrRiskService`, `application.yml` (the `atr-risk` section) and `BuyHtfAssessmentAuditStore`.
+
+## Entry times
+
+| ID | Symbol | Entry, UTC | Entry, KSA |
+|---|---|---|---|
+| 137 | EGLD | 2026-10-11 20:55:04 | 2026-10-11 23:55:04 |
+| 143 | EGLD | 2026-10-11 22:40:04 | 2026-10-12 01:40:04 |
+| 158 | XRP | 2026-10-12 02:35:04 | 2026-10-12 05:35:04 |
+| 162 | DOGE | 2026-10-12 04:02:06 | 2026-10-12 07:02:06 |
+| 172 | SHIB | 2026-10-12 06:36:05 | 2026-10-12 09:36:05 |
+| 182 | ACE | 2026-10-12 09:57:06 | 2026-10-12 12:57:06 |
+
+---
+
+## FINDINGS
+
+### F-I5-01: The stop/target geometry flips reward:risk below 1 on low-volatility 1m candles
+
+[PROJECT EVIDENCE: `AtrRiskService.java:34-45`, `application.yml:137-144`, stored values from I2-007]
+
+**How the code sets the stop and target:**
+- Stop distance = max(2 × ATR, 0.5% of price), capped at 8%.
+- Target distance = 3 × ATR.
+- So whenever ATR is below 0.5% / 3 = **0.1667% of price**, reward:risk = 3 × ATR% / 0.5 and is always below 1.
+
+**The stored values match the defaults exactly.** Each stop is precisely signal price × 0.995 and each target is precisely price + 3 × ATR. That is strong evidence Production ran these defaults. The server's environment overrides are not verified.
+
+| ID | ATR % of price | Target distance | Stop distance | Reward:risk | Win rate needed to break even (no fees) |
+|---|---|---|---|---|---|
+| 137 | 0.107% | 0.322% | 0.500% (floor) | 0.64 | 60.8% |
+| 143 | 0.270% | 0.811% | 0.541% (2 × ATR) | 1.50 (1.39 at the 4.033 fill) | — |
+| 158 | 0.055% | **0.164%** | 0.500% (floor) | **0.33** | 75.3% |
+| 162 | 0.073% | 0.219% | 0.500% (floor) | 0.44 | 69.5% |
+| 172 | 0.124% | 0.372% | 0.500% (floor) | 0.74 | 57.3% |
+| 182 | 0.080% | 0.241% | 0.500% (floor) | 0.48 | 67.5% |
+
+**The labels and entry plans are consistent with the code.**
+- All six signals are labelled LOW volatility, meaning ATR below 0.5% of price (`:139`). That is the normal state for 1m candles, so the label tells you nothing.
+- Each trade's ATR entry type matches the strategy thresholds in `AtrRiskService.java:143-174`:
+  - 143: BREAKOUT, candle range 4.35 ATR → WAIT_FOR_RETRACEMENT.
+  - 162: BREAKOUT, 2.82 ATR → REDUCED_POSITION.
+  - 182: trend-following, 2.15 ATR → REDUCED_POSITION.
+  - 137, 158 and 172 → STANDARD_ENTRY.
+
+**Caveat (AGENT INFERENCE, carried from F-I3-07):** exits are mostly driven by signals and profit locks, not by the stop or target. So these reward:risk figures describe the plan, not what actually happened. With zero paper fees, trades with reward:risk below 1 did **not** lose more often (F-I3-07). This is a confirmed design weakness, not a demonstrated cause of these losses.
+
+### F-I5-02: Entry Quality cannot block a structurally inverted reward:risk; it only sizes it down
+
+[PROJECT EVIDENCE: `ExecutionIntelligenceService.java:976-1022`, `:1171-1183`, `:229`]
+
+**How the score is built:**
+- It starts at 100.
+- Reward:risk below 1 costs 30 points (`:991`).
+- The block threshold (the "chase cutoff") is 50 (`:229`).
+- So an entry with reward:risk 0.33 and no other penalty scores **70 = GOOD_ENTRY**.
+
+**What the guard does with the score:**
+- It blocks only below 50.
+- Otherwise it caps the size at 50%, 40% or 25%, depending on the score (`:1183`).
+- The only exceptions are the BALANCED_EARLY late-entry block (`:672`) and the FIX-119 deferral.
+
+**Where the frozen trades scored** (from the stored explanations, I2-008 and I4-002):
+
+| ID | Entry Quality | Label |
+|---|---|---|
+| 137 | 58 | |
+| 162 | **50** | LATE_ENTRY |
+| 172 | 60 | ACCEPTABLE |
+| 182 | **50** | |
+| 143, 158 | Not visible | The explanation is truncated at 400 characters; DB_REQUEST I5-002 fetches it |
+
+**What can and cannot be derived from the formula** (AGENT INFERENCE, arithmetic on the code's penalty values; the inputs need I5-003):
+- **137 (58):** the only combination that gives 58 is 100 − 30 (reward:risk) − 12 (recent-rejection penalty). So the price was within 0.5% of a recent high that buyers had already failed to hold at least twice.
+- **172 (60):** 100 − 30 − 10. The 10 is most likely the ATR-extension penalty: two price ticks above the 30-minute low equals 2.94 ATR (see F-I5-05).
+- **162 (50) and 182 (50):** both land exactly on the cutoff. Two decompositions are possible:
+  - A raw score below 50 that was lifted to 50 by the floor on the rejection penalty (`:1000-1002`). This is exactly the case the FIX-119 code comment describes (`:1234-1236`).
+  - Or an ATR-extension penalty of 20.
+- **162 does not reconcile.** If the opportunity's best price (0.08675) was used as the reference, the ATR extension is 4.7 ATR, which gives 45, not 50. Either the best price changed after entry, or another input differs. This is a stated uncertainty; I5-003 settles it.
+
+**Conclusion:** four of the six entries sat 0–10 points above the block threshold. The model's single largest penalty, reward:risk, is mechanically present on most 1m low-volatility entries and is never decisive.
+
+### F-I5-03: Entry Quality ignores fees; 158's target was below the round-trip fee
+
+[EXTERNAL RESEARCH + AGENT INFERENCE]
+
+- Several fee guides put Binance's standard spot fee at 0.10% maker and 0.10% taker (VIP 0), which is about 0.2% for a round trip. The real fee tier for this account is still unverified (U-I2-7).
+- Target distance after a 0.2% round trip:
+
+| ID | Target | After fees |
+|---|---|---|
+| 158 | 0.164% | **−0.036%** (the target cannot make money) |
+| 162 | 0.219% | +0.019% |
+| 182 | 0.241% | +0.041% |
+| 137 | 0.322% | +0.122% |
+
+- Paper fees are 0 (F-I3-07), so the paper PnL hides this.
+- **Classification:** a design gap in entry quality, not the cause of the paper losses.
+
+### F-I5-04: 143 was a poor entry on what was known at the time; its ATR plan was also out of date
+
+[PROJECT EVIDENCE: I3-001, I2-007, I2-008, `ExecutionIntelligenceService.java:628-640`, `:1472-1514`, `:857-858`]
+
+This strengthens F-I4-01.
+
+**Where the price was:**
+- The 1m signal 159408's own plan was WAIT_FOR_RETRACEMENT at 0%. The candle range was 4.35 ATR, inside the BREAKOUT band from 4.25 to 5.25.
+- Between 22:27 and 22:34 UTC (01:27–01:34 KSA, 2026-10-12), EGLD 1m prices were 3.972–3.977 (the anchors of the cancelled opportunities 36400–36473).
+- The entry at 4.033 was therefore about **+1.5% above the 30-minute low**, at the top of an expansion candle.
+
+**The route trusted an old 5m plan:**
+- `SETUP_TIMEFRAME_ATR` took its "immediate entry at 100%" permission from 5m signal 159285.
+- That plan had been computed at a price of **3.986**, 1.2% below the fill.
+- The current 5m, 159407, said PULLBACK_ENTRY with immediate entry **not** allowed.
+- So both the 5m direction (BUY instead of WATCH) and the 5m risk plan were taken from the superseded candle.
+
+**Two different ATR bases are used for the same entry (new design gap):**
+- At decision time, the route scores Entry Quality with the **5m** ATR (`:634`).
+- At execution, `revalidateAtExecutionPrice` re-scores it with the **1m** ATR (`:858`).
+- For 143, the decision-time cap took the allocation from 30% to 25%. That implies an Entry Quality below 70, even with the more lenient 5m ATR.
+
+**Classification:** confirmed entry defect (F-I4-01), with poor entry quality on information available at the time.
+
+**Outcome, assessed separately:**
+- The price peaked at 4.101 (+1.69%).
+- The position then exited at 4.027 through the 8-second EGLD price gap (F-I3-02).
+
+### F-I5-05: For SHIB, the 1m ATR is smaller than one price tick, so the ATR-based plan is distorted (172)
+
+[PROJECT EVIDENCE: I2-007, I2-001 / AGENT INFERENCE]
+
+- SHIB prices are stored in steps of 0.00000001 (0.00000548, 0.00000549). One tick is 0.18% of price.
+- The ATR was 0.000000006806, which is **0.68 of a tick**.
+- In tick terms:
+  - The target is 2.04 ticks above entry.
+  - The stop is 2.75 ticks below.
+  - A one-tick move counts as 1.47 ATR, so a two-tick move already triggers the 2.5-ATR extension penalty.
+- 172 entered at 0.00000549 and exited at 0.00000548: a loss of **exactly one tick** (−0.18%).
+- **Classification:** a design gap where the ATR plan does not account for tick size. It is not a logic defect. PEPE is likely affected the same way; the sizing in I5-005 will show it.
+
+### F-I5-06: Entry-quality verdict per trade (only information available at entry)
+
+| ID | Entry assessment | Main weaknesses | Verdict |
+|---|---|---|---|
+| 137 | Marginal | Entry Quality 58 with a rejection-zone penalty; reward:risk 0.64; 25% exploratory size on 5m NEUTRAL with a 1h WATCH that was 55 min old (3301 s, I4-002) | Valid losing trade |
+| 143 | Poor | Entry approved on a superseded 5m direction and ATR plan; the 1m plan said wait; +1.5% above the 30-minute low | **Confirmed defect** (F-I4-01, F-I5-04) |
+| 158 | Weak geometry | Reward:risk 0.33; target 0.164%, below a round-trip fee; the 1m was WATCH | Followed the rules; Replay diverges (F-I4-03) |
+| 162 | Weak | Entry Quality 50, LATE_ENTRY; 1m WATCH with an overextended REDUCED_POSITION plan; reward:risk 0.44; opportunity 21 min old; FIX-119 bypassed by one BUY (F-I4-06) | Followed the rules; weak exemption |
+| 172 | Weak geometry | 5m `final_entry_allowed=0` with confidence 49 (F-I4-04); target distorted by tick size | Followed the rules; design gaps |
+| 182 | Weakest of the six | Entry Quality 50 on the cutoff; 1m regime **WEAK_DOWNTREND** on a trend-following BUY; reward:risk 0.48; masked 5m STRONG_SELL; 1h WATCH with trend score 16, 57 min old (3421 s) | Followed the rules; entry-quality weakness |
+
+**Outcome, assessed separately:**
+- None of the six reached its stop. Every loss was small: −0.03 to −0.075 USDT.
+- The geometry problem shows up in the planned risk, not in the realised losses.
+
+### F-I5-07: Sizing from I4-004 for F-I4-04 and F-I4-05, with a correction
+
+[PROJECT EVIDENCE: I4-004]
+
+**Correction:** I4-004 selected the 5m as the latest one generated at or before the 1m. That is wrong for `SETUP_CONFIRMATION_WAKEUP` rows, where the deciding 5m is the trigger generated *after* the 1m (for example 158 shows 165289 WATCH instead of trigger 165415). The wakeup rows are excluded below.
+
+**F-I4-05: IMMEDIATE_VALIDATION entries made on a 5m whose underlying (original) decision was SELL or STRONG_SELL but which was shown as NEUTRAL:**
+- 8 entries: paper positions 37, 95, 97, 113, 138, 139, 181, 182.
+- 5 wins (+0.329 USDT) and 3 losses (−0.761 USDT), net **−0.431 USDT**.
+- Two of the three losses were STOPPED: 37 (−0.145) and 181 (−0.584).
+
+**F-I4-04: IMMEDIATE_VALIDATION entries made on a 5m with `final_entry_allowed=0`:**
+- 3 entries: 14 (+0.024), 101 (−0.005) and 172 (−0.046), net −0.026 USDT.
+- Too small a sample for any conclusion.
+- **Observation:** every 5m signal with `final_entry_allowed=0` in I4-004 has confidence 49, which looks like a deliberate cap. I have not verified that in code.
+
+**The `BALANCED_NEUTRAL_5M_WATCH_1H` route (FIX-11G, used by 137 and 182):**
+- 35 executed entries: 18 wins, 1 flat, 16 losses, net about **−0.29 USDT**.
+- 12 of the 16 losses were STOPPED.
+- **AGENT INFERENCE:** a 51% win rate for an "exploratory" route whose planned reward:risk is mostly below 1.
+
+### F-I5-08: FIX-154 was live in Production before the frozen trades (contradiction confirmed)
+
+[PROJECT EVIDENCE: I4-001, I4-002, `BuyHtfAssessmentAuditStore.java:87`]
+
+This settles U-I4-1 for FIX-154 and confirms F-I4-08.
+
+**The evidence:**
+- Flyway (the database migration tool) installed V107 (`fix 154 trusted higher timeframe buy`) at 2026-10-10 00:15:21 and V109 at 01:52:45. The `installed_on` value is DB-server time; I take it as UTC, which is unproven.
+- `buy_htf_assessment_audit` holds Production rows (`replay_mode=0`) for 137, 158, 162, 172 and 182.
+- **So FIX-154 audit code was running in Production during the study window.** AGENTS.md and the claude-docs describe it as not implemented.
+- I am reporting the contradiction. I have not edited the docs; this needs dual-agent review.
+
+**New audit-evidence gap:**
+- The audit column `five_minute_raw_decision` is filled from `signal.getDecision()`, which is the decision after the multi-timeframe conflict adjustment. It is not filled from `original_decision` (`:87`).
+- For 182 the audit says raw = NEUTRAL, while trade_signal 176655 has `original_decision` STRONG_SELL.
+- **So the "immutable" FIX-154 audit cannot show a masked bearish 5m.** That undercuts the FIX-154 direction's requirement for reconstructable bearish-5m evidence.
+
+---
+
+## Remediation direction (recommendation only, not authorised)
+
+1. Make Entry Quality, or a separate pre-entry gate, account for **target distance after the expected round-trip fee and tick size**. Reject or defer when the net target is at or below 0, or below N ticks.
+2. Revisit the stop-floor/target asymmetry. For example, scale the target with the floored stop, or require reward:risk ≥ 1 after the floor for exploratory routes such as FIX-11G and BALANCED_EARLY. This is a trading-rule change and needs a specification and approval.
+3. Use **one ATR basis** for the decision-time and execution-time Entry Quality on the setup ATR route.
+4. Record `original_decision` in `buy_htf_assessment_audit`. The schema change needs the governed migration path.
+5. Unchanged from iteration 4: select the 5m by candle identity and re-check it before execution (F-I4-01).
+
+**Regression checks:**
+- Unit tests for the geometry: ATR at 0.05%, 0.1667% and 0.25% of price, checking reward:risk and the gate outcome.
+- A SHIB-like tick fixture where ATR is less than one tick.
+- 143 should become non-executable when the same-boundary 5m is WATCH or PULLBACK_ENTRY.
+- Run Production-parity Replay over the same windows.
+
+---
+
+## UNKNOWNS
+
+- **U-I5-1:** The persisted Entry Quality for 143 and 158, and the exact components behind each score (I5-001, I5-002, I5-003). The 162 reconstruction does not reconcile (F-I5-02).
+- **U-I5-2:** Whether Entry Quality predicts outcomes at all across the population (I5-004).
+- **U-I5-3:** Which symbols structurally carry reward:risk below 1, and whether PEPE has the same tick distortion (I5-005).
+- **U-I5-4:** The 5m ATR plans used as setup authority (I5-006).
+- **U-I5-5:** The time zone of Flyway `installed_on`. It does not change the conclusion: both readings fall at least 18 h before trade 137.
+- **Carried:**
+  - U-I2-7: the real fee tier.
+  - U-I4-5: no Replay run has confirmed F-I4-03.
+  - U-I4-6: the Production logs for 10-11 and 10-12 are unavailable.
+
+---
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: Persisted entry_quality_score, stage and allocation for the six frozen entries (U-I5-1). `wallet_managed_position` has no signal_id, so this matches on symbol and opened_at within 15 s of paper_position.opened_at. Columns come from V29 and V46.
+SQL:
+SELECT pp.id AS paper_id, pp.symbol, pp.opened_at AS paper_opened, w.id AS wmp_id, w.opened_at AS wmp_opened, w.status, w.entry_stage, w.allocated_position_percent, w.entry_quality_score, w.average_entry_price_usdt, w.total_cost_usdt FROM crypto_ai.paper_position pp LEFT JOIN crypto_ai.wallet_managed_position w ON w.symbol = pp.symbol AND w.opened_at BETWEEN pp.opened_at - INTERVAL 15 SECOND AND pp.opened_at + INTERVAL 15 SECOND WHERE pp.id IN (137,143,158,162,172,182) ORDER BY pp.id LIMIT 30
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: Full untruncated decision explanations, to read the Entry Quality text for 143 (36524, and 36481 for comparison) and 158 (37621) (U-I5-1).
+SQL:
+SELECT id, symbol, execution_source, decision_code, recommended_position_percent, decision_explanation FROM crypto_ai.execution_opportunity WHERE id IN (36481,36524,37621,37952,39062,40290,35535) ORDER BY id LIMIT 10
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: The 30-minute 1m evidence window behind each entry, to reconstruct the Entry Quality reference low, the recent high, rejections, regime and liquidity status (F-I5-02, U-I5-1). Columns come from I2-007, V18 and V19.
+SQL:
+SELECT id, symbol, generated_at, latest_price, decision, market_regime, liquidity_status, btc_context_status, atr_at_signal FROM crypto_ai.trade_signal WHERE interval_code = '1m' AND ((symbol = 'EGLDUSDT' AND generated_at BETWEEN '2026-10-11 20:24:00' AND '2026-10-11 20:55:02') OR (symbol = 'EGLDUSDT' AND generated_at BETWEEN '2026-10-11 22:09:00' AND '2026-10-11 22:40:02') OR (symbol = 'XRPUSDT' AND generated_at BETWEEN '2026-10-12 02:04:00' AND '2026-10-12 02:35:02') OR (symbol = 'DOGEUSDT' AND generated_at BETWEEN '2026-10-12 03:31:00' AND '2026-10-12 04:02:03') OR (symbol = 'SHIBUSDT' AND generated_at BETWEEN '2026-10-12 06:05:00' AND '2026-10-12 06:36:02') OR (symbol = 'ACEUSDT' AND generated_at BETWEEN '2026-10-12 09:26:00' AND '2026-10-12 09:57:02')) ORDER BY symbol, generated_at LIMIT 240
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: Does Entry Quality predict outcome? Groups all completed paper positions (CLOSED and STOPPED) by entry_quality_score band, using the same 15 s match as I5-001 (U-I5-2).
+SQL:
+SELECT CASE WHEN w.entry_quality_score >= 70 THEN '70+' WHEN w.entry_quality_score >= 60 THEN '60-69' WHEN w.entry_quality_score >= 55 THEN '55-59' WHEN w.entry_quality_score >= 50 THEN '50-54' ELSE '<50_or_0' END AS eq_band, COUNT(*) AS n, SUM(pp.realized_pnl < 0) AS losers, SUM(pp.status = 'STOPPED') AS stopped, SUM(pp.realized_pnl) AS net_pnl, AVG(pp.realized_pnl) AS avg_pnl FROM crypto_ai.paper_position pp JOIN crypto_ai.wallet_managed_position w ON w.symbol = pp.symbol AND w.opened_at BETWEEN pp.opened_at - INTERVAL 15 SECOND AND pp.opened_at + INTERVAL 15 SECOND WHERE pp.status IN ('CLOSED','STOPPED') GROUP BY eq_band ORDER BY eq_band LIMIT 10
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-005
+Purpose: Per-symbol view of the stop-floor geometry (F-I5-01, F-I5-05, U-I5-3): ATR %, how many entries had reward:risk below 1, and the outcome.
+SQL:
+SELECT s.symbol, COUNT(*) AS n, AVG(s.atr_percent) AS avg_atr_pct, MIN(s.atr_percent) AS min_atr_pct, SUM(s.risk_reward_ratio < 1) AS rr_below_1, SUM(pp.realized_pnl < 0) AS losers, SUM(pp.status = 'STOPPED') AS stopped, SUM(pp.realized_pnl) AS net_pnl FROM crypto_ai.paper_position pp JOIN crypto_ai.trade_signal s ON s.id = pp.signal_id WHERE pp.status IN ('CLOSED','STOPPED') GROUP BY s.symbol ORDER BY net_pnl LIMIT 40
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-006
+Purpose: ATR risk plans of the 5m signals each entry relied on, plus the superseding 5m 159407 (F-I5-04, U-I5-4). Columns are proven by I2-007.
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, latest_price, stop_loss, take_profit, atr_at_signal, atr_percent, risk_reward_ratio, candle_range_atr_multiple, atr_entry_type, atr_recommended_position_percent, final_entry_allowed, confidence_score FROM crypto_ai.trade_signal WHERE id IN (159285,159407,165415,167616,171559,176655,156721) ORDER BY symbol, candle_open_time LIMIT 10
+### END_DB_REQUEST
+
+---
+
+## Self-review (iteration 5)
+
+**Time labelling:** every timestamp is labelled UTC or KSA. 143's KSA date is 2026-10-12. The Flyway time zone is flagged as an unknown.
+
+**Evidence labels:**
+- The geometry finding (F-I5-01) is code plus config plus an exact match against stored values.
+- The fee figures (F-I5-03) are external and unverified for this account.
+- The score breakdowns (F-I5-02) are explicitly inference, and one of them (162) does not reconcile.
+
+**Corrections this iteration:**
+- I4-004 picked the wrong 5m for confirmation-wakeup entries (F-I5-07).
+- F-I4-08 has moved from "reported contradiction" to "confirmed by evidence; awaiting dual-agent review".
+
+**Not claimed:**
+- That the inverted reward:risk or the fee blindness caused these paper losses.
+- That the masked-5m entries lose money overall (8 trades only).
+
+**Plan for iteration 6:**
+- Fold in I5-001 to I5-006.
+- Recompute each Entry Quality score exactly.
+- Test whether Entry Quality predicts outcome.
+- Freeze the per-trade verdicts.
+
+Sources:
+- [Binance fee-rate FAQ](https://www.binance.com/bn/amp/support/faq/360033544231)
+- [CryptoPotato: Binance fees explained](https://cryptopotato.com/binance-fees/)
+- [Traders Union: Binance fees](https://tradersunion.com/brokers/crypto/view/binance/fees/)

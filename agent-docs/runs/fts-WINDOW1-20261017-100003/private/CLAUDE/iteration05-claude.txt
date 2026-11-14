@@ -1,0 +1,223 @@
+# FTS WINDOW1: Claude, Iteration 5, entry quality (self-review only)
+
+I made no code, config, DB, git or deploy changes. I did not read `private/CODEX/`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or Codex memory. Plan mode is active, but this session has no plan-file write tool and no exit-plan tool, so this message is the iteration output.
+
+**Inputs used:**
+- My database results I4-001 to I4-005, re-reading I1-003, I1-006, I1-007 and I2-005.
+- Code reads:
+  - `ExecutionIntelligenceService` (EIS) `:530-786` (routes), `:848-1030` (Entry Quality scoring), `:1150-1223` (re-check at execution price and size caps), `:1257-1320` (FIX-119), `:1811-1817` (R/R).
+  - `TradeExecutionValidationService` (TEVS) `:49, :62-113, :218-321, :413-418`.
+  - `PaperTradingService` (PTS) `:322-399`.
+  - `WalletAutoExecutionService` `:80-139`.
+- External: one web search on Binance spot fees.
+
+---
+
+## FINDING 0: time labels (unchanged)
+
+The DB stores UTC. The wrapper displays `TIMESTAMP` columns in KSA (I2-001, I3-004, and the Binance cross-check in iteration 4). Times below are written **KSA (UTC)**. The run prompt's "DB timestamps are UTC" describes what is stored, not what the wrapper displays. I keep reporting this contradiction and have not edited any rule file.
+
+---
+
+## Resolutions from the I4 results (PROJECT EVIDENCE)
+
+| ID | Resolution | Evidence |
+|---|---|---|
+| **U-27** | FIX-154 **was running in Production** when these trades happened. V107 and V109 were installed 2026-10-10 00:15 / 01:52 KSA. Audit rows exist for 4 of the 6 entries, all `NO_CONFLICT` with `max_initial_percent=NULL`, so FIX-154 changed nothing on these entries. 143 (SETUP_TIMEFRAME_ATR) and 158 (wake-up) do not go through `validateBuy`, so they have no audit row. This confirms the F-28 contradiction with AGENTS.md ("not-yet-implemented"). Reported, not edited. | I4-004 |
+| **U-26** | 137 used 5m **156721** (the 20:50–20:55 candle, NEUTRAL, original NEUTRAL, score 48). It was generated 17 ms before the 1m. **Correction:** my iteration-4 table said the 20:45–20:50 candle. | I4-004 audit 1938 |
+| **U-25** | 171559's blocking stage was `RANGE_ENTRY_LOCATION` (confirmed). 176655 had `final_entry_allowed=1` and no blocking stage, so the reason for the STRONG_SELL→NEUTRAL downgrade is **not** in these columns. FIX-154 recorded `five_minute_raw_decision=NEUTRAL`, so its "raw" value is the `decision` column, not `original_decision`. | I4-002, I4-004 |
+| **U-24** | Of the 13 boundary BUYs that have a paper row, the route would clearly have flipped only for **255 (+0.032)** and **358 (=143, −0.037)**. In most of the rest, the superseded and newer 5m were in the same class. The P&L impact of F-27 in this sample is about zero, so it is a **correctness/parity issue, not a loss driver**. | I4-001 |
+| **U-28** | Wallet activity after 10-12: only 10-15 (7 BUY / 7 SELL). From 10-12 11:00 KSA (08:00 UTC), 1m analysis degraded: average 8.5–18.8 s, max 74.2 s. There were no signals from 20:00 to 21:59 KSA (17:00–18:59 UTC). All six frozen trades came before this. | I4-005 |
+| **U-23 (partial)** | `market_price_event.created_at` was 45–156 ms **before** the Binance event time E on 10-11 (EGLD, XRP). The local clock was behind Binance. Whether `created_at` is set by the JVM or by a DB default is not verified. | I4-003 |
+
+---
+
+## EVIDENCE: entry-quality ledger (PROJECT EVIDENCE)
+
+Scoring rules (EIS `:976-1022`):
+- Start at 100.
+- **R/R < 1 costs −30**, whether R/R is 0.01 or 0.99.
+- Expansion from the 30-minute reference low: −10 / −22 / −35 / −50.
+- ATR extension: −10 / −20 / −30.
+- Opportunity age: −5 / −10 / −15.
+- Rejection zone: −12, but **floored at 50** if the score was ≥ 50 before the penalty.
+- HIGH_VOLATILITY −10, STOP_EXPOSED −15, BREAKOUT bonus +5.
+
+What the score does:
+- The only block is score < 50 (`CHASE_ENTRY_CUTOFF`).
+- Otherwise it caps size: ≥ 85 → 50%, ≥ 70 → 40%, else 25%.
+- Final size = cap × the signal's ATR-recommended % (PTS `:328-333`).
+
+| Trade | Route / HTF authority | EQ used for the decision | EQ persisted (at fill price) | R/R | Target % / Stop % | ATR rec. % | Final size |
+|---|---|---|---|---|---|---|---|
+| 137 | IMMEDIATE / FIX-11G | 58 ACCEPTABLE | 58 | 0.64 | +0.322 / −0.500 | 100 | 25% |
+| 143 | SETUP_TIMEFRAME_ATR (EQ uses 5m ATR) | **60** | **70** | 1.50 | +0.786 / −0.565 | **0 → treated as 100** | 25% |
+| 158 | WAKEUP / BALANCED_STRONG 75 | not logged (≤ 69, since the cap applied) | **50** | 0.33 | +0.171 / −0.493 | 100 | 25% |
+| 162 | ACCUMULATED / BALANCED_EARLY | **50 LATE_ENTRY** | **50** | 0.44 | +0.219 / −0.500 | 60 | 15% |
+| 172 | IMMEDIATE / BALANCED_STRONG 75 | 60 ACCEPTABLE | 60 | 0.74 | +0.372 / −0.500 | 100 | 25% |
+| 182 | IMMEDIATE / FIX-11G | **50 LATE_ENTRY** | **50** | 0.48 | +0.241 / −0.500 | 60 | 15% |
+
+Sources: wallet_trade messages (I1-006), `wallet_managed_position.entry_quality_score` (I1-007), trade_signal (I1-003, I2-005).
+
+**Resolved:** the 15% size on 162 and 182 is round(60% ATR × 25% cap) (PTS `:332-333`). It is not a separate cap.
+
+---
+
+## FINDINGS
+
+### F-30: Entry Quality cannot reject an R/R < 1 entry; it only sizes it (PROJECT EVIDENCE; design gap)
+
+- The R/R penalty is flat: −30 for anything below 1, with no fee term (`EIS:991`, `:1811-1817`).
+- Starting from 70, an R/R < 1 entry still passes the 50 cutoff as long as all other penalties total ≤ 20.
+- 5 of the 6 entries had R/R 0.33–0.74, so each started at 70 at most.
+- **All six scored 50–60 on the score that governed the decision. Three (158, 162, 182) sat at exactly 50, the lowest passing value.**
+- **AGENT INFERENCE:** the rejection-zone floor (`:1000-1002`) turns 50 into a sink value. A trade at 50 may have absorbed penalties well beyond the cutoff. Which components produced each score is pending I5-001 to I5-003.
+
+### F-31: net of fees, the planned trades had almost no edge (PROJECT EVIDENCE + EXTERNAL RESEARCH)
+
+- **External research:** the standard Binance spot rate (VIP 0) is 0.1% per side, or 0.075% if paid in BNB. That makes a round trip 0.15–0.20%. Sources are mostly third-party; one unverified report says maker fees are now 0.
+- At 0.2% round trip, net R/R would be:
+
+| Trade | Net R/R | Win rate needed to break even |
+|---|---|---|
+| 137 | 0.17 | — |
+| 143 | 0.77 | — |
+| 158 | **negative** (the target is below the fee) | — |
+| 162 | 0.03 | about 97% |
+| 172 | 0.25 (0.46 with tick rounding) | — |
+| 182 | 0.06 | about 94% |
+
+- `wallet_trade.fee_usdt = 0`, and neither Entry Quality nor R/R models fees.
+- This makes F-10 stronger: these are **structurally negative-expectancy entry plans**, separate from whether the signal was right.
+
+### F-32: FIX-11G admits LATE_ENTRY prices that the stronger BALANCED_EARLY authority blocks (PROJECT EVIDENCE; candidate design gap, trade 182)
+
+- FIX-041 blocks a direct BUY only when the validation code is `BALANCED_EARLY` **and** Entry Quality is LATE_ENTRY (`EIS:672-673`). BALANCED_EARLY means 5m WATCH + 1h WATCH.
+- FIX-11G (`BALANCED_NEUTRAL_5M_WATCH_1H`) is a **weaker** authority (5m NEUTRAL), yet it only requires EQ ≥ 50 (`TEVS:49, :266`). FIX-041 does not cover it.
+- 182 went through this path at **exactly 50 / LATE_ENTRY**. Its 5m context 176655 had originally been STRONG_SELL (F-26).
+- **AGENT INFERENCE:** had 182 come through BALANCED_EARLY, it would have been held as `BALANCED_EARLY_LATE_ENTRY_BLOCKED`. Ranking the authorities like this is inconsistent.
+
+### F-33: on the accumulated-evidence route, one BUY in 30 minutes lets a LATE_ENTRY through (PROJECT EVIDENCE; candidate design gap, trade 162)
+
+- FIX-119 defers an `ACCUMULATED_EVIDENCE` LATE_ENTRY only when buyCount = 0 and the 5m is not bullish (`EIS:1271-1280`).
+- 162 had "1 BUY, 9 WATCH", 5m WATCH and HTF authority BALANCED_EARLY. One BUY observation was enough to skip the deferral.
+- Its signal showed the price at or above the upper Bollinger band, 2.82 ATR above SMA20, and RSI 68 (I1-007).
+- The same BALANCED_EARLY + LATE_ENTRY combination is blocked on the direct path (FIX-041).
+- The age, price and freshness of that single BUY are pending (I5-002).
+
+### F-34: on trade 143, the score that set the size differs from the score persisted (PROJECT EVIDENCE + AGENT INFERENCE)
+
+- The decision used EQ **60**, computed with the 5m ATR (`EIS:634`).
+- The persisted `entry_quality_score` is **70**, re-scored at the fill price with the **1m** ATR (`PTS:377-385`, `EIS:857`).
+- The difference is one 10-point tier. That means the **5m ATR produced the larger ATR extension**. This contradicts the code comment's premise that a "tiny 1m ATR" inflates chase scores.
+- **AGENT INFERENCE:** the 22:39 1m candle had RVOL 21.9×, which inflated the 1m ATR14. Pending `atr_at_signal` (I5-001).
+- **Audit consequence:** the persisted score is not always the score that governed sizing.
+
+### F-35: an ATR plan of "0% recommended" is treated as 100% (PROJECT EVIDENCE; latent gap, no P&L impact here)
+
+- The code does `atrPercent <= 0 ? 100 : …` (`PTS:328-330`). An explicit 0% from `WAIT_FOR_RETRACEMENT` is indistinguishable from "missing".
+- For 143 the 5m plan allowed 100%, so the size would have been the same either way.
+
+### F-36: other entry-quality gaps (PROJECT EVIDENCE)
+
+- **143, no memory of the previous exit:**
+  - The re-entry came 22 s after a profit-lock exit at 3.996, and filled 0.93% higher (4.033).
+  - FIX-020 sets the previous opportunity to COMPLETED, so the anchor resets to the rolling 30-minute low.
+  - The 1m showed RSI 84.3, a close above the upper Bollinger band, and 4.35 ATR above SMA20 (I1-007).
+- **172:**
+  - The 5m it relied on (171559) and the 1m BUYs at 06:31 and 06:32 had been blocked at this same price zone by `RANGE_ENTRY_LOCATION`.
+  - The regime label then changed to WEAK_UPTREND / TREND_FOLLOWING, where that guard is "not applicable", and the next 1m BUY passed.
+  - The order-book check said: "No persistent bid support was detected above the stop-loss."
+  - **Self-correction:** the target 5.510418e-6 needs +3 ticks (5.52), not the +2 I said in iteration 2. The stop is −3 ticks, so the R/R after tick rounding is about 1.0. That does not change the outcome: the exit came at −1 tick on HTF_SELL.
+- **182, a counter-trend entry:**
+  - The 1m BUY came straight after 12 STRONG_SELLs.
+  - EMA20 was below EMA50 and the EMAs were not bullishly aligned, but the regime was WEAK_DOWNTREND with the TREND_FOLLOWING strategy.
+  - Confluence was CONFLICT, and order-book support above the stop was absent.
+- **137, a reversal entry:**
+  - A STRONG_BUY with score 91 came right after 12 STRONG_SELLs. It passed through the expansion-transition exception (RVOL 8.26×).
+  - It sat 0.325% under an ask wall at 4.012. The target was 4.0119, so the target sat right at that wall.
+  - **AGENT INFERENCE:** a score of exactly 58 means R/R −30 plus the −12 rejection-zone penalty. No other combination of the penalties adds up to −12. To be verified with I5-002.
+
+### Per-trade entry verdicts (AGENT INFERENCE, using only information available at decision time)
+
+| Trade | Entry verdict | Main reason |
+|---|---|---|
+| 137 | Low quality, followed the rules | Reversal against a near wall; net R/R 0.17; no 5m support |
+| 143 | **Candidate defect** (superseded 5m, F-11/F-18) plus a chase | RSI 84, re-entry 0.9% above the previous exit; best plan geometry of the six |
+| 158 | Poor, by design | Target below the round-trip fee; volume did not confirm |
+| 162 | Poor; **candidate gap F-33** | LATE_ENTRY above the upper Bollinger band, released by a single BUY |
+| 172 | Poor; **candidate gap F-25** | Blocked 5m used as confirmation; range guard sidestepped by a regime change; tick-bound plan |
+| 182 | Worst of the six; **candidate gaps F-26 + F-32** | Raw STRONG_SELL 5m treated as NEUTRAL; FIX-11G at EQ 50; counter-trend |
+
+---
+
+## UNKNOWNS
+
+- **U-18:** gzipped logs are still unreadable, so the FIX-11G post-guard and FIX-105 chase-reference logs are **MISSING**.
+- **U-29:** the score components (expansion, ATR extension, age, rejection zone, STOP_EXPOSED) behind each score. Needs I5-001 to I5-003.
+- **U-30:** why 176655 was downgraded (I5-005).
+- **U-31:** whether low Entry Quality, a target below the fee, or FIX-11G predict losses system-wide (I5-004, I5-005).
+- **U-32:** the decision-time EQ for 158 (not logged on the wake-up path).
+- **U-21:** a Replay run is still out of scope.
+
+---
+
+## DB REQUESTS
+
+Time literals are in the wrapper's +03:00 session.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: Entry Quality inputs for each entry and its 5m authority: ATR, liquidity status (STOP_EXPOSED), regime, entry-authority cap (F-30, F-34, U-29).
+SQL:
+SELECT id, symbol, interval_code, decision, latest_price, atr_at_signal, stop_loss, take_profit, risk_reward_ratio, liquidity_status, market_regime, entry_authority, entry_authority_max_position_percent, btc_context_status, generated_at FROM crypto_ai.trade_signal WHERE id IN (156723,159408,165412,167668,171589,176710,156721,159285,165415,167616,171559,176655) ORDER BY symbol, generated_at;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: The 30-minute 1m evidence window before each entry, to rebuild the reference low, the rolling high, the rejection count and the single BUY behind 162 (F-30, F-33, F-36).
+SQL:
+SELECT p.id AS position_id, s.id, s.decision, s.latest_price, s.total_score, s.confidence_score, s.generated_at FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal e ON e.id=p.signal_id JOIN crypto_ai.trade_signal s ON s.symbol=e.symbol AND s.interval_code='1m' AND s.generated_at BETWEEN e.generated_at - INTERVAL 30 MINUTE AND e.generated_at WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, s.generated_at LIMIT 400;
+SELECT p.id AS position_id, MIN(s.latest_price) AS ref_low_30m, MAX(s.latest_price) AS high_30m, SUM(s.decision IN ('BUY','STRONG_BUY')) AS buys, SUM(s.decision='WATCH') AS watches FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal e ON e.id=p.signal_id JOIN crypto_ai.trade_signal s ON s.symbol=e.symbol AND s.interval_code='1m' AND s.generated_at BETWEEN e.generated_at - INTERVAL 30 MINUTE AND e.generated_at WHERE p.id IN (182,172,162,158,143,137) GROUP BY p.id ORDER BY p.id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: The opportunity rows around each entry: anchor and best prices (FIX-055/105 chase reference), age, evidence counts (F-30, F-36, U-29).
+SQL:
+SELECT id, symbol, status, started_at, last_evidence_at, anchor_entry_price, best_entry_price, evidence_count, buy_count, watch_count, neutral_count, bearish_count, evidence_score, opportunity_health, five_minute_decision, one_hour_decision, execution_source, recommended_position_percent, decision_code, latest_signal_id, executed_at, updated_at FROM crypto_ai.execution_opportunity WHERE (symbol='EGLDUSDT' AND started_at <= '2026-10-11 22:40:04' AND last_evidence_at >= '2026-10-11 20:50:00') OR (symbol='XRPUSDT' AND started_at <= '2026-10-12 02:35:03' AND last_evidence_at >= '2026-10-12 02:30:00') OR (symbol='DOGEUSDT' AND started_at <= '2026-10-12 04:02:05' AND last_evidence_at >= '2026-10-12 03:55:00') OR (symbol='SHIBUSDT' AND started_at <= '2026-10-12 06:36:03' AND last_evidence_at >= '2026-10-12 06:30:00') OR (symbol='ACEUSDT' AND started_at <= '2026-10-12 09:57:05' AND last_evidence_at >= '2026-10-12 09:50:00') ORDER BY symbol, started_at LIMIT 60;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: Whether the Entry Quality band and a target below the fee predict outcome across all closed trades (F-30, F-31, U-31).
+SQL:
+SELECT CASE WHEN m.entry_quality_score < 55 THEN 'EQ50-54' WHEN m.entry_quality_score < 70 THEN 'EQ55-69' WHEN m.entry_quality_score < 85 THEN 'EQ70-84' ELSE 'EQ85+' END AS eq_bucket, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losers, ROUND(SUM(p.realized_pnl),6) AS pnl_sum, ROUND(AVG(s.risk_reward_ratio),3) AS avg_rr FROM crypto_ai.wallet_managed_position m JOIN crypto_ai.paper_position p ON p.signal_id=m.entry_signal_id JOIN crypto_ai.trade_signal s ON s.id=m.entry_signal_id WHERE p.status IN ('CLOSED','STOPPED') GROUP BY eq_bucket ORDER BY eq_bucket;
+SELECT CASE WHEN (p.take_profit-p.entry_price)/p.entry_price*100 < 0.20 THEN 'TP<0.20%' WHEN (p.take_profit-p.entry_price)/p.entry_price*100 < 0.40 THEN 'TP0.20-0.40%' ELSE 'TP>=0.40%' END AS tp_bucket, p.status, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losers, ROUND(SUM(p.realized_pnl),6) AS pnl_sum FROM crypto_ai.paper_position p WHERE p.status IN ('CLOSED','STOPPED') GROUP BY tp_bucket, p.status ORDER BY tp_bucket, p.status;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-005
+Purpose: Why 176655 was downgraded, and route-level outcomes for FIX-11G and for LATE_ENTRY accumulated entries (F-26, F-32, F-33, U-30, U-31).
+SQL:
+SELECT id, decision, original_decision, final_entry_allowed, primary_blocking_stage, LEFT(final_decision_explanation,1500) AS final_expl, decision_path FROM crypto_ai.trade_signal WHERE id=176655;
+SELECT CASE WHEN w.execution_message LIKE '%BALANCED_NEUTRAL_5M_WATCH_1H%' THEN 'FIX11G' WHEN w.execution_reason='ACCUMULATED_EVIDENCE' AND w.execution_message LIKE '%LATE_ENTRY%' THEN 'ACCUM_LATE' WHEN w.execution_reason='ACCUMULATED_EVIDENCE' THEN 'ACCUM_OTHER' ELSE w.execution_reason END AS route, COUNT(*) AS buys, SUM(p.realized_pnl < 0) AS losers, ROUND(SUM(p.realized_pnl),6) AS pnl_sum, ROUND(AVG(m.entry_quality_score),1) AS avg_eq FROM crypto_ai.wallet_trade w LEFT JOIN crypto_ai.paper_position p ON p.signal_id=w.signal_id AND p.status IN ('CLOSED','STOPPED') LEFT JOIN crypto_ai.wallet_managed_position m ON m.entry_signal_id=w.signal_id WHERE w.side='BUY' AND w.status='EXECUTED' GROUP BY route ORDER BY pnl_sum;
+### END_DB_REQUEST
+
+---
+
+## Self-review for iteration 5
+
+- **Two of my own statements corrected:** the 5m candle used by 137 (U-26), and the tick count for 172's target.
+- **Weight reduced:** I4-001 shows F-18/F-27 has about zero P&L impact in the sample, so I no longer treat it as a loss driver.
+- **F-28 settled from DB evidence:** FIX-154 was live at trade time and changed nothing on these entries.
+- **Entry verdicts** use only information available at decision time. High-water marks and post-exit outcomes are kept out of them.
+- **Candidates, not confirmed defects:** F-30 to F-36 rest on code and persisted fields. The score components and system-wide rates are pending I5-001 to I5-005.
+- **Missing evidence stated:** log evidence is still missing (U-18), and no log content was invented.
+- **Iteration 6 plan:** combine I5-001 to I5-005; break down all six scores; test whether F-30, F-31 and F-32 predict losses system-wide; begin the stop/exit-geometry review.
+
+**Sources (external research):**
+- [Unger Academy: Binance fees explained](https://ungeracademy.com/?p=6767)
+- [CryptoPotato: Binance trading fees explained](https://cryptopotato.com/binance-fees/)
+- [Traders Union: Binance fee-structure revision (unverified)](https://tradersunion.com/news/brokers-news/show/2241303-binance-revises-trading-fee-structure/)
+- [Rutland Herald / Business Wire: Binance.US fees (separate platform, not applicable)](https://www.rutlandherald.com/news/business/binance-us-slashes-spot-trading-fees-to-near-zero-for-all-users/article_03c05c3d-289a-557a-aef5-443d71beea8b.html)

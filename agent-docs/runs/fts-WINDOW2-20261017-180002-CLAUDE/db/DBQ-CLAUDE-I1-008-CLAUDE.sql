@@ -1,0 +1,4 @@
+SELECT p.id AS position_id, 'ENTRY' AS phase, e.id, e.observed_at, e.created_at, e.source_received_at, e.price, e.source, e.delivery_status, e.outcome_reason FROM crypto_ai.paper_position p JOIN crypto_ai.market_price_event e ON e.symbol = p.symbol AND e.observed_at BETWEEN p.opened_at - INTERVAL 20 SECOND AND p.opened_at + INTERVAL 3 SECOND WHERE p.id IN (182,172,162,158,143,137)
+UNION ALL
+SELECT p.id, 'EXIT', e.id, e.observed_at, e.created_at, e.source_received_at, e.price, e.source, e.delivery_status, e.outcome_reason FROM crypto_ai.paper_position p JOIN crypto_ai.market_price_event e ON e.symbol = p.symbol AND e.observed_at BETWEEN p.closed_at - INTERVAL 60 SECOND AND p.closed_at + INTERVAL 3 SECOND WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY position_id, phase, observed_at LIMIT 600;

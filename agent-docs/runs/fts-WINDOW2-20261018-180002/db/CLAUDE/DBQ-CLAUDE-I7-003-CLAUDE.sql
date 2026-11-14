@@ -1,0 +1,1 @@
+SELECT id, generated_at, decision, original_decision, total_score, LEFT(final_decision_explanation, 600) AS final_expl FROM crypto_ai.trade_signal WHERE id IN (176529, 176655) ORDER BY id;

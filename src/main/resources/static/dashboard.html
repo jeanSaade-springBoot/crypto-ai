@@ -202,7 +202,8 @@
             <div class="activity-analysis-filters">
                 <label>Symbol<select id="dashboard-signal-symbol"><option value="ALL">All symbols</option></select></label>
                 <label>Period<select id="dashboard-signal-period"><option value="15m">Last 15 minutes</option><option value="1h">Last 1 hour</option><option value="4h">Last 4 hours</option><option value="1d" selected>Last 1 day</option><option value="1w">Last 1 week</option></select></label>
-                <label>Type<select id="dashboard-signal-type"><option value="BLOCKED_BUY" selected>Blocked BUY</option><option value="BLOCKED_SELL">Blocked SELL</option><option value="DONE">BUY / SELL done</option><option value="OPEN_BUY">BUY open</option></select></label>
+                <!-- FIX-143: Shared read-only allowed/unexecuted signal filter. -->
+    <label>Type<select id="dashboard-signal-type"><option value="BLOCKED_BUY" selected>Blocked BUY</option><option value="ALLOWED_BUY">Allowed BUY — not executed</option><option value="BLOCKED_SELL">Blocked SELL</option><option value="DONE">BUY / SELL done</option><option value="OPEN_BUY">BUY open</option></select></label>
                 <button id="dashboard-signal-search" type="button">Analyze</button>
             </div>
             <p class="activity-analysis-note">The Dashboard header symbol preselects this browser. Its Symbol dropdown remains independent so you can inspect another market without changing the Dashboard header.</p>

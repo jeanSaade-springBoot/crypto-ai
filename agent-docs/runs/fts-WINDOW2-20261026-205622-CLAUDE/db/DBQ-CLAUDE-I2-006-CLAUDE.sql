@@ -1,0 +1,3 @@
+SELECT DATE(opened_at) AS d_utc, COUNT(*) AS opened, SUM(status='STOPPED') AS stopped, SUM(status='CLOSED') AS closed_n, SUM(realized_pnl < 0) AS losses, ROUND(SUM(realized_pnl), 6) AS pnl FROM crypto_ai.paper_position WHERE opened_at >= '2026-10-10 00:00:00' GROUP BY DATE(opened_at) ORDER BY d_utc;
+SELECT MAX(generated_at) AS last_signal_utc FROM crypto_ai.trade_signal;
+SELECT MAX(executed_at) AS last_wallet_trade_utc FROM crypto_ai.wallet_trade;

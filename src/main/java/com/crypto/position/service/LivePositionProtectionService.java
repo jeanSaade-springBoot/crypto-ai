@@ -47,6 +47,30 @@ public class LivePositionProtectionService {
     private final PositionManagementEventRepository positionManagementEventRepository;
     private final NearTpFailureProtectionPolicy nearTpFailureProtectionPolicy;
 
+    // FIX-153: direct observations use atomic effects+outcome; shared callers retain their ledger API.
+    @org.springframework.beans.factory.annotation.Autowired private com.crypto.market.service.MarketPriceEventService priceEvents;
+    @org.springframework.beans.factory.annotation.Autowired(required=false) private com.crypto.local.ExchangeClockSynchronizer exchangeClock;
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
+    public void onPrice(String symbol,BigDecimal price,Instant observedAt,long eventId){
+        price=com.crypto.market.service.MarketPriceEventService.normalizePrice(price);
+        if(walletCoordination!=null)walletCoordination.symbol(symbol);
+        // Acquire the existing managed-position lock BEFORE freshness, including waits on it.
+        try {managedPositionRepository.findFirstBySymbolAndStatusOrderByOpenedAtDesc(symbol,"OPEN");}
+        catch(RuntimeException failure){
+            // FIX-153: preserve only the established pre-business position-deadlock retry permission.
+            if(com.crypto.infrastructure.transaction.InitialPositionLockDeadlock.isMysqlDeadlock(failure))
+                throw new com.crypto.infrastructure.transaction.InitialPositionLockDeadlock(failure);
+            throw failure;
+        }
+        Instant localNow=Instant.now();
+        String rejection=priceEvents.invalidReason(price,observedAt,exchangeClock==null?localNow:exchangeClock.correctJvm(localNow));
+        if(rejection==null && priceEvents.laterApplied(symbol,observedAt))rejection="OUT_OF_ORDER";
+        if(rejection!=null){priceEvents.finish(eventId,symbol,observedAt,price,"NON_CANONICAL",rejection);return;}
+        onPrice(symbol,price);
+        // No-position and all successful no-op exits reach this statement; exceptions do not.
+        priceEvents.finish(eventId,symbol,observedAt,price,"APPLIED","PROTECTION_CALLBACK_COMPLETED");
+    }
+
     @Transactional
     public void onPrice(String symbolValue, BigDecimal price) {
         if (symbolValue == null || symbolValue.isBlank() || price == null || price.signum() <= 0) return;

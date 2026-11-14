@@ -1,0 +1,47 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE — REJECTED:** this exact artifact is not safe to freeze. Its filename says `RPR-0.9.1`, while its internal revision is `RPR-0.9.4-DRAFT`; it therefore lacks one unambiguous revision identity. [spec line 3](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.9.1.md:3)
+
+- **PROJECT EVIDENCE — REJECTED:** the required Production signal-path order is internally contradictory. Section 3.3 tells tests to use `TP → stop loss → rebase floor → profit lock → SELL → near-TP`; the D16 register correctly records `TP → profit lock → stop loss → hard floor → SELL`. Current code confirms the latter: `profitLock.triggered()` is checked before stop loss. [spec lines 66 and 89](C:/workspace/crypto-ai-trader-mysql/agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.9.1.md:66) · [PaperTradingService lines 170–209](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:170)
+
+- **PROJECT EVIDENCE — REJECTED:** D05 is insufficiently specified for historical ordering. Production protection obtains “latest” signals by `generated_at` at callback time, without an as-of bound tied to the price-event observation; Replay advances a deterministic in-memory signal timeline. Measuring only `created_at - generated_at` cannot prove which signals the Production callback actually read. [LivePositionProtectionService lines 95–97](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:95) · [RegressionTestWorker lines 550–620](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:550)
+
+- **PROJECT EVIDENCE:** D26 is correct and material. The Replay chart route reaches `allTradesChart`, which queries `wallet_trade`; removing only a worker-path dependency would not meet the stated boundary. [RegressionTestController lines 106–112](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/controller/RegressionTestController.java:106) · [RegressionTestService lines 549–558](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:549)
+
+- **PROJECT EVIDENCE:** D25 and D27 are correct. Replay consumes prices only before a signal and does not drain events after the final signal; it leaves an open position summarized at the end rather than producing a real terminal outcome. [ShadowProductionReplayService lines 117–163](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:117)
+
+## EVIDENCE
+
+**PROJECT EVIDENCE — D register**
+
+- D01–D04, D08–D11, D14–D16, and D20–D24 are source-supported. In particular, Production invokes position management first, applies TP/profit-lock/stop/hard-floor before signal SELL, and only then considers a 1m add. [PaperTradingService lines 113–289](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:113)
+- D02/D09 are source-supported: active profit lock suppresses normal SELL and prevents add evaluation. [PaperTradingService lines 197–218](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:197)
+- D13/D24 are source-supported: current Replay injects `WalletSettingsRepository`, reads `wallet_settings`, and uses wallet sizing/budget state. [ShadowProductionReplayService lines 45–58](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:45) · [lines 999–1016](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ShadowProductionReplayService.java:999)
+- D17 is source-supported: production entry points open only `PRODUCTION_PARITY`; `EXPERIMENTAL` use is found in a test. [ExecutionReplayScope lines 27–44](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionReplayScope.java:27)
+- D18 is source-supported as an open risk: scope is a plain `ThreadLocal`, with no async propagation or dependency guard. [ExecutionReplayScope lines 31–45](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionReplayScope.java:31)
+- D19 is source-supported: Replay profiling is invoked during generation. [RegressionTestWorker lines 567–574](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:567)
+
+**PROJECT EVIDENCE — S register**
+
+- S01, S03, S06–S09, and S11–S12 are source-supported as differences or required exclusions. Regression uses close-time evaluation and historical derivatives/order-book paths; live analysis uses `Instant.now()` and live paths. [AnalysisService lines 147–190](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:147) · [lines 327–345](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/AnalysisService.java:327)
+- S07 is confirmed: normal database-mode Replay loads candles without `closed=true`; only dataset mode’s forward segment filters closed rows. [RegressionTestWorker lines 475–485](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:475) · [lines 509–512](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:509)
+- S13 is confirmed: `ReplayParityValidator` exists but has no application call site, and compares only 13 fields. [ReplayParityValidator lines 17–38](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/ReplayParityValidator.java:17)
+- S14 is confirmed: one accepted price event anywhere satisfies the current price-parity condition. [RegressionTestWorker lines 322–323](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestWorker.java:322)
+
+## OBJECTIONS
+
+- **PROJECT EVIDENCE:** The spec’s intended “same business logic” cannot be validated if the canonical signal-path precedence is contradictory. Correct the Section 3.3 sequence to the proven code order, then specify which sequence a Replay mirror must apply and which policy is intentionally excluded.
+
+- **PROJECT EVIDENCE:** D05 must require durable ordering evidence for price callback, signal persistence, and actual callback read/availability—not merely generated/persisted timestamps. Otherwise the design risks deterministic Replay look-ahead or false mismatches.
+
+- **PROJECT EVIDENCE:** The `PriceEvent` projection drops both `id` and `delivery_status` despite SQL ordering by `id`. The spec notices this, but its implementation registry should explicitly prohibit using the existing `PriceEvent` DTO for qualified coverage/order decisions. [MarketPriceEventService lines 118–128](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:118)
+
+- **PROJECT EVIDENCE:** “No Production account-table read during a Replay run” needs a route inventory wider than D26. The existing Regression service contains run-adjacent “proven trade” APIs and links to wallet-trade identifiers; the specification’s E01 should explicitly classify these routes as legacy/outside-boundary or replace/isolate them. [RegressionTestService lines 603–695](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/regression/service/RegressionTestService.java:603)
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** No read-only database evidence package E01–E10 is present in the inspected workspace, so price-span coverage, historical settings recoverability, fixture completeness, and the proposed 98–99% denominator remain unproven.
+- **AGENT INFERENCE:** The target can be made reviewable after a single revision identity is established and the three objections above are resolved, but it should not be treated as an approved implementation contract yet.
+- **EXTERNAL RESEARCH:** None used.
+
+VERDICT: REJECTED

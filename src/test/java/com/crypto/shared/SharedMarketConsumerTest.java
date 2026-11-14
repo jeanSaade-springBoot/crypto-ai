@@ -36,12 +36,18 @@ class SharedMarketConsumerTest {
         }
         local.execute(Files.readString(Path.of("src/main/resources/db/migration/V90__fix_132_delivery_exclusion_reason.sql")));
         local.execute("ALTER TABLE shared_market_event_delivery ADD COLUMN analysis_not_before TIMESTAMP(6)");
-        local.execute("CREATE TABLE signal_processing_work(signal_id BIGINT PRIMARY KEY,status VARCHAR(30),symbol VARCHAR(30),interval_code VARCHAR(10),candle_open_time TIMESTAMP(6))");
+        local.execute("CREATE TABLE signal_processing_work(signal_id BIGINT PRIMARY KEY,status VARCHAR(30),symbol VARCHAR(30),interval_code VARCHAR(10),candle_open_time TIMESTAMP(6),origin VARCHAR(20),attempts INT,owner_token VARCHAR(36),next_attempt_at TIMESTAMP(6),updated_at TIMESTAMP(6),completed_at TIMESTAMP(6),paper_position_id BIGINT,failure_stage VARCHAR(40),error_message CLOB)");
         local.execute("INSERT INTO shared_market_consumer_state(symbol,cutover_sequence,cutover_at,discovered_sequence,status) VALUES('AMBIGUSDT',0,CURRENT_TIMESTAMP(6),0,'READY'),('REVIEWUSDT',0,CURRENT_TIMESTAMP(6),0,'REVIEW_REQUIRED')");
         String approvalDdl=Files.readString(Path.of("src/main/resources/db/migration/V91__fix_132_explicit_cutover_ownership.sql")).replaceAll("(?m)^\\s*--.*$", "");
         // Split multi-ADD only for H2 syntax compatibility; MySQL accepts either form.
         approvalDdl=approvalDdl.replaceAll(",\\s*ADD COLUMN", ";ALTER TABLE shared_market_consumer_state ADD COLUMN");
         for(String sql:approvalDdl.split(";"))if(!sql.isBlank())local.execute(sql);
+        // FIX-145: full audit snapshot required by the revised startup guard.
+        local.execute("CREATE TABLE signal_processing_work_cancellation AS SELECT * FROM signal_processing_work WHERE 1=0");
+        local.execute("ALTER TABLE signal_processing_work_cancellation ADD cancelled_at TIMESTAMP(6)");
+        local.execute("ALTER TABLE signal_processing_work_cancellation ADD operator_name VARCHAR(128)");
+        local.execute("ALTER TABLE signal_processing_work_cancellation ADD review_reference VARCHAR(128)");
+        local.execute("ALTER TABLE signal_processing_work_cancellation ADD decision VARCHAR(64)");
         assertEquals("PENDING_CUTOVER",local.queryForObject("SELECT status FROM shared_market_consumer_state WHERE symbol='AMBIGUSDT'",String.class));
         assertEquals("UNKNOWN_LEGACY",local.queryForObject("SELECT cutover_source FROM shared_market_consumer_state WHERE symbol='AMBIGUSDT'",String.class));
         assertEquals("REVIEW_REQUIRED",local.queryForObject("SELECT status FROM shared_market_consumer_state WHERE symbol='REVIEWUSDT'",String.class));
@@ -578,7 +584,7 @@ class SharedMarketConsumerTest {
         when(signals.findById(740L)).thenReturn(Optional.of(signal));
         var store=new com.crypto.execution.processing.SignalProcessingStore(local,manager);
         var freshness=mock(com.crypto.execution.processing.SignalProcessingFreshness.class);
-        when(freshness.eligible(any(),any())).thenReturn(true);
+        when(freshness.eligible(any())).thenReturn(true);
         var positions=mock(com.crypto.wallet.repository.WalletManagedPositionRepository.class);
         var coordinator=new com.crypto.execution.processing.SignalProcessingCoordinator(store,signals,positions,freshness,manager);
         var wallet=mock(com.crypto.wallet.service.WalletTransactionCoordination.class);
@@ -639,7 +645,7 @@ class SharedMarketConsumerTest {
             verify(scoring,times(1)).analyzeForProcessing(any(),any(),eq(140L));
             verify(scoring,never()).analyzeRecovered(any(),any());
             verify(technical,times(1)).calculateAndPersist("BTCUSDT","1m",open);
-            verify(freshness).eligible(any(),any());
+            verify(freshness).eligible(any());
             actual.dispatchAnalysis();assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM effects",Integer.class));
         } finally {actual.stop();}
     }
@@ -915,4 +921,180 @@ class SharedMarketConsumerTest {
         dispatcher().reconcileOwnerTimeoutReviews();
         assertEquals("REVIEW_REQUIRED",analysisStatus(1));
     }
+    // FIX-146: initialization is the same readiness path used by ApplicationReadyEvent;
+    // explicit approval remains a separate operator workflow.
+    void readinessSourceFixture() {
+        enableValidation();
+        feed.execute("CREATE TABLE market_data_stream_cursor(symbol VARCHAR(30) PRIMARY KEY,last_sequence BIGINT)");
+        feed.update("INSERT INTO market_data_stream_cursor VALUES('BTCUSDT',0)");
+        feed.execute("CREATE TABLE candle(id BIGINT,symbol VARCHAR(30),interval_code VARCHAR(10),closed INT)");
+        for(int n=0;n<300;n++)feed.update("INSERT INTO candle VALUES(?,'BTCUSDT','1m',1)",n);
+        when(source.reader()).thenReturn(feed);
+        local.execute("ALTER TABLE shared_market_consumer_state ADD active_delivery_state VARCHAR(30) DEFAULT 'NONE'");
+    }
+    @SuppressWarnings("unchecked")
+    String blockedReason(String symbol) {
+        var blocked=(Map<String,Object>)consumer.tradingReadiness().get("blockedSymbols");
+        return (String)((Map<String,Object>)blocked.get(symbol)).get("reason");
+    }
+    @Test void unapprovedCoinDoesNotAbortInitializationOrStopApprovedCoin() {
+        readinessSourceFixture();
+        local.update("INSERT INTO shared_market_consumer_state(symbol,cutover_sequence,cutover_at,discovered_sequence,status,cutover_source) VALUES('SOLUSDT',0,CURRENT_TIMESTAMP(6),0,'PENDING_CUTOVER','AUTO_OBSERVED')");
+        when(coins.enabledSymbols()).thenReturn(List.of("SOLUSDT","BTCUSDT"));
+        assertDoesNotThrow(consumer::initializeTradingReadiness);
+        assertEquals("CUTOVER_REQUIRED",blockedReason("SOLUSDT"));
+        assertEquals(List.of("BTCUSDT"),consumer.tradingReadiness().get("readySymbols"));
+        assertEquals("PENDING_CUTOVER",local.queryForObject("SELECT status FROM shared_market_consumer_state WHERE symbol='SOLUSDT'",String.class));
+        assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_approval WHERE symbol='SOLUSDT'",Integer.class));
+        consumer.processNext("SOLUSDT");event(1,now);consumer.discover();consumer.processNext("BTCUSDT");
+        verify(protect,times(1)).onPrice(eq("BTCUSDT"),any());verify(protect,never()).onPrice(eq("SOLUSDT"),any());
+    }
+    @Test void symbolScopedLegacyReviewDoesNotAbortOrAutomaticallyCancelWork() {
+        readinessSourceFixture();
+        local.update("INSERT INTO signal_processing_work(signal_id,symbol,status) VALUES(999,'BTCUSDT','REVIEW_REQUIRED')");
+        assertDoesNotThrow(consumer::initializeTradingReadiness);
+        assertEquals("LEGACY_WORK_REVIEW",blockedReason("BTCUSDT"));
+        event(1,now);consumer.discover();consumer.processNext("BTCUSDT");
+        assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM shared_market_event_delivery",Integer.class));
+        assertEquals("REVIEW_REQUIRED",local.queryForObject("SELECT status FROM signal_processing_work WHERE signal_id=999",String.class));
+        verifyNoInteractions(protect,observer,worker);
+    }
+    @Test void unknownWorkScopeKeepsDiagnosticsAvailableButGrantsNoSymbolAuthority() {
+        readinessSourceFixture();local.update("INSERT INTO signal_processing_work(signal_id,status) VALUES(999,'REVIEW_REQUIRED')");
+        assertDoesNotThrow(consumer::initializeTradingReadiness);
+        assertEquals("UNSCOPED_WORK",blockedReason("BTCUSDT"));
+        assertEquals("NO_READY_SYMBOLS",consumer.tradingReadiness().get("status"));
+    }
+    @Test void missingAuditDoesNotCrashAndRecheckRequiresActualRestoredAudit() {
+        readinessSourceFixture();local.update("DELETE FROM shared_market_cutover_approval");
+        assertDoesNotThrow(consumer::initializeTradingReadiness);
+        assertEquals("APPROVAL_AUDIT_MISSING",blockedReason("BTCUSDT"));
+        assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_history",Integer.class));
+        // Fixture restoration represents an existing validated operator approval, not automatic approval.
+        local.update("INSERT INTO shared_market_cutover_approval(symbol,cutover_sequence,cutover_at,approved_by,approved_at,approval_reference) SELECT symbol,cutover_sequence,cutover_at,approved_by,approved_at,approval_reference FROM shared_market_consumer_state");
+        consumer.refreshTradingReadiness();
+        assertEquals(List.of("BTCUSDT"),consumer.tradingReadiness().get("readySymbols"));
+        assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_history",Integer.class));
+        consumer.refreshTradingReadiness();
+        assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_history",Integer.class));
+    }
+    @Test void sourceCheckFailureAndMissingActivationKeepProcessAvailableAndFailClosed() {
+        readinessSourceFixture();feed.update("DELETE FROM candle");
+        assertDoesNotThrow(consumer::initializeTradingReadiness);
+        assertEquals("SOURCE_HISTORY_MISSING",blockedReason("BTCUSDT"));
+        org.springframework.test.util.ReflectionTestUtils.setField(consumer,"activationApproved",false);
+        consumer.refreshTradingReadiness();assertEquals("ACTIVATION_REQUIRED",blockedReason("BTCUSDT"));
+        assertThrows(IllegalStateException.class,consumer::validateCutover);
+    }
+
+    // FIX-148: exercise the actual automatic activation service against the durable
+    // fixture, with current source history and no manual approver account/API.
+    // FIX-148: keep real CURRENT_TIMESTAMP in the activation fixtures, so H2's
+    // OffsetDateTime result continues to exercise the previously failing path.
+    @Test void automaticActivationJdbcTimesPreserveUtcAcrossDriverTypes() {
+        Instant expected=Instant.parse("2026-10-04T21:16:10.123456Z");
+        assertEquals(expected,SharedAutomaticActivation.jdbcInstant(Timestamp.from(expected)));
+        assertEquals(expected,SharedAutomaticActivation.jdbcInstant(expected.atOffset(java.time.ZoneOffset.ofHours(3))));
+        assertEquals(expected,SharedAutomaticActivation.jdbcInstant(expected));
+        assertEquals(expected,SharedAutomaticActivation.jdbcInstant(java.time.LocalDateTime.ofInstant(expected,java.time.ZoneOffset.UTC)));
+        assertThrows(IllegalArgumentException.class,()->SharedAutomaticActivation.jdbcInstant(null));
+        assertThrows(IllegalArgumentException.class,()->SharedAutomaticActivation.jdbcInstant("2026-10-04 21:16:10"));
+    }
+    SharedAutomaticActivation automaticFixture() {
+        readinessSourceFixture();
+        local.execute("ALTER TABLE shared_market_consumer_state ADD active_delivery_event_id BIGINT");
+        local.execute("ALTER TABLE shared_market_consumer_state ADD active_delivery_owner_token VARCHAR(80)");
+        local.execute("ALTER TABLE shared_market_consumer_state ADD active_delivery_process_owner VARCHAR(36)");
+        local.execute("CREATE TABLE shared_delivery_resolution_audit(id BIGINT AUTO_INCREMENT PRIMARY KEY,source_event_id BIGINT,symbol VARCHAR(30),operation VARCHAR(40),reviewer VARCHAR(160),evidence VARCHAR(2000))");
+        local.update("DELETE FROM shared_market_cutover_approval");
+        local.update("UPDATE shared_market_consumer_state SET status='PENDING_CUTOVER',cutover_source='AUTO_OBSERVED',approved_by=NULL,approved_at=NULL,approval_reference=NULL,approved_sequence=NULL,approved_cutover_at=NULL");
+        feed.update("UPDATE market_data_stream_cursor SET last_sequence=100");
+        event(100,now);feed.update("UPDATE market_data_stream_event SET closed=TRUE,candle_close_time=? WHERE id=100",Timestamp.from(now.minusSeconds(1)));
+        org.springframework.test.util.ReflectionTestUtils.setField(consumer,"automaticFirstCutoverEnabled",true);
+        return new SharedAutomaticActivation(source,local,manager);
+    }
+    void untouchedOldDelivery() {
+        local.update("INSERT INTO shared_market_event_delivery(source_event_id,symbol,symbol_sequence,interval_code,candle_open_time,candle_close_time,closed,observed_at,received_at,source_created_at,price,source,classification) VALUES(1,'BTCUSDT',1,'1m',?,?,FALSE,?,?,?,10,'LIVE_WEBSOCKET','LIVE')",
+            Timestamp.from(now.minusSeconds(360)),Timestamp.from(now.minusSeconds(300)),Timestamp.from(now.minusSeconds(350)),Timestamp.from(now.minusSeconds(350)),Timestamp.from(now.minusSeconds(350)));
+    }
+    @Test void automaticFirstCutoverAuditsAndAdmitsFutureFreshEventWithoutOperator() {
+        automaticFixture();consumer.initializeTradingReadiness();
+        assertEquals(List.of("BTCUSDT"),consumer.tradingReadiness().get("readySymbols"));
+        assertEquals("SYSTEM_VALIDATED",local.queryForObject("SELECT cutover_source FROM shared_market_consumer_state",String.class));
+        assertEquals("FIX148_SYSTEM",local.queryForObject("SELECT approved_by FROM shared_market_cutover_approval",String.class));
+        assertEquals(100L,local.queryForObject("SELECT discovered_sequence FROM shared_market_consumer_state",Long.class));
+        assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM shared_market_event_delivery",Integer.class));
+        event(101,Instant.now());consumer.discover();consumer.processNext("BTCUSDT");
+        verify(protect,times(1)).onPrice(eq("BTCUSDT"),any());
+    }
+    @Test void automaticActivationNeverResetsApprovedBoundaryOrDuplicatesAudit() {
+        var activation=automaticFixture();assertTrue(activation.activateFirst("BTCUSDT",List.of("1m")));
+        var before=local.queryForMap("SELECT cutover_sequence,cutover_at,discovered_sequence FROM shared_market_consumer_state");
+        feed.update("UPDATE market_data_stream_cursor SET last_sequence=200");
+        assertFalse(activation.activateFirst("BTCUSDT",List.of("1m")));
+        assertEquals(before,local.queryForMap("SELECT cutover_sequence,cutover_at,discovered_sequence FROM shared_market_consumer_state"));
+        assertEquals(1,local.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_approval",Integer.class));
+    }
+    @Test void expiredNeverStartedObservationIsAuditedAndNotReplayedBeforeActivation() {
+        var activation=automaticFixture();untouchedOldDelivery();
+        assertTrue(activation.activateFirst("BTCUSDT",List.of("1m")));
+        assertEquals("SKIPPED",local.queryForObject("SELECT status FROM shared_market_event_delivery",String.class));
+        assertNull(local.queryForMap("SELECT * FROM shared_market_event_delivery").get("protection_started_at"));
+        assertEquals("AUTO_EXPIRE_NEVER_STARTED",local.queryForObject("SELECT operation FROM shared_delivery_resolution_audit",String.class));
+        verifyNoInteractions(protect,observer,worker);
+    }
+    @Test void uncertainStartedProtectionRetainsFenceAndCannotBeExpiredOrActivated() {
+        var activation=automaticFixture();untouchedOldDelivery();
+        local.update("UPDATE shared_market_event_delivery SET status='REVIEW_REQUIRED',protection_started_at=?,protection_owner='old-owner'",Timestamp.from(now.minusSeconds(300)));
+        assertFalse(activation.activateFirst("BTCUSDT",List.of("1m")));
+        assertEquals("REVIEW_REQUIRED",local.queryForObject("SELECT status FROM shared_market_event_delivery",String.class));
+        assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_approval",Integer.class));
+        assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM shared_delivery_resolution_audit",Integer.class));
+    }
+    @Test void missingHistoryOrStaleClosedSourceContextDoesNotGrantAutomaticAuthority() {
+        var activation=automaticFixture();feed.update("DELETE FROM candle");
+        assertFalse(activation.activateFirst("BTCUSDT",List.of("1m")));
+        for(int n=0;n<300;n++)feed.update("INSERT INTO candle VALUES(?,'BTCUSDT','1m',1)",n);
+        feed.update("UPDATE market_data_stream_event SET candle_close_time=?",Timestamp.from(now.minusSeconds(600)));
+        assertFalse(activation.activateFirst("BTCUSDT",List.of("1m")));
+        assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM shared_market_cutover_approval",Integer.class));
+    }
+    @Test void priorAuditPreventsSilentReapprovalOfResetObservationState() {
+        var activation=automaticFixture();
+        local.update("INSERT INTO shared_market_cutover_approval(symbol,cutover_sequence,cutover_at,approved_by,approved_at,approval_reference) VALUES('BTCUSDT',0,CURRENT_TIMESTAMP(6),'original',CURRENT_TIMESTAMP(6),'prior')");
+        assertFalse(activation.activateFirst("BTCUSDT",List.of("1m")));
+        assertEquals("PENDING_CUTOVER",local.queryForObject("SELECT status FROM shared_market_consumer_state",String.class));
+    }
+    @Test void activationAuditFailureRollsBackRetirementAndReadinessMutation() {
+        var activation=automaticFixture();untouchedOldDelivery();
+        local.execute("ALTER TABLE shared_market_cutover_approval ADD CONSTRAINT reject_system_test CHECK (approved_by<>'FIX148_SYSTEM')");
+        assertThrows(RuntimeException.class,()->activation.activateFirst("BTCUSDT",List.of("1m")));
+        assertEquals("PENDING",local.queryForObject("SELECT status FROM shared_market_event_delivery",String.class));
+        assertEquals("PENDING_CUTOVER",local.queryForObject("SELECT status FROM shared_market_consumer_state",String.class));
+        assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM shared_delivery_resolution_audit",Integer.class));
+    }
+    @Test void newlyEnabledMissingStateCanBootstrapAutomaticallyButSourceRegressionCannot() {
+        var activation=automaticFixture();local.update("DELETE FROM shared_market_consumer_state");
+        assertTrue(activation.activateFirst("BTCUSDT",List.of("1m")));
+        assertEquals(100L,local.queryForObject("SELECT cutover_sequence FROM shared_market_consumer_state",Long.class));
+        local.update("DELETE FROM shared_market_cutover_approval");local.update("DELETE FROM shared_market_cutover_history");
+        local.update("UPDATE shared_market_consumer_state SET status='PENDING_CUTOVER',cutover_source='AUTO_OBSERVED',approved_by=NULL,approved_at=NULL,approval_reference=NULL,approved_sequence=NULL,approved_cutover_at=NULL,discovered_sequence=101");
+        assertFalse(activation.activateFirst("BTCUSDT",List.of("1m")));
+    }
+    @Test void naturalIdentitySignalEvidencePreventsExpiryAndAutomaticActivation() {
+        var activation=automaticFixture();untouchedOldDelivery();
+        local.update("INSERT INTO trade_signal(id,symbol,interval_code,candle_open_time) SELECT 55,symbol,interval_code,candle_open_time FROM shared_market_event_delivery");
+        assertFalse(activation.activateFirst("BTCUSDT",List.of("1m")));
+        assertEquals("PENDING",local.queryForObject("SELECT status FROM shared_market_event_delivery",String.class));
+        assertEquals(0,local.queryForObject("SELECT COUNT(*) FROM shared_delivery_resolution_audit",Integer.class));
+    }
+
+    @Test void systemValidatedMarkerWithoutExactDurableAuditRemainsBlocked() {
+        automaticFixture();
+        local.update("UPDATE shared_market_consumer_state SET status='READY',cutover_source='SYSTEM_VALIDATED',approved_by='FIX148_SYSTEM',approved_at=CURRENT_TIMESTAMP(6),approval_reference='FIX-148-AUTO-forged',approved_sequence=cutover_sequence,approved_cutover_at=cutover_at");
+        consumer.initializeTradingReadiness();
+        assertEquals("APPROVAL_AUDIT_MISSING",blockedReason("BTCUSDT"));
+        consumer.discover();consumer.processNext("BTCUSDT");verifyNoInteractions(protect,observer,worker);
+    }
+
 }

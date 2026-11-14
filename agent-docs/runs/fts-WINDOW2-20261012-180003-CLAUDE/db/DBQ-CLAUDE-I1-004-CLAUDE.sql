@@ -1,0 +1,1 @@
+SELECT * FROM wallet_managed_position WHERE symbol IN ('ACEUSDT','SHIBUSDT','DOGEUSDT','XRPUSDT','EGLDUSDT') AND opened_at BETWEEN '2026-10-11 20:50:00' AND '2026-10-12 10:00:00' ORDER BY symbol, opened_at LIMIT 50

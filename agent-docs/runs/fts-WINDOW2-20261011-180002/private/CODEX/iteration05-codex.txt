@@ -1,0 +1,156 @@
+## FINDINGS
+
+- **[PROJECT EVIDENCE]** No executed database result exists in the permitted `db/CODEX` folder. Entry quality for frozen IDs `104, 101, 96, 91, 82, 78` therefore cannot be scored or classified from evidence.
+
+- **[PROJECT EVIDENCE]** Current source requires a BUY to pass execution authority and hard-risk gates, obtain a fresh canonical execution price, pass execution-price revalidation, then complete the wallet BUY before a `paper_position` is created. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:292)
+
+- **[PROJECT EVIDENCE]** The hard gates include strategy permission, BTC-context permission, derivatives permission, and a strong target-side liquidity wall; an entry also needs a positive price, stop loss, and take profit. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:2221)
+
+- **[PROJECT EVIDENCE]** Entry quality is independently recomputed at the execution price. It incorporates expansion from the recent/opportunity reference, ATR extension, opportunity age, reward/risk, rejection-zone evidence, volatility, and stop exposure. A score below 50 blocks the initial entry; higher scores can cap size. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1145)
+
+- **[PROJECT EVIDENCE]** The contemporaneous wallet BUY records decision price, execution price, observation time, quantity, and execution explanation. The managed position persists an `entry_quality_score`, but every subsequent BUY overwrites it; it cannot by itself prove the original-entry quality if the position was scaled in. [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:129) [WalletManagedPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/domain/WalletManagedPosition.java:70)
+
+- **[AGENT INFERENCE]** A defensible entry-quality assessment needs the exact entry signal, fresh execution-price event, BUY fill, and prior signal context. A closed losing position alone cannot establish whether its entry was early, acceptable, late, or a chase.
+
+- **[PROJECT EVIDENCE / trade 104]** Previously identified EDUUSDT evidence is post-entry profit-lock/exit-path evidence, not entry evidence. It is deliberately excluded from judging entry quality to avoid future-information leakage.
+
+| Frozen trade | Entry-quality verdict |
+|---:|---|
+| 104 | Not assessable from supplied Codex evidence |
+| 101 | Not assessable from supplied Codex evidence |
+| 96 | Not assessable from supplied Codex evidence |
+| 91 | Not assessable from supplied Codex evidence |
+| 82 | Not assessable from supplied Codex evidence |
+| 78 | Not assessable from supplied Codex evidence |
+
+## EVIDENCE
+
+- **[PROJECT EVIDENCE]** Direct 1m execution is freshness-gated against the exact latest closed candle; the recovery grace is 90 seconds for 1m work. [SignalProcessingFreshness.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/processing/SignalProcessingFreshness.java:23)
+
+- **[PROJECT EVIDENCE]** Revalidation cancels a BUY if the fresh price is at/below stop or at/above target, then reapplies entry-quality controls at that fresh price. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1150)
+
+- **[EXTERNAL RESEARCH]** None.
+
+## UNKNOWNS
+
+- The authoritative `paper_position` lifecycle fields and each linked entry signal for all six frozen trades.
+- Signal-time decision, score, confidence, risk/reward, ATR plan, market regime, BTC/derivatives/liquidity status, and final-entry permission.
+- Decision price versus execution price, their UTC timestamps, and whether a fresh price-event record proves the fill authority.
+- Whether any selected position had progressive adds; if so, whether the retained managed-position quality score reflects the initial BUY or a later add.
+- Whether the current source revision and configured execution profile were active for each historical entry.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Confirm the actual schema and timestamp context for the authoritative entry-evidence chain before interpreting historical fields.  
+SQL:
+```sql
+SELECT
+    @@session.time_zone AS session_time_zone,
+    @@global.time_zone AS global_time_zone,
+    @@system_time_zone AS system_time_zone;
+
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'execution_opportunity'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I5-002  
+Purpose: After DBQ-CODEX-I5-001 confirms physical columns, retrieve the authoritative position, entry-signal, executed-BUY, and managed-position records for exactly the six frozen trades.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (104, 101, 96, 91, 82, 78)
+ORDER BY FIELD(id, 104, 101, 96, 91, 82, 78);
+
+SELECT ts.*
+FROM crypto_ai.trade_signal ts
+JOIN crypto_ai.paper_position p ON p.signal_id = ts.id
+WHERE p.id IN (104, 101, 96, 91, 82, 78)
+ORDER BY p.id, ts.generated_at, ts.id;
+
+SELECT wt.*
+FROM crypto_ai.wallet_trade wt
+JOIN crypto_ai.paper_position p ON p.signal_id = wt.signal_id
+WHERE p.id IN (104, 101, 96, 91, 82, 78)
+  AND wt.side = 'BUY'
+ORDER BY p.id, wt.executed_at, wt.id;
+
+SELECT wmp.*
+FROM crypto_ai.wallet_managed_position wmp
+JOIN crypto_ai.paper_position p ON p.signal_id = wmp.entry_signal_id
+WHERE p.id IN (104, 101, 96, 91, 82, 78)
+ORDER BY p.id, wmp.id;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I5-003  
+Purpose: After DBQ-CODEX-I5-002 supplies entry signal times, retrieve only the pre-entry multi-timeframe context, opportunity state, and canonical price-event evidence needed to reconstruct each entry without look-ahead.  
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    entry_signal.id AS entry_signal_id,
+    context_signal.*
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.trade_signal entry_signal ON entry_signal.id = p.signal_id
+JOIN crypto_ai.trade_signal context_signal
+  ON context_signal.symbol = entry_signal.symbol
+ AND context_signal.generated_at <= entry_signal.generated_at
+ AND (
+        (context_signal.interval = '1m'
+         AND context_signal.generated_at >= entry_signal.generated_at - INTERVAL 30 MINUTE)
+     OR (context_signal.interval = '5m'
+         AND context_signal.generated_at >= entry_signal.generated_at - INTERVAL 20 MINUTE)
+     OR (context_signal.interval = '1h'
+         AND context_signal.generated_at >= entry_signal.generated_at - INTERVAL 3 HOUR)
+ )
+WHERE p.id IN (104, 101, 96, 91, 82, 78)
+ORDER BY p.id, context_signal.interval, context_signal.generated_at, context_signal.id;
+
+SELECT
+    p.id AS paper_position_id,
+    eo.*
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.trade_signal entry_signal ON entry_signal.id = p.signal_id
+JOIN crypto_ai.execution_opportunity eo
+  ON eo.symbol = entry_signal.symbol
+ AND eo.started_at <= entry_signal.generated_at
+WHERE p.id IN (104, 101, 96, 91, 82, 78)
+ORDER BY p.id, eo.started_at, eo.id;
+
+SELECT
+    p.id AS paper_position_id,
+    wt.id AS wallet_trade_id,
+    mpe.*
+FROM crypto_ai.paper_position p
+JOIN crypto_ai.wallet_trade wt
+  ON wt.signal_id = p.signal_id
+ AND wt.side = 'BUY'
+ AND wt.status = 'EXECUTED'
+JOIN crypto_ai.market_price_event mpe
+  ON mpe.symbol = wt.symbol
+ AND mpe.observed_at BETWEEN wt.execution_price_observed_at - INTERVAL 1 SECOND
+                         AND wt.execution_price_observed_at + INTERVAL 1 SECOND
+WHERE p.id IN (104, 101, 96, 91, 82, 78)
+ORDER BY p.id, wt.executed_at, mpe.observed_at, mpe.id;
+```
+### END_DB_REQUEST

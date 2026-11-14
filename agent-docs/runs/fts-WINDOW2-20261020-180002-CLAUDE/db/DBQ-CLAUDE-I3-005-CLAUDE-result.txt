@@ -1,0 +1,13 @@
+Field	Type	Null	Key	Default	Extra
+id	bigint	NO	PRI	NULL	auto_increment
+symbol	varchar(30)	NO	MUL	NULL	
+interval_code	varchar(10)	NO		NULL	
+candle_open_time	timestamp(6)	NO		NULL	
+observed_at	timestamp(6)	NO		NULL	
+price	decimal(30,12)	NO		NULL	
+attempts	int	NO		NULL	
+outcome	varchar(20)	NO		NULL	
+error_message	mediumtext	YES		NULL	
+recorded_at	timestamp(6)	NO		CURRENT_TIMESTAMP(6)	DEFAULT_GENERATED
+Tables_in_crypto_ai (%reconcil%)
+local_reconciliation_audit

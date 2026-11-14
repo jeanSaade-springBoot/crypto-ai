@@ -1,0 +1,31 @@
+You are running an UNATTENDED READ-ONLY simulation of the daily failed-trade study.
+No application/config/DB/git/deploy changes. Do not implement fixes.
+Do not read the other agent's private folder, LIVE_TEAM_STATUS.md, or LIVE_EVENTS.log.
+Do not request interactive confirmation. Internet research is allowed. Do not upload private data.
+FROZEN INPUT (not a finding): You MUST analyze exactly these paper_position.id values and MUST NOT substitute others:
+96, 91, 82, 78, 71, 72
+STUDY WINDOW: WINDOW1
+SNAPSHOT TIME UTC: 2026-10-10 20:51:50
+SNAPSHOT TIME KSA: 2026-10-11 00:51:47
+INTENDED WINDOW CLOCK KSA: 2026-10-11 10:00:00
+SNAPSHOT NOTE: TEST MODE: snapshot is launcher start, not the scheduled 2026-10-11 10:00:00 KSA clock.
+AUTHORITATIVE ENTITY: crypto_ai.paper_position
+SELECTION: status=CLOSED AND closed_at IS NOT NULL AND realized_pnl < 0 ORDER BY closed_at DESC LIMIT 6
+EXCLUDED: OPEN/incomplete rows; NULL closed_at; non-negative realized_pnl; wallet_position_test (Replay)
+
+SELECTED TRADE IDS:
+1. 96
+2. 91
+3. 82
+4. 78
+5. 71
+6. 72
+
+PROOF QUERIES: DBQ-FTS-001 .. DBQ-FTS-005
+You are CLAUDE. Reply with exactly these headings and nothing that requires a human:
+SIMULATION_STATUS: STARTED
+AUTH: whether Claude CLI authentication appears usable
+WEB: one public source (title, URL) about losing-trade / post-trade analysis, labeled EXTERNAL RESEARCH
+FROZEN_IDS: repeat the six IDs
+DB: state that you did not receive a database password
+VERDICT: SIMULATION_OK

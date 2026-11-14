@@ -1,0 +1,242 @@
+# FTS WINDOW2: Claude, Iteration 6 of 8 (root cause and research, self-review only)
+
+**Iteration headline:**
+- **Fees are the biggest cost in the system.** At an assumed 0.10% per side, the 193 closed positions go from −4.17 USDT gross to −16.56. That is about 12.4 USDT of fees on top of the gross loss. The frozen six go from −0.273 to −0.533.
+- **The frozen six do not show where the gross losses come from.** Most of the gross loss sits in the R:R ≥ 1.5 group, where 37 of 63 positions were STOPPED. The charter only selects `status=CLOSED`, so STOPPED positions are left out by design.
+- **Entry Quality (EQ) does not predict results.** Higher EQ groups did worse: the 50–54 group is the only one with a positive gross P&L, and the 85+ group lost money.
+- **Each frozen trade has one main root cause** (table in F6-6). Two are logic defects (172, 182). One has a parity defect plus a loss caused by TP extension and a price gap (143). Three are valid low-edge trades whose geometry has negative expected value (137, 158, 162). 162 also has a scope gap in a guard.
+- **All six EQ scores now match the code exactly** (F6-3). 182 was admitted by less than one price tick.
+
+I changed nothing: no code, config, DB writes, git or deploy. Plan mode is on, and this session has no Write or ExitPlanMode tool, so this message is the iteration output. I did not open `private/CODEX/`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or Codex memory.
+
+**Inputs this iteration:**
+- My I2, I4 and I5 outputs.
+- New results I5-001, I5-002, I5-003 and I5-004.
+- Code: `ExecutionIntelligenceService.java:895-1029`, `MarketPriceEventService`, `KlineTransactionCoordinator`.
+- Two web searches.
+- **Still missing:** results for I3-005, I3-006, I3-007 and I4-003.
+
+**Labels:** **[PE]** project evidence · **[ER]** external research · **[AI]** agent inference. Times are **KSA (UTC)**. The wrapper displays DB values in KSA (F2-0); UTC is the displayed value minus 3 h.
+
+---
+
+## FINDINGS
+
+### F6-1 [PE DB I5-004, arithmetic AI]: fees, not R:R, are the largest system-wide cost
+
+Results by planned R:R group, across 193 closed positions (CLOSED and STOPPED):
+
+| R:R group | n | Losers | STOPPED | Gross P&L | P&L after 0.1%/side | Avg TP % | Avg SL % | TP below 0.2% |
+|---|---|---|---|---|---|---|---|---|
+| < 0.5 | 26 | 10 (38%) | 2 | −0.015 | −1.165 | 0.184 | 0.500 | 15 |
+| 0.5–1 | 43 | 18 (42%) | 10 | −0.106 | −2.076 | 0.355 | 0.500 | 0 |
+| 1–1.5 | 61 | 31 (51%) | 26 | +0.079 | −3.729 | 0.615 | 0.500 | 0 |
+| ≥ 1.5 | 63 | 42 (67%) | 37 | **−4.130** | −9.587 | 1.005 | 0.670 | 0 |
+
+- **[AI] Correction to F5-1/F5-2.** Low-R:R trades are roughly break-even gross. They win often but by small amounts, and fees make them negative.
+- The gross loss comes from the R:R ≥ 1.5 group:
+  - It has the most stop-outs (59% STOPPED).
+  - It is the only group with an unfloored average stop (0.67%).
+- So low-ATR geometry explains why the frozen six have **no edge after fees**, but it does **not** explain the system's gross P&L.
+- **Fee drag:** about 12.39 USDT against a gross loss of −4.17 USDT, roughly 3× the gross loss. This uses an assumed rate [ER], not a measured one. The paper engine charges `fee_usdt=0` (F5-2).
+
+### F6-2 [PE DB I5-004]: Entry Quality is inversely related to outcome
+
+| EQ group | n | Losers | STOPPED | Gross P&L | After fee |
+|---|---|---|---|---|---|
+| 50–54 | 61 | 25 (41%) | 14 | **+0.687** | −1.894 |
+| 55–69 | 57 | 28 (49%) | 21 | −1.284 | −4.333 |
+| 70–84 | 47 | 30 (64%) | 24 | −2.460 | −6.548 |
+| 85+ | 28 | 18 (64%) | 16 | −1.114 | −3.783 |
+
+- **[AI]** This is confounded. The 50–54 group is mostly R:R < 1 trades: the −30 R:R penalty pushes them there, and they have small targets and few stop-outs.
+- Even so, EQ does not rank trades by expected value. That matters because EQ is the only quality barrier, with a cutoff of 50 (F5-2).
+- Per-trade gross vs. after fee (P&L in USDT):
+
+| ID | Gross P&L | After fee |
+|---|---|---|
+| 137 | −0.0750 | −0.1249 |
+| 143 | −0.0372 | −0.0872 |
+| 158 | −0.0319 | −0.0819 |
+| 162 | −0.0517 | −0.0816 |
+| 172 | −0.0455 | −0.0955 |
+| 182 | −0.0318 | −0.0618 |
+
+### F6-3 [PE code + DB I5-002/I5-003]: all six EQ scores reproduce exactly from code (resolves U5-1 and U5-2)
+
+**How the score is built (`ExecutionIntelligenceService.java`):**
+- Reference price = the rolling 30-minute low, replaced by the opportunity anchor or best price if that is lower (`:900-926`).
+- Penalties:
+  - Expansion above the reference: −10 for over 1.5% (`:978-981`).
+  - ATR extension: −10 above 2.5 ATR, −20 above 4, −30 above 6 (`:983-985`).
+  - Opportunity age: −10 above 40 minutes (`:987-989`).
+  - R:R below 1: −30 (`:991`).
+  - Rejection zone: −12, but it cannot pull a score that was at or above 50 below 50 (`:995-1003`).
+
+| ID | Reference / ATR extension | Breakdown | Result |
+|---|---|---|---|
+| 137 | 3.992 → 1.63 ATR (0); rejected high 4.005, 0.15% away | 100 − 30 − 12 | **58** ✔ |
+| 143 (1m ATR) | 3.972 → 5.6 ATR (−20); expansion 1.54% (−10) | 100 − 10 − 20 | **70** persisted ✔ |
+| 143 (5m ATR 0.00907) | 6.73 ATR (−30) | 100 − 10 − 30 | **60**, the value in the message (I5-003) ✔ |
+| 158 | 1.4084 → 3.1 ATR (−10); opportunity 53 min old (−10) | 100 − 30 − 10 − 10 | **50** ✔ (probable: the XRP opportunity rows were cut off by LIMIT) |
+| 162 | 0.08672 → 5.19 ATR (−20) | 100 − 30 − 20 | **50** ✔ |
+| 172 | 5.47e-6 → 2.94 ATR (−10), about 2 ticks | 100 − 30 − 10 | **60** ✔ |
+| 182 | 0.1875 → **5.95 ATR** (−20) | 100 − 30 − 20 | **50** ✔ |
+
+- **F5-4 is confirmed exactly:** in 143, the 5m ATR gave a *harsher* EQ (60) than the 1m ATR (70). That contradicts the premise in the code comment.
+- **[AI] 182 was admitted by less than one tick.** A reference one tick lower (0.1874) gives 6.6 ATR, a −30 penalty and EQ 40, which is below the cutoff, so the entry would have been blocked. Three entries sat exactly at 50 (158, 162, 182).
+
+### F6-4 [PE DB I5-001]: stored ATR values confirm F5-1 (resolves U5-4)
+
+**Stored ATR % at signal:**
+
+| ID | ATR % |
+|---|---|
+| 137 | 0.107 |
+| 143 | 0.270 |
+| 158 | 0.0545 |
+| 162 | 0.073 |
+| 172 | 0.124 |
+| 182 | 0.080 |
+
+- All are `volatility_level=LOW`.
+
+**New: three entries were flagged overextended by the risk service at signal time** (`atr_overextended=1`):
+
+| ID | Signal | Distance from SMA20 | Plan |
+|---|---|---|---|
+| 143 | 159408 | 4.35 ATR | WAIT_FOR_RETRACEMENT 0%, retrace to 4.0118, `immediate_entry_allowed=0` |
+| 162 | 167668 | 2.82 ATR | REDUCED_POSITION 60% |
+| 182 | 176710 | 2.15 ATR | REDUCED_POSITION 60% |
+
+- The 5m authority for 182 (176655) was also overextended.
+- **158 lost the better geometry.** Its 5m authority 165415 had a TP of 1.41654 (+0.40%, R:R 0.80). The position used the 1m 165412 plan instead: TP 1.41321 (+0.17%, R:R 0.33). **[AI]** The wake-up route adopts the reused 1m signal's risk plan. Code confirmation is pending (U6-3).
+
+### F6-5 [PE DB I5-002]: four of six entries were 1m BUY flips right after a run of SELL signals
+
+The 1m LIVE signals before each entry:
+- **182:** STRONG_SELL in 17 consecutive minutes (09:38–09:54), then NEUTRAL at 09:55, BUY at 09:56 and BUY at 09:57 (entry). Opportunity 40290 started on the NEUTRAL signal at 0.1879 and executed 2 minutes later at 0.1884.
+- **137:** STRONG_SELL in 10 of 11 minutes (20:42–20:52), then WATCH at 20:54 and STRONG_BUY at 20:55 (entry), in RANGE.
+- **172:** a mix of STRONG_SELL and SELL from 06:07 to 06:21, then NEUTRAL, then BUY at 06:36. Price stayed at 5.47–5.49e-6 throughout.
+- **143:** STRONG_SELL from 22:26 to 22:34, then BUY at 22:35, then a +1.4% burst.
+- **[AI]** The 1m classifier labels micro-reversals after sell runs as BUY or STRONG_BUY. In LOW-ATR conditions, this produces entries with no directional edge. I treat this as a strategy property, not a defect. Whether it loses system-wide needs I6-002.
+
+### F6-6 [AI, built from PE]: root cause for each trade
+
+Loss % is exit against entry.
+
+| ID | Exit, KSA (UTC) | Loss % | Main root cause | Class | Contributing factors |
+|---|---|---|---|---|---|
+| 137 | 10-11 21:00:08.935 (18:00:08.935) | −0.30% | No edge: a 1m flip after a sell run, under a rejection zone, target +0.32% | **Valid losing trade** (low-edge geometry) | 5m SELL exit fired correctly |
+| 143 | 10-11 22:43:35.046 (19:43:35.046) | −0.15% | After price passed the original TP (4.0647), the TP was extended instead of taking profit. The break-even floor (4.035) then gapped to 4.027 after an 8 s gap between ticks. | **Design property** (TP extension plus a market-at-next-tick floor) | The entry exists only because of the 2 ms boundary race (F4-2/F4-3 defect); it entered against its own 1m 0% plan |
+| 158 | 10-12 03:30:04.217 (00:30:04.217) | −0.13% | Target +0.17%, below fees; negative expected value by construction | **Valid losing trade** (geometry) | Route set by the boundary race (defect); the wake-up dropped the 5m's better TP (F6-4) |
+| 162 | 10-12 04:26:06 (01:26:06) | −0.34% | A LATE_ENTRY at the close of the breakout candle, admitted as BALANCED_EARLY | **Policy-scope gap** (F5-5) | Overextended flag set; EQ exactly 50 |
+| 172 | 10-12 07:15:43.492 (04:15:43.492) | −0.18% (−1 tick) | Authority came from a 5m BUY whose own entry was blocked | **Logic defect** (label-only authority, F4-4) | ATR smaller than one tick (F5-6); 37.6 s wait for the exit tick |
+| 182 | 10-12 10:05:18.504 (07:05:18.504) | −0.21% | A STRONG_SELL 5m, neutralised to NEUTRAL, bypassed 5M_BEARISH_VETO; it bought the top after 17 minutes of STRONG_SELL | **Logic defect** (F4-4) | EQ 50, under one tick from being blocked (F6-3); overextended |
+
+- **Ruled out for all six [PE]:**
+  - Stale data: inputs were LIVE and data-quality-valid, with BTC context 1–9 s old (F2-2).
+  - A protection gap (F4-5).
+  - Incorrect stop or TP mechanics (F4-7).
+  - Ingest-lag stalls at entry (F5-11).
+- **None hit the 0.5% stop.** Every loss is a signal-driven or floor exit of −0.13% to −0.34%.
+
+### F6-7 [PE + AI]: the frozen set is shaped by how it was selected
+
+- The charter selects `status=CLOSED`. Status `STOPPED` is a separate value, so all 75 stop-loss positions (of 193) are excluded.
+- The six frozen losses are therefore "scratch" exits, averaging −0.046 USDT.
+- **[AI]** The system's main gross loss (the STOPPED-heavy R:R ≥ 1.5 group) is not covered by this study. I record this as a study-design observation for the Coordinator, not a change of trades. I6-001 measures it.
+
+### F6-8 [ER]: external research
+
+- **Fees.**
+  - Third-party guides put Binance spot regular-user fees at 0.10% maker and 0.10% taker, or 0.075% with the BNB discount, so about 0.15–0.20% per round trip. I still have not obtained Binance's own fee page, so the rate remains **[ER, unverified tier]**.
+  - The paper engine's 0 fee overstates results (F6-1).
+- **Kline update rate.**
+  - Binance's spot WebSocket docs give the kline stream an update speed of 1000 ms for 1s klines and **2000 ms for other intervals**. The same page also says "pushes every second", which conflicts.
+  - **[AI]** Gaps of 8 s (143), 12.7 s (182) and 37.6 s (172) between ticks are far beyond 2 s. In a bounded search I found no dedup of unchanged prices in `MarketPriceEventService` or `KlineTransactionCoordinator`. Only exact-timestamp duplicates are marked NON_CANONICAL (`:66-71`).
+  - That points to a Binance-side cause (no kline event while there are no trades) or to a missed upstream path. It is **not proven** (U6-1).
+  - Because the floor and stop fill at the next tick, gaps like these turn a break-even floor into a realised loss (143).
+
+---
+
+## SELF-REVIEW OF EARLIER CLAIMS
+
+| Earlier claim | Status |
+|---|---|
+| F5-1/F5-2 "low-ATR geometry is the shared root cause" | **Narrowed:** it is the root cause of *no edge after fees*. It is not the cause of system-wide gross losses (F6-1). |
+| F5-3: 158 ambiguous; 143 reference range | **Resolved:** all six reproduce exactly (F6-3); 158 is probable. |
+| F5-4: 143 EQ 60 vs. 70 | **Confirmed exactly:** the 5m ATR gave 60, the 1m ATR gave 70. |
+| F4-4: label-only authority as the cause of 172 and 182 | **Kept** as the main root cause. 182's admission margin was under one tick. |
+| F4-6 / F2-8: 143 "protection behaved as coded" | **Kept.** The loss is attributed to the TP-extension policy plus fills at the next tick after a gap. |
+| U5-1, U5-2, U5-4 | **Resolved.** |
+
+---
+
+## UNKNOWNS
+
+| ID | Unknown | Resolution |
+|---|---|---|
+| U6-1 | Why ticks were absent for 8–38 s: Binance inactivity or an upstream gap. | Coordinator log extraction (`.gz`), plus DB trade counts per candle (I2-002 showed 0–2 trades in some minutes, which suggests inactivity) |
+| U6-2 | The gross P&L split between STOPPED and CLOSED, and the loss mechanism in the R:R ≥ 1.5 group. | I6-001 |
+| U6-3 | Whether the wake-up route always takes the 1m plan instead of the 5m authority's plan. | Code trace in Iteration 7 |
+| U6-4 | Whether 1m BUY flips after sell runs lose system-wide. | I6-002 |
+| U6-5 | How often TP extension turns a passed TP into a loss. | I6-003 |
+| U3-1/4/5, U4-3, U4-5, U2-9, U5-5 | Still open. I3-005/006/007 and I4-003 have no results. Replay has not been run. | Reissue |
+
+---
+
+## DB REQUESTS
+
+Time literals are KSA (the session is +03:00). All requests are read-only and bounded.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: Split the system-wide gross loss by status, by stop floored or not, and by ATR% group. This sizes the STOPPED class the charter excluded (F6-1, F6-7, U6-2).
+SQL:
+SELECT p.status, CASE WHEN ROUND((s.latest_price - s.stop_loss)/s.latest_price*100,2) <= 0.51 THEN 'floored' ELSE 'atr' END AS stop_kind, CASE WHEN s.atr_percent < 0.10 THEN 'a_lt0.10' WHEN s.atr_percent < 0.25 THEN 'b_0.10-0.25' WHEN s.atr_percent < 0.50 THEN 'c_0.25-0.50' ELSE 'd_ge0.50' END AS atr_bucket, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losers, ROUND(SUM(p.realized_pnl),4) AS pnl_gross, ROUND(SUM(p.realized_pnl - 0.001*p.quantity*(p.entry_price + p.exit_price)),4) AS pnl_after_fee, ROUND(AVG((p.exit_price - p.entry_price)/p.entry_price*100),3) AS avg_move_pct FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id WHERE p.closed_at IS NOT NULL GROUP BY p.status, stop_kind, atr_bucket ORDER BY p.status, stop_kind, atr_bucket LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: Test whether entries that follow a run of 1m SELL signals lose system-wide (F6-5, U6-4). The count uses 1m LIVE SELL/STRONG_SELL signals in the 15 minutes before the entry signal.
+SQL:
+SELECT CASE WHEN x.sells_15m >= 10 THEN 'a_ge10' WHEN x.sells_15m >= 5 THEN 'b_5-9' WHEN x.sells_15m >= 1 THEN 'c_1-4' ELSE 'd_0' END AS sell_run, COUNT(*) AS n, SUM(x.realized_pnl < 0) AS losers, SUM(x.status='STOPPED') AS stopped, ROUND(SUM(x.realized_pnl),4) AS pnl_gross FROM (SELECT p.id, p.status, p.realized_pnl, (SELECT COUNT(*) FROM crypto_ai.trade_signal q WHERE q.symbol = s.symbol AND q.interval_code='1m' AND q.signal_mode='LIVE' AND q.decision IN ('SELL','STRONG_SELL') AND q.generated_at >= DATE_SUB(s.generated_at, INTERVAL 15 MINUTE) AND q.generated_at < s.generated_at) AS sells_15m FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id WHERE p.closed_at IS NOT NULL) x GROUP BY sell_run ORDER BY sell_run;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: Find the TP-extension columns, then count positions whose highest price passed the original signal TP but which closed at a loss (U6-5, 143 mechanism).
+SQL:
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME IN ('paper_position','wallet_managed_position','production_exit_audit') AND (COLUMN_NAME LIKE '%take_profit%' OR COLUMN_NAME LIKE '%extension%' OR COLUMN_NAME LIKE '%highest%' OR COLUMN_NAME LIKE '%floor%' OR COLUMN_NAME LIKE '%reason%') ORDER BY TABLE_NAME, COLUMN_NAME;
+SELECT p.status, COUNT(*) AS n, SUM(p.realized_pnl < 0) AS losers, ROUND(SUM(p.realized_pnl),4) AS pnl_gross FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id WHERE p.closed_at IS NOT NULL AND p.highest_price >= s.take_profit GROUP BY p.status;
+### END_DB_REQUEST
+
+**Reissue requests:** DBQ-CLAUDE-I3-005, I3-006, I3-007 and I4-003 still have no result files. Please run them unchanged, with the SQL as in the Iteration 3 and Iteration 4 outputs.
+
+---
+
+## STATUS AFTER ITERATION 6
+
+**Confirmed defects (unchanged):**
+- The boundary lookup race and Replay-parity divergence (F4-2/F4-3), which shaped 143 and 158.
+- Label-only 5m authority (F4-4), which is the main root cause of 172 and 182.
+
+**Design root causes [PE + AI]:**
+- No fee model, and fee drag is about 3× the gross loss.
+- Low-ATR stop floor with a 3× ATR target, so these trades have no edge after fees.
+- EQ does not predict outcomes, yet it is the only quality cutoff.
+- TP extension combined with fills at the next tick (143).
+- 1m BUY flips after sell runs (needs I6-002).
+
+**Valid losing trades:** 137 and 158; 162 also involves the policy-scope gap.
+
+**Next, Iteration 7:** correction candidates and regression checks per root cause. They use I6-001 to I6-003, a code trace of the wake-up plan (U6-3), and a Replay feasibility check.
+
+Sources:
+- [WebSocket Streams for Binance (spot)](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)
+- [WebSocket Streams for Binance SPOT Testnet](https://developers.binance.com/docs/binance-spot-api-docs/testnet/web-socket-streams)
+- [Crypto Trading: Binance Fees Explained (Unger Academy)](https://ungeracademy.com/?p=6767)
+- [Binance Trading Fees Explained (CryptoPotato)](https://cryptopotato.com/binance-fees/)
+- [Binance Exchange: How it Works, Fees, Trading, Risks (Analytics Insight)](https://www.analyticsinsight.net/cryptocurrency-analytics-insight/binance-exchange-how-it-works-fees-trading-risks)
+- [Binance support article 360033544231 (futures fees; not used for the spot rate)](https://www.binance.com/es/support/articles/360033544231)

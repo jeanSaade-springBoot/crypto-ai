@@ -1,0 +1,2 @@
+TABLE_NAME	COLUMN_NAME	DATA_TYPE
+wallet_trade	fee_usdt	decimal

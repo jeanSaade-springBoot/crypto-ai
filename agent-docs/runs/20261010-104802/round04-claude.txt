@@ -1,0 +1,254 @@
+My verdict stays **INSUFFICIENT_EVIDENCE**, because the question is still the single word "Perform".
+
+This round:
+- I checked Codex's round-3 claims in the code. Most hold; one is narrower than stated.
+- I re-tested my own round-3 claims. One was wrong and one was too broad; both are corrected below.
+- I found four new differences between Replay and Production, and one configuration conflict.
+
+Everything was read-only. I did not read `round04-codex.txt` (Codex's answer for this round). This session has no Write, ExitPlanMode or AskUserQuestion tool, so no plan file was written.
+
+Labels: **[PE]** project evidence · **[ER]** external research · **[AI]** agent inference.
+
+## FINDINGS
+
+### A. Codex's round-3 claims
+
+1. **"Perform" is undefined: agreed [PE].**
+
+2. **The FIX-154 status records conflict: agreed, and the conflict is wider [PE].**
+   - `codex-docs/ARCHITECTURE.md:181-203` says FIX-154 is pending. Lines 255-274 describe it as implemented. `INVESTIGATION_LOG.md:69` refers to "after FIX-154 deployment".
+   - `CHANGELOG_AI.md:186` calls the policy "approved" but names no approver, and `DECISIONS.md` is empty.
+   - My own `claude-docs/ARCHITECTURE.md:19` still says "pending". It is out of date (section D).
+
+3. **The FIX-154 code contradicts `AGENTS.md`: all three of Codex's points verified [PE].** I have three additions.
+   - **5m data quality is never checked.**
+     - The hard-confirmation marker looks only at the 1h signal (`HigherTimeframeBuyAssessmentService.java:23-25`).
+     - The soft release only needs a non-bearish 5m (`:33-35`).
+     - `AGENTS.md` requires a quality-valid 5m in both cases.
+   - **The "quality" flag is nearly always true [PE + AI].**
+     - It only checks that the price is above zero and that EMA20, EMA50 and EMA200 exist (`MarketContextService.java:74-75`).
+     - An EMA is missing only when there are fewer prices than its period (`EmaCalculator.java:24-26`). No indicator snapshot is built from fewer than 210 candles (`TechnicalIndicatorService.java:38, 202-211`).
+     - So every new signal is marked valid, and a missing value only means "created before migration V107".
+     - In practice, FIX-154's trust levels separate old rows from new rows, not good data from bad. The real candle-quality check is a different service (B1).
+   - **Replay can never reach the "unknown quality" veto [PE].**
+     - Replay regenerates every 1h signal, so its quality flag is always true.
+     - The tests state this directly. The same bearish 1h row is a veto in Production when its stored flag is empty (`HigherTimeframeBuyAssessmentServiceTest.java:67-72`). In Replay it is allowed, capped at 25% (`:74-81`).
+     - [AI] This only matters until the first 1h signal created after V107: normally within an hour, at most 3 hours (`TradeExecutionValidationService.java:43`).
+
+4. **Replay misattributes unclosed candles: agreed, with corrections.**
+   - **Both Replay modes have the problem [PE].**
+     - Codex said dataset mode excludes unclosed candles. That is true only of the dataset's contents.
+     - The candle list that drives evaluation comes from the same unfiltered loader in both modes (`RegressionTestWorker.java:129-131, 550-556`).
+     - The dataset lookup also returns the newest closed candle at or before the requested time (`ReplayDataset.java:32-46`; `TechnicalIndicatorService.java:134-145`).
+     - The UI offers both modes as separate buttons (`proven-analyzed-trades.html:77-78`), so which mode is the default matters only for direct API calls.
+   - **It has happened at least once [PE + AI].**
+     - `md/FIX-11O.md:7` records a PEPEUSDT Replay for 2026-08-30 13:00–20:30 UTC. Candle coverage was 445/446, yet 446/446 1m signals were generated.
+     - The coverage check counts a candle only if it is the newest closed candle at its own open time (`RegressionTestWorker.java:514-533`). That logic is unchanged in `validation/FIX-153.patch:1605-1616`.
+     - So one requested candle was not closed, and its "new" signal was really the previous candle evaluated again.
+   - **The Replay pass rule now depends on that misattributed signal [PE + AI].**
+     - FIX-11O made the pass check compare generated signals with requested candles, and requested candles include unclosed ones (`:132-134, 311-313`).
+     - Simply skipping unclosed candles would therefore turn such runs into FAILED, unless the candle count is changed at the same time.
+   - **The misattributed signal looks fresh [PE].**
+     - Its generation time is the unclosed candle's close (`AnalysisService.java:190, 550`), but its candle is the previous one (`:409`; `TechnicalIndicatorService.java:321`).
+     - Freshness is checked on generation time (`TradeExecutionValidationService.java:381-386`), so it passes.
+     - A check based on candle close time, which is what `AGENTS.md` requires, would catch it.
+
+5. **Production analyses a candle only when it actually changes from open to closed: agreed, but understated [PE].** Production also checks candle quality before analysis, and Replay has no such check (B1). That gap is much larger than the misattribution.
+
+6. **The confidence threshold of 70 is not validated: agreed.** B3 adds a concrete flaw.
+
+7. **FIX-122: agreed.**
+
+8. **Codex's open V107 checksum question is answered in Codex's own changelog [PE].** `CHANGELOG_AI.md:334-343` records that the original V107 (checksum `-501147284`) was restored and the later columns were moved to V109. Proof still requires a read-only query of the migration history table.
+
+### B. New findings
+
+**B1. Replay skips Production's candle data-quality check [PE + AI].**
+- In Production, the live analysis worker refuses to analyse if the latest 210 closed candles contain any gap (`CandleClosedAnalysisWorker.java:117-126`; `CandleDataQualityService.java:24-79`; `application.yml:338-341`, where the maximum number of missing candles is 0).
+- That worker is the only caller of this check; no Replay code calls it.
+- Codex's own investigation log records two real cases:
+  - 2026-10-09: no 1m or 5m signals for any of the 21 symbols from 04:34Z until a repair at about 07:28Z (`codex-docs/INVESTIGATION_LOG.md:10-21`);
+  - 2026-10-10: 15 symbols blocked for about 71 minutes (`:69-84`).
+- A Replay of either window would produce signals, and possibly simulated trades, for every candle. Production produced none.
+- Replay also cannot tell repaired or backfilled candles from candles closed by the live stream:
+  - The candle mapper does not read the `ingestion_source` column (`CandleRepository.java:23-31`).
+  - Replay never reads `candle_analysis_outcome`, where Production records these candles as `SKIPPED_NOT_LIVE` (`LocalCandleReconciliationService.java:189`).
+  - So the changelog statement that recovery "has no Replay authority" (`CHANGELOG_AI.md:330-331`) is misleading: Replay analyses recovered candles like any other.
+- These runs are still labelled `PRODUCTION_PARITY` (`ShadowProductionReplayService.java:97-99`).
+- [AI] The Replay suggested for ETH trade 59 (`INVESTIGATION_LOG.md:31`) would show what complete data would have produced. It would not show what Production could have done.
+
+**B2. Replay can never apply the BUY_CONTINUATION guard [PE].**
+- BUY_CONTINUATION blocks a new entry when the previous bullish 1m signal already led to an executed BUY.
+- Replay signals are never saved to the database, so they have no ID (`TradeSignal.java:14-15`; `AnalysisService.java:178-196`).
+- The simulated execution marks entries as used by these empty IDs (`ShadowProductionReplayService.java:340, 362`). The Replay scope ignores an empty ID (`ExecutionReplayScope.java:85-92`), and the policy treats it as "not used" (`EntryConsumptionPolicy.java:21`).
+- The guard fires only for a used entry (`TradeExecutionValidationService.java:67-78`). The setting is on by default (migration V39; `WalletService.java:238`).
+- The unit tests only use made-up IDs (`ExecutionReplayScopeModeTest.java:57-66`; `EntryConsumptionPolicyTest.java:52-53`).
+- [AI] Effect: after an executed entry and a quick exit, Production blocks re-entry on the next bullish 1m signal within 10 minutes (`:41`). Replay does not.
+- **Correction:** my round-3 statement that "BUY_CONTINUATION likely blocks the duplicate" was wrong. In Replay it can never block.
+
+**B3. FIX-154's threshold of 70 reads a capped confidence value [PE + AI].**
+- The stored confidence is the *effective* value (`AnalysisService.java:497`; `FinalDecisionResult.java:23-25`). It is cut to at most 49 whenever entry is blocked (`FinalDecisionService.java:155-159`).
+- Entry can be blocked for reasons unrelated to how bearish the market is:
+  - the ATR risk adjustment (`:71-79`);
+  - the multi-timeframe, BTC context, derivatives or order-book checks (`:122-148`);
+  - a no-trade strategy (`:45`).
+- [AI] So a strong 1h STRONG_SELL produced while, say, BTC context was stale scores at most 49. FIX-154 then treats it as a soft conflict and allows a BUY at 25%.
+- The hard/soft split therefore mixes bearish strength with unrelated blocking.
+- The 203 versus 192 split of past rows used to justify 70 (`CHANGELOG_AI.md:192-193`) has further weaknesses:
+  - it is measured on the same data it justifies;
+  - it carries no trade outcomes;
+  - it treats correlated hourly rows as independent;
+  - it ignores fees and slippage (paper trading has zero fees);
+  - part of it may be made of capped values.
+- The uncapped confidence is also stored (`AnalysisService.java:500`). Which one to use is a design decision for you.
+
+**B4. Replay's output table was missing columns from V97 until V109 [PE + AI].**
+- Replay copies every mapped signal field into `trade_signal_test` (`RegressionTestWorker.java:741-771`).
+- Two of those fields, BTC context close time (added in V97) and signal mode (V106), are mapped in the code (`TradeSignal.java:110-112, 409-411`). `trade_signal_test` only received them in V109 (`V109…sql:4-9`). Before that, the table was last changed in V72.
+- [AI] On any database between V97 and V108, every in-window Replay signal would fail to save and count as an error, so the run would be marked FAILED.
+- Simulated trades would still run, because signals are queued before the save (`:622`).
+- Any Replay evidence claimed for FIX-141 to FIX-153 on such a database needs checking.
+
+**B5. Automatic candle reconciliation is on, although its documented release conditions are not met [PE].**
+- `application.yml:57` sets reconciliation to enabled.
+- `codex-docs/ARCHITECTURE.md:224-231` says it must stay off until listed conditions pass, including Replay parity and real-MySQL tests. The changelog entry that enabled it says the real-MySQL tests are still pending (`CHANGELOG_AI.md:317-332`).
+- The log shows the new missed-close detector running on 2026-10-10 between 07:24 and 08:28 (10 lines in `logs/crypto-ai-trader.log`, from 14742 to 70830).
+- That detector runs only when the trader ingests Binance data itself (`LocalClosedCandleDetector.java:36`). So the runtime that wrote this log uses trader-owned ingestion, which `AGENTS.md` still describes as pending.
+- I could not establish whether that runtime is Production.
+
+### C. My round-3 claims, re-tested
+
+- **A REST candle import can swallow a live candle close: this stands, and is stronger [PE].**
+  - Neither safety net picks the swallowed candle up. The detector needs a close token (`LocalClosedCandleDetector.java:50`). Reconciliation only looks at open or missing candles (`LocalCandleReconciliationService.java:129-133, 150-156`).
+  - Reconciliation records `SKIPPED_NOT_LIVE` (`:189`). It also waits a 10 s grace period plus a 2 s margin and needs evidence that the final update was lost (`:122-141, 198-207`).
+  - The config itself calls that grace period "provisional … release requires measured live-final-event grace" (`application.yml:62-64`).
+  - The import does none of these things.
+- **Startup is not exposed to the race: now supported.**
+  - [PE] The startup import is a plain ApplicationRunner (`MarketDataBootstrapService.java:26-30, 48-69`, not asynchronous). The WebSocket starts on ApplicationReadyEvent (`BinanceWebSocketManager.java:95-96`).
+  - [ER] The Spring Boot documentation says that event is sent after runners finish.
+  - [PE + AI] However, at every startup the import closes candles left open at shutdown and fills gaps without recording any outcome. It runs before reconciliation, which would have recorded one.
+- **Size of the race window [ER + AI].** Binance pushes kline updates every 2 seconds for these intervals. So each import call has roughly a 3% chance of hitting a 1m candle close. Imports run when a coin is activated (`CoinConfigurationController.java:33, 41`) or through the manual import endpoint.
+- **Narrowed: the V107/V109 risk.** A duplicate-column failure in V109 could only happen on a database that applied the interim V107 file. None is evidenced (A8).
+- **Strengthened: the local-candle section of `AGENTS.md` is contradicted** (B5).
+- **Confirmed again: the coordinator's round labels [PE].** This round's prompt again labels Codex's round-3 text "Round-1" (`round04-claude.prompt.txt:19, 29, 32`; lines 33-82 match `round03-codex.txt:1-50`).
+- **New coordinator facts [PE].**
+  - The run stops early only if both agents return APPROVED at round 5 or later (`coordinator.ps1:4, 462`). Otherwise it runs to round 12, which is up to 16 more calls of up to 1200 s each.
+  - A dual APPROVED would trigger a document review and could add a generic "convergence" entry to `AGREED_KNOWLEDGE.md` (`:505-532`). That would be the file's first entry, and it would be about "Perform".
+
+### D. My own claude-docs are out of date [PE]
+
+- `claude-docs/ARCHITECTURE.md`:
+  - line 19 says FIX-154 is pending;
+  - line 24 lists migrations only up to V106;
+  - lines 92-99 say the import runs only at startup or coin activation, and that nothing repairs candles left open.
+- `TRADING_RULES.md:59-64` lists the BUY veto order from before FIX-154.
+- I did not edit them, because this session is read-only.
+
+### E. External research
+
+- **Spring Boot reference, "Application Events and Listeners"** (https://docs.spring.io/spring-boot/reference/features/spring-application.html, undated).
+  - It says ApplicationStartedEvent is sent before runners and ApplicationReadyEvent after them.
+  - It does not cover asynchronous runners or this project's exact version.
+  - It supports the startup ordering in section C.
+- **Binance Spot API, "WebSocket Streams"** (https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams, undated).
+  - Kline updates are pushed every 1000 ms for the 1s interval and every 2000 ms for all others. The `x` field means "is this kline closed".
+  - The fetched page said nothing about whether a final closed kline is resent after a reconnect, and it was truncated. The timings are nominal, not measured.
+- Neither source says anything about trading performance.
+
+## EVIDENCE (file paths and lines)
+
+- **Replay pipeline:**
+  - `RegressionTestWorker.java:129-134, 311-313, 325-326, 340, 469-485, 509-533, 550-556, 590-622, 636-686, 741-771`
+  - `ReplayDataset.java:32-46`
+  - `TechnicalIndicatorService.java:38, 84-145, 186-211, 318-322`
+  - `ShadowProductionReplayService.java:65-69, 97-116, 340, 362`
+  - `ExecutionReplayScope.java:85-92, 106-137`
+  - `EntryConsumptionPolicy.java:20-34`
+  - `RegressionTestService.java:173-183, 204, 229-232`
+  - `RegressionTestController.java:44-51`
+  - `proven-analyzed-trades.html:77-78`
+  - `proven-analyzed-trades.js:944-945`
+  - `md/FIX-11O.md:7, 11, 18, 22-23`
+  - `validation/FIX-153.patch:1605-1616`
+- **Production admission:**
+  - `CandleClosedAnalysisWorker.java:117-166, 251-254`
+  - `CandleDataQualityService.java:24-79`
+  - `BinanceKlineService.java:89-121`
+  - `CandleRepository.java:23-31, 51-62, 99-122, 132-213`
+  - `LocalClosedCandleDetector.java:34-51, 135-139`
+  - `LocalCandleReconciliationService.java:122-207`
+  - `LocalReconciliationAuditRepository.java:51-58`
+  - `application.yml:53-64, 125, 338-341, 430-434`
+- **REST import:**
+  - `MarketDataService.java:31-56`
+  - `MarketDataBootstrapService.java:26-110`
+  - `DynamicCoinActivationService.java:18-33`
+  - `CoinConfigurationController.java:33, 41, 56-57`
+  - `MarketDataController.java:16-24`
+  - `BinanceWebSocketManager.java:95-105`
+- **FIX-154:**
+  - `HigherTimeframeBuyAssessmentService.java:13-51`
+  - `HigherTimeframeBuyAssessmentServiceTest.java:12-81`
+  - `TradeExecutionValidationService.java:41-43, 62-98, 371-386, 424-427`
+  - `OpportunityConsolidationService.java:64`
+  - `MarketContextService.java:74-75`
+  - `EmaCalculator.java:24-26`
+  - `FinalDecisionService.java:45, 54-79, 122-179`
+  - `FinalDecisionResult.java:23-25`
+  - `MarketStrategyService.java:32-82`
+  - `AnalysisService.java:178-196, 406-424, 497-501, 550`
+  - `TradeSignal.java:14-15, 73-74, 110-112, 409-411`
+  - `V39…sql:2`, `V107…sql:1-38`, `V109…sql:1-12`
+- **Project documentation:**
+  - `codex-docs/INVESTIGATION_LOG.md:8-31, 69-84`
+  - `codex-docs/CHANGELOG_AI.md:184-194, 240-291, 317-343`
+  - `codex-docs/ARCHITECTURE.md:181-203, 216-231, 255-285`
+  - `claude-docs/ARCHITECTURE.md:19, 24, 92-99, 161`
+  - `claude-docs/TRADING_RULES.md:59-64`
+- **Coordinator and run:**
+  - `coordinator.ps1:4, 155-186, 207-214, 441-444, 452-484, 505-537`
+  - `round04-claude.prompt.txt:15-19, 29, 32-82`
+  - `round03-codex.txt:1-50`
+  - `PROGRESS.log:18-21`
+- **Log (`logs/crypto-ai-trader.log`):**
+  - detector lines 14742, 21825, 21832, 35519, 42788, 45049, 48242, 60749, 60769, 70830;
+  - zero `DUPLICATE_CLOSE` lines; zero data-quality-blocked lines.
+
+## OBJECTIONS
+
+- **O1 (material; blocks any verdict).** The question is undefined. I recommend stopping the run now. Otherwise it runs to round 12, and a dual APPROVED would reach the step that writes to `AGREED_KNOWLEDGE.md`.
+- **O2 (needs your decision).**
+  - FIX-154's rules in the code differ from `AGENTS.md`.
+  - The "approved" FIX-154 policy has no recorded approver.
+  - `AGENTS.md` still calls trader-owned ingestion pending, while the config and log show it running.
+  - Reconciliation is enabled while its documented release conditions are unmet.
+- **O3 (candidates for the next specification, RPR-0.5).**
+  - (a) Replay should check that the snapshot's candle is the timeline candle, in both modes, and count only closed candles when deciding pass/fail.
+  - (b) Replay should either apply the data-quality check as of each candle's time or exclude candles that Production recorded as skipped in `candle_analysis_outcome`. Windows without that evidence must not be labelled `PRODUCTION_PARITY`.
+  - (c) Replay signals need stable run-local IDs so that BUY_CONTINUATION works.
+  - (d) FIX-154 needs your decision on raw versus effective confidence, and on what "quality" should mean.
+  - (e) The REST import should either wait for a grace period and record an outcome, or only insert candles that are missing.
+  - (f) Carried over from round 3: a frozen code baseline, a measured grace period, and the `PRODUCTION_PARITY` label on runs using the old FIX-122 rule.
+- **O4 (process).**
+  - Fix the round labels.
+  - Hide the other agent's answer for the same round.
+  - Remove the claude.ai Docs tools from Claude's session; they are still present and I did not use them.
+  - Add a stop condition for an undefined question or repeated non-approval.
+- **Corrected this round:** the BUY_CONTINUATION statement (B2) and the V107 risk (narrowed).
+
+## UNKNOWNS
+
+1. The intended question.
+2. Whether the runtime behind the log is Production, whether FIX-154 is deployed, and whether you approved the FIX-154 policy and the reconciliation switch.
+3. The V107 and V109 entries in the database's migration history.
+4. Measurable with read-only queries I did not run:
+   - how many unclosed candles each Replay run included, from `candles_1m − replayable_1m_events` in `analysis_test_result` (likewise for 5m and 1h);
+   - whether any Replay ran on a V97–V108 database, shown by generation errors above zero;
+   - how many 1h STRONG_SELL rows have a stored confidence of 49 or less while their raw confidence is 70 or more.
+5. Nothing was compiled, tested, queried or replayed.
+
+## VERDICT
+
+"Perform" names no subject and no acceptance criterion. Sections A to C are for you and the next specification; they are not an answer to "Perform". I recommend stopping this run.
+
+VERDICT: INSUFFICIENT_EVIDENCE

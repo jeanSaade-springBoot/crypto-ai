@@ -1,0 +1,190 @@
+## FINDINGS — Iteration 6: Root Cause + Research
+
+- **PROJECT EVIDENCE:** No row-level evidence for frozen positions `182, 172, 162, 158, 143, 137` is available in the isolated `db/CODEX/` folder; only the schema result exists. A root cause for any individual loss, or a shared root cause across all six, is therefore **not established**.
+- **PROJECT EVIDENCE:** Current code supports distinct exit mechanisms: mechanical TP/SL/profit-lock/normal-exit protection, and signal/position-management exits. `production_exit_audit.close_trigger` is the primary route discriminator; `exit_signal_id` alone is not sufficient. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:54) [ProductionExitAuditService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/service/ProductionExitAuditService.java:33)
+- **PROJECT EVIDENCE:** A `market_price_event` is symbol-level, not position-linked. An `APPLIED` event confirms the protection callback committed, but does not itself prove a closure; a `NON_CANONICAL`, `PENDING`, or absent event cannot be silently treated as an accepted protection observation. [MarketPriceEventService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/market/service/MarketPriceEventService.java:77)
+- **AGENT INFERENCE:** It is premature to attribute these losses to strategy quality, protection failure, stale data, execution delay, or a defect. The required evidence can distinguish these possibilities, but has not been supplied.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `paper_position` is the authoritative lifecycle entity and links entry signal, optional exit signal, prices, P&L, and UTC timestamps.
+- **PROJECT EVIDENCE:** `production_exit_audit.paper_position_id` is unique and links to the managed wallet position; `wallet_trade` can be linked by matching signal IDs or the mechanical-exit idempotency key.
+- **EXTERNAL RESEARCH:** None. External market documentation cannot establish the historical cause of these six database records; durable position, audit, execution, and price-event evidence is required.
+
+## UNKNOWNS
+
+- Symbol, UTC/KSA timeline, loss amount, entry/exit reason, and exit trigger for each frozen ID.
+- Whether each exit was an intended stop, protection-policy decision, signal-driven closure, or an unexplained mismatch.
+- Whether a relevant accepted price event crossed the then-active stop/target/profit-lock threshold.
+- Whether wallet trades, audit prices, and `paper_position.realized_pnl` reconcile.
+- Whether any shared causal pattern exists across the six losses.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Obtain bounded root-cause evidence for exactly the six frozen Window2 positions. All returned timestamps are UTC; no result should be presented as KSA without adding three hours.
+
+SQL:
+```sql
+WITH frozen AS (
+    SELECT
+        p.id AS paper_position_id,
+        p.symbol,
+        p.side,
+        p.status,
+        p.quantity,
+        p.entry_price,
+        p.stop_loss,
+        p.take_profit,
+        p.exit_price,
+        p.realized_pnl,
+        p.close_reason,
+        p.entry_reason,
+        p.exit_reason,
+        p.signal_id,
+        p.exit_signal_id,
+        p.opened_at,
+        p.closed_at
+    FROM crypto_ai.paper_position p
+    WHERE p.id IN (182, 172, 162, 158, 143, 137)
+)
+SELECT
+    f.*,
+    es.interval_code AS entry_signal_interval,
+    es.candle_open_time AS entry_signal_candle_open_time,
+    es.generated_at AS entry_signal_generated_at,
+    es.decision AS entry_signal_decision,
+    es.original_decision AS entry_signal_original_decision,
+    es.final_entry_allowed AS entry_signal_allowed,
+    es.primary_blocking_stage AS entry_signal_blocking_stage,
+    es.data_quality_valid AS entry_signal_data_quality_valid,
+    es.risk_reward_ratio AS entry_signal_risk_reward_ratio,
+    es.latest_price AS entry_signal_price,
+    xs.interval_code AS exit_signal_interval,
+    xs.candle_open_time AS exit_signal_candle_open_time,
+    xs.generated_at AS exit_signal_generated_at,
+    xs.decision AS exit_signal_decision,
+    xs.original_decision AS exit_signal_original_decision,
+    pea.id AS exit_audit_id,
+    pea.wallet_position_id,
+    pea.close_trigger,
+    pea.source_signal_id AS audit_source_signal_id,
+    pea.source_signal_decision AS audit_source_signal_decision,
+    pea.source_signal_original_decision AS audit_source_signal_original_decision,
+    pea.position_analysis_id,
+    pea.position_recommendation,
+    pea.entry_price_usdt AS audit_entry_price,
+    pea.exit_price_usdt AS audit_exit_price,
+    pea.stop_loss_usdt AS audit_stop_loss,
+    pea.take_profit_usdt AS audit_take_profit,
+    pea.close_explanation,
+    pea.audited_at,
+    wmp.status AS wallet_position_status,
+    wmp.opened_at AS wallet_position_opened_at,
+    wmp.updated_at AS wallet_position_updated_at,
+    wmp.highest_price_usdt,
+    wmp.profit_lock_active,
+    wmp.profit_lock_price_usdt,
+    wmp.profit_lock_state,
+    wmp.profit_lock_activated_at,
+    wmp.near_tp_state,
+    wmp.near_tp_harvest_used
+FROM frozen f
+LEFT JOIN crypto_ai.trade_signal es ON es.id = f.signal_id
+LEFT JOIN crypto_ai.trade_signal xs ON xs.id = f.exit_signal_id
+LEFT JOIN crypto_ai.production_exit_audit pea
+    ON pea.paper_position_id = f.paper_position_id
+LEFT JOIN crypto_ai.wallet_managed_position wmp
+    ON wmp.id = pea.wallet_position_id
+ORDER BY f.closed_at DESC, f.paper_position_id DESC;
+
+WITH frozen AS (
+    SELECT id AS paper_position_id, signal_id, exit_signal_id
+    FROM crypto_ai.paper_position
+    WHERE id IN (182, 172, 162, 158, 143, 137)
+),
+audited AS (
+    SELECT paper_position_id, wallet_position_id
+    FROM crypto_ai.production_exit_audit
+    WHERE paper_position_id IN (182, 172, 162, 158, 143, 137)
+)
+SELECT DISTINCT
+    f.paper_position_id,
+    wt.id AS wallet_trade_id,
+    wt.execution_key,
+    wt.signal_id,
+    wt.position_analysis_id,
+    wt.symbol,
+    wt.side,
+    wt.quantity,
+    wt.price_usdt,
+    wt.decision_price_usdt,
+    wt.execution_price_observed_at,
+    wt.gross_amount_usdt,
+    wt.fee_usdt,
+    wt.net_amount_usdt,
+    wt.cost_basis_usdt,
+    wt.realized_pnl_usdt,
+    wt.realized_pnl_percent,
+    wt.execution_type,
+    wt.execution_reason,
+    wt.status,
+    wt.executed_at,
+    wt.execution_message
+FROM frozen f
+LEFT JOIN audited a ON a.paper_position_id = f.paper_position_id
+JOIN crypto_ai.wallet_trade wt
+    ON wt.signal_id IN (f.signal_id, f.exit_signal_id)
+    OR (
+        a.wallet_position_id IS NOT NULL
+        AND wt.execution_key LIKE CONCAT('POSITION:', a.wallet_position_id, ':%')
+    )
+ORDER BY f.paper_position_id, wt.executed_at, wt.id;
+
+WITH frozen AS (
+    SELECT
+        id AS paper_position_id,
+        symbol,
+        entry_price,
+        stop_loss,
+        take_profit,
+        exit_price,
+        closed_at
+    FROM crypto_ai.paper_position
+    WHERE id IN (182, 172, 162, 158, 143, 137)
+),
+ranked_events AS (
+    SELECT
+        f.paper_position_id,
+        f.symbol,
+        f.entry_price,
+        f.stop_loss,
+        f.take_profit,
+        f.exit_price,
+        f.closed_at,
+        mpe.id AS market_price_event_id,
+        mpe.observed_at,
+        mpe.price,
+        mpe.source,
+        mpe.created_at,
+        mpe.source_received_at,
+        mpe.delivery_status,
+        mpe.ordering_slot,
+        mpe.outcome_reason,
+        ROW_NUMBER() OVER (
+            PARTITION BY f.paper_position_id
+            ORDER BY mpe.observed_at DESC, mpe.id DESC
+        ) AS recency_rank
+    FROM frozen f
+    JOIN crypto_ai.market_price_event mpe
+      ON mpe.symbol = f.symbol
+     AND mpe.observed_at >= f.closed_at - INTERVAL 180 SECOND
+     AND mpe.observed_at <= f.closed_at + INTERVAL 1 SECOND
+)
+SELECT *
+FROM ranked_events
+WHERE recency_rank <= 200
+ORDER BY paper_position_id, observed_at, market_price_event_id;
+```
+### END_DB_REQUEST
+
+No documentation update is required: this iteration was analysis-only.

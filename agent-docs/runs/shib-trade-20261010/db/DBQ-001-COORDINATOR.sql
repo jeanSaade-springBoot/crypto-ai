@@ -1,0 +1,1 @@
+SHOW TABLES LIKE '%position%'; SHOW TABLES LIKE '%trade%'; SHOW TABLES LIKE '%wallet%';

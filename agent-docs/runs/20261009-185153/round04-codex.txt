@@ -1,0 +1,78 @@
+## FINDINGS
+
+- The checked-in default is `shared-market.mode=OFF`. In OFF, the trader itself owns Binance kline WebSocket ingestion, REST bootstrap/import, local persistence, runtime close dispatch, and optional reconciliation. Candles are written to the local `crypto_ai.candle` table.
+
+- `LIVE` is the retained collector architecture: direct WebSocket, bootstrap, and import are disabled; the trader reads collector tables from `crypto_ai_v2` and consumes them through local delivery tables.
+
+- `OBSERVE` is architecturally contradictory to the pending direction. Direct trader ingestion remains enabled because only `LIVE` disables it, while `SharedMarketConsumer` also schedules collector discovery, price, and analysis loops. It does not execute collector-driven protection/analysis—it marks deliveries `OBSERVED`—but it still connects to and reads collector infrastructure alongside direct ingestion. This contradicts the stated “do not run direct ingestion and shared-market executors together” rule.
+
+- Runtime close handling is structurally sound only for the WebSocket path: `upsertRuntime` writes a close-transition token only when an open row becomes closed; only the receipt owning that token publishes the close event. The event is after commit and analysis is submitted to an executor rather than run on the Binance thread.
+
+- The ordinary REST import path is materially unsafe versus the pending design. `MarketDataService.importCandles()` sends already-final Binance candles to `CandleRepository.upsert()`, whose `BACKFILL` duplicate-key clause can update an existing `closed=0` runtime row to closed, without a token, outcome, or dispatch. This can happen in the reachable overlap where dynamic activation reloads WebSockets before bootstrap, and through the manual import API.
+
+- That unsafe ordinary backfill can leave a closed candle permanently unanalysed: a later WebSocket close cannot own a token; the local detector selects only token-bearing non-`BACKFILL` rows; reconciliation selects only `closed=0` rows. No terminal `candle_analysis_outcome` is written by that path. The repository comment claiming backfill “inserts missing identities only” is false for the implemented `upsert()` method.
+
+- A separate reconciliation implementation does meet several pending-design mechanics: it is OFF-only; exact recovery only finalizes open non-backfill rows; gap repair is insert-if-absent; both avoid tokens and record historical-only outcomes. However, it is disabled in checked-in config, so automatic reconnect recovery is not part of the checked-in operational behavior.
+
+- Reconciliation also does not meet the durable-age-out requirement. `PENDING` audit rows are due indefinitely with a maximum retry delay but no attempt or time ceiling. Once candidates age out of the active quality window, they are no longer selected and can remain `PENDING` without a terminal analysis outcome. The open-candidate query applies `LIMIT 50` before due/loss-evidence filtering, allowing ineligible old rows to crowd out eligible work.
+
+- No reviewed implementation establishes shared Binance REST handling for 429/418, `Retry-After`, rate budgets, or bans across bootstrap, reconciliation, and exchange-clock callers. The REST client creates separate clients and timeouts, but no visible shared rate-limit policy.
+
+- Fresh Replay loads every closed candle solely by closed/time predicates and then generates fresh signals for every candle in its timeline. It does not filter `ingestion_source`, close token, reconciliation audit, or local analysis outcome. Therefore source review does not prove parity with production’s deliberate exclusion of recovered/backfilled/token-less candles from live close dispatch.
+
+- The target direction remains not deployment-ready. The source has substantial local-candle implementation, but the checked-in mode is not evidence of a production deployment. No production systems were accessed.
+
+## EVIDENCE
+
+- **Default OFF and configuration contradiction:** `application.yml:40-50` sets reconciliation disabled; `application.yml:420-432` sets `shared-market.mode` default `OFF`; `application.yml:447-459` begins a second top-level `local-candle` block. Duplicate top-level YAML keys require runtime parser validation; source review cannot determine whether startup rejects or overrides one mapping.
+
+- **Trader WebSocket ownership outside LIVE:** `BinanceWebSocketManager.start()` returns only when the mode is LIVE: `src/main/java/com/crypto/client/binance/websocket/BinanceWebSocketManager.java:95-103`. `BinanceKlineService` likewise treats only LIVE as shared: `src/main/java/com/crypto/service/BinanceKlineService.java:23,55-135`.
+
+- **Trader REST/bootstrap ownership outside LIVE:** `MarketDataService.importCandles()` rejects only LIVE and calls Binance server-time/klines before local write: `src/main/java/com/crypto/service/MarketDataService.java:19-55`. Bootstrap runs unless LIVE: `src/main/java/com/crypto/service/MarketDataBootstrapService.java:48-69`.
+
+- **Local versus collector table ownership:** OFF uses the local JDBC reader/writer; non-OFF creates a collector pool and validates its schema: `src/main/java/com/crypto/shared/SharedMarketSource.java:19-55`. Candle reads route through that selected reader: `src/main/java/com/crypto/repository/CandleRepository.java:32-36`. LIVE collector event reads include `crypto_ai_v2.market_data_stream_event` and cursor tables: `src/main/java/com/crypto/shared/SharedMarketConsumer.java:330,345`.
+
+- **Tokened close transition and async dispatch:** `CandleRepository.upsertRuntime()` reads back the exact transition token: `CandleRepository.java:107-124`; WebSocket processing publishes only when it owns it: `BinanceKlineService.java:101-121`; transaction order is input → protection → observer → close dispatch: `KlineTransactionCoordinator.java:36-92`; the event listener is `AFTER_COMMIT`: `CandleClosedEventListener.java:30-33`; dispatcher uses its executor: `CandleAnalysisDispatcher.java:102-123`.
+
+- **Unsafe ordinary backfill:** `MarketDataService` imports all exchange-final rows as `closed=true`: `MarketDataService.java:34-50`. `CandleRepository.upsert()` assigns `BACKFILL`: `CandleRepository.java:99-105`. Its duplicate clause updates open rows and then applies `closed=GREATEST(...)`, without token assignment: `CandleRepository.java:173-188`. Dynamic activation reloads WebSockets before bootstrap: `DynamicCoinActivationService.java:18-32`. The public import endpoint calls this same method: `MarketDataController.java:16-23`.
+
+- **Why no recovery/admission follows:** detector requires both `closed=1` and a token, excluding `BACKFILL`: `LocalClosedCandleDetector.java:34-50`; reconciliation only finds `closed=0`: `LocalCandleReconciliationService.java:122-140`.
+
+- **Implemented recovery mechanics, disabled operationally:** `LocalCandleReconciliationService` runs only if enabled and OFF: `LocalCandleReconciliationService.java:92-96`; it calls update-only recovery or insert-only gap repair and records `SKIPPED_NOT_LIVE`: `LocalCandleReconciliationService.java:161-191`. Repository methods enforce those distinct policies: `CandleRepository.java:126-167`.
+
+- **Indefinite audit pending:** audit due logic has no terminal deadline: `LocalReconciliationAuditRepository.java:35-43`; retry delay caps at 300 seconds without attempt limit: `LocalCandleReconciliationService.java:194-196`; active-window selection excludes older rows: `LocalCandleReconciliationService.java:125-140,143-158`.
+
+- **OBSERVE overlap:** WebSocket/direct ingestion is disabled only for LIVE above. Meanwhile shared loops run whenever mode is not OFF: `SharedMarketConsumer.java:136-151`; OBSERVE reads collector cursors and events: `SharedMarketConsumer.java:322-379`; it marks each local delivery `OBSERVED` before protection/analysis: `SharedMarketConsumer.java:477-481`.
+
+- **Replay mismatch:** Replay dataset queries every `closed=1` candle: `RegressionTestWorker.java:469-506`; the fresh path explicitly processes “EVERY closed candle”: `RegressionTestWorker.java:575-584`.
+
+- **Bootstrap blocker:** Java migration V103 explicitly requires `crypto_ai_v2.market_data_stream_event`: `src/main/java/db/migration/V103__fix_149_fresh_admission_indexes.java:14-50`. B105 claims a trader-only baseline, but this review did not run Flyway/MySQL to prove that baseline migration semantics work: `src/main/resources/db/migration/B105__fix_153_trader_only_baseline.sql:1-4`; dependencies are Spring Boot 4.1.0/Flyway starter/MySQL module: `pom.xml:7-9,56-65`.
+
+## OBJECTIONS
+
+1. Ordinary REST import violates the pending pure-insert gap-backfill rule and can consume a live close without durable analysis admission or terminal outcome.
+
+2. Automatic recovery is disabled by default and reconciliation can leave PENDING records without a terminal outcome after they leave the quality window.
+
+3. The required shared Binance rate-limit/ban control is unproven and not present in reviewed REST client paths.
+
+4. OBSERVE permits direct ingestion plus shared-market executors and collector connectivity, contrary to AGENTS.md’s target separation. It is not double trading execution, but it is still an architectural breach.
+
+5. Replay parity is not demonstrated because replay input selection differs from the production local close-admission boundary.
+
+6. Fresh trader-only bootstrap remains unverified because V103 requires collector infrastructure and B105 has not been validated.
+
+7. The duplicate `local-candle` YAML key may make the effective reconciliation settings ambiguous or reject startup.
+
+## UNKNOWNS
+
+- Effective production mode, environment overrides, artifact, database schema, Flyway history, and deployment status. Production was not accessed.
+- YAML duplicate-key behavior for the exact Spring configuration stack.
+- Flyway baseline behavior and successful MySQL 8 fresh install using B105.
+- Full build/test, crash/restart, race, Java 21, and MySQL validation results; none were executed.
+- Whether another unreviewed service or infrastructure layer supplies Binance-wide rate-limit control.
+- Open-position protection across application replacement remains an unresolved release gate.
+
+## VERDICT
+
+REJECTED

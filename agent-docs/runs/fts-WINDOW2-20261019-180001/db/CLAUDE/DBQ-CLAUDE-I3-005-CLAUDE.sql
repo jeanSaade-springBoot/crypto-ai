@@ -1,0 +1,1 @@
+SELECT DATE(generated_at) AS d, interval_code, COUNT(*) AS n, MIN(generated_at) AS first_gen, MAX(generated_at) AS last_gen FROM crypto_ai.trade_signal WHERE generated_at >= '2026-10-12 00:00:00' AND generated_at < '2026-10-14 00:00:00' AND signal_mode = 'LIVE' GROUP BY DATE(generated_at), interval_code ORDER BY d, interval_code LIMIT 50;

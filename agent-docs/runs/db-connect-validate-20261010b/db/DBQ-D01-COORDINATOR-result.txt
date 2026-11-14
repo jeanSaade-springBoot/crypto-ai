@@ -1,0 +1,2 @@
+BLOCKED BY WRAPPER before MySQL execution.
+Rejected statement family 'CREATE'. Allowed: SELECT, SHOW, DESCRIBE, DESC, EXPLAIN.

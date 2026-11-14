@@ -1,0 +1,1 @@
+SELECT id, symbol, latest_price, stop_loss, take_profit, risk_reward_ratio, atr_percent, entry_authority, final_entry_allowed, primary_blocking_stage FROM trade_signal WHERE id IN (115049,115669,121198,122431,128170,133249,115050,121201,133251) ORDER BY id;

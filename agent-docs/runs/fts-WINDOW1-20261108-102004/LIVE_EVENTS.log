@@ -1,0 +1,8 @@
+﻿[10:20:04] [COORDINATOR] [STATUS] Launcher started Window=WINDOW1 TestMode=False Run=fts-WINDOW1-20261108-102004
+[10:20:06] [COORDINATOR] [EVIDENCE] Authoritative entity: paper_position CLOSED with closed_at and realized_pnl<0. Replay table wallet_position_test excluded. Ranking by closed_at not opened_at/signal.
+[10:20:06] [COORDINATOR] [STATUS] Frozen 6 trade IDs for both agents
+[10:20:06] [CODEX] [STATUS] Started ITERATION 1 - TRADE RECONSTRUCTION
+[10:20:21] [CODEX] [STATUS] Still working - elapsed 0m 15s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[10:20:37] [CODEX] [STATUS] Still working - elapsed 0m 30s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[10:20:52] [CODEX] [STATUS] Still working - elapsed 1m 45s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[21:55:25] [CODEX] [STATUS] Still working - elapsed 695m 19s; task: ITERATION 1 - TRADE RECONSTRUCTION

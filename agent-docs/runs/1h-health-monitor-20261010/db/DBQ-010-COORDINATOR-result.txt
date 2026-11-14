@@ -1,0 +1,2 @@
+utc_now	session_now	tz	usr
+2026-10-10 15:40:49	2026-10-10 18:40:49	SYSTEM	ai_investigator@localhost

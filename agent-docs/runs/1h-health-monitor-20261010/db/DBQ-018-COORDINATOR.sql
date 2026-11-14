@@ -1,0 +1,1 @@
+SELECT TIMESTAMPDIFF(MINUTE, MAX(generated_at), NOW()) stale_vs_session_now, TIMESTAMPDIFF(MINUTE, MAX(generated_at), UTC_TIMESTAMP()) stale_vs_utc_now, MAX(generated_at) last_disp, NOW() session_now, UTC_TIMESTAMP() utc_now FROM trade_signal WHERE interval_code='1h' AND generated_at>=NOW()-INTERVAL 6 HOUR

@@ -1,0 +1,239 @@
+# Iteration 5 of 8: entry quality (Claude, self-review only)
+
+All six frozen trades were weak entries, and the system's own Entry Quality (EQ) score said so: three scored exactly 50, the lowest score that can still execute, one scored 58, and two scored 60. The trouble is what the score does with that. On the routes these trades used, a score from 50 to 69 changes neither whether the trade happens nor its size.
+
+- **Time basis confirmed:** the database query results are shown in KSA, not UTC.
+- **Trade 143:** this is the clearest entry defect. It reused a 5-minute BUY whose plan was assessed at a price 1.15% lower.
+
+Nothing was changed: no code, config, database writes, git or deploy. I didn't read the Codex folders, LIVE_TEAM_STATUS, LIVE_EVENTS or the other agent's memory. Plan mode was on with no plan-file or ExitPlanMode tool available, so this response is the whole deliverable.
+
+## FINDINGS
+
+**F38. F31 is confirmed: query results are displayed in KSA. True UTC = displayed time − 3 h.** (PROJECT EVIDENCE: DBQ-CLAUDE-I4-001/002)
+
+- **Time zone:** DBQ-CLAUDE-I4-001 shows the session time zone is `SYSTEM` = `Arab Standard Time`, with `NOW()` at 18:38:01 and `UTC_TIMESTAMP()` at 15:38:01.
+- **Epoch check:** DBQ-CLAUDE-I4-002 gives 344's observed time as epoch 1791741300.032, which is 2026-10-11 17:55:00.032 UTC. That equals the app's `priceObservedAt=…17:55:00.032Z`.
+- **Effect on the study:**
+  - The rule "DB timestamps are UTC" in the prompt and in `DATABASE_INVESTIGATION_RULES.md:35` does not hold for this query path. This contradiction needs escalating.
+  - Every SQL time literal I used is also read in KSA, so my earlier query windows are internally consistent.
+- **Corrected wallet times** (true UTC → KSA):
+
+| Trade | Entry (UTC → KSA) | Exit (UTC → KSA) |
+|---|---|---|
+| 137 | 10-11 17:55:03.017 → 20:55:03 | 18:00:08.935 → 21:00:08 |
+| 143 | 10-11 19:40:03.115 → 22:40:03 | 19:43:35.046 → 22:43:35 |
+| 158 | 10-11 23:35:02.988 → 10-12 02:35:02 | 10-12 00:30:04.217 → 03:30:04 |
+| 162 | 10-12 01:02:04.210 → 04:02:04 | 01:26:04.134 → 04:26:04 |
+| 172 | 10-12 03:36:02.935 → 06:36:02 | 04:15:43.492 → 07:15:43 |
+| 182 | 10-12 06:57:04.232 → 09:57:04 | 07:05:18.504 → 10:05:18 |
+
+- **Label correction:** "position 171" in F14/F33 means `wallet_managed_position` 171 (`POSITION:171` on wallet_trade 357). It is not `paper_position` 171, which is EDUUSDT (I4-006).
+
+**F39. The EQ score at entry, and the size actually used** (PROJECT EVIDENCE: `wallet_managed_position.entry_quality_score` from I1-004, wallet messages from I1-003, code)
+
+| Trade | Route | EQ | Approved % | ATR-recommended % (1m) | Wallet % |
+|---|---|---|---|---|---|
+| 137 | IMMEDIATE_VALIDATION, `FIX-11G` | 58 | 25 | 100 | 25 |
+| 143 | SETUP_TIMEFRAME_ATR | 60 when decided, 70 stored (F42) | 25 | **0** | 25 |
+| 158 | SETUP_CONFIRMATION_WAKEUP | **50** | 25 | n/a (I5-005) | 25 |
+| 162 | ACCUMULATED_EVIDENCE | **50** (LATE_ENTRY) | 25 | 60 | 15 |
+| 172 | IMMEDIATE_VALIDATION, BALANCED_STRONG | 60 | 75 → 25 | 100 | 25 |
+| 182 | IMMEDIATE_VALIDATION, `FIX-11G` | **50** | 25 | 60 | 15 |
+
+- **Sizing formula:** wallet % = ATR-recommended % × approved % (`PaperTradingService.java:328-333, 358-360`). For example, 60% × 25% = 15% for 182 and 162.
+- **What EQ does in code** (`ExecutionIntelligenceService.java:1171-1222`):
+  - below 50, the entry is blocked;
+  - otherwise the size is capped at 25% (EQ under 70), 40% (EQ 70–84) or 50% (EQ 85 and above).
+  - FIX-11G, the setup wake-up and the setup-ATR route already start at 25% or less, so an EQ of 50–69 has **no effect at all** on them. For these routes the score works as a simple pass/fail at 50.
+- **Weaker context gets the looser threshold:** FIX-11G's threshold of EQ ≥ 50 (`TradeExecutionValidationService.java:49, 266`) is looser than the sibling `BALANCED_NEUTRAL_5M` exception. That one requires EQ ≥ 70 and confidence ≥ 72 (`:234-236`), even though its higher-timeframe context is *stronger* (1h bullish rather than 1h WATCH).
+  - This is a design inconsistency, not a defect against the coded rules.
+  - It decided 182: with EQ 50, it would have failed the 70 threshold.
+
+**F40. The score already marked five of the six entries as poor, mostly because of risk/reward.** (PROJECT EVIDENCE: code; the per-trade breakdown is AGENT INFERENCE)
+
+- An R:R below 1 always costs 30 points (`:991`). R:R was below 1 for 137, 158, 162, 172 and 182 (I1-002), so none of them could score above 70 (75 with the breakout bonus).
+- The breakdowns that reproduce the stored scores:
+  - **137 = 58:** 100 − 30 (R:R) − 12 (recent-rejection penalty, `:995-1003`). No other combination of the coded penalties gives 58, so 137 most likely entered in a **recently rejected high zone**.
+  - **143 = 60 / 70:** 100 − 10 (price expansion 1.5%) − 30 or − 20 (ATR extension 6.6× or 5.6×). This assumes a 30-minute low of about 3.972, which matches the opportunity anchors at 3.972–3.975 between 22:31 and 22:34 KSA (I4-003).
+  - **158, 162, 182 = 50:** that score needs −20 beyond the R:R penalty, or the rejection floor that pins a score at 50 (`:1000-1001`). The components are unconfirmed (I5-001).
+- **Classification:** the score did its job. The defect class is that a score in the high 50s only caps size, and the cap is idle on 25% routes (F39).
+
+**F41. Sizing inversion: an ATR verdict of "wait for a pullback" gets the *largest* size.** (PROJECT EVIDENCE: code + data; whether it is intended is unknown)
+
+- **The code:** `PaperTradingService.java:328-330` treats `atr_recommended_position_percent <= 0` as **100**.
+- **The effect:**
+  - Trade 143's 1m signal 159408 was `WAIT_FOR_RETRACEMENT` with a recommended size of 0% (I4-004), and was sized at 25%.
+  - 182 and 162 (`REDUCED_POSITION` at 60%) were sized at 15%.
+  - The previous EGLD entry 159321 (0%) and DOGE 164118 (0%) also got 25% (I1-003/004).
+- **Possible intent:** for the setup-ATR route, the 5m plan might be meant to own sizing. But the code uses the 1m execution signal's value, and treats 0 as "no data". The size was 25% where the 60% scale used for 182 and 162 would have given 15%.
+- **Classification:** candidate sizing defect. How often it happens: I5-005.
+
+**F42. Two EQ values for the same entry (143), and the price re-check contradicts the route's own rule.** (PROJECT EVIDENCE)
+
+- **When deciding:** the setup route scores EQ with the 5m ATR (`:634`), giving 60 / ACCEPTABLE (wallet_trade 358 message).
+- **At the fill:**
+  - `revalidateAtExecutionPrice` → `assessEntryQualityAtPrice` uses the **1m** ATR (`:857-858, 1167`).
+  - `PaperTradingService:377-385` stores that second score, so `wallet_managed_position` 172 holds EQ **70**. The stored score is not the one that governed the decision.
+- **The route's comment doesn't match these figures:**
+  - The comment at `:631-633` assumes a "tiny 1m ATR".
+  - Here the 5m ATR (0.009073, from the 22:30 KSA bar *before* the breakout) was smaller than the 1m ATR (0.010899).
+- **Impact:** no size change for 143, because the cap was 25% either way. It is a consistency and observability defect: anyone investigating trade quality from the stored EQ will see an inflated score.
+
+**F43. Trade 143's entry: a stale 5m setup was reused at a much higher price.** (PROJECT EVIDENCE + AGENT INFERENCE for intent)
+
+What was known at the decision (1m signal 159408, generated 19:40:01.634 UTC → 22:40:01 KSA):
+
+- **1m context:**
+  - WATCH, RSI 84.3, 4.35 ATR above SMA20, `atr_overextended=1`;
+  - `WAIT_FOR_RETRACEMENT`, recommended size 0%.
+- **The 5m authority it relied on:**
+  - 159285 (BUY, 22:30 KSA candle) assessed "immediate entry allowed, 100%" at a price of **3.986** (I4-004).
+  - Price at the decision was 4.032: **+1.15%, or 5.1 times the 5m ATR**, above that plan.
+  - Nothing re-checks the 5m plan at the new price.
+  - `FIVE_MINUTE_MAX_AGE` = 20 minutes (`:66`), so "fresh" covers up to four bars old.
+- **A newer 5m signal said the opposite before the fill:**
+  - 159407 (22:35 KSA candle): WATCH, `PULLBACK_ENTRY`, immediate entry **not** allowed.
+  - It was committed at 22:40:02.94 KSA, before the fill at 22:40:03.115, but was excluded by the selection rule (F33/F35).
+- **The same 5m authority had just been used:**
+  - It was used for the previous EGLD entry (opportunity 36481, `five_minute_decision=BUY`).
+  - That position had profit-locked out 22 s earlier, after a 4.046 → 3.996 whipsaw.
+  - Opportunity 36524 records 7 pieces of evidence, but only 1 BUY.
+- **Verdict:** a poor entry, using only information available at that moment. It is a **route-design defect candidate**: the setup ATR authority is never re-checked against price drift, never marked as consumed, and never compared with a newer 5m bar.
+
+**F44. Fee geometry: three targets were at or below the round-trip fee, and this was visible at entry.** (PROJECT EVIDENCE for levels; EXTERNAL RESEARCH for the fee rate)
+
+| Trade | Target distance | Stop distance | Target net of 0.15–0.20% round-trip fee |
+|---|---|---|---|
+| 158 | 0.171% | 0.50% | **−0.03% to +0.02%** |
+| 162 | 0.219% | 0.50% | +0.02% to +0.07% |
+| 182 | 0.241% | 0.50% | +0.04% to +0.09% |
+| 137 | 0.322% | 0.50% | +0.12% to +0.17% |
+| 172 | 0.37% nominal (2.04 ticks); a fill needs 3 ticks = 0.55% | 0.50% nominal (2.7 ticks); trigger at 3 ticks = 0.55% | at tick granularity the R:R is about 1.0, not 0.74 |
+| 143 | 0.786% | 0.565% | +0.59% to +0.64% |
+
+- At the 0.20% round trip, trade 182 hitting its target nets +0.04% against a −0.70% stop. It needs a win rate of about 95% to break even.
+- No fee-aware minimum-target check exists in `src/main`. A search for fee, taker, round-trip or minimum-target finds nothing in the decision code.
+- **Fee rate:** externally, Binance's standard spot fee is 0.1% per side, or 0.075% when paid in BNB. A zero-maker report exists but is unconfirmed. The account's actual tier is unknown.
+- **Classification:** a structural entry-quality gap. The wallet records a fee of 0, so this never shows in the paper P&L.
+
+**F45. Entry verdict for each trade, using only information available at entry** (AGENT INFERENCE from evidence above)
+
+| Trade | Main entry weaknesses | Followed coded rules? | Verdict |
+|---|---|---|---|
+| 137 | Mean-reversion strategy buying at 68% of the Bollinger range on a single bar with relative volume 8.26× (transition exception), after eight 1m STRONG_SELLs; 5m NEUTRAL / 1h WATCH; rejection-zone penalty (F40); R:R 0.64 | Yes | Weak entry; valid loss |
+| 143 | F43 | Yes, but the route has a design gap | Poor entry; **defect candidate** |
+| 158 | 1m WATCH 64; target 0.171% is below fees; EQ at the 50 floor | Yes | Poor geometry, negative expectancy after fees |
+| 162 | WATCH-only accumulated evidence, released by a single BUY (FIX-119 needs `buyCount=0` to defer, `:1275-1279`); above the upper Bollinger band; LATE_ENTRY 50; R:R 0.44 | Yes (FIX-041 exempts this route) | Late entry; design inconsistency (F34) |
+| 172 | ATR smaller than one price tick, so ATR-based EQ and geometry mean nothing (a single tick is 1.47 ATR); confluence CONFLICT with 1h; BTC context LEARNING | Yes | Valid loss; the model can't work at this price precision |
+| 182 | Trend-following BUY in a WEAK_DOWNTREND regime, below EMA200; raw 5m STRONG_SELL masked as NEUTRAL (F24); EQ 50 passed the FIX-11G threshold of 50 | Yes | Poor entry; F24 and F39 defect candidates |
+
+**F46. Pattern checks across all closed trades (I4-005/006/007)** (PROJECT EVIDENCE; pre-fee)
+
+- **By route:**
+
+| Route | Trades | Winners | Net P&L | Per trade |
+|---|---|---|---|---|
+| IMMEDIATE_VALIDATION | 62 | 27 | −2.433 | −0.039 |
+| SETUP_TIMEFRAME_ATR | 23 | 12 | −0.800 | −0.035 |
+| SETUP_CONFIRMATION_WAKEUP | 41 | 15 | −0.905 | −0.022 |
+| ACCUMULATED_EVIDENCE | 40 | 22 | +0.156 | +0.004 |
+
+  - SETUP_TIMEFRAME_ATR winners average only +0.038 USDT, about 0.15% on 25 USDT. That is roughly the size of the round-trip fee (AGENT INFERENCE).
+  - All 186 closed trades total −4.235, or −0.023 per trade, which matches F30.
+- **Quick re-entries (within 120 s of a close on the same symbol):** 22 cases, 11 winners, net about −0.87 (−0.039 per trade). That isn't clearly worse than the baseline, so 143's re-entry looks like a single case, not a pattern.
+- **Same-boundary race:** at 9,489 boundaries where a 1m and a 5m candle close together, the 1m signal was generated first in **8,181 cases (86.2%)**, by an average of 303 ms.
+  - So any lookup of the form "latest 5m with `generated_at` at or before the 1m" almost always returns the *previous* 5m bar at these boundaries.
+  - F35 is therefore **systematic**, not an unlucky race. Trade 137, where the 5m came first, was the exception.
+
+**F47. The "30-minute" rolling low actually covers about 20 minutes on 1m.** (PROJECT EVIDENCE, low severity)
+
+- Production `recentSignals` returns `findTop20…OrderByGeneratedAtDesc` (`:2601-2604`), so the 30-minute window (`:47`) is capped at 20 signals.
+- Replay uses an as-of query with the same limit of 20 (`replayScope.recent`). The two match in normal operation but would differ if signal processing lagged.
+
+## EVIDENCE
+
+- **Database results:**
+  - DBQ-CLAUDE-I4-001 to -007
+  - DBQ-CLAUDE-I1-002, -003, -004
+  - Record IDs: wallet_trade 344/356/358/392/403/426/451; `wallet_managed_position` 166/171/172/187/191/201/211; opportunities 36481/36524; signals 159285/159321/159407/159408.
+- **Code:**
+  - `ExecutionIntelligenceService.java:47, 66, 229, 390-457, 600-710, 848-1030, 1150-1222, 1257-1329, 1472-1514, 2601-2604`
+  - `TradeExecutionValidationService.java:49, 218-321`
+  - `PaperTradingService.java:322-389`
+  - `WalletAutoExecutionService.java:105-139, 179`
+  - `WalletExecutionSizingPolicy.java:17-37`
+  - `StopLossEvidenceService.java` (does not affect sizing)
+- **External:** Binance spot fee rates (sources below).
+
+## UNKNOWNS
+
+- **U23:** the exact EQ components for 158, 162 and 182 at 50: was it the rejection floor or ATR extension? (I5-001, I5-002)
+- **U24:** the ATR-recommended % for 158's 1m signal 165412, and how often F41 occurs (I5-005).
+- **U25:** the account's real fee tier. Paper fees are 0.
+- **U26:** fee-adjusted outcome by target distance and by EQ band (I5-003, I5-004).
+- **U27:** how often setup-ATR entries used a 5m bar that a newer, already-committed 5m signal had superseded (I5-006).
+- **Carried over:** U7 (Replay not run), U17, U19 (needs logs).
+- **Escalations:** F38 (time-basis rule) and F12 (FIX-154 is live although AGENTS.md says it isn't implemented).
+
+## DB REQUESTS
+
+All time literals are interpreted in the session time zone, which is KSA (F38).
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-001
+Purpose: Rebuild the EQ reference, recent high and rejection count from the 1m signals in the 30 minutes before each entry signal (F40, U23)
+SQL:
+SELECT p.id AS position_id, s.id, s.generated_at, s.latest_price, s.decision FROM paper_position p JOIN trade_signal e ON e.id = p.signal_id JOIN trade_signal s ON s.symbol = e.symbol AND s.interval_code = '1m' AND s.generated_at BETWEEN e.generated_at - INTERVAL 30 MINUTE AND e.generated_at WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, s.generated_at DESC LIMIT 200
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-002
+Purpose: Opportunity anchor and best price, and age, at each entry (inputs to the EQ reference)
+SQL:
+SELECT id, symbol, status, started_at, anchor_entry_price, best_entry_price, latest_signal_id, evidence_count, buy_count, watch_count, evidence_score, opportunity_health, five_minute_decision, one_hour_decision, execution_source, recommended_position_percent, decision_code, executed_at FROM execution_opportunity WHERE latest_signal_id IN (156723,165412,167668,171589,176710,159408) ORDER BY id LIMIT 20
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-003
+Purpose: Gross and fee-adjusted (10 bps per side) outcome by target-distance bucket across closed positions (F44, U26)
+SQL:
+SELECT CASE WHEN s.take_profit / p.entry_price - 1 < 0.002 THEN 'A_TP_LT_0.20' WHEN s.take_profit / p.entry_price - 1 < 0.004 THEN 'B_TP_0.20_0.40' ELSE 'C_TP_GE_0.40' END AS tp_bucket, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS winners, ROUND(SUM(p.realized_pnl), 6) AS gross_pnl, ROUND(SUM(p.realized_pnl - 0.001 * p.quantity * (p.entry_price + p.exit_price)), 6) AS net_pnl_10bps FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id WHERE p.closed_at IS NOT NULL AND p.exit_price IS NOT NULL GROUP BY tp_bucket ORDER BY tp_bucket
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-004
+Purpose: Outcome by stored entry EQ band (F39, F40, U26)
+SQL:
+SELECT CASE WHEN m.entry_quality_score <= 50 THEN 'EQ_50' WHEN m.entry_quality_score < 60 THEN 'EQ_51_59' WHEN m.entry_quality_score < 70 THEN 'EQ_60_69' ELSE 'EQ_70_PLUS' END AS eq_band, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS winners, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum, ROUND(SUM(p.realized_pnl - 0.001 * p.quantity * (p.entry_price + p.exit_price)), 6) AS net_pnl_10bps FROM wallet_managed_position m JOIN paper_position p ON p.signal_id = m.entry_signal_id WHERE p.closed_at IS NOT NULL GROUP BY eq_band ORDER BY eq_band
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-005
+Purpose: How often the sizing inversion occurs and how it turns out (ATR-recommended size 0 treated as 100), plus the six entry signals' ATR plans (F41, U24)
+SQL:
+SELECT id, atr_recommended_position_percent, atr_entry_type, atr_immediate_entry_allowed, atr_at_signal FROM trade_signal WHERE id IN (156723,159408,165412,167668,171589,176710);
+SELECT CASE WHEN s.atr_recommended_position_percent <= 0 THEN 'REC_0' ELSE 'REC_POS' END AS rec_bucket, s.atr_entry_type, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS winners, ROUND(SUM(p.realized_pnl), 6) AS pnl_sum FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id WHERE p.closed_at IS NOT NULL GROUP BY rec_bucket, s.atr_entry_type ORDER BY rec_bucket, s.atr_entry_type
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I5-006
+Purpose: For each SETUP_TIMEFRAME_ATR buy, the 5m signal chosen by the `generated_at` rule versus the latest closed 5m candle, and the outcome (F43, F46, U27)
+SQL:
+SELECT b.id AS buy_id, b.signal_id, m.candle_open_time, (SELECT f.id FROM trade_signal f WHERE f.symbol = m.symbol AND f.interval_code = '5m' AND f.generated_at <= m.generated_at ORDER BY f.generated_at DESC LIMIT 1) AS used_5m_id, (SELECT f.id FROM trade_signal f WHERE f.symbol = m.symbol AND f.interval_code = '5m' AND f.candle_open_time + INTERVAL 5 MINUTE <= m.candle_open_time + INTERVAL 1 MINUTE ORDER BY f.candle_open_time DESC LIMIT 1) AS latest_closed_5m_id, b.price_usdt, p.realized_pnl, p.status FROM wallet_trade b JOIN trade_signal m ON m.id = b.signal_id LEFT JOIN paper_position p ON p.signal_id = b.signal_id WHERE b.side = 'BUY' AND b.status = 'EXECUTED' AND b.execution_reason = 'SETUP_TIMEFRAME_ATR' ORDER BY b.id LIMIT 50
+### END_DB_REQUEST
+
+## Self-review
+
+- **Corrections:**
+  - F38 confirms F31 and replaces every absolute time label from iterations 1–4.
+  - "Position 171" is now qualified as `wallet_managed_position` 171.
+  - F35 is upgraded from a race to a systematic 86% effect (F46).
+  - The re-entry concern (F33) is downgraded to a single case.
+- **Unsupported claims:** the EQ breakdowns in F40 are reconstructions until I5-001/002 return. The fee rate is external and unverified for this account.
+- **Plan for iteration 6:** use I5-001 to I5-006 to confirm the F40 breakdowns, size F41 and F44 across all trades, and decide whether F43 is systematic. Then start the Replay-reproducibility assessment, as analysis only.
+
+Sources:
+- [CryptoPotato – Binance Fees Explained](https://cryptopotato.com/binance-fees/)
+- [Unger Academy – Binance Fees Explained](https://ungeracademy.com/?p=6767)
+- [Traders Union – Binance revises trading fee structure](https://tradersunion.com/news/brokers-news/show/2241303-binance-revises-trading-fee-structure/)
+- [Rutland Herald / Business Wire – Binance.US fee change (different entity)](https://www.rutlandherald.com/news/business/binance-us-slashes-spot-trading-fees-to-near-zero-for-all-users/article_03c05c3d-289a-557a-aef5-443d71beea8b.html)

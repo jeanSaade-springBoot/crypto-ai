@@ -1,0 +1,1 @@
+SELECT interval_code, signal_mode, SUM(final_entry_allowed = 1) AS entry_allowed, SUM(final_entry_allowed = 1 AND risk_reward_ratio < 1) AS allowed_rr_lt1, COUNT(*) AS total FROM crypto_ai.trade_signal WHERE generated_at >= '2026-10-10 00:00:00' AND interval_code = '1m' GROUP BY interval_code, signal_mode LIMIT 10

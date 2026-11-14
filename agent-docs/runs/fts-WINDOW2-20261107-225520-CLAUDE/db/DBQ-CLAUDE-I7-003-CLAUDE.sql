@@ -1,0 +1,1 @@
+SELECT pp.status, SUM(pp.entry_reason LIKE '%Progressive add%') AS with_add, COUNT(*) AS n, SUM(CASE WHEN pp.entry_reason LIKE '%Progressive add%' THEN pp.realized_pnl ELSE 0 END) AS pnl_with_add FROM crypto_ai.paper_position pp WHERE pp.status IN ('CLOSED','STOPPED') GROUP BY pp.status LIMIT 5

@@ -1,0 +1,289 @@
+# Daily Failed-Trade Study: WINDOW1, Claude Track, Iteration 1 (Trade Reconstruction, Self-Review)
+
+**Bottom line:** I can't reconstruct any of the six trades from entry signal to exit yet. The only database evidence I have is the coordinator's five proof queries. Two problems come before any trade analysis:
+
+- **The snapshot's KSA time is wrong** (F-01).
+- **The selection leaves out every stop-loss loss**, because those rows have status `STOPPED`, not `CLOSED` (F-02).
+
+Trade 143 also has a loss on a close reason that should only fire at a small profit (F-08).
+
+I didn't touch code, configuration, the database, git or deployments. Plan mode was active, but no Write or ExitPlanMode tool was available, so there is no plan file. This message is the whole Iteration 1 output.
+
+**Context loaded:**
+- AGENTS.md.
+- `AGREED_KNOWLEDGE.md` and `DECISIONS.md`: both say "no entries recorded yet".
+- `DATABASE_INVESTIGATION_RULES.md`.
+- All of `claude-docs/`.
+- The run's `CHARTER.md` and `FROZEN_TRADE_SELECTION.md`.
+- The `db/` folder: `DATABASE_QUERY_LOG.md` and DBQ-FTS-001…005 (SQL and results).
+
+There is no `db/CLAUDE/` folder and I have no private files yet. As required, I did not read `private/CODEX/`, `LIVE_EVENTS.log` or `LIVE_TEAM_STATUS.md`.
+
+---
+
+## FINDINGS
+
+**F-01: The snapshot's KSA time doesn't match its UTC time.** [PROJECT EVIDENCE]
+- The charter says snapshot UTC `2026-10-22 10:28:18` and snapshot KSA `2026-10-21 12:50:52`. UTC+3 would be **2026-10-22 13:28:18 KSA**.
+- `DATABASE_QUERY_LOG.md` agrees with the UTC value: DBQ-FTS-001…005 ran from `2026-10-22T13:28:13+03:00` to `13:28:18+03:00`.
+- The "KSA" value looks like the run-ID clock (`20261021-125052`), not the time the snapshot was taken. [AGENT INFERENCE]
+- This doesn't change the frozen IDs, but the window metadata isn't reliable.
+
+**F-02: The selection leaves out all stop-loss losses.** [PROJECT EVIDENCE]
+- DBQ-FTS-002 shows 75 `STOPPED` rows, and all 75 have negative P&L. Only 26 of the 118 `CLOSED` rows are negative.
+- The code shows why: `LivePositionProtectionService.java:178` and `PaperTradingService.java:183` close stop-loss exits as `PositionStatus.STOPPED`.
+- So `status='CLOSED'` picks only signal-driven and profit-lock losses. The six trades are not "the six latest failed trades". Any `STOPPED` loss closed after 2026-10-11 20:55 UTC was skipped.
+- I'm not substituting trades (frozen set), but the comparative study must say this.
+
+**F-03: The newest selected loss is about 10 days older than the snapshot.** [PROJECT EVIDENCE + INFERENCE]
+- The newest `closed_at` is `2026-10-12 10:05:20 UTC`, and the snapshot was taken on 2026-10-22.
+- Possible reasons: no trading since then, only profitable or `STOPPED` closes since then, or the database is a stale copy. I can't tell which yet (DBQ-CLAUDE-I1-003).
+
+**F-04: Close reasons tell us which code path closed each trade.** [PROJECT EVIDENCE, code]
+- `SELL_CONFIRMED` and `HTF_SELL_CONFIRMED` come only from `PositionExitPolicy.evaluateNormalExit` (`PositionExitPolicy.java:29,42`). It runs on the live 1m tick path (`LivePositionProtectionService.java:235-238`). Trades 182, 158 and 137 use the first; trade 172 uses the second.
+- `STRONG_SELL` (trade 162) comes from the signal path: `PaperTradingService.java:197-208`, `closeFromSignal(... signal.getDecision().name())`, after `validateSell`.
+- `PROFIT_LOCK_HARD_EXIT` (trade 143) can come from either path: `LivePositionProtectionService.java:195,213` or `PaperTradingService.java:193`.
+
+**F-05: The live exit path uses the newest 1m, 5m and 1h signals without checking their age.** [PROJECT EVIDENCE, code; impact unconfirmed]
+- `LivePositionProtectionService.java:95-97` takes `findTopBySymbolAndIntervalOrderByGeneratedAtDesc` for each interval.
+- `evaluateNormalExit` doesn't check how old those signals are. A 1h SELL that is up to about an hour old can trigger `HTF_SELL_CONFIRMED` (`PositionExitPolicy.java:25-28`).
+- This also applies to a 1h SELL that already existed when the position opened. That raises a question for trade 172: was the 1h signal already bearish at entry? If so, the BUY was admitted against a bearish 1h, or the 1h turned within the 40-minute hold.
+- This is a hypothesis to test, not a defect.
+
+**F-06: Entries are 4–6 seconds after a minute boundary.** [AGENT INFERENCE]
+- All six `opened_at` values fall at hh:mm:04–06 UTC. That fits 1m-close-driven entries with about 4–6 s from candle close to entry.
+- This needs signal and work timestamps to confirm.
+
+**F-07: Four of the six holds are short.** [PROJECT EVIDENCE: timing]
+- Holds were 3m31s (143), 5m08s (137) and 8m14s (182). Trade 162 was 23m58s, 172 was 39m40s and 158 was 55m02s.
+- Exiting on a confirmed SELL within 3–8 minutes of a BUY suggests the entry admitted a BUY while the 5m was already weakening, or it chased a spike. [AGENT INFERENCE, to be tested against the 5m/1h signals available at entry]
+
+**F-08: Trade 143 lost money on a hard-floor exit that should only fire at a small profit.** [PROJECT EVIDENCE + INFERENCE] **Highest priority.**
+- The hard floor is `entry × 1.0005` (`LivePositionProtectionService.java:210`).
+- For this exit the profit lock had to be active within 3.5 minutes of entry, which needs 70% progress toward the take-profit.
+- A loss on this exit means one of four things:
+  - a price jump through the floor, filling at the tick price below entry;
+  - the floor being measured against a different entry price than the paper P&L (wallet average vs paper entry);
+  - a fill and P&L mismatch;
+  - a logic defect.
+- Two earlier observations bear on this but are unconfirmed (INVESTIGATION_LOG items 3 and 7): sizing differs between the paper row and the wallet, and a wallet exit failure doesn't block the paper close.
+
+**F-09: Trade 137 is EGLDUSDT again, and trade 143 opened 1h40m after it closed.** [PROJECT EVIDENCE]
+- Two losses in a row on the same symbol.
+- Check whether a same-symbol re-entry guard was evaluated. The `crypto_account_configuration` limits aren't read by the paper entry path (INVESTIGATION_LOG item 4). [AGENT INFERENCE]
+
+**F-10: The working tree has a FIX-154 migration, while AGENTS.md calls FIX-154 not implemented.** [PROJECT EVIDENCE]
+- The file is `V107__fix_154_trusted_higher_timeframe_buy.sql`.
+- I don't know whether it was applied or running on 2026-10-11/12 (DBQ-CLAUDE-I1-012). It matters for judging entry rules.
+
+## EVIDENCE: Timeline (stored UTC → KSA = UTC+3)
+
+| # | ID | Symbol | Opened UTC → KSA | Closed UTC → KSA | Hold | Close reason | Realized P&L (USDT) | Entry signal |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 182 | ACEUSDT | 10-12 09:57:06.476 → 10-12 12:57:06 | 10-12 10:05:20.486 → 10-12 13:05:20 | 8m14s | SELL_CONFIRMED | -0.031847133758 | 176710 |
+| 2 | 172 | SHIBUSDT | 10-12 06:36:05.087 → 10-12 09:36:05 | 10-12 07:15:45.484 → 10-12 10:15:45 | 39m40s | HTF_SELL_CONFIRMED | -0.045537340619 | 171589 |
+| 3 | 162 | DOGEUSDT | 10-12 04:02:06.415 → 10-12 07:02:06 | 10-12 04:26:04.116 → 10-12 07:26:04 | 23m58s | STRONG_SELL | -0.051694428489 | 167668 |
+| 4 | 158 | XRPUSDT | 10-12 02:35:04.811 → 10-12 05:35:04 | 10-12 03:30:06.638 → 10-12 06:30:06 | 55m02s | SELL_CONFIRMED | -0.031896796144 | 165412 |
+| 5 | 143 | EGLDUSDT | 10-11 22:40:04.858 → 10-12 01:40:04 | 10-11 22:43:36.229 → 10-12 01:43:36 | 3m31s | PROFIT_LOCK_HARD_EXIT | -0.037193156459 | 159408 |
+| 6 | 137 | EGLDUSDT | 10-11 20:55:04.510 → 10-11 23:55:04 | 10-11 21:00:12.122 → 10-12 00:00:12 | 5m08s | SELL_CONFIRMED | -0.075018754689 | 156723 |
+
+All dates are 2026.
+
+**Sources:**
+- Rows: DBQ-FTS-005.
+- Schema: DBQ-FTS-001. `paper_position` has `exit_signal_id`, `entry_reason`, `exit_reason` and `close_reason` columns.
+- Replay table `wallet_position_test` is separate from production: DBQ-FTS-004.
+- `wallet_trade` has 445 EXECUTED rows, 101 of them with negative P&L: DBQ-FTS-003.
+
+The six losses total about -0.2732 USDT, gross. Automatic trades record zero fees (`claude-docs/TRADING_RULES.md` §6), so the net loss is larger. [PROJECT EVIDENCE + arithmetic]
+
+**Still missing for every trade:** candle, entry signal decision chain, work claim, wallet fill, managed SL/TP and profit-lock state, price observations, exit trigger, and audit.
+
+## UNKNOWNS
+
+- **U-1:** Entry and exit price, quantity, SL/TP and risk/reward for all six (asked for in DBQ-CLAUDE-I1-002).
+- **U-2:** Whether wallet fills match the paper rows, and the real P&L after fees (DBQ-CLAUDE-I1-005).
+- **U-3:** The entry signal's decision chain: strategy, `entryAllowed`, blocking stage, 5m/1h/BTC context and data quality (DBQ-CLAUDE-I1-007/008).
+- **U-4:** The exit-time 1m/5m/1h signals, how old they were, and whether F-05 applies (DBQ-CLAUDE-I1-008).
+- **U-5:** Price observations during each hold, and whether there were gaps or `PROTECTION_NOT_APPLIED` events (DBQ-CLAUDE-I1-009).
+- **U-6:** Trade 143's profit-lock state history and the actual fill compared with the floor (DBQ-CLAUDE-I1-006/010).
+- **U-7:** Which `STOPPED` losses the frozen selection left out (DBQ-CLAUDE-I1-003).
+- **U-8:** Application version and ingestion mode on 2026-10-11/12 (DBQ-CLAUDE-I1-012). Logs are not available to me.
+- **U-9:** Whether Replay can reproduce these. Not assessed in Iteration 1.
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-001
+Purpose: Read the actual schema of the related trader tables before choosing columns (AGENTS.md rule)
+SQL:
+SELECT table_name, ordinal_position, column_name, column_type
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN ('trade_signal','wallet_trade','wallet_managed_position','production_exit_audit','market_price_event','signal_processing_work','position_management_event','execution_opportunity','position_analysis')
+ORDER BY table_name, ordinal_position
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-002
+Purpose: Full lifecycle row for the six frozen trades (prices, SL/TP, qty, exit signal, reasons)
+SQL:
+SELECT id, symbol, side, status, quantity, entry_price, stop_loss, take_profit, exit_price, realized_pnl, close_reason, signal_id, exit_signal_id, opened_at, closed_at, LEFT(entry_reason, 1500) AS entry_reason, LEFT(exit_reason, 1500) AS exit_reason
+FROM paper_position
+WHERE id IN (182,172,162,158,143,137)
+ORDER BY id DESC
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-003
+Purpose: Check what the selection skipped: positions closed after 2026-10-11 20:55 UTC (all statuses) and the latest open/close times overall
+SQL:
+SELECT id, symbol, status, realized_pnl, close_reason, opened_at, closed_at
+FROM paper_position
+WHERE closed_at >= '2026-10-11 20:55:00'
+ORDER BY closed_at DESC
+LIMIT 60;
+SELECT status, MAX(opened_at) AS max_opened, MAX(closed_at) AS max_closed, COUNT(*) AS n
+FROM paper_position
+GROUP BY status
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-004
+Purpose: Recorded close trigger per frozen trade
+SQL:
+SELECT *
+FROM production_exit_audit
+WHERE paper_position_id IN (182,172,162,158,143,137)
+ORDER BY paper_position_id DESC
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-005
+Purpose: Wallet fills for each trade window (entry, partial harvests, exit), to check paper vs wallet
+SQL:
+SELECT p.id AS paper_id, w.id, w.signal_id, w.execution_key, w.symbol, w.side, w.quantity, w.price_usdt, w.gross_amount_usdt, w.fee_usdt, w.net_amount_usdt, w.cost_basis_usdt, w.realized_pnl_usdt, w.realized_pnl_percent, w.execution_type, w.status, w.executed_at, LEFT(w.notes, 300) AS notes
+FROM paper_position p
+JOIN wallet_trade w
+  ON w.symbol = p.symbol
+ AND w.executed_at BETWEEN p.opened_at - INTERVAL 2 MINUTE AND p.closed_at + INTERVAL 2 MINUTE
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC, w.executed_at
+LIMIT 100
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-006
+Purpose: Managed-position state (SL/TP, highest price, profit lock, entry thesis) for each trade
+SQL:
+SELECT p.id AS paper_id, m.*
+FROM paper_position p
+JOIN wallet_managed_position m
+  ON m.symbol = p.symbol
+ AND m.opened_at BETWEEN p.opened_at - INTERVAL 1 MINUTE AND p.opened_at + INTERVAL 1 MINUTE
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC
+LIMIT 20
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-007
+Purpose: Entry and exit trade_signal rows (full row; any large JSON is trimmed in a later iteration)
+SQL:
+SELECT p.id AS paper_id, 'ENTRY' AS role, s.*
+FROM paper_position p
+JOIN trade_signal s ON s.id = p.signal_id
+WHERE p.id IN (182,172,162,158,143,137)
+UNION ALL
+SELECT p.id, 'EXIT', s.*
+FROM paper_position p
+JOIN trade_signal s ON s.id = p.exit_signal_id
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY 1 DESC, 2
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-008
+Purpose: 1m/5m/1h signal context available at entry and during the hold (checks F-05 and F-07)
+SQL:
+SELECT p.id AS paper_id, s.id, s.interval_code, s.decision, s.total_score, s.latest_price, s.stop_loss, s.take_profit, s.generated_at
+FROM paper_position p
+JOIN trade_signal s
+  ON s.symbol = p.symbol
+ AND ( (s.interval_code = '1m' AND s.generated_at BETWEEN p.opened_at - INTERVAL 10 MINUTE AND p.closed_at + INTERVAL 10 SECOND)
+    OR (s.interval_code = '5m' AND s.generated_at BETWEEN p.opened_at - INTERVAL 30 MINUTE AND p.closed_at + INTERVAL 10 SECOND)
+    OR (s.interval_code = '1h' AND s.generated_at BETWEEN p.opened_at - INTERVAL 3 HOUR AND p.closed_at + INTERVAL 10 SECOND) )
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC, s.interval_code, s.generated_at
+LIMIT 600
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-009
+Purpose: Price-observation coverage during each hold (count, gaps, range, statuses). Assumes a `status` column; confirm against DBQ-CLAUDE-I1-001.
+SQL:
+SELECT p.id AS paper_id, e.status, COUNT(*) AS n, MIN(e.observed_at) AS first_obs, MAX(e.observed_at) AS last_obs, MIN(e.price) AS min_price, MAX(e.price) AS max_price
+FROM paper_position p
+JOIN market_price_event e
+  ON e.symbol = p.symbol
+ AND e.observed_at BETWEEN p.opened_at - INTERVAL 30 SECOND AND p.closed_at + INTERVAL 5 SECOND
+WHERE p.id IN (182,172,162,158,143,137)
+GROUP BY p.id, e.status
+ORDER BY p.id DESC, e.status
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-010
+Purpose: Every price observation for trade 143 (the hard-floor loss) and the 20 observations just before each other trade's exit
+SQL:
+SELECT e.*
+FROM market_price_event e
+WHERE e.symbol = 'EGLDUSDT'
+  AND e.observed_at BETWEEN '2026-10-11 22:39:30' AND '2026-10-11 22:43:40'
+ORDER BY e.observed_at
+LIMIT 400;
+SELECT p.id AS paper_id, e.*
+FROM paper_position p
+JOIN market_price_event e
+  ON e.symbol = p.symbol
+ AND e.observed_at BETWEEN p.closed_at - INTERVAL 40 SECOND AND p.closed_at + INTERVAL 2 SECOND
+WHERE p.id IN (182,172,162,158,137)
+ORDER BY p.id DESC, e.observed_at
+LIMIT 300
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-011
+Purpose: Position-management events (TP extension, profit lock, near-TP) and entry-signal work claim/latency
+SQL:
+SELECT p.id AS paper_id, ev.*
+FROM paper_position p
+JOIN position_management_event ev
+  ON ev.symbol = p.symbol
+ AND ev.occurred_at BETWEEN p.opened_at - INTERVAL 5 SECOND AND p.closed_at + INTERVAL 5 SECOND
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC, ev.occurred_at
+LIMIT 200;
+SELECT w.*
+FROM signal_processing_work w
+WHERE w.signal_id IN (176710,171589,167668,165412,159408,156723)
+   OR w.paper_position_id IN (182,172,162,158,143,137)
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-012
+Purpose: Migration level in effect around the trade dates (checks the FIX-153 OFF-mode level and whether V107/FIX-154 was applied before 2026-10-12)
+SQL:
+SELECT installed_rank, version, description, type, installed_on, success
+FROM flyway_schema_history
+ORDER BY installed_rank DESC
+LIMIT 25
+### END_DB_REQUEST
+
+---
+
+**Self-review of Iteration 1:**
+- Only the coordinator proof queries and static code support the conclusions so far.
+- F-02 and F-08 are the highest-value leads. F-05 is a code-level hypothesis.
+- No cause has been assigned to any trade yet.
+- Iteration 2 needs the results of DBQ-CLAUDE-I1-001…012.

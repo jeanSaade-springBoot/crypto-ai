@@ -1,0 +1,203 @@
+# CLAUDE: FTS WINDOW2, Iteration 6: Root cause and research
+
+**Run:** `fts-WINDOW2-20261025-180002`. **Frozen trades:** 182, 172, 162, 158, 143, 137, none substituted. This was analysis only: I made no code, config or DB writes, ran no git commands and deployed nothing. I did not open the other agent's files, `LIVE_TEAM_STATUS.md` or `LIVE_EVENTS.log`.
+
+**Time rule:** the database stores UTC, but our query session displays it in KSA (F-I4-00). Values copied from DB results below are KSA; UTC = KSA − 3 h.
+
+## Summary
+
+- **Two trades lost because of how the system reads its own 5m/1h context.**
+  - **182:** the 5m SELL was hidden, so nothing vetoed the BUY.
+  - **143:** a race at the 1m/5m candle boundary let the BUY use a 5m bar that had already been replaced.
+- **Four trades were valid losses under the current rules,** each with a structural weakness:
+  - 162: an Entry Quality score cut-off that falls on a cliff edge.
+  - 158: a target smaller than round-trip fees.
+  - 172: a coin whose price step is larger than its ATR (its typical candle size).
+  - 137: a long placed under a known rejection high.
+- **The Entry Quality score (EQ) does not predict results across all trades.** EXCELLENT entries won 0 of 3 (I5-003), so EQ cannot be the fix.
+- **New: Replay would not reproduce trade 143's entry.** Replay processes candles at a shared boundary in a fixed order, 1h → 5m → 1m, so the 1m sees the new 5m. Production's order depends on thread timing.
+- **New: FIX-154 was very likely live when these trades ran.** This contradicts AGENTS.md, which calls it "not yet implemented".
+
+## FINDINGS
+
+**F-I6-01: Root cause of 182. One 1h trend score on a cliff edge both hid the 5m SELL and authorised the BUY. Logic defect. (PROJECT EVIDENCE + code)**
+- **What happened:**
+  - In the 30 minutes before entry, the 1m ran STRONG_SELL from 09:39 to 09:54 KSA, then flipped to BUY at 09:56 (I5-001).
+  - The 5m was originally SELL or STRONG_SELL on all 12 bars, but every one was stored as NEUTRAL (F-I4-01).
+  - `HigherTimeframeBuyAssessmentService.java:20-22` vetoes only on `getDecision()`, not on the original decision, so the bearish 5m never reached it.
+  - FIX-11G then admitted the trade at EQ 50.
+- **Why it exited:** the 1h trend score fell from 16 to 13, below the bullish threshold of 15. The 5m was no longer masked, and that produced SELL_CONFIRMED.
+- **So entry and exit were the same threshold flipping, not a change in the market.**
+- **EQ arithmetic (AGENT INFERENCE):**
+  - R:R 0.48 implies ATR ≈ 0.08% of price ≈ 0.000151.
+  - The 30-minute low was 0.1875 and the signal price was 0.1884, which puts price about 5.96 ATRs above the low. That costs −20, within 0.04 ATR of the −30 band.
+  - EQ = 100 − 30 − 20 = 50, matching the recorded value. One more price step would have given EQ 40 and a block.
+- **Population (I5-004):** 9 closed positions entered on a masked-bearish 5m.
+  - 5 wins, each between +0.03 and +0.12.
+  - 4 losses (182, 181, 37, 23). Three of them were full STOPPED losses: −0.584, −0.272, −0.145.
+  - Net about −0.703. The sample is small, but the pattern is asymmetric.
+- **Verdict:** confirmed logic defect in the working tree. Deployment at trade time is strongly supported by F-I6-05 and is being proven by I6-001.
+
+**F-I6-02: Root cause of 143. A boundary race plus a chase that the route overrode; Replay would not reproduce the entry. (PROJECT EVIDENCE + code)**
+- **The chase is now confirmed with numbers (closes U-I5-01/02):**
+  - The 30-minute low was 3.972 at 22:33 KSA, and the fill was 4.033: that is **+1.54% expansion**, inside the 1.5–3% band worth −10.
+  - Using the 5m ATR of 0.009073 (I5-002), price was **(4.033 − 3.972) / 0.009073 = 6.72 ATRs** above the low, beyond the >6 band worth −30.
+  - EQ = 100 − 30 − 10 = 60, which reproduces the recorded value.
+  - The price had moved from 3.972 to 4.032 in 6 bars, up 0.78% in the last 2 minutes alone.
+- **Replay ordering (closes U-I4-03):**
+  - Replay sorts candles by close time, then by interval, 1h → 5m → 1m (`RegressionTestWorker.java:557-560`, `intervalOrder` at `:787-793`).
+  - It sets `evaluationTime` to the candle close (`:584`), and `analyzeForRegression` stamps the signal with that time (`AnalysisService.java:190`).
+  - So the same-boundary 5m has `generatedAt == evaluationTime`. It passes the `!isAfter` filter and is visible to the 1m.
+  - In Replay, the 1m 159408 would therefore see the 5m WATCH (159407), and SETUP_TIMEFRAME_ATR would return null. **Production entered; Replay would not.** This is inferred from the code and still needs a Replay run (I6-004).
+  - Production stamps signals with `Instant.now()` when analysis starts (`AnalysisService.java:150`), so its ordering depends on which thread wins.
+- **How common the race is (I5-006):** it admitted 6 entries.
+  - 3 were small profit-lock wins (72, 119, 255).
+  - 305 (PEPE) was a full stop at −0.698, and 358 is trade 143 at −0.037.
+  - 199 was an add-on with no separate position.
+  - Net about −0.60, but n is too small to size the effect.
+- **Verdict:** confirmed race and a confirmed Replay/Production ordering mismatch (a parity defect). It is decisive for 143. The exit was a separate single-tick gap (F-I3-03).
+
+**F-I6-03: EQ is not a reliable filter, so raising its bar is not the fix. (PROJECT EVIDENCE: I5-003)**
+
+| EQ class | Wins / trades | Net PnL |
+|---|---|---|
+| EXCELLENT | 0 / 3 | −0.968 |
+| GOOD | 8 / 16 | −0.402 |
+| ACCEPTABLE | 24 / 43 | +0.758 |
+| LATE | 17 / 29 | +0.224 |
+
+- **Inside FIX-11G:** n = 35, 18 wins / 16 losses, net about −0.288.
+  - The EQ 50 bucket was *positive*: 8 wins / 6 losses, +0.277.
+  - EQ 85–90 lost: 0 / 3, −0.829.
+- **Effect on my iteration 5 finding:** F-I5-02's threshold inconsistency is real in the code and decisive for 182. But the population does not show the loose EQ 50 bar is what costs money, so I am **downgrading F-I5-02 from root cause to a contributing factor**.
+- **Most likely reason:** F-I5-01. A third of the EQ range is a volatility term, which drowns out the location signal. This is inference.
+- **Weakest route:** SETUP_CONFIRMATION_WAKEUP had the worst win rate, 15 wins / 41 trades, net −0.905. This is trade 158's route.
+
+**F-I6-04: Fees. Trade 158's 0.17% target cannot cover a standard Binance round trip. (EXTERNAL RESEARCH + PROJECT EVIDENCE)**
+- **External:** secondary sources agree that a regular (VIP 0) Binance spot account pays 0.10% maker and taker, or 0.075% when paying in BNB. That makes a round trip 0.15–0.20%. I did not reach Binance's official fee page, so this is not authoritative.
+- **Effect:** 158's 0.17% TP would have been at about breakeven or a loss after fees even if it hit. Any ATR plan with an ATR% below roughly 0.067% puts the TP under fees.
+- **Unknown:** whether the paper model charges fees at all (I6-002).
+
+**F-I6-05: Contradiction with AGENTS.md. FIX-154 appears to have been deployed before every frozen trade. (PROJECT EVIDENCE: I5-005 + code)**
+- **Migrations:** `V107 fix 154 trusted higher timeframe buy` and `V108` were installed at a displayed 2026-10-10 00:15:21; `V109` at 01:52:45.
+  - Flyway's `installed_on` is a TIMESTAMP, so these display in KSA. In UTC: 2026-10-09 21:15:21 and 22:52:45.
+  - All six entries were made on 10-11 or 10-12.
+- **Startup check:** `Fix154RuntimeSchemaChecks.java:21-23` refuses to start the application without `buy_htf_assessment_audit`. Flyway also runs from the application jar, so a jar containing FIX-154 started on 10-10.
+- **Later jars:** V110 and V111 (10-15, 10-17) show later code was deployed after the trades too. So the working tree is newer than the code that ran them, and U-I4-01 stays open for any lines changed after 10-12.
+- I am reporting this contradiction only; I have not edited AGENTS.md.
+
+**F-I6-06: The other entry inputs are confirmed from the 30-minute windows. (PROJECT EVIDENCE: I5-001, I5-002)**
+- **172:** the 30-minute low was 5.47e-6 and entry 5.49e-6, two price steps. At a 1m ATR of about 6.8e-9 that is about 2.9 ATRs, worth −10, giving EQ 60 as recorded. Confirms F-I5-06.
+- **158:**
+  - 30-minute low 1.4084, 5m ATR 0.001879 (I5-002).
+  - With the 5m ATR the extension is 1.28 ATRs, so no extension penalty. EQ at decision ≈ 100 − 30 (R:R) − 10 (age 53 min) = 60.
+  - With the 1m ATR of 0.00077 it is 3.1 ATRs (−10), so EQ at execution ≈ 50.
+  - This confirms the split in F-I5-07/08.
+- **137:**
+  - The rejection high is identified: **4.005 at 20:40 KSA**. Later 1m bars closed at 3.992–4.000 and never reclaimed it.
+  - Entry was 3.999 with TP at 4.01188. To hit, price had to break both the rejection high and the 4.012 ask wall.
+  - Confirms F-I5-05.
+
+## Root-cause register (on information available at entry)
+
+| Pos | Primary cause | Contributing factors | Classification |
+|---|---|---|---|
+| 182 | Masked 5m bearish plus FIX-154 checking only the post-mask decision (F-I6-01) | FIX-11G EQ 50 bar; R:R 0.48; whipsaw on the 1h trend-score threshold of 15 | **Logic defect** |
+| 143 | 1m/5m boundary race giving a stale 5m BUY (F-I6-02) | Chase: +1.54% expansion, 6.72 ATRs above the low; route overrode the 1m WAIT_FOR_RETRACEMENT; gap exit | **Logic defect plus a Replay parity defect** |
+| 162 | Marginal pass at EQ 50, only through minute truncation | FIX-119 guard skipped (1 BUY / 9 WATCH); R:R 0.44 | Valid loss; threshold design weakness |
+| 158 | TP 0.17% below fees | Late wake-up (opportunity 53 min old); weakest route by win rate | Valid loss; structural (fees) |
+| 172 | SHIB price step larger than ATR | R:R 0.74 | Valid loss; structural |
+| 137 | Long under the 4.005 rejection high, TP above it | 68% of the Bollinger range; ask wall; funding at the 100th percentile | Valid loss; location weakness |
+
+**Outcome, assessed separately:** after the exit, 182, 172 and 158 later reached their TP; 162 and 137 would have been stopped. So the exits were mixed in outcome, and all of them followed the rules (F-I4-05).
+
+## EVIDENCE
+- **E-I6-01:** I5-001 (30-minute 1m windows), I5-002 (5m ATRs), I5-003 (route × EQ outcomes), I5-004 (masked population), I5-005 (V107/V108/V109 at 10-10, V110/V111 at 10-15 and 10-17), I5-006 (race outcomes).
+- **E-I6-02:** code:
+  - `RegressionTestWorker.java:550-560, 584, 612-620, 787-793`
+  - `AnalysisService.java:147-154, 183-190`
+  - `HigherTimeframeBuyAssessmentService.java:15-51`
+  - `TradeExecutionValidationService.java:93, 145, 427` (assessment call sites)
+  - `OpportunityConsolidationService.java:64`
+  - `BuyHtfAssessmentAuditStore.java:58`
+  - `Fix154RuntimeSchemaChecks.java:21-23`
+  - `V107__fix_154_trusted_higher_timeframe_buy.sql`, `V109__…sql`
+- **E-I6-03 (EXTERNAL):** Binance spot fees of 0.1%, or 0.075% with BNB. Secondary sources only.
+
+## UNKNOWNS
+- **U-I6-01:** the FIX-154 audit rows for the six entries. These would prove deployment and show exactly which 5m and 1h signal IDs each entry used. (I6-001)
+- **U-I6-02:** whether the paper model charges fees. This decides how serious F-I6-04 is. (I6-002)
+- **U-I6-03:** confirmation from an actual Replay run that 143 does not reproduce and 182 does. Checked first against existing Replay output (I6-004), otherwise a Replay run is needed.
+- **U-I6-04:** the exact 1m ATR for 182, which would confirm the 5.96 ATR claim. (I6-003)
+- **Carried over:** log searches (FIX-11G, FIX-105, FIX-154 lines) and the working-tree vs deployed-code diff for lines changed after 10-12.
+
+## DB_REQUESTS
+Date/time literals are in the session's KSA display zone.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-001
+Purpose: U-I6-01 / F-I6-05. FIX-154 audit evidence for the six entry signals: proves deployment and the exact 5m and 1h used.
+SQL:
+SELECT id, reference_signal_id, evaluation_path, evaluated_at, replay_mode, one_hour_signal_id, one_hour_raw_decision, one_hour_effective_decision, one_hour_data_quality_valid, five_minute_signal_id, five_minute_raw_decision, five_minute_effective_decision, five_minute_data_quality_valid, assessment_band, max_initial_percent, legacy_veto_result, final_result, LEFT(final_reason, 300) AS final_reason
+FROM crypto_ai.buy_htf_assessment_audit
+WHERE reference_signal_id IN (176710, 171589, 167668, 165412, 159408, 156723)
+ORDER BY reference_signal_id, evaluated_at
+LIMIT 60;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-002
+Purpose: U-I6-02. Whether the position and wallet tables model fees (schema only).
+SQL:
+SELECT table_name, column_name, data_type
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai' AND table_name IN ('paper_position','wallet_trade','wallet')
+  AND (column_name LIKE '%fee%' OR column_name LIKE '%commission%')
+ORDER BY table_name, column_name
+LIMIT 30;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-003
+Purpose: U-I6-04. 1m ATR, R:R, stop and TP of the six entry signals, plus position entry, stop and TP.
+SQL:
+SELECT p.id, p.entry_price, p.stop_loss, p.take_profit, s.id AS sig, s.latest_price, s.atr_at_signal, s.atr_percent, s.risk_reward_ratio
+FROM crypto_ai.paper_position p JOIN crypto_ai.trade_signal s ON s.id = p.signal_id
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC
+LIMIT 6;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I6-004
+Purpose: U-I6-03. Any existing Replay output covering the 143 (EGLD) and 182 (ACE) entry boundaries (read-only; Replay tables).
+SQL:
+SELECT test_run_id, symbol, interval_code, candle_open_time, generated_at, original_decision, final_decision, entry_authority, entry_authority_max_position_percent
+FROM crypto_ai.analysis_test_signal
+WHERE (symbol = 'EGLDUSDT' AND candle_open_time BETWEEN '2026-10-11 22:34:00' AND '2026-10-11 22:40:00')
+   OR (symbol = 'ACEUSDT'  AND candle_open_time BETWEEN '2026-10-12 09:50:00' AND '2026-10-12 09:57:00')
+ORDER BY test_run_id DESC, symbol, candle_open_time, interval_code
+LIMIT 80;
+### END_DB_REQUEST
+
+### LOG_SEARCH_REQUEST (operator with SSH; read-only; windows in true UTC)
+1. `FIX-154` or `HTF_CONTEXT_ALLOWED` for signalId 176710, 2026-10-12 06:57:00Z–06:57:10Z. This is a backup if I6-001 returns nothing.
+2. Startup lines after 2026-10-09 21:15Z showing the deployed version or build, to pin the code that ran on 10-11/12.
+
+## Self-review (iteration 6)
+- **Closed:**
+  - U-I4-03: Replay's order is fixed, so 143 is not reproducible by code inspection.
+  - U-I5-01/02: the 143 chase numbers (+1.54%, 6.72 ATRs), 137's rejection high (4.005), and the 172 and 158 EQ components.
+- **Downgraded:** F-I5-02, from root cause to contributing factor, because the population data does not show the EQ 50 bar loses money (F-I6-03).
+- **Raised:** a contradiction with AGENTS.md about FIX-154's deployment state (F-I6-05). Reported only.
+- **Inference labels:** the 182 EQ split and "Replay would not reproduce 143" remain inference until I6-003 and I6-004 return.
+- No entry judgement used price action after the entry.
+- **Next (iteration 7):** fold in the I6 results, then draft the recommended corrections and regression checks:
+  - 5m veto on the original decision;
+  - a deterministic same-boundary context rule shared by Production and Replay;
+  - an R:R/fee floor.
+
+Sources:
+- [Unger Academy: Binance fees explained](https://ungeracademy.com/?p=6767)
+- [Finhay: Binance trading fees 2026](https://www.finhay.com.vn/en/phi-giao-dich-binance)
+- [Gfinity: Binance fees](https://www.gfinityesports.com/article/binance-fees-withdrawal-transaction)

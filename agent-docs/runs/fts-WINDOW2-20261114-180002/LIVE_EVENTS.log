@@ -1,0 +1,20 @@
+﻿[18:00:02] [COORDINATOR] [STATUS] Launcher started Window=WINDOW2 TestMode=False Run=fts-WINDOW2-20261114-180002
+[18:00:04] [COORDINATOR] [EVIDENCE] Authoritative entity: paper_position CLOSED with closed_at and realized_pnl<0. Replay table wallet_position_test excluded. Ranking by closed_at not opened_at/signal.
+[18:00:04] [COORDINATOR] [STATUS] Frozen 6 trade IDs for both agents
+[18:00:04] [CODEX] [STATUS] Started ITERATION 1 - TRADE RECONSTRUCTION
+[18:00:22] [CODEX] [STATUS] Still working - elapsed 0m 15s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[18:00:37] [CODEX] [STATUS] Still working - elapsed 0m 30s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[18:00:52] [CODEX] [STATUS] Still working - elapsed 1m 45s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[18:01:07] [CODEX] [STATUS] Still working - elapsed 1m 1s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[18:01:22] [CODEX] [STATUS] Still working - elapsed 1m 16s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[18:01:37] [CODEX] [STATUS] Still working - elapsed 2m 31s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[18:01:52] [CODEX] [STATUS] Still working - elapsed 2m 45s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[18:02:07] [CODEX] [STATUS] Still working - elapsed 2m 0s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[18:02:22] [CODEX] [STATUS] Still working - elapsed 2m 15s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[18:02:37] [CODEX] [STATUS] Still working - elapsed 3m 31s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[18:02:52] [CODEX] [STATUS] Still working - elapsed 3m 46s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[18:03:07] [CODEX] [STATUS] Still working - elapsed 3m 1s; task: ITERATION 1 - TRADE RECONSTRUCTION
+[18:03:16] [CODEX] [STATUS] Completed ITERATION 1 - TRADE RECONSTRUCTION
+[18:03:16] [CODEX] [DB] Executing DBQ-CODEX-I1-001
+[18:03:16] [CODEX] [DB] Completed DBQ-CODEX-I1-001
+[18:03:16] [CLAUDE] [STATUS] Started ITERATION 1 - TRADE RECONSTRUCTION

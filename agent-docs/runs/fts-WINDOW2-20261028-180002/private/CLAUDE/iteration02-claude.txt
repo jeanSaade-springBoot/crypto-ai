@@ -1,0 +1,366 @@
+I've finished the evidence pass. Below are the iteration-2 findings and DB requests.
+
+# CLAUDE: FTS WINDOW2, Iteration 2 of 8 (database forensics)
+
+**Run:** `fts-WINDOW2-20261028-180002` · **Mode:** analysis only, self-review only
+**Context loaded:** AGENTS.md, DATABASE_INVESTIGATION_RULES.md, CHARTER.md, my iteration-1 output, and my DB results DBQ-CLAUDE-I1-001..008. AGREED_KNOWLEDGE.md had no timezone entries.
+**Isolation:** I did not read `private/CODEX/`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or any Codex memory.
+**Writes:** none. No code, configuration, database, git or deployment changes. The session is in plan/read-only mode, so this response is the iteration artifact.
+
+---
+
+## F0. The study's timestamps are probably KSA, not UTC (PROJECT EVIDENCE + EXTERNAL RESEARCH)
+
+The `TIMESTAMP` columns returned through the agent DB wrapper appear to be shown at **+03:00 (KSA)**. Every "UTC" time in my iteration 1 and in the frozen-selection table is therefore probably 3 hours late. My iteration-1 KSA column was wrong by +3h, and **I am withdrawing it.**
+
+Evidence:
+
+| # | Source | Observation |
+|---|---|---|
+| E-TZ1 | DBQ-CLAUDE-I1-003, signal 156723 | `candle_open_time` (TIMESTAMP) shows `2026-10-11 20:54:00`, but `btc_signal_generated_at` (DATETIME, which has no session conversion) shows `17:54:59.96` |
+| E-TZ2 | DBQ-CLAUDE-I1-008, `entry_analysis_snapshot_json.generatedAt` | `1791741301.575` epoch = **2026-10-11 17:55:01.575 UTC**, while `trade_signal.generated_at` shows 20:55:01 |
+| E-TZ3 | Binance REST `klines EGLDUSDT 1m` (external) | The candle opening **17:54 UTC** closed at **3.999**, which equals the entry/latest price of signal 156723. The candle opening 20:54 UTC closed at 3.970, which does not match. |
+| E-TZ4 | Binance REST `klines ACEUSDT 1m` (external) | The candle opening **06:56 UTC** on 2026-10-12 closed at **0.1884**, which equals trade 182's entry. The DB showed `09:56`. |
+| E-TZ5 | `application.yml:13-35` | The application forces a UTC session (`connection-init-sql: SET time_zone='+00:00'`, `connectionTimeZone: UTC`), so the stored instants are correct. |
+| E-TZ6 | `scripts/agent-db-query.ps1:10-11` | The wrapper sets no `time_zone`, so it inherits the server's `@@global.time_zone` (probably SYSTEM, a KSA host). |
+
+- **Implication:** the stored data is correct, but what the wrapper displays is KSA. `DATABASE_INVESTIGATION_RULES.md` ("Raw MySQL timestamps are UTC") does not hold for wrapper output. This affects every DBQ-FTS result and the CHARTER's per-trade times. It does not affect selection order.
+- **Status:** strongly supported by two independent symbols, but not formally proven until DBQ-CLAUDE-I2-001 returns `@@session.time_zone` and the NOW()/UTC_TIMESTAMP() offset.
+- **For the coordinator:** this probably affects Codex's output as well.
+
+### Corrected timeline (assuming F0 holds: UTC = displayed − 3h, KSA = displayed)
+
+| ID | Symbol | Open UTC → KSA | Close UTC → KSA |
+|---|---|---|---|
+| 182 | ACEUSDT | 10-12 06:57:06.476 → 09:57:06.476 | 07:05:20.486 → 10:05:20.486 |
+| 172 | SHIBUSDT | 10-12 03:36:05.087 → 06:36:05.087 | 04:15:45.484 → 07:15:45.484 |
+| 162 | DOGEUSDT | 10-12 01:02:06.415 → 04:02:06.415 | 01:26:04.116 → 04:26:04.116 |
+| 158 | XRPUSDT | 10-11 23:35:04.811 → 10-12 02:35:04.811 | 10-12 00:30:06.638 → 03:30:06.638 |
+| 143 | EGLDUSDT | 10-11 19:40:04.858 → 22:40:04.858 | 19:43:36.229 → 22:43:36.229 |
+| 137 | EGLDUSDT | 10-11 17:55:04.510 → 20:55:04.510 | 18:00:12.122 → 21:00:12.122 |
+
+---
+
+## FINDINGS
+
+### F1. The risk plan is inverted on 5 of 6 trades (PROJECT EVIDENCE; code + DB)
+
+- In `AtrRiskService.java:34-45` the stop distance is `max(2×ATR, 0.50% of price)` (`minimum-stop-percent: 0.50`, `application.yml:143`). The target is `3×ATR` with **no matching floor**, and I found no minimum-R:R gate (grep for one returned nothing).
+- So when ATR% is below about 0.25%, the planned R:R falls below 1.
+- DBQ-CLAUDE-I1-002 and I1-005 show the effect. Break-even win rate is SL ÷ (SL + TP), before fees.
+
+| ID | ATR % | SL dist | TP dist | Planned R:R | Break-even win rate |
+|---|---|---|---|---|---|
+| 158 | 0.05% | 0.49% | 0.17% | 0.35 | ~74% |
+| 162 | 0.07% | 0.50% | 0.22% | 0.44 | ~70% |
+| 182 | 0.08% | 0.50% | 0.24% | 0.48 | ~68% |
+| 137 | 0.11% | 0.50% | 0.32% | 0.64 | ~61% |
+| 172 | 0.12% | 0.50% | 0.37% | 0.74 | ~57% |
+| 143 | 0.27% | 0.57% | 1.77% | 3.13 | ~24% (TP from the 5m ATR plan) |
+
+- All six had `volatility_level` LOW.
+- **AGENT INFERENCE:** this is structural rather than a code defect. It works as coded, but in low-volatility regimes it builds negative expectancy into every trade.
+- I'm not classifying it as a defect until the intended policy is confirmed (U-New3). It is the strongest systemic finding so far.
+
+### F2. Fees are larger than the targets (EXTERNAL RESEARCH + PROJECT EVIDENCE)
+
+- Paper notional is about 15–25 USDT (for example 79.6 ACE × 0.1884 ≈ 15.0; 6.2 EGLD × 4.033 ≈ 25.0).
+- Binance's standard spot fee is 0.1% per side (general knowledge, not fetched this iteration), so the round-trip cost is about 0.2%.
+- That exceeds the planned TP distance of 158 (0.17%) and is close to 162 and 182.
+- TRADING_RULES §6 says paper P&L excludes fees, so the realised losses understate the true cost.
+- DBQ-CLAUDE-I2-003 checks `wallet_trade.fee_usdt`.
+
+### F3. SHIBUSDT's ATR is smaller than one price tick (EXTERNAL RESEARCH + PROJECT EVIDENCE)
+
+- Binance `exchangeInfo` gives SHIBUSDT a tickSize of `0.00000001`, which is 0.182% of the 0.00000549 entry.
+- Trade 172's ATR14 was `0.000000006806`, or **0.68 ticks**.
+- The TP needed +3 ticks and the SL sat at −3 ticks. The loss was exactly **1 tick** (549 → 548).
+- The ATR plan carries no real information at this resolution.
+- ACE is also coarse: tick = 0.053% of price and ATR = 1.5 ticks.
+- **AGENT INFERENCE:** this is a symbol-suitability gap. It may need a ticks-per-ATR eligibility check, as a recommendation only.
+
+### F4. Trade 143: the lock was breached by a flash wick, not by drift (PROJECT EVIDENCE + EXTERNAL RESEARCH)
+
+- **Price path (Binance 1m klines, UTC):**
+  - 19:40 candle: open 4.033, high 4.067, close 4.056
+  - 19:41 candle: high **4.101**, matching `highest_price_usdt` 4.101
+  - 19:42 candle: low 4.077, which stayed above the lock price 4.07579
+  - **19:43 candle: open 4.086, low 3.994, close 4.026**
+- **The exit:** at 19:43:36 UTC it filled at 4.027. That is **4.9 cents below the lock** (4.0758) and below the hard floor (4.0350).
+- **Was it a defect?** The 19:43 low of 3.994 was below the SL of 4.0102, so a stop-loss would otherwise have fired. The 4.027 fill was better than the SL would have given.
+- **Lock level checks out:** `profit_lock_price` 4.07579 = entry + 60% × TP distance (4.033 + 0.6 × 0.071317). The stored progress of 95.35% = (4.101 − 4.033) ÷ 0.071317.
+- **Classification:** most likely a valid loss caused by market microstructure, in which price moved past the lock between two observed ticks. Not yet proven: whether the price-event feed had a gap or delay at 19:43 (DBQ-CLAUDE-I2-005/006).
+
+### F5. Trade 143: profit-lock activation is inconsistent with the stored TP (PROJECT EVIDENCE; unresolved)
+
+- `profit_lock_activated_at` displays 22:40:23, which is 19:40:23 UTC, 19 s after entry.
+- Activation at 70% of the stored TP distance needs price ≥ 4.0829, but the 19:40 candle's high was only 4.067.
+- Activation does reconcile with the **1m signal TP** of 4.0647: 70% of that distance is about 4.0549.
+- Hypothesis: the lock activated against the 1m TP, and the TP was then raised to the 5m-ATR value 4.1043 (SETUP_TIMEFRAME_ATR or a FIX-118 extension). The lock may therefore have been armed on a different TP than the one stored.
+- DBQ-CLAUDE-I2-004 (`position_management_event`) should settle this. It is not a defect claim yet.
+
+### F6. Trade 143's entry overrode an ATR "wait" plan and re-entered with no gap (PROJECT EVIDENCE)
+
+- Signal 159408 was **WATCH**, `atr_entry_type` was WAIT_FOR_RETRACEMENT, and recommended position was **0%**, with a retrace target of 4.0118.
+- RSI was 84.32 ("extremely overbought"), RVOL 21.93×, and price was 4.35 ATR from SMA20.
+- Entry was made by `entry_stage=SETUP_TIMEFRAME_ATR` at 25% allocation, at 4.033, which is 0.53% above the 1m retrace target.
+- Prior EGLD trade 142 had closed by PROFIT_LOCK_EXIT about 22 s before, at 19:39:42 UTC, so the re-entry gap was 0 minutes (DBQ-CLAUDE-I1-006).
+- The 5m route (`ExecutionIntelligenceService.java:278-339`, `:1502`) is designed to let the 5m ATR plan override 1m extension. So this follows the coded rules, but it chased a parabolic 1m move.
+- **AGENT INFERENCE:** entry quality was weak *using only the information available at entry* (RSI 84, 4.35 ATR extension).
+
+### F7. Three of six entries were on WATCH signals (PROJECT EVIDENCE)
+
+| ID | `entry_decision` | `entry_stage` |
+|---|---|---|
+| 162 | WATCH | ACCUMULATED_EVIDENCE |
+| 158 | WATCH | SETUP_CONFIRMATION_WAKEUP |
+| 143 | WATCH | SETUP_TIMEFRAME_ATR |
+| 182 | BUY | IMMEDIATE_VALIDATION |
+| 172 | BUY | IMMEDIATE_VALIDATION |
+| 137 | STRONG_BUY | IMMEDIATE_VALIDATION |
+
+- All of these are coded entry routes, so this is not a defect in itself.
+- Trade 162 entered a BREAKOUT at the upper Bollinger band (RSI 68, 2.82 ATR from SMA20).
+- The two BUY entries (182, 172) both had `confluence_status=CONFLICT`. Trade 182 ran TREND_FOLLOWING inside a **WEAK_DOWNTREND** regime with EMA20 < EMA50.
+
+### F8. Entries were fresh; stale data at entry is ruled out (PROJECT EVIDENCE)
+
+- All 7 entry/exit signals have `signal_mode=LIVE` and `data_quality_valid=1`.
+- From the trade-137 example: candle close 17:55:00 UTC → signal 17:55:01.58 → wallet open 17:55:03.02 → paper open 17:55:04.51. That is about 4.5 s from candle close to entry.
+- The others show the same seconds-after-close pattern. I2-002 confirms this for all six.
+
+### F9. Two positions never moved into profit (PROJECT EVIDENCE)
+
+- Trade 182's `highest_price_usdt` equals its entry (0.1884), so it was never above entry.
+- The best progress toward TP on the others was 31% (162), 33% (158), 47% (137) and 49% (172), all before the bearish exits.
+- Exit reasons (trades 182, 158 and 137 SELL_CONFIRMED, 172 HTF_SELL_CONFIRMED) all match the coded policy text.
+- Whether those exits used stale 5m/1h signals is iteration-1 hypothesis F5, still open; DBQ-CLAUDE-I2-007 tests it.
+
+### F10. The study window is not "recent" (PROJECT EVIDENCE)
+
+- The last CLOSED row displays 2026-10-15 03:00 KSA (00:00 UTC). The last STOPPED row displays 03:15 KSA (00:15 UTC).
+- Nothing at all closed between 2026-10-15 and the 2026-10-28 snapshot (DBQ-CLAUDE-I1-004/007), so the system appears not to have traded for about 13 days.
+- The frozen trades are 16–17 days old. The charter stands, but conclusions describe the code/configuration as of 10-11/12, which may differ from today's.
+
+---
+
+## EVIDENCE INDEX
+
+| ID | Source |
+|---|---|
+| DB1 | DBQ-CLAUDE-I1-001: schemas of 7 tables |
+| DB2 | DBQ-CLAUDE-I1-002: full rows for the six trades, recomputed P&L, planned R:R |
+| DB3 | DBQ-CLAUDE-I1-003: 7 signal rows (156723, 159408, 165412, 167668, 168277, 171589, 176710) |
+| DB4 | DBQ-CLAUDE-I1-004/007: status distribution and post-10-12 activity |
+| DB5 | DBQ-CLAUDE-I1-005: hard floor and SL/TP distances |
+| DB6 | DBQ-CLAUDE-I1-006: prior trades 142 and 154 |
+| DB7 | DBQ-CLAUDE-I1-008: managed positions 166, 172, 187, 191, 201, 211 |
+| C1 | `AtrRiskService.java:34-45`; `application.yml:135-151` |
+| C2 | `ExecutionIntelligenceService.java:270-339` (SETUP wakeup route) |
+| C3 | `application.yml:13-35`; `scripts/agent-db-query.ps1:10-11` |
+| X1 | Binance `api/v3/klines` EGLDUSDT 1m at 17:54, 20:54 and 19:40–19:44 UTC; ACEUSDT 06:56 UTC |
+| X2 | Binance `api/v3/exchangeInfo` tick sizes: SHIB 1e-8, ACE 1e-4, XRP 1e-4, DOGE 1e-5, EGLD 1e-3 |
+
+---
+
+## UNKNOWNS
+
+- **U-TZ:** formal proof of the wrapper's session time zone (I2-001).
+- **U3:** age and decision of the newest 1m/5m/1h signals at each close (iteration-1 F5) (I2-007).
+- **U4:** wallet fills, fees, and wallet-vs-paper P&L agreement (I2-003).
+- **U5:** trade 143's lock/TP lifecycle (F5); TP extensions on the others (I2-004).
+- **U6:** price-event coverage, gaps and delivery status per holding window, especially EGLD around 19:43 UTC (I2-005/006).
+- **U-New1:** whether candle rows match Binance OHLC (I2-008).
+- **U-New2:** trade 142's lifecycle and its relation to trade 143's re-entry (I2-009).
+- **U-New3:** whether the inverted R:R (F1) is intended policy. This needs project-history evidence: the TRADING_RULES/CHANGELOG origin of the 0.50% floor.
+- **U8/U9:** deployed version on 10-11/12 and Replay feasibility are unchanged from iteration 1.
+
+---
+
+## DB_REQUEST
+
+> Note: until I2-001 confirms otherwise, I assume literals are interpreted in the wrapper's session time zone (+03:00), so the windows below use **displayed** values. Every query also returns `UNIX_TIMESTAMP(...)` so the results can be checked without trusting the session.
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-001
+Purpose: Prove the session time zone (F0) and get true epochs for the six trades
+SQL:
+SELECT @@global.time_zone AS g_tz, @@session.time_zone AS s_tz, @@system_time_zone AS sys_tz,
+       NOW(6) AS now_session, UTC_TIMESTAMP(6) AS now_utc,
+       TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) AS session_offset_s;
+SELECT id, symbol, opened_at, closed_at,
+       UNIX_TIMESTAMP(opened_at) AS opened_epoch, UNIX_TIMESTAMP(closed_at) AS closed_epoch
+FROM paper_position WHERE id IN (182,172,162,158,143,137) ORDER BY id DESC;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-002
+Purpose: Entry/exit signal freshness, HTF age, ATR plan (F1, F6, F8); narrow columns
+SQL:
+SELECT id, symbol, interval_code, decision, original_decision, confluence_status,
+       UNIX_TIMESTAMP(candle_open_time) AS candle_open_epoch,
+       UNIX_TIMESTAMP(generated_at) AS generated_epoch,
+       TIMESTAMPDIFF(MICROSECOND, candle_open_time + INTERVAL 60 SECOND, generated_at)/1000000 AS close_to_signal_s,
+       confluence_higher_interval, confluence_higher_decision,
+       TIMESTAMPDIFF(SECOND, confluence_higher_signal_generated_at, generated_at) AS htf_age_s,
+       btc_context_age_seconds, latest_price, stop_loss, take_profit, risk_reward_ratio,
+       atr_at_signal, atr_percent, atr_entry_type, atr_recommended_position_percent,
+       atr_immediate_entry_allowed, final_entry_allowed, primary_blocking_stage,
+       market_regime, selected_strategy, entry_authority, signal_mode, data_quality_valid
+FROM trade_signal
+WHERE id IN (156723,159408,165412,167668,168277,171589,176710);
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-003
+Purpose: Wallet fills, fees, wallet P&L vs paper P&L (U4, F2); includes trades 142 and 154 in the same windows
+SQL:
+SELECT id, signal_id, position_analysis_id, symbol, side, quantity, price_usdt, decision_price_usdt,
+       execution_price_observed_at, UNIX_TIMESTAMP(execution_price_observed_at) AS obs_epoch,
+       gross_amount_usdt, fee_usdt, net_amount_usdt, cost_basis_usdt,
+       realized_pnl_usdt, realized_pnl_percent, execution_type, execution_reason, status,
+       executed_at, UNIX_TIMESTAMP(executed_at) AS exec_epoch, LEFT(notes, 300) AS notes_head
+FROM wallet_trade
+WHERE (symbol='EGLDUSDT' AND executed_at BETWEEN '2026-10-11 20:30:00' AND '2026-10-11 22:50:00')
+   OR (symbol='XRPUSDT'  AND executed_at BETWEEN '2026-10-12 02:30:00' AND '2026-10-12 03:35:00')
+   OR (symbol='DOGEUSDT' AND executed_at BETWEEN '2026-10-12 04:00:00' AND '2026-10-12 04:30:00')
+   OR (symbol='SHIBUSDT' AND executed_at BETWEEN '2026-10-12 06:30:00' AND '2026-10-12 07:20:00')
+   OR (symbol='ACEUSDT'  AND executed_at BETWEEN '2026-10-12 09:50:00' AND '2026-10-12 10:10:00')
+ORDER BY symbol, executed_at
+LIMIT 100;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-004
+Purpose: Position management lifecycle (lock activation, TP changes, rebase) and exit audit (F5, U5)
+SQL:
+SELECT id, wallet_position_id, symbol, event_type, old_value_usdt, new_value_usdt, market_price_usdt,
+       occurred_at, UNIX_TIMESTAMP(occurred_at) AS occurred_epoch, LEFT(reason, 600) AS reason_head
+FROM position_management_event
+WHERE wallet_position_id IN (211,201,191,187,172,166)
+ORDER BY wallet_position_id, occurred_at
+LIMIT 200;
+SELECT id, paper_position_id, wallet_position_id, symbol, close_trigger, source_signal_id,
+       source_signal_decision, source_signal_original_decision, position_analysis_id,
+       position_recommendation, entry_price_usdt, exit_price_usdt, stop_loss_usdt, take_profit_usdt,
+       UNIX_TIMESTAMP(audited_at) AS audited_epoch, LEFT(close_explanation, 800) AS expl_head
+FROM production_exit_audit
+WHERE paper_position_id IN (182,172,162,158,143,137) OR wallet_position_id IN (211,201,191,187,172,166);
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-005
+Purpose: Price-event coverage per holding window: count, range, source/delivery-status mix (U6)
+SQL:
+SELECT p.id AS pid, e.source, e.delivery_status, e.outcome_reason, COUNT(*) AS n,
+       MIN(e.price) AS min_px, MAX(e.price) AS max_px,
+       UNIX_TIMESTAMP(MIN(e.observed_at)) AS first_epoch, UNIX_TIMESTAMP(MAX(e.observed_at)) AS last_epoch,
+       MAX(TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at))/1000 AS max_observe_to_persist_ms
+FROM paper_position p
+JOIN market_price_event e
+  ON e.symbol = p.symbol AND e.observed_at BETWEEN p.opened_at AND p.closed_at
+WHERE p.id IN (182,172,162,158,143,137)
+GROUP BY p.id, e.source, e.delivery_status, e.outcome_reason
+ORDER BY p.id DESC
+LIMIT 100;
+SELECT pid, MAX(gap_ms) AS max_gap_ms, AVG(gap_ms) AS avg_gap_ms, COUNT(*) AS n
+FROM (
+  SELECT p.id AS pid,
+         TIMESTAMPDIFF(MICROSECOND,
+           LAG(e.observed_at) OVER (PARTITION BY p.id ORDER BY e.observed_at), e.observed_at)/1000 AS gap_ms
+  FROM paper_position p
+  JOIN market_price_event e
+    ON e.symbol = p.symbol AND e.observed_at BETWEEN p.opened_at AND p.closed_at
+  WHERE p.id IN (182,172,162,158,143,137)
+) x
+GROUP BY pid;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-006
+Purpose: Tick-level EGLD price events across trade 143's lock breach (F4): displayed 22:42:50–22:43:40 (19:42:50–19:43:40 UTC if F0 holds)
+SQL:
+SELECT id, observed_at, UNIX_TIMESTAMP(observed_at) AS obs_epoch, price, source, delivery_status,
+       ordering_slot, outcome_reason, source_event_id, source_sequence,
+       UNIX_TIMESTAMP(source_received_at) AS recv_epoch, UNIX_TIMESTAMP(created_at) AS created_epoch
+FROM market_price_event
+WHERE symbol = 'EGLDUSDT'
+  AND observed_at BETWEEN '2026-10-11 22:42:50' AND '2026-10-11 22:43:40'
+ORDER BY observed_at, id
+LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-007
+Purpose: Newest 1m/5m/1h signal at each close and its age (iteration-1 F5 / U3)
+SQL:
+SELECT p.id AS pid, i.iv, s.id AS sig_id, s.decision, s.original_decision,
+       UNIX_TIMESTAMP(s.candle_open_time) AS candle_epoch, UNIX_TIMESTAMP(s.generated_at) AS gen_epoch,
+       TIMESTAMPDIFF(SECOND, s.generated_at, p.closed_at) AS age_at_close_s,
+       s.latest_price, s.data_quality_valid, s.signal_mode
+FROM paper_position p
+CROSS JOIN (SELECT '1m' AS iv UNION ALL SELECT '5m' UNION ALL SELECT '1h') i
+LEFT JOIN trade_signal s ON s.id = (
+  SELECT s2.id FROM trade_signal s2
+  WHERE s2.symbol = p.symbol AND s2.interval_code = i.iv AND s2.generated_at <= p.closed_at
+  ORDER BY s2.generated_at DESC LIMIT 1)
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC, i.iv;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-008
+Purpose: Signal sequence during each holding window (were there earlier exit opportunities?) and the local 1m candles for the EGLD windows (U-New1)
+SQL:
+SELECT p.id AS pid, s.id, s.interval_code, s.decision, s.original_decision,
+       UNIX_TIMESTAMP(s.generated_at) AS gen_epoch, s.latest_price, s.total_score
+FROM paper_position p
+JOIN trade_signal s
+  ON s.symbol = p.symbol AND s.generated_at BETWEEN p.opened_at - INTERVAL 5 MINUTE AND p.closed_at
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY p.id DESC, s.generated_at
+LIMIT 400;
+SELECT symbol, interval_code, UNIX_TIMESTAMP(open_time) AS open_epoch, open_price, high_price, low_price,
+       close_price, closed, ingestion_source, UNIX_TIMESTAMP(updated_at) AS updated_epoch
+FROM candle
+WHERE symbol = 'EGLDUSDT' AND interval_code = '1m'
+  AND ((open_time BETWEEN '2026-10-11 20:53:00' AND '2026-10-11 21:01:00')
+    OR (open_time BETWEEN '2026-10-11 22:35:00' AND '2026-10-11 22:45:00'))
+ORDER BY open_time
+LIMIT 40;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-009
+Purpose: Trade 142, which closed about 22 s before trade 143 re-entered (F6, U-New2)
+SQL:
+SELECT id, symbol, status, quantity, entry_price, stop_loss, take_profit, exit_price, realized_pnl,
+       close_reason, signal_id, exit_signal_id,
+       UNIX_TIMESTAMP(opened_at) AS opened_epoch, UNIX_TIMESTAMP(closed_at) AS closed_epoch,
+       LEFT(exit_reason, 600) AS exit_reason_head
+FROM paper_position WHERE id = 142;
+### END_DB_REQUEST
+
+---
+
+## SELF-REVIEW (iteration 2)
+
+- **Correction:** iteration 1 mislabelled displayed timestamps as UTC. F0 corrects this with internal (DATETIME vs TIMESTAMP, JSON epoch) and external (Binance kline) evidence. From now on I report UTC from `UNIX_TIMESTAMP` epochs where possible.
+- **Trade set:** all six frozen trades are covered. None was substituted.
+- **Classifications so far (provisional):**
+
+| ID | Classification | Open check |
+|---|---|---|
+| 143 | Valid loss: a flash wick went through the lock, and the SL would otherwise have fired. Entry quality was weak (F6). | Lock-TP mismatch (F5) |
+| 137, 182, 158, 162, 172 | Valid losses under coded rules. The negative expectancy is built in by the inverted R:R (F1) and fees (F2). Trade 172 is also tick-quantised (F3). | Exit-signal freshness (I2-007) |
+
+- **No logic defect is confirmed.** F5 is the only open candidate defect.
+- **Labels:** each finding is tagged PROJECT EVIDENCE, EXTERNAL RESEARCH or AGENT INFERENCE. The Binance fee rate is from general knowledge and was not fetched this iteration.
+- **Next iteration:** use the I2 results to close U-TZ, U3, U4, U5 and U6. Then trace the origin of the 0.50% SL floor in claude-docs/CHANGELOG_AI.md and TRADING_RULES.md, and the TP-extension path for trade 143.
+
+Sources:
+- [Binance klines EGLDUSDT 17:54 UTC](https://api.binance.com/api/v3/klines?symbol=EGLDUSDT&interval=1m&startTime=1791741240000&limit=2)
+- [Binance klines EGLDUSDT 20:54 UTC](https://api.binance.com/api/v3/klines?symbol=EGLDUSDT&interval=1m&startTime=1791752040000&limit=2)
+- [Binance klines EGLDUSDT 19:40–19:44 UTC](https://api.binance.com/api/v3/klines?symbol=EGLDUSDT&interval=1m&startTime=1791747600000&limit=5)
+- [Binance klines ACEUSDT 06:56 UTC](https://api.binance.com/api/v3/klines?symbol=ACEUSDT&interval=1m&startTime=1791788160000&limit=1)
+- [Binance exchangeInfo (tick sizes)](https://api.binance.com/api/v3/exchangeInfo?symbols=["SHIBUSDT","ACEUSDT","XRPUSDT","DOGEUSDT","EGLDUSDT"])

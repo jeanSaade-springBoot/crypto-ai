@@ -1,0 +1,1 @@
+SELECT DATE_FORMAT(candle_open_time,'%H:%i') AS raw_minute, COUNT(*) AS signals, COUNT(DISTINCT symbol) AS symbols, MIN(generated_at) AS first_gen, MAX(generated_at) AS last_gen FROM trade_signal WHERE interval_code='1m' AND candle_open_time BETWEEN '2026-10-10 17:54:00' AND '2026-10-10 18:06:00' GROUP BY raw_minute ORDER BY raw_minute

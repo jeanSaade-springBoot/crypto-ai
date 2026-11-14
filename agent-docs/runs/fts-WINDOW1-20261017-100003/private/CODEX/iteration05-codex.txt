@@ -1,0 +1,97 @@
+## FINDINGS — Iteration 5: Entry Quality
+
+- **PROJECT EVIDENCE:** Scope remains exactly frozen `paper_position` IDs `182, 172, 162, 158, 143, 137`. No substitutions or mutations occurred.
+
+- **PROJECT EVIDENCE:** The permitted `db/CODEX` directory contains no results for `DBQ-FTS-001..005` or prior Codex requests. Entry quality for any individual frozen trade is therefore currently **unverifiable**, not poor or valid.
+
+- **PROJECT EVIDENCE:** Current source admits a normal initial BUY only from a 1m signal that is final-entry-allowed, ATR-immediate-entry-allowed, meets the configured minimum score, and is BUY/STRONG_BUY. It also applies strategy, BTC-context, derivatives, and strong target-side liquidity vetoes. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:2139)
+
+- **PROJECT EVIDENCE:** For the direct path, current source requires fresh 5m context (≤20 minutes) and 1h context (≤3 hours), evaluated as of the 1m signal’s `generated_at`; current source does not look forward. [TradeExecutionValidationService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/TradeExecutionValidationService.java:62)
+
+- **PROJECT EVIDENCE:** The execution-time price is independently resolved after signal/HTF approval and before sizing and wallet persistence. A BUY is cancelled if that price is at/below stop or at/above target, then entry quality is recomputed at that actual execution price. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:340) [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1150)
+
+- **PROJECT EVIDENCE:** Current entry quality starts at 100 and adjusts for: expansion from a timestamp-bounded opportunity/rolling reference, ATR extension, opportunity age, reward/risk, recent rejection proximity, high volatility, and stop-exposed liquidity. Scores classify as `EXCELLENT` ≥85, `GOOD` ≥70, `ACCEPTABLE` ≥55, `LATE` ≥50, and `CHASE` <50. A `CHASE` is held rather than bought; otherwise quality caps initial exposure at 50%, 40%, or 25%. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:865) [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1171)
+
+- **AGENT INFERENCE:** Even if the six rows prove a losing outcome, that alone cannot establish an entry-quality defect. The analysis needs contemporaneous entry signal, execution price/timestamp, risk plan, prior 30-minute signal evidence, opportunity state, and candle evidence available at entry—never subsequent price action.
+
+- **AGENT INFERENCE:** Current source may postdate one or more frozen trades. Historical build/configuration and persisted execution evidence are required before treating the current gates as the gates actually applied.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** `paper_position` stores the position’s entry price, stop, target, linked entry signal, entry reason, and UTC opened time. [PaperPosition.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:30)
+
+- **PROJECT EVIDENCE:** `trade_signal` maps the contemporaneous entry/risk/context fields needed for assessment, including prices, ATR data, risk/reward, market regime, entry authority, score/confidence, and final-entry result. [TradeSignal.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/TradeSignal.java:367)
+
+- **PROJECT EVIDENCE:** The wallet BUY records both immutable decision price and actual execution price plus observed/executed timestamps. [WalletAutoExecutionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:163)
+
+- **EXTERNAL RESEARCH:** None.
+
+## UNKNOWNS
+
+- Entry signal ID, symbol, opened UTC/KSA time, decision price, actual execution price, stop, target, and risk/reward for each frozen position.
+- Whether execution-time revalidation and entry-quality controls existed in the deployed version for each trade.
+- Contemporaneous entry-quality score/classification, effective allocation, entry route, opportunity anchor/reference, expansion, ATR extension, and rejection-zone state.
+- Whether the signal’s 5m/1h/BTC/derivatives/liquidity gates were fresh and valid at entry.
+- Whether a wallet execution shows material signal-to-fill drift or whether a position was created through a nonstandard/manual route.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-001  
+Purpose: Establish the actual physical columns and retrieve only the six authoritative frozen positions before requesting linked entry evidence.  
+SQL:
+```sql
+SELECT table_name,
+       ordinal_position,
+       column_name,
+       column_type,
+       is_nullable,
+       column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'execution_opportunity',
+      'signal_processing_work',
+      'candle',
+      'market_price_event'
+  )
+ORDER BY table_name, ordinal_position;
+
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I5-002  
+Purpose: After confirming the physical schema from I5-001, retrieve the entry-signal and wallet-execution evidence required to measure decision-to-fill drift and assess entry quality using only information available by each entry time.  
+SQL:
+```sql
+SELECT pp.id AS paper_position_id,
+       pp.symbol AS position_symbol,
+       pp.signal_id AS entry_signal_id,
+       pp.opened_at AS position_opened_at_utc,
+       pp.entry_price AS position_entry_price,
+       pp.stop_loss AS position_stop_loss,
+       pp.take_profit AS position_take_profit,
+       pp.entry_reason,
+       ts.*,
+       wt.*
+FROM crypto_ai.paper_position pp
+LEFT JOIN crypto_ai.trade_signal ts
+       ON ts.id = pp.signal_id
+LEFT JOIN crypto_ai.wallet_trade wt
+       ON wt.signal_id = pp.signal_id
+      AND wt.side = 'BUY'
+      AND wt.status = 'EXECUTED'
+WHERE pp.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(pp.id, 182, 172, 162, 158, 143, 137),
+         wt.executed_at ASC;
+```
+### END_DB_REQUEST

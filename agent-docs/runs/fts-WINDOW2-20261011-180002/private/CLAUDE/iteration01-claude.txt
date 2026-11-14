@@ -1,0 +1,155 @@
+I've rebuilt the six frozen trades as far as the snapshot evidence allows. What I can say is limited because nothing has been queried yet beyond the coordinator's five proof queries (DBQ-FTS-001..005). Below are the findings, the evidence, the unknowns and nine DB requests.
+
+I made no code, config, DB, git or deploy changes. I did not read the CODEX private folder, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log or the other agent's memory. Plan mode was active, but no plan-file write or ExitPlanMode tool was available in this session, so this text is the whole deliverable.
+
+---
+
+## FINDINGS
+
+**F1 – Timeline of the frozen set (PROJECT EVIDENCE: DBQ-FTS-005)**
+
+| # | id | Symbol | Opened UTC → KSA | Closed UTC → KSA | Hold | close_reason | realized_pnl | signal_id |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 104 | ENAUSDT | 2026-10-11 05:35:07.079 → 08:35:07 | 05:40:11.251 → 08:40:11 | 5m04s | HTF_SELL_CONFIRMED | −0.013345 | 133249 |
+| 2 | 101 | AEROUSDT | 2026-10-11 02:12:06.557 → 05:12:06 | 02:21:27.161 → 05:21:27 | 9m21s | PROFIT_LOCK_HARD_EXIT | −0.004681 | 128170 |
+| 3 | 96 | PEPEUSDT | 2026-10-10 22:28:04.356 → 10-11 01:28:04 | 22:45:09.704 → 10-11 01:45:09 | 17m05s | HTF_SELL_CONFIRMED | −0.061576 | 122431 |
+| 4 | 91 | SHIBUSDT | 2026-10-10 21:40:07.266 → 10-11 00:40:07 | 21:45:30.852 → 10-11 00:45:30 | 5m23s | HTF_SELL_CONFIRMED | −0.045620 | 121198 |
+| 5 | 82 | XLMUSDT | 2026-10-10 18:03:06.244 → 21:03:06 | 19:25:16.123 → 22:25:16 | 1h22m10s | SELL_CONFIRMED | −0.075605 | 115669 |
+| 6 | 78 | PEPEUSDT | 2026-10-10 17:35:06.805 → 20:35:06 | 17:50:12.873 → 20:50:12 | 15m06s | HTF_SELL_CONFIRMED | −0.061576 | 115049 |
+
+- The total loss is −0.262403 USDT. Automatic fees are recorded as 0, so this is gross P&L.
+- Four of the six (104, 96, 91, 78) closed with `HTF_SELL_CONFIRMED`. One closed with `PROFIT_LOCK_HARD_EXIT` while losing (101), and one with `SELL_CONFIRMED` (82).
+- No frozen trade is a stop-loss exit. That follows from the selection rule `status='CLOSED'`: stop-loss closes are recorded as `STOPPED`.
+
+**F2 – When entries and exits happened (AGENT INFERENCE from F1)**
+- Every entry happened 3–7 s after a 1-minute candle closed. That fits normal 1m analysis rather than a delayed execution.
+- Every `HTF_SELL_CONFIRMED` exit came 9–30 s after a 5-minute boundary: 05:40:11, 22:45:09, 21:45:30 and 17:50:12 UTC.
+- None of these exits fell on an hour boundary.
+- So a new 5m signal most likely triggered each exit, not a new 1h signal. The 1h SELL the exit relied on most likely already existed when the position was opened. This needs proof from DB-003 and DB-004.
+
+**F3 – Entry and exit rules disagree in the working-tree code (PROJECT EVIDENCE: code)**
+- **Entry:** `HigherTimeframeBuyAssessmentService.java:33-34` allows a BUY when the 1h signal is a quality-valid SELL and the 5m signal is not bearish. It labels this `SOFT_CONFLICT` and caps it at 25%. `TradeExecutionValidationService.java:93-111` applies that rule to direct BUYs.
+- **Exit:** `PositionExitPolicy.java:25-33` closes the position with `HTF_SELL_CONFIRMED` whenever the 1h signal is SELL/STRONG_SELL and the 5m signal is not BUY, STRONG_BUY or WATCH.
+- **Consequence:**
+  - A BUY admitted with 1h SELL and 5m NEUTRAL is exitable on the very next accepted price tick.
+  - A BUY admitted with 5m WATCH/BUY is exited as soon as the next 5m signal turns NEUTRAL.
+  - This matches the F2 pattern. It is a candidate design defect, not yet confirmed for these trades.
+
+**F4 – The exit reads the latest signals with no freshness or quality check (PROJECT EVIDENCE: `LivePositionProtectionService.java:95-97`)**
+- The exit loads the newest 1m, 5m and 1h `trade_signal` rows by `generated_at`.
+- It does not check freshness, `signal_mode` (it does not exclude `HISTORICAL_ONLY` signals), `data_quality_valid`, or whether the signal is newer than the position.
+- Entry, by contrast, does check freshness (`TradeExecutionValidationService.java:81-91`).
+- Whether this affected any of the six trades is not yet known.
+
+**F5 – Trade 101: a profit-lock hard exit below entry (PROJECT EVIDENCE: `LivePositionProtectionService.java:191-216`; claude-docs/TRADING_RULES.md §7)**
+- The hard floor is entry × 1.0005. If the floor works as intended, a hard exit should land slightly above entry.
+- A negative P&L means the exit price was below entry. Possible explanations, none confirmed:
+  - the price jumped past the floor between accepted price events;
+  - the hard-floor branch for a TP extension / rebase (FIX-118, line 191) uses a different floor;
+  - the paper and wallet records disagree on quantity or price.
+- This needs DB-002, DB-005 and DB-007.
+
+**F6 – Trades 78 and 96 lost exactly the same amount (PROJECT EVIDENCE)**
+- Both PEPEUSDT trades show realized P&L of −0.061576354680.
+- The likely explanation is the same quantity combined with the same tick-quantised price drop. This is a hypothesis to check against `wallet_trade`, not yet a defect.
+
+**F7 – Possible contradiction with AGENTS.md: is FIX-154 deployed? (PROJECT EVIDENCE vs governance text)**
+- AGENTS.md describes FIX-154 as "not-yet-implemented".
+- The working tree contains it: `HigherTimeframeBuyAssessmentService`, plus migrations `V107__fix_154_trusted_higher_timeframe_buy.sql` and `V109`. Git status shows uncommitted changes.
+- Whether Production was running with FIX-154 on 10-10 and 10-11 is unknown, so F3 only applies if it was deployed. DB-001 checks this.
+- I am reporting this contradiction, not resolving it.
+
+**F8 – What the selection leaves out (PROJECT EVIDENCE: DBQ-FTS-002 and DBQ-FTS-003)**
+- `CLOSED` rows: 74 in total, 19 losing. `STOPPED` rows: 45 in total, all losing.
+- That adds up to 64 losing positions, which equals the 64 losing `wallet_trade` SELLs.
+- Under the frozen selection rule, stop-loss losers never enter this study. This is a note on scope only; I have not substituted any trade.
+
+## EVIDENCE
+- **DB results:** DBQ-FTS-001 (schema), 002 (status counts), 003 (wallet_trade cross-check), 005 (frozen rows).
+- **Code:**
+  - `PositionExitPolicy.java:20-50`
+  - `LivePositionProtectionService.java:95-97`, `:174-239`
+  - `HigherTimeframeBuyAssessmentService.java:15-38`
+  - `TradeExecutionValidationService.java:62-113`
+  - `V107__fix_154_trusted_higher_timeframe_buy.sql`
+- **External research:** none used.
+
+## UNKNOWNS
+- U1: Whether FIX-154 (V107/V109) was applied in Production, and when.
+- U2: The 1h and 5m signals actually used at entry and at exit for each trade.
+- U3: Which exit path fired: the live-price path or the signal-driven `PositionManagementService` path.
+- U4: For trade 101: entry and exit prices, the floor value, and the price events around the exit.
+- U5: The entry route and the source of the 25% cap (`SOFT_CONFLICT`) or of the size more generally.
+- U6: Data quality, gaps and freshness of the entry signals.
+- U7: How the four HTF exits behave in Replay. This is not attempted, because Replay creates state.
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-001
+Purpose: U1. Check whether the FIX-153/154 migrations were applied in Production and when.
+SQL:
+SELECT installed_rank, version, description, installed_on, success FROM flyway_schema_history WHERE CAST(version AS UNSIGNED) >= 100 ORDER BY installed_rank;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-002
+Purpose: Full lifecycle rows for the frozen positions (prices, SL/TP, qty, reasons).
+SQL:
+SELECT id, symbol, side, status, quantity, entry_price, stop_loss, take_profit, exit_price, realized_pnl, close_reason, signal_id, exit_signal_id, opened_at, closed_at, LEFT(entry_reason,1500) AS entry_reason, LEFT(exit_reason,1500) AS exit_reason FROM paper_position WHERE id IN (104,101,96,91,82,78) ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-003
+Purpose: U2/U6. Entry signal evidence for the six entry signals.
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, generated_at, signal_mode, decision, original_decision, total_score, confidence_score, data_quality_valid, final_entry_allowed, primary_blocking_stage, selected_strategy, market_regime, entry_authority, entry_authority_max_position_percent, confluence_higher_interval, confluence_higher_decision, btc_context_status, latest_price, stop_loss, take_profit, risk_reward_ratio, atr_percent FROM trade_signal WHERE id IN (133249,128170,122431,121198,115669,115049) ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-004
+Purpose: U2/F2/F3. The 5m and 1h signal sequence per symbol, from 2h before entry to just after exit (bounded windows).
+SQL:
+SELECT p.id AS position_id, s.id AS signal_id, s.symbol, s.interval_code, s.candle_open_time, s.generated_at, s.signal_mode, s.decision, s.confidence_score, s.data_quality_valid FROM paper_position p JOIN trade_signal s ON s.symbol = p.symbol AND s.interval_code IN ('5m','1h') AND s.generated_at BETWEEN p.opened_at - INTERVAL 2 HOUR AND p.closed_at + INTERVAL 1 MINUTE WHERE p.id IN (104,101,96,91,82,78) ORDER BY p.id, s.generated_at LIMIT 600;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-005
+Purpose: U3/U4. The recorded exit trigger and its source signal for each position.
+SQL:
+SELECT id, paper_position_id, wallet_position_id, symbol, close_trigger, source_signal_id, source_signal_decision, source_signal_original_decision, position_analysis_id, position_recommendation, entry_price_usdt, exit_price_usdt, stop_loss_usdt, take_profit_usdt, LEFT(close_explanation,1500) AS close_explanation, audited_at FROM production_exit_audit WHERE paper_position_id IN (104,101,96,91,82,78) ORDER BY paper_position_id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-006
+Purpose: U1/U5/F3. The FIX-154 BUY assessment audit for the entry signals (fails if the table does not exist, which also answers U1).
+SQL:
+SELECT id, reference_signal_id, evaluation_path, evaluated_at, replay_mode, one_hour_signal_id, one_hour_raw_decision, one_hour_effective_decision, one_hour_age_seconds, one_hour_data_quality_valid, five_minute_signal_id, five_minute_raw_decision, five_minute_effective_decision, five_minute_age_seconds, assessment_band, max_initial_percent, legacy_veto_result, final_result, LEFT(final_reason,500) AS final_reason FROM buy_htf_assessment_audit WHERE reference_signal_id IN (133249,128170,122431,121198,115669,115049) ORDER BY reference_signal_id, evaluated_at LIMIT 100;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-007
+Purpose: Read the schemas before the next queries (wallet_trade, wallet_managed_position, position_management_event, market_price_event).
+SQL:
+DESCRIBE wallet_trade; DESCRIBE wallet_managed_position; DESCRIBE position_management_event; DESCRIBE market_price_event;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-008
+Purpose: F6/U4. Wallet trades linked to the entry signals and their exits (columns to be checked against DB-007; uses only the documented signal link).
+SQL:
+SELECT * FROM wallet_trade WHERE symbol IN ('ENAUSDT','AEROUSDT','PEPEUSDT','SHIBUSDT','XLMUSDT') AND created_at BETWEEN '2026-10-10 17:30:00' AND '2026-10-11 05:45:00' ORDER BY symbol, created_at LIMIT 60;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-009
+Purpose: Check the table list so the price-event and analysis table names are verified rather than assumed.
+SQL:
+SHOW TABLES;
+### END_DB_REQUEST
+
+---
+
+**Iteration 2:** after DB-007 and DB-009 come back, I'll check the column names and send the per-trade `market_price_event` and `position_management_event` requests, within bounds, for trade 101 and the HTF exits. I'll also confirm or reject F3 for each trade from DB-004 and DB-006.
+
+**Labels:** F1, F4 and F8 are PROJECT EVIDENCE. F2, and the explanations in F5 and F6, are AGENT INFERENCE. F3 and F7 are code facts, but they only apply to these trades if FIX-154 was deployed (U1). No EXTERNAL RESEARCH was used.

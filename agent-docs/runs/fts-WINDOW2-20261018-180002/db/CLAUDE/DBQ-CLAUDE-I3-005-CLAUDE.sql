@@ -1,0 +1,1 @@
+SELECT symbol, COUNT(*) AS events, MIN(observed_at) AS first_obs, MAX(observed_at) AS last_obs, SUM(delivery_status <> 'APPLIED') AS non_applied FROM crypto_ai.market_price_event WHERE observed_at BETWEEN '2026-10-11 22:43:00' AND '2026-10-11 22:43:59.999' GROUP BY symbol ORDER BY events;

@@ -1,0 +1,121 @@
+I didn't change anything this round: no source, config, database, git or runtime changes. This session has no file-write or ExitPlanMode tool, so this report is the only output. The verdict stays **REJECTED**.
+
+# Round 6: candle ingestion, as implemented vs. the pending local-candle direction
+
+## FINDINGS
+
+### Ownership (questions 1–5, 9, 11): unchanged, rechecked
+- **OFF mode** is the checked-in default (`application.yml:421`). The trader owns WebSocket and REST kline ingestion and writes `crypto_ai.candle`.
+- **LIVE mode** is the only value that turns off direct ingestion (`BinanceWebSocketManager.java:28,97,127`; `MarketDataService.java:19,32`; `MarketDataBootstrapService.java:31,50,73`).
+- **OBSERVE mode** therefore runs direct ingestion and the collector at the same time. In OBSERVE, the startup import also runs analysis and `processSignal` with origin `STARTUP` (`MarketDataBootstrapService.java:107-136`).
+- **Production:** I did not access it and have no evidence about it.
+
+### Correction 1: my round-5 race has more triggers than I said
+The race itself holds: REST import closes an open `RUNTIME` row with no token, so the WebSocket's final message never creates a dispatchable transition.
+- Mechanism: MySQL evaluates `ON DUPLICATE KEY UPDATE` left to right, and `closed=` is assigned last (`CandleRepository.java:188,203`). So the token test `IF(closed=0 AND …)` at `:201` sees the row as already closed. The read-back at `:120` then fails, and nothing is dispatched.
+- I limited it to adding a coin. It is wider:
+  - **Re-enabling a coin:** `PUT /api/administration/coins/{id}/enabled` also calls `activate` (`CoinConfigurationController.java:41`).
+  - **A failed reload:** if `reload()` times out after 30 seconds, the exception is caught (`DynamicCoinActivationService.java:23`) and the import still runs (`:28`).
+  - **The import endpoint (broadest):** `POST /api/market-data/import` (`MarketDataController.java:16-22`) can be called at runtime for any symbol that is already streaming. No reload is needed. I did not check whether it requires authentication.
+
+### New 1: ordinary import skips the close grace period that reconciliation uses
+- Ordinary import skips only candles whose `closeTime` is after `exchangeNow` (`MarketDataService.java:45`). It has no grace period.
+- Reconciliation waits `live-close-grace (10s) + safety-margin (2s)` (`LocalCandleReconciliationService.java:127`), as AGENTS.md requires.
+- Once the import closes a row, every field is frozen (`CandleRepository.java:177-188`). A later WebSocket final kline cannot correct it.
+- So candle values read from REST at the close boundary become permanent. Whether Binance REST can return non-final values for a candle whose `closeTime` is at or before server time is **unknown**.
+
+### New 2: dropped 1m and overflow closes can end with no recorded outcome
+- When work backs up, the dispatcher drops a committed, tokened close in two ways:
+  - **1m candles:** a newer close replaces the pending one (`PENDING_REPLACED`).
+  - **Higher timeframes:** the queue holds 4 entries, and an overflow is rejected (`LANE_OVERFLOW`).
+- In both cases the only trace is a log line and an in-memory counter (`CandleAnalysisDispatcher.java:74-81, 91-97`). No durable outcome is written.
+- The detector is the only thing that could write a final outcome later:
+  - It admits work only when the lane is idle: `idle()` at `:29`, the check at `:38`, and the detector's own check at `LocalClosedCandleDetector.java:46`.
+  - It only looks back about 180 seconds (`:47-50`).
+- If the lane stays busy for longer than that, the dropped candle ages out with no outcome. That breaks the AGENTS.md rule that each candle path writes one durable final outcome.
+
+### New 3: the historical-only path is only a code branch, not a separate component
+- When stale work is recovered, the worker routes it to `analyzeRecovered` (`CandleClosedAnalysisWorker.java:160-165`), so it does not trade today. That answers one possible objection.
+- But the same class holds `paperTradingService` (`:37`) and calls it twenty lines later (`:175`).
+- AGENTS.md asks for historical-only recovery that is *structurally unable* to reach execution. A branch inside the executing class does not meet that.
+
+### New 4: `application.yml` declares `local-candle:` twice at the top level (lines 40 and 447)
+Codex flagged this as an unknown. I add:
+- There is no `@SpringBootTest` in `src/test`, and there are no test resource files. No test in the tree has ever loaded this YAML.
+- From memory, not checked here: Spring Boot's YAML loader has rejected duplicate keys, and the project uses Spring Boot 4.1.0 (`pom.xml:9`). If that still holds, the checked-in configuration would fail at startup. If it doesn't, one block silently overrides the other.
+- Either way, "reconciliation is off by default" still holds, because the code default is also `false` (`LocalCandleReconciliationService.java:44`).
+
+### Correction 2: my round-5 point about the in-memory reconnect evidence was wrong
+- I said `lastReconnectAdmission` stays empty after a restart until the next reconnect. Wrong: the first connection at startup also calls `requestAfterReconnect` (`BinanceWebSocketManager.java:200`; `LocalCandleReconciliationService.java:60-62`).
+- I also called it "global". There is one primary session covering every symbol, so a single timestamp is appropriate.
+- Still valid: it is held in memory only.
+- My `LIMIT 50` objection stands unchanged (`:129-140`): the limit is shared across every symbol, has no enabled-coin filter, and is applied before the due and loss-evidence filters.
+
+### Challenging Codex
+Codex's material claims still hold:
+- The duplicate-key backfill closes an open row while keeping its provenance and token.
+- The detector keeps retry state in memory and only looks back a bounded window.
+- Replay selects candles by `closed` and time.
+- There is no Binance 429/418/`Retry-After` handling anywhere: a search of `src/main/java` found no matches.
+
+Codex missed:
+- the runtime triggers for the import race;
+- the missing close grace period in ordinary import;
+- dispatcher drops that end with no outcome;
+- the gap between a code branch and real structural separation.
+
+The V103/B105 and OBSERVE wording points were settled in round 4.
+
+## EVIDENCE
+- `CandleRepository.java:99-124, 173-212`
+- `MarketDataService.java:31-56`
+- `MarketDataController.java:16-24`
+- `CoinConfigurationController.java:30-59`
+- `DynamicCoinActivationService.java:18-33`
+- `BinanceWebSocketManager.java:95-136, 188-203`
+- `MarketDataBootstrapService.java:21-24, 94-136`
+- `LocalCandleReconciliationService.java:44-62, 122-141, 198-207`
+- `LocalClosedCandleDetector.java:34-142`
+- `CandleAnalysisDispatcher.java:29-125`
+- `CandleClosedAnalysisWorker.java:37, 160-205, 251-254`
+- `SignalProcessingStore.java:192` (outcome for the live path)
+- `application.yml:40-51, 420-457`
+- `pom.xml:9`
+
+## OBJECTIONS (unresolved, material)
+1. **Ordinary import:**
+   - It closes open runtime rows without audit, outcome or provenance change, and without a close grace period.
+   - Three runtime triggers (adding a coin, re-enabling one, the import endpoint) can lose a live close entirely.
+2. **Dropped closes:** 1m replacement and queue overflow write no outcome, and the idle-only, lookback-bounded detector cannot guarantee one later.
+3. **Reconciliation:**
+   - It is off by default.
+   - The `LIMIT 50` is applied before filtering.
+   - `PENDING` candidates that age out get no final outcome.
+   - Its retry evidence is in memory.
+4. **Detector:** it writes no outcome after an outage longer than its lookback.
+5. **Historical-only work:** it is separated from execution only by a code branch, not structurally.
+6. **OBSERVE:** it runs both ingestion paths, and the startup import executes trades.
+7. **Rate limits:** there is no shared Binance REST rate-limit or ban handling.
+8. **Replay:** parity with live admission and recovery is not shown.
+9. **Configuration:** the duplicate YAML key was never loaded by any test.
+10. **Documentation drift:**
+    - AGENTS.md calls the design "pending" and its V103 blocker text is out of date.
+    - claude-docs misdescribes OBSERVE.
+    - Four source comments contradict their own SQL or code.
+
+## UNKNOWNS
+- Whether the duplicate `local-candle` key breaks startup or is silently merged in Spring Boot 4.1.
+- Whether Binance REST can return non-final values for a candle at the close boundary.
+- Whether the import endpoint requires authentication.
+- How often 1m lanes back up in practice.
+- Whether `LocalCandleMySqlIT` has ever passed.
+- Production artifact, mode, overrides, Flyway history, logs, and how open positions are protected during replacement.
+
+**Candidates for a later solution review only (not authorised):**
+- Make ordinary import insert-if-absent, with a close grace period, or have it skip open `RUNTIME` rows.
+- Write a durable outcome when the dispatcher replaces or rejects a close.
+- Move historical-only analysis into a component that has no execution dependency.
+- Add a context-load test that reads the real `application.yml`.
+
+## VERDICT
+REJECTED

@@ -1,0 +1,63 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No `DBQ-FTS-001..005` result or Codex-scoped DB evidence is available. Trade-specific timing, entry/exit cause, and latency findings for IDs `182, 172, 162, 158, 143, 137` remain unproven.
+- **PROJECT EVIDENCE:** Application-file timestamps are explicitly formatted in UTC. Database-timing records include both UTC and KSA fields. [logback-spring.xml](C:\workspace\crypto-ai-trader-mysql\src\main\resources\logback-spring.xml)
+- **PROJECT EVIDENCE:** Application logs are asynchronous, non-blocking, and retained only through bounded rollover (seven-day / 256 MB configuration). Their absence cannot establish that an event did not occur.
+- **PROJECT EVIDENCE:** Current source would log a committed direct-price protection outcome with `market_price_event` ID, symbol, observed UTC/KSA, outcome, and reason—but not `paper_position` ID. A position therefore requires DB linkage plus time/symbol correlation; it cannot be proven from this log class alone.
+- **PROJECT EVIDENCE:** Current protection logs include `positionId` for several profit-lock, target-extension, and near-TP paths, but ordinary STOP_LOSS, TAKE_PROFIT, signal-driven exits, and profit-lock exits log only symbol/price/reason. Exact position attribution is incomplete for those paths.
+- **AGENT INFERENCE:** The supplied snapshot pair has a one-second discrepancy: `07:00:04 UTC` converts to `10:00:04 KSA`, while the supplied KSA snapshot is `10:00:03`. Preserve both supplied values; do not silently correct either.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Permitted `agent-docs/runs/fts-WINDOW1-20261017-100003/db/CODEX/` is empty.
+- **PROJECT EVIDENCE:** Available application logs are present under `logs/`, with source-configured UTC timestamps; no claim is made that they cover a frozen trade until its actual UTC lifecycle times are obtained.
+- **EXTERNAL RESEARCH:** None.
+- **AGENT INFERENCE:** None beyond the stated snapshot conversion check.
+
+## UNKNOWNS
+
+- UTC/KSA opened/closed times, symbols, signals, exit reasons, and loss amounts for all six frozen positions.
+- Whether each exit was protection-driven, signal-driven, or involved partial harvests.
+- Whether the relevant historical log segment still exists within bounded retention.
+- Whether a timing delay occurred between observation, protection decision, wallet execution, and `paper_position` close.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Obtain authoritative position schema and exact UTC lifecycle/linkage evidence for the six frozen IDs, enabling a bounded log search and timing reconstruction.  
+SQL:
+```sql
+SHOW CREATE TABLE crypto_ai.paper_position;
+
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-002  
+Purpose: Discover actual columns for only the candidate timing/protection/execution evidence tables before requesting linked records.  
+SQL:
+```sql
+SELECT table_name,
+       ordinal_position,
+       column_name,
+       column_type,
+       is_nullable,
+       column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'position_management_event',
+      'signal_processing_work'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

@@ -4,10 +4,6 @@ import com.crypto.shared.SharedMarketSource;
 import org.springframework.context.annotation.*;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.core.env.Environment;
-import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.provisioning.JdbcUserDetailsManager;
-import javax.sql.DataSource;
 
 /** Deliberately outside com.crypto's component scan. Launch with the explicit
  * --fix132-approval-console=true argument after stopping ALL Trader instances.

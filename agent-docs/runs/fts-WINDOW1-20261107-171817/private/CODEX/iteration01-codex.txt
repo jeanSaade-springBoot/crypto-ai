@@ -1,0 +1,67 @@
+## FINDINGS
+
+- Frozen study scope retained exactly: paper positions `182, 172, 162, 158, 143, 137`. No substitutions.
+- The permitted CODEX private and DB-evidence folders are empty. Therefore no database result, timeline, symbol, entry/exit signal, exit reason, or P&L can yet be independently established for any selected trade.
+- The charter’s selection criteria are task-supplied scope, not independently verified evidence until the proof/query outputs are available.
+- Project source shows the intended evidence path:
+  - `paper_position` links its entry signal through `signal_id`, optional exit signal through `exit_signal_id`, and records close reason, price, realized P&L, and UTC close time: [PaperPosition.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java:12).
+  - A terminal close persists the actual close reason and separately writes immutable exit-audit evidence: [PaperTradingService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487).
+  - Live protection prioritizes TP management, absolute stop loss, profit-lock handling, confirmed signal exits, then near-TP handling: [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:99).
+  - `production_exit_audit` is designed to distinguish the terminal trigger from contextual market signals: [ProductionExitAudit.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/audit/domain/ProductionExitAudit.java:10).
+
+## EVIDENCE
+
+**PROJECT EVIDENCE**
+
+- Startup context, charter, database rules, and all `codex-docs/` were read under the isolation restriction.
+- Permitted path `agent-docs/runs/fts-WINDOW1-20261107-171817/db/CODEX/`: empty.
+- No code, configuration, database, Git, deployment, or documentation write was made.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+**AGENT INFERENCE**
+
+- The reconstruction must begin with schema evidence, then retrieve only the six authoritative `paper_position` rows and their directly linked records. Current source is useful for choosing evidence categories but cannot prove the runtime version or configuration active when these trades occurred.
+
+## UNKNOWNS
+
+- Environment/runtime version and ingestion mode at each trade.
+- Symbols, entry/exit UTC timestamps, KSA conversions, prices, quantities, fees, and realized-P&L reconciliation.
+- Entry/exit signal IDs, processing work, accepted price observations, protection state, and actual exit trigger.
+- Whether each loss followed intended rules, reflects weak entry quality, or indicates an execution/protection/data defect.
+- Replay reproducibility.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Schema-first discovery for the authoritative selected-position reconstruction; identifies the actual columns and relationships before any record-level query.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'wallet_managed_position',
+      'production_exit_audit',
+      'position_management_event',
+      'position_analysis',
+      'market_price_event',
+      'candle',
+      'technical_indicator',
+      'flyway_schema_history'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST

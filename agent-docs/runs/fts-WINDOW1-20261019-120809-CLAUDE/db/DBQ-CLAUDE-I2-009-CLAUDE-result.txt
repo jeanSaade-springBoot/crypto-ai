@@ -1,0 +1,3 @@
+interval_code	signal_mode	entry_allowed	allowed_rr_lt1	total
+1m	LIVE	83032	69464	85649
+1m	HISTORICAL_ONLY	16	13	21

@@ -1,0 +1,1 @@
+All 106 original migration files are byte-for-byte unchanged.

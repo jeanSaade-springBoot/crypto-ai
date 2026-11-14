@@ -1,0 +1,5 @@
+id	len	message_tail
+358	938	ative 5m ATR so a tiny 1m ATR cannot manufacture a false late-stage chase classification. Entry Quality 60/100 (ACCEPTABLE_ENTRY) capped the initial allocation at 25% so confirmation can add later instead of committing full size at once. DecisionPrice=4.032000000000, executionPrice=4.033000000000, priceObservedAt=2026-10-11T19:40:01.028Z
+403	685	.087050000000, executionPrice=0.087050000000, priceObservedAt=2026-10-12T01:02:02.580Z
+id	len	explanation_tail
+36524	643	evaluated with the authoritative 5m ATR so a tiny 1m ATR cannot manufacture a false late-stage chase classification. Entry Quality 60/100 (ACCEPTABLE_ENTRY) capped the initial allocation at 25% so confirmation can add later instead of committing full size at once.

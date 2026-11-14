@@ -1,0 +1,1 @@
+SELECT open_time,open_price,high_price,low_price,close_price,volume FROM candle WHERE symbol='SHIBUSDT' AND interval_code='1m' AND closed=1 AND open_time >= '2026-10-09 23:55:00' AND open_time < '2026-10-10 01:00:00' ORDER BY high_price DESC,open_time ASC LIMIT 12

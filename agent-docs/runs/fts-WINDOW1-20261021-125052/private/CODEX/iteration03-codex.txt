@@ -1,0 +1,75 @@
+## Iteration 3 — Log and timing forensics
+
+### FINDINGS
+
+**PROJECT EVIDENCE**
+
+- Scope remains exactly `paper_position` IDs 182, 172, 162, 158, 143, 137.
+- Exact-ID scan of the available 17 `crypto-ai-trader` archives/current log found 11 position-correlated lines, all for position **182**. It found no exact position-ID log correlation for 172, 162, 158, 143, or 137. This is a log-evidence gap, not proof that their runtime events did not occur.
+- Position **182** is associated in logs with `ICPUSDT`.
+- Its apparent entry path was driven by 1m signal `164053`:
+  - Candle close UTC `2026-10-11 22:40:59.999`; KSA `2026-10-12 01:40:59.999`.
+  - Signal generated UTC `22:41:01.677`; KSA `01:41:01.677` — 1.678 s after candle close.
+  - Signal row creation UTC `22:41:02.996`; KSA `01:41:02.996` — 2.997 s after candle close.
+  - Execution evidence logged `BREAKOUT_CONTINUATION_ENTRY allowed=true` at UTC `22:41:03.047`, followed by its price recheck at `22:41:03.060`.
+  - The execution transaction completed UTC `22:41:04.863`; KSA `01:41:04.863`, with `paperPositionOpened=true`.
+- The first position-specific protection log is UTC `22:41:05.405`; KSA `01:41:05.405`: position 182, entry `3.493`, target `3.537460443272`, current `3.494`. A second at UTC `22:41:07.414`; KSA `01:41:07.414` records current `3.497`; the profit lock remained inactive.
+- Entry contention was observed but recovered:
+  - A protection callback observed UTC `22:41:03.516`; KSA `01:41:03.516` waited 1,401 ms for the ICP symbol lock.
+  - The entry-side symbol transaction held that lock for 1,859 ms.
+  - The protection event then committed `APPLIED` as event `1835452`; its protection stage returned in 1,416 ms.
+  - This proves a short protection delay during entry serialization, not a missed or failed callback.
+- The likely stop-loss sequence for 182 is:
+  - `market_price_event` `1837489` was logged `APPLIED` with observation UTC `2026-10-11 22:49:33.460`; KSA `2026-10-12 01:49:33.460`.
+  - `Live STOP_LOSS executed` for ICPUSDT at UTC `22:49:36.971`; KSA `01:49:36.971`, price `3.465000000000`, stop `3.465026371152`.
+  - The price was below the logged stop by `0.000026371152` (about `0.000761%`).
+  - The symbol transaction committed 2,438 ms later in the same logged stop path; price-event `1837489` was recorded `APPLIED` at UTC `22:49:36.974`; KSA `01:49:36.974`.
+- The observation-to-commit interval for that stop path is about 3.514 s. The log attributes 2.438 s to the symbol transaction; the remaining roughly 1.076 s is not decomposed in the available logs.
+
+**AGENT INFERENCE**
+
+- Log order strongly indicates that the ICPUSDT stop-loss line belongs to position 182: position 182 is the only frozen position correlated with ICPUSDT in the available archive and was recorded open immediately before the stop path. This still requires database linkage confirmation.
+- No timing evidence currently establishes a defect. The entry-time lock wait and stop-path latency are real, but both paths ended with committed/APPLIED evidence.
+
+**EXTERNAL RESEARCH**
+
+- None.
+
+### UNKNOWNS
+
+- Database confirmation that `paper_position.id=182` links to signal `164053`, the stop-loss exit, `market_price_event` `1837489`, and the logged entry/exit values.
+- Position 182’s durable `closed_at`, close reason, quantity, fees, realized P&L, and whether its persisted exit exactly matches the logged stop.
+- For trades 172, 162, 158, 143, and 137: symbols, entry/exit timelines, timing, and log correlation remain unknown.
+- Whether the approximately 1.076 s unpartitioned stop-path interval was queueing, lookup work, lock acquisition, or another normal protection step.
+- The supplied snapshot UTC/KSA timestamps remain internally inconsistent and are not used to convert runtime events.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Obtain actual schemas and the six authoritative lifecycle rows before deriving signal, price-event, and protection joins; validate the provisional position-182 log linkage without assuming undocumented columns.  
+SQL:
+
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'market_price_event'
+  )
+ORDER BY table_name, ordinal_position;
+
+SELECT p.*
+FROM crypto_ai.paper_position AS p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+
+### END_DB_REQUEST

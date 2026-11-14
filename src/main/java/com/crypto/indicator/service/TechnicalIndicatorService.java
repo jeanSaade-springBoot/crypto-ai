@@ -11,7 +11,6 @@ import com.crypto.indicator.calculator.MacdCalculator;
 import com.crypto.indicator.calculator.RelativeVolumeCalculator;
 import com.crypto.indicator.calculator.RsiCalculator;
 import com.crypto.indicator.calculator.SmaCalculator;
-import com.crypto.indicator.event.CandleClosedEventListener;
 import com.crypto.indicator.model.BollingerBandsResult;
 import com.crypto.indicator.model.MacdResult;
 import com.crypto.repository.CandleRepository;

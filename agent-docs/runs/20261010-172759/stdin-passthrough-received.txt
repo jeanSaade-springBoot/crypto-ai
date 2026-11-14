@@ -1,0 +1,14 @@
+SYNTHETIC STDIN PASSTHROUGH — em dash check
+The literal word declared must survive unchanged.
+Apostrophes: it's, don't, agent's.
+Double quotes: "quoted text" and nested "inner".
+Backticks: `agent-docs/FINAL_CHANGE_SPECIFICATION_RPR-0.5.md`
+$variables as literal text: $Question $declaredTask ${env:USERPROFILE}
+Parentheses: (exact), (a(b)), func()
+Markdown:
+# Heading
+- item **bold** and `code`
+Colon: value; semicolon; both: here;
+Multiple lines follow.
+Line two.
+Line three.

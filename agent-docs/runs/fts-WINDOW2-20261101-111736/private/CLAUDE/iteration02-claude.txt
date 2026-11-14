@@ -1,0 +1,204 @@
+# Claude: FTS WINDOW2, Iteration 2 (database forensics, self-review)
+
+**Result:** Iteration 1's DB results show three likely problems, all supported by stored data:
+
+1. Five of the six entries had a risk/reward below 1. The stop is held at a fixed 0.5% minimum, while the target uses the much smaller 3×ATR.
+2. The code computes and stores risk/reward but never uses it to allow or block a trade.
+3. Trade 143 gave back a +1.69% peak and closed below entry through a profit-lock path. The first evaluated tick under the lock was already below the protected floor.
+
+None of the six trades hit its stop. All were closed early by signal or lock exits.
+
+**What I read:** AGENTS.md, the shared docs and claude-docs (loaded in iteration 1), CHARTER.md, my own iteration-1 output, and `db/CLAUDE/` results I1-001 to I1-011. I1-008 has no result file. Its SQL was invalid because the subquery used `iv.code` before `iv` was joined; it is corrected below as I2-001.
+
+**What I did not do:** no code, config or DB writes, no git, no deploy. Plan mode is on but no Write tool was available, so I created no plan file. I did not open LIVE_TEAM_STATUS.md, LIVE_EVENTS.log or any Codex file.
+
+---
+
+## EVIDENCE
+
+### E1: Entry geometry (PROJECT EVIDENCE, I1-002 and I1-003; times in KSA)
+
+| id | symbol | entry 1m signal | entry (KSA) | stop distance | target distance | stored R:R | ATR% |
+|---|---|---|---|---|---|---|---|
+| 137 | EGLD | #156723 STRONG_BUY 91/81 | 10-11 23:55:03 | −0.50% | +0.32% | 0.64 | 0.107 |
+| 143 | EGLD | #159408 **WATCH** 73/78, WAIT_FOR_RETRACEMENT, RSI 84.3 | 10-12 01:40:03 | −0.54% | +0.79% | 1.50 | 0.270 |
+| 158 | XRP | #165412 **WATCH** 64/73 | 10-12 05:35:03 | −0.50% | +0.17% | **0.33** | 0.055 |
+| 162 | DOGE | #167668 **WATCH** 76/75 | 10-12 07:02:04 | −0.50% | +0.22% | 0.44 | 0.073 |
+| 172 | SHIB | #171589 BUY 77/67, confluence CONFLICT | 10-12 09:36:03 | −0.50% | +0.37% | 0.74 | 0.124 |
+| 182 | ACE | #176710 BUY 75/68, WEAK_DOWNTREND, confluence CONFLICT | 10-12 12:57:04 | −0.50% | +0.24% | 0.48 | 0.080 |
+
+For the five trades other than 143, the stop equals signal price × 0.995 exactly. That is `minimum-stop-percent: 0.50` (`application.yml:143`).
+
+### E2: Where the risk/reward comes from (PROJECT EVIDENCE, code in the current tree)
+
+- `AtrRiskService.java:34-45` sets the stop distance to max(2×ATR, 0.5% of price) and the target distance to 3×ATR, with nothing equivalent for the target.
+- Whenever ATR% is below 0.25%, the stop is held at 0.5% while the target shrinks with ATR. R:R then equals 6×ATR% and falls below 1.5.
+- `getRiskRewardRatio()` / `riskRewardRatio()` is only read in `AnalysisService:540` (persist), `DashboardApiController` and `TradeInspectorService` (display). No entry gate uses it.
+- Caveat: the build that ran on 10-11/12 is unknown (iteration-1 U7). The DB values themselves (stop exactly 0.5%, stored R:R 0.33–0.74) show the behavior regardless of build.
+
+### E3: How each entry was approved (PROJECT EVIDENCE, I1-004 `wallet_trade.execution_reason` and message)
+
+- **137 and 182:** `IMMEDIATE_VALIDATION` "BALANCED_NEUTRAL_5M_WATCH_1H" exploratory entry. Entry quality was 58 and 50.
+- **143:** `SETUP_TIMEFRAME_ATR`. The 1m signal was ATR-extended (WAIT_FOR_RETRACEMENT), and the fresh 5m BUY was used as the authority. The message says "conservative 30%", but the fill was 25 USDT. The message is cut off at 400 characters, so the cause is unknown.
+- **158:** `SETUP_CONFIRMATION_WAKEUP` via 5m trigger #165415. `signal_processing_work` for #165412 has `paper_position_id=NULL` and completed at 02:35:02.882, before the wallet BUY at 02:35:02.988. The entry was opened outside the work item.
+- **162:** `ACCUMULATED_EVIDENCE`: 1 BUY and 9 WATCH; 5m=WATCH, 1h=WATCH.
+- **172:** `IMMEDIATE_VALIDATION`: 5m bullish, 1h NEUTRAL, entry quality 60.
+- **Size:** the 15 USDT fills on 162 and 182 equal 25% × 0.60 (`reduced-position-percent: 60`, entry type REDUCED_POSITION). The 182 message still says "position=25%", which is a logging inconsistency, not a sizing defect.
+
+### E4: Entry latency (PROJECT EVIDENCE, I1-003, I1-004, I1-010)
+
+- Candle close to signal: 1.5–2.8 s.
+- Signal to wallet fill: 1.4–2.4 s.
+- Each work item finished in one attempt with no failures.
+- **No sign of execution delay or stale input at entry.**
+
+### E5: Outcome during each trade (PROJECT EVIDENCE, I1-006, I1-009)
+
+| id | best price | % of target reached | exit price | gross P&L | close trigger (I1-005) |
+|---|---|---|---|---|---|
+| 137 | 4.005 (+0.15%) | 46.6% | 3.987 | −0.300% | SELL_CONFIRMED, src #156850 STRONG_SELL |
+| 143 | 4.101 (+1.69%) | 95.3% (after TP extensions) | 4.027 | −0.149% | PROFIT_LOCK_HARD_EXIT |
+| 158 | 1.4116 (+0.06%) | 33.2% | 1.409 | −0.128% | SELL_CONFIRMED, src #166819 |
+| 162 | 0.08711 (+0.07%) | 31.5% | 0.08675 | −0.345% | STRONG_SELL (signal path, #168277) |
+| 172 | 550 (+1 tick, +0.18%) | 49.0% | 548 (−1 tick) | −0.182% | HTF_SELL_CONFIRMED, src #172587 1h SELL |
+| 182 | 0.1884 (never above entry) | 0% | 0.1880 | −0.212% | SELL_CONFIRMED, src #176927 |
+
+- SHIB prices are in units of 1e-8, so one tick is about 0.18%.
+- No trade touched its stop. The lowest observed price was above the stop for every trade.
+- All `market_price_event` rows in these windows are `APPLIED`.
+
+### E6: Trade 143 profit-lock timeline (PROJECT EVIDENCE, I1-006, I1-007, code)
+
+- 01:40:03 KSA: entry at 4.033.
+- 01:40:23: profit lock activates.
+- 01:40:41: target extended 4.0647 → 4.0805 at price 4.067.
+- 01:41:13: target extended 4.0805 → 4.1043 at price 4.081.
+- Peak price was 4.101 and the stored lock price was 4.07579.
+- 01:43:35: exit at 4.027, below both the lock (4.0758) and the floor (entry × 1.0005 = 4.03502).
+- The exit wording matches the "triggered" text (`DynamicProfitLockService.java:193`) plus `LivePositionProtectionService.java:212`. It does not match the rebase wording (`:185`). So this was the ACTIVE-lock branch, not the FIX-118 rebase branch.
+- When the lock is triggered with 1h=NEUTRAL, 5m=WATCH and 1m=WATCH, `evaluateProfitLockBreach` (`PositionExitPolicy.java:52-92`) falls through to `PROFIT_LOCK_EXIT`.
+
+**AGENT INFERENCE:** a tick between 4.035 and 4.0758 would have exited in profit, so the first tick evaluated at or below the lock was already ≤ 4.027. Possible causes:
+- (a) a real price gap of about −1.2% between ticks;
+- (b) sparse sampling: about 65 ticks in 3m50s, roughly one every 3.5 s;
+- (c) a different 1h/5m state at trigger time.
+
+I2-003 and I2-001 test these.
+
+### E7: Exit write timing (PROJECT EVIDENCE, I1-002, I1-004, I1-005)
+
+- On live-path exits, the wallet SELL commits 1.2–3.2 s **before** `paper_position.closed_at`: 137 +3.19 s, 158 +2.42 s, 172 +1.99 s, 182 +1.98 s, 143 +1.18 s.
+- On the signal-path exit (162), both happen at the same moment.
+- `paper_position.closed_at` therefore overstates the exit time on the live path. `wallet_trade.executed_at` should be used for exit timing.
+
+### E8: Activity scope (PROJECT EVIDENCE, I1-011, opened on or after 10-11 00:00 UTC)
+
+- CLOSED: 58 rows, 9 negative. STOPPED: 37 rows, all negative.
+- The last close was 2026-10-15 03:15 UTC (06:15 KSA). The last open was 2026-10-15 03:08 UTC.
+- **No positions at all between 10-15 and the 11-01 snapshot** (17 days). That explains why the frozen set is 20 days old (F2).
+- From 10-12 10:05 UTC to 10-15 there were no CLOSED losses, while STOPPED losses continued.
+
+---
+
+## FINDINGS (Iteration 2; I have reviewed only my own work)
+
+- **F8: Entries with a structurally negative edge. Likely defect (design or configuration).** PROJECT EVIDENCE (E1, E2) + AGENT INFERENCE.
+  - Five of six entries had R:R between 0.33 and 0.74 because of the 0.5% stop floor combined with a 3×ATR target.
+  - Gross break-even win rate: 158 needs 74.5%, 162 70%, 182 68%, 137 61%, 172 57%.
+  - Assuming Binance's standard spot fee of about 0.1% per side, round trip about 0.2% (EXTERNAL knowledge, not fetched this session; the system records `fee_usdt=0`), 158's full target of +0.17% is a **net loss even if it is hit**. 162 and 182 would net only about +0.02% and +0.04%.
+  - No code gate uses `risk_reward_ratio` (E2).
+  - These losses are valid under the rules as coded, but the rule set allows entries that cannot pay off at their own target.
+  - I3-005 tests this across the whole population before I call it confirmed.
+
+- **F9: WATCH-decision entries.** PROJECT EVIDENCE (E3).
+  - Three of six (143, 158, 162) entered on a 1m WATCH through Execution Intelligence routes.
+  - 143 entered despite WAIT_FOR_RETRACEMENT and RSI 84.
+  - These routes appear to be designed behavior. Whether they are allowed under TRADING_RULES is held for iteration 3. Not called a defect yet.
+
+- **F10: Trade 143 exited through the profit lock at a loss.** PROJECT EVIDENCE (E6) + INFERENCE.
+  - The lock earned at a +1.69% peak did not protect any profit: the exit was at −0.15%, below the protected floor.
+  - Whether this is a protection defect (missing or late ticks) or market slippage depends on I2-003.
+  - This refines F4: it was **not** the rebase branch.
+
+- **F3 (still open): stale higher-timeframe signals in the live exit path.** Not testable until I2-001 returns.
+  - In 172, the 1h signal turned SELL but the exit came 15 minutes later. That is consistent with waiting for the 5m to turn non-supportive, not with staleness. This is still unverified.
+
+- **F11: Signal exits limited every loss to below the stop.** PROJECT EVIDENCE (E5).
+  - Losses were 0.13–0.35%, against a 0.5% stop.
+  - The exits themselves do not look harmful. The losses come mainly from entries that never moved toward their target: best progress was 0–49%, except 143.
+
+- **F12: Traceability gaps (minor).** PROJECT EVIDENCE.
+  - 158's work row does not link to the paper position.
+  - Two execution messages state a size that differs from the executed size.
+  - `paper_position.closed_at` lags the wallet exit by up to 3.2 s.
+
+- **F1 and F7 from iteration 1 still stand.** F1: all STOPPED losses are excluded from the frozen set. F7: FIX-154 code is in the working tree but the docs say it is not implemented.
+
+## UNKNOWNS
+
+- U3: The ages of the 5m and 1h signals at entry and exit (I2-001, I2-002).
+- U9: The tick sequence for 143 between 01:41 and 01:43:41 KSA, and the price gap at the trigger (I2-003).
+- U10: Price after each close compared with each trade's target and stop, i.e. whether holding would have won (I2-004).
+- U11: Whether low R:R entries lose more often across the population (I2-005).
+- U12: Data quality of the entry candles (I2-006).
+- U13: Full Execution Intelligence decision text and the opportunity rows (I2-007).
+- U7: The build running at trade time.
+
+---
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-001
+Purpose: Corrects the failed I1-008. For each position, the newest 1m, 5m and 1h signal at or before opening and at or before closing, with its age in seconds. Tests F3 and the entry-time higher-timeframe context.
+SQL:
+SELECT p.id AS position_id, pt.point, pt.at_ts, iv.code AS interval_code, s.id, s.candle_open_time, s.generated_at, TIMESTAMPDIFF(SECOND, s.generated_at, pt.at_ts) AS age_s, s.decision, s.original_decision, s.total_score, s.confidence_score, s.latest_price, s.data_quality_valid FROM paper_position p JOIN (SELECT id AS pid, 'OPEN' AS point, opened_at AS at_ts FROM paper_position WHERE id IN (182,172,162,158,143,137) UNION ALL SELECT id, 'CLOSE', closed_at FROM paper_position WHERE id IN (182,172,162,158,143,137)) pt ON pt.pid=p.id CROSS JOIN (SELECT '1m' AS code UNION ALL SELECT '5m' UNION ALL SELECT '1h') iv LEFT JOIN trade_signal s ON s.id = (SELECT s2.id FROM trade_signal s2 WHERE s2.symbol=p.symbol AND s2.interval_code=iv.code AND s2.generated_at <= pt.at_ts ORDER BY s2.generated_at DESC LIMIT 1) ORDER BY p.id, pt.point DESC, iv.code
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-002
+Purpose: 5m and 1h signal series from 15 minutes before entry to 1 minute after exit. Shows how the higher-timeframe decision changed during each trade (172's 1h SELL, 5m flips).
+SQL:
+SELECT p.id AS position_id, s.interval_code, s.id, s.candle_open_time, s.generated_at, s.decision, s.total_score, s.confidence_score, s.latest_price FROM paper_position p JOIN trade_signal s ON s.symbol=p.symbol AND s.interval_code IN ('5m','1h') AND s.generated_at BETWEEN p.opened_at - INTERVAL 15 MINUTE AND p.closed_at + INTERVAL 1 MINUTE WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, s.interval_code, s.generated_at LIMIT 300
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-003
+Purpose: Tick-level evidence for F10. Full tick sequence for 143 (lock to exit) with the gap to the previous tick. For the other five, only the last 30 s before the wallet SELL. Tests the gap and sampling-density explanations.
+SQL:
+SELECT x.position_id, x.id, x.observed_at, x.source_received_at, x.created_at, x.price, x.source, x.source_event_id, x.delivery_status, x.outcome_reason, TIMESTAMPDIFF(MICROSECOND, x.prev_obs, x.observed_at)/1000000 AS gap_s FROM (SELECT p.id AS position_id, e.*, LAG(e.observed_at) OVER (PARTITION BY p.id ORDER BY e.observed_at, e.id) AS prev_obs FROM paper_position p JOIN market_price_event e ON e.symbol=p.symbol AND e.observed_at BETWEEN (CASE WHEN p.id=143 THEN '2026-10-11 22:40:15' ELSE p.closed_at - INTERVAL 35 SECOND END) AND p.closed_at + INTERVAL 2 SECOND WHERE p.id IN (182,172,162,158,143,137)) x ORDER BY x.position_id, x.observed_at, x.id LIMIT 300
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-004
+Purpose: Outcome after exit, kept separate from the entry assessment. Minimum and maximum price within 60 minutes of each close, the first time price reached the stored target, and the first time it reached the stored stop.
+SQL:
+SELECT p.id AS position_id, p.take_profit, p.stop_loss, MIN(e.price) AS min_60m, MAX(e.price) AS max_60m, MIN(CASE WHEN e.price >= p.take_profit THEN e.observed_at END) AS first_tp_touch, MIN(CASE WHEN e.price <= p.stop_loss THEN e.observed_at END) AS first_sl_touch, COUNT(*) AS n FROM paper_position p JOIN market_price_event e ON e.symbol=p.symbol AND e.observed_at > p.closed_at AND e.observed_at <= p.closed_at + INTERVAL 60 MINUTE WHERE p.id IN (182,172,162,158,143,137) GROUP BY p.id, p.take_profit, p.stop_loss ORDER BY p.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-005
+Purpose: Tests F8 across the population. Production positions opened 10-11 to 10-15, grouped by entry-signal R:R, with win/loss counts and average gross P&L percent.
+SQL:
+SELECT CASE WHEN s.risk_reward_ratio < 0.5 THEN 'a<0.5' WHEN s.risk_reward_ratio < 1 THEN 'b0.5-1' WHEN s.risk_reward_ratio < 1.5 THEN 'c1-1.5' ELSE 'd>=1.5' END AS rr_bucket, COUNT(*) AS n, SUM(p.realized_pnl > 0) AS wins, SUM(p.realized_pnl < 0) AS losses, SUM(p.status='STOPPED') AS stopped, ROUND(AVG((p.exit_price - p.entry_price)/p.entry_price*100),4) AS avg_gross_pct, ROUND(SUM(p.realized_pnl),6) AS sum_pnl FROM paper_position p JOIN trade_signal s ON s.id=p.signal_id WHERE p.opened_at >= '2026-10-11 00:00:00' AND p.status IN ('CLOSED','STOPPED') GROUP BY rr_bucket ORDER BY rr_bucket
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-006
+Purpose: Data quality of the entry candles (U12). The 1m candle each entry signal used, plus the 5 preceding 1m candles: closed flag, created_at lag and gaps. Also lists the candle table columns to find a provenance column.
+SQL:
+SELECT p.id AS position_id, c.id, c.interval_code, c.open_time, c.close_time, c.open_price, c.high_price, c.low_price, c.close_price, c.volume, c.number_of_trades, c.taker_buy_base_volume, c.closed, c.created_at, TIMESTAMPDIFF(MICROSECOND, c.close_time, c.created_at)/1000000 AS created_lag_s FROM paper_position p JOIN trade_signal s ON s.id=p.signal_id JOIN candle c ON c.symbol=p.symbol AND c.interval_code='1m' AND c.open_time BETWEEN s.candle_open_time - INTERVAL 5 MINUTE AND s.candle_open_time WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, c.open_time LIMIT 60;
+SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='crypto_ai' AND TABLE_NAME='candle' ORDER BY ORDINAL_POSITION
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-007
+Purpose: Full Execution Intelligence approval text and opportunity state for each entry (U13, F9). Also returns the wallet execution and observed-price timestamps for the exits.
+SQL:
+SELECT p.id AS position_id, w.id AS wallet_trade_id, w.side, w.execution_reason, w.decision_price_usdt, w.price_usdt, w.execution_price_observed_at, w.executed_at, LEFT(w.execution_message,2000) AS msg FROM paper_position p JOIN wallet_trade w ON w.symbol=p.symbol AND w.executed_at BETWEEN p.opened_at - INTERVAL 10 SECOND AND p.closed_at + INTERVAL 10 SECOND WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, w.executed_at LIMIT 40;
+SELECT o.id, o.symbol, o.status, o.started_at, o.last_evidence_at, o.latest_signal_id, o.evidence_count, o.buy_count, o.watch_count, o.neutral_count, o.bearish_count, o.evidence_score, o.opportunity_health, o.five_minute_decision, o.one_hour_decision, o.execution_source, o.recommended_position_percent, o.decision_code, LEFT(o.decision_explanation,1200) AS expl, o.executed_at FROM execution_opportunity o JOIN paper_position p ON p.symbol=o.symbol AND o.executed_at BETWEEN p.opened_at - INTERVAL 10 SECOND AND p.opened_at + INTERVAL 5 SECOND WHERE p.id IN (182,172,162,158,143,137) ORDER BY o.executed_at LIMIT 20
+### END_DB_REQUEST
+
+---
+
+**Next iteration (3):** finish the 5m/1h timeline for each trade and rule on F3 (I2-001/002) and F10 (I2-003). Then judge each trade as a valid loss or a defect, testing F8 on the population (I2-005) and judging outcomes separately from entries (I2-004).

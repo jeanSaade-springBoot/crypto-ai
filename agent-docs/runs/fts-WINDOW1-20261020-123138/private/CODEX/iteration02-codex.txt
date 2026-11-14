@@ -1,0 +1,40 @@
+## FINDINGS — Iteration 2: database forensics
+
+- **[PROJECT EVIDENCE]** No database result files exist in the assigned `db/CODEX` evidence directory. The actual `crypto_ai` schema and all six frozen `paper_position` records remain unobserved.
+- **[PROJECT EVIDENCE]** Therefore none of the following can yet be confirmed for IDs **182, 172, 162, 158, 143, 137**: selection criteria, symbol, side, entry/exit times and prices, quantity, stop/target, exit reason, fees, linked signals, or realized-P&L reconciliation.
+- **[PROJECT EVIDENCE]** `paper_position` is the frozen authoritative entity; `wallet_position_test` is excluded as Replay evidence. The frozen IDs must not be replaced, even if later data reveals a selection discrepancy.
+- **[PROJECT EVIDENCE]** The supplied snapshot times conflict: `2026-10-20 11:54:53 UTC` converts to **2026-10-20 14:54:53 KSA**, not the stated **2026-10-20 12:31:38 KSA**. The stated KSA value corresponds to `2026-10-20 09:31:38 UTC`. This prevents reliable timing conclusions based on the snapshot clock.
+- **[AGENT INFERENCE]** Without schema and row evidence, attributing these losses to strategy quality, stale inputs, stop-loss/protection behavior, execution delay, fees, or a defect would be unsupported.
+
+## EVIDENCE
+
+- `agent-docs/runs/fts-WINDOW1-20261020-123138/CHARTER.md`
+- `agent-docs/runs/fts-WINDOW1-20261020-123138/private/CODEX/iteration01-codex.txt`
+- `agent-docs/DATABASE_INVESTIGATION_RULES.md`
+- `codex-docs/TRADE_INVESTIGATION_AGENT.md`
+- Assigned `db/CODEX` directory: no query result artifacts available.
+
+## UNKNOWNS
+
+- Whether every frozen ID currently satisfies `CLOSED`, non-null `closed_at`, and negative `realized_pnl`.
+- Exact UTC timestamps and their KSA conversions.
+- Position-to-signal/work/execution linkage.
+- Whether an accepted protection price event triggered each exit.
+- Whether reported P&L matches quantities, prices, and fees.
+- Runtime mode/version/configuration active at each entry.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I2-001  
+Purpose: Schema-first confirmation of the authoritative position entity and discovery of exact related tables before selecting any data columns or reconstructing the six frozen trades.  
+SQL:
+```sql
+SELECT table_name
+FROM information_schema.tables
+WHERE table_schema = 'crypto_ai'
+ORDER BY table_name;
+
+SHOW CREATE TABLE crypto_ai.paper_position;
+
+SHOW INDEX FROM crypto_ai.paper_position;
+```
+### END_DB_REQUEST

@@ -1,0 +1,1 @@
+SELECT id, execution_price_observed_at, UNIX_TIMESTAMP(execution_price_observed_at) AS observed_epoch, executed_at, UNIX_TIMESTAMP(executed_at) AS executed_epoch FROM wallet_trade WHERE id IN (344,358,392,403,426,451) ORDER BY id

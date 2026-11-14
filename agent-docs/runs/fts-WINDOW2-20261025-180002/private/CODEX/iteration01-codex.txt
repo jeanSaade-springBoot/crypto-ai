@@ -1,0 +1,67 @@
+## Iteration 1 — Trade reconstruction (pending database evidence)
+
+### Findings
+
+- **PROJECT EVIDENCE:** The frozen scope is exactly `crypto_ai.paper_position` IDs `182, 172, 162, 158, 143, 137`. No substitutions made.
+- **PROJECT EVIDENCE:** The Codex-private database-evidence folder is empty. No results for `DBQ-FTS-001..005` are available to this track.
+- **PROJECT EVIDENCE:** `paper_position` holds the entry signal (`signal_id`), optional exit signal (`exit_signal_id`), lifecycle, entry/exit prices, P&L, and close reasons. [PaperPosition.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/domain/PaperPosition.java)
+- **PROJECT EVIDENCE:** Live mechanical exits execute the wallet exit before closing the corresponding paper position; the paper record’s close reason/explanation is then persisted and audited. [LivePositionProtectionService.java](C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java)
+- **AGENT INFERENCE:** Without the six actual position rows, no trade-specific entry, exit, P&L, timing, defect, or strategy conclusion is justified.
+
+### Evidence
+
+- **PROJECT EVIDENCE:** The study charter freezes the six IDs and defines the negative-`realized_pnl`, closed-position selection.
+- **PROJECT EVIDENCE:** Current source identifies the likely reconstruction evidence chain: `paper_position` → entry/exit `trade_signal`; `wallet_managed_position` via entry signal; `wallet_trade`; `production_exit_audit`; `signal_processing_work`; and accepted `market_price_event` evidence.
+- **EXTERNAL RESEARCH:** None.
+
+### Time metadata discrepancy
+
+- **PROJECT EVIDENCE:** Supplied snapshot UTC is `2026-10-25 15:00:04`.
+- **AGENT INFERENCE:** UTC+03:00 converts this to **KSA `2026-10-25 18:00:04`**, not the supplied `18:00:02`. I will retain raw database values as UTC and show explicit conversions; this two-second metadata discrepancy should not be silently normalized.
+
+### Unknowns
+
+For every frozen trade: symbol, entry/exit timestamps, prices, P&L, entry and exit signal IDs, exit trigger, wallet execution linkage, protection-event evidence, data quality/freshness, and whether the observed loss followed the rules.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual `crypto_ai` schema before selecting linked evidence columns/tables for the six frozen paper positions.  
+SQL:
+```sql
+SELECT
+    table_name,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'signal_processing_work',
+      'market_price_event',
+      'production_exit_audit',
+      'position_analysis',
+      'position_management_event'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I1-002  
+Purpose: Obtain the authoritative lifecycle rows for the six frozen positions, without substituting any trade.  
+SQL:
+```sql
+SELECT *
+FROM crypto_ai.paper_position
+WHERE id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST

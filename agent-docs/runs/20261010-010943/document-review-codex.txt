@@ -1,0 +1,49 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** SELL 107 was committed as `PROFIT_LOCK_EXIT` at `2026-10-09T20:58:43.554Z` / `23:58:43.554 KSA`. The recorded price was below the active lock, and the logged 1m/5m/1h labels produce the policy’s default profit-lock exit.
+
+- **AGENT INFERENCE:** This sufficiently explains the recorded exit, but not the document’s stronger claim that no accepted TP-capable price occurred earlier.
+
+- **PROJECT EVIDENCE:** The document lacks exact proposed code changes, a test plan, rollback, DB/Replay/Production impact registry, and proof that both agents approved this exact merged revision. It expressly lists those items as still “Required before approval.”
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** [DBQ-002](</C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/trade-investigation-shib-20261010/db/DBQ-002-CODEX-result.txt:10>) records BUY 106 and SELL 107 with `PROFIT_LOCK_EXIT`.
+
+- **PROJECT EVIDENCE:** Captured archive evidence records lock activation on event 1085348 and trigger on 1085485 at [round04-codex.stderr.txt](</C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/20261010-010943/round04-codex.stderr.txt:5914>).
+
+- **PROJECT EVIDENCE:** `PositionExitPolicy` defaults a breached lock to `PROFIT_LOCK_EXIT` when neither hold condition matches: [PositionExitPolicy.java](</C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/PositionExitPolicy.java:52>).
+
+- **PROJECT EVIDENCE:** TP is checked before profit lock, but the TP branch returns even if `executeMechanicalExit` returns `false`: [LivePositionProtectionService.java](</C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:100>).
+
+- **PROJECT EVIDENCE:** `executeMechanicalExit` can return `false` for a missing/zero managed position or zero available asset quantity, without throwing: [WalletAutoExecutionService.java](</C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/wallet/service/WalletAutoExecutionService.java:490>).
+
+- **PROJECT EVIDENCE:** An ordinary callback that returns normally is marked `APPLIED`; a `false` mechanical-exit result does not create a protection-failure outcome: [LivePositionProtectionService.java](</C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:69>).
+
+- **PROJECT EVIDENCE:** The reviewed document itself concedes missing mandatory approval inputs at [FINAL_TECHNICAL_REVIEW.md](</C:/workspace/crypto-ai-trader-mysql/agent-docs/runs/20261010-010943/FINAL_TECHNICAL_REVIEW.md:295>).
+
+## OBJECTIONS
+
+- **PROJECT EVIDENCE:** The document’s claim that a silent TP-path failure is ruled out is incorrect. Its cited position check is not sufficient: the later execution method independently has `false` return paths, and the caller silently returns afterward. No retained query shows every relevant `market_price_event` row, its price, outcome, and reason.
+
+- **AGENT INFERENCE:** Therefore, “TP was never reached by the evidenced protection path” is defensible only as an evidence limitation, not as a confirmed historical fact. A TP-capable accepted observation followed by a non-executed mechanical exit remains unexcluded.
+
+- **PROJECT EVIDENCE:** The document’s timestamps have a material audit-quality defect: database result files render KSA values while their metadata says raw values are UTC, and DBQ-008 labels KSA values as UTC. The runtime log supports the stated UTC/KSA timeline, but the database artifacts must not be presented as unambiguous UTC evidence.
+
+- **PROJECT EVIDENCE:** Current relevant source files are uncommitted, including live protection, price-event handling, and kline ingestion. The document correctly notes no deployed-binary hash or historical configuration snapshot; this prevents source from proving the exact runtime behavior.
+
+- **PROJECT EVIDENCE:** Claude reviewed earlier Codex rounds, while the final merged document has no immutable revision identifier or explicit two-agent approval of that same complete text. This fails the required same-revision review gate.
+
+- **AGENT INFERENCE:** The fee, tick-size, and later-price discussion is appropriately non-causal, but cannot support a correction proposal without historical account fees, slippage, complete price-event data, and out-of-sample Replay/Production-safe validation.
+
+## UNKNOWNS
+
+- **PROJECT EVIDENCE:** Whether any accepted TP-capable `market_price_event` occurred before the lock breach.
+
+- **PROJECT EVIDENCE:** Whether a TP-path `executeMechanicalExit` returned `false`, and the managed-position/asset state at that instant.
+
+- **PROJECT EVIDENCE:** The exact deployed binary, configuration, and Replay parity for this event.
+
+- **PROJECT EVIDENCE:** The required exact code-diff registry, tests, rollback, DB/Replay/Production impact analysis, and same-revision dual-agent approval are absent.
+
+VERDICT: REJECTED

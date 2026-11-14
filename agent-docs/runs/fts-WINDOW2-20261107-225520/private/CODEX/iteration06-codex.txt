@@ -1,0 +1,78 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** The study remains restricted to frozen `crypto_ai.paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitute trades were used.
+
+- **PROJECT EVIDENCE:** `agent-docs/runs/fts-WINDOW2-20261107-225520/db/CODEX/` has no readable evidence artifacts. Therefore, no durable position, signal, wallet, price-event, candle, audit, or runtime-log evidence exists in this track to identify the actual root cause of any loss.
+
+- **AGENT INFERENCE:** A trade-specific root-cause finding is currently **not established** for any of the six trades. It would be unsound to classify them as bad entries, valid stop losses, delayed exits, execution defects, or data-quality defects without their durable records.
+
+- **PROJECT EVIDENCE:** Current source has materially different close evidence paths:
+  - Mechanical protection executes the wallet exit before closing `paper_position`.
+  - Signal-route close persists the `paper_position` closure before attempting the wallet exit, and catches wallet exceptions.
+  
+  Any position/wallet mismatch is therefore an investigation lead, not automatically proof of an execution failure. [PaperTradingService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/service/PaperTradingService.java:487), [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:165)
+
+- **PROJECT EVIDENCE:** A negative realized P&L could result from a `STOP_LOSS`, a normal signal-driven exit, or another close route. Current protection treats stop loss as absolute when the accepted price is at or below the configured stop. This is not proof that any selected trade was stopped out. [LivePositionProtectionService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/position/service/LivePositionProtectionService.java:174)
+
+- **EXTERNAL RESEARCH:** Binance marks a WebSocket kline explicitly with `x` (“is this kline closed?”), while REST klines are uniquely identified by open time and supply OHLC data. Consequently, candle OHLC cannot by itself establish the accepted live-price event or paper-wallet fill that caused a close; those must come from trader-side price-event and wallet evidence. [Binance WebSocket kline documentation](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/ws-streams/~), [Binance REST kline documentation](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/rest-api/market)
+
+- **PROJECT EVIDENCE:** The supplied snapshot labels remain internally inconsistent: UTC `2026-11-07 19:55:22` converts to **KSA `2026-11-07 22:55:22`**, not the supplied `22:55:20`. This does not change the frozen IDs; it prevents treating the provided KSA snapshot label as an exact timestamp conversion.
+
+## EVIDENCE
+
+- **PROJECT EVIDENCE:** Current entry rules include final execution-price authority limited to a 15-second-old canonical price observation; the historical deployed version and configuration remain unproven. [ExecutionPriceAuthorityService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionPriceAuthorityService.java:24)
+
+- **PROJECT EVIDENCE:** Current source rejects initial BUYs below its 50-point entry-quality cutoff as `CHASE_ENTRY_BLOCKED`; this is a present-code control, not historical proof for these trades. [ExecutionIntelligenceService.java](/C:/workspace/crypto-ai-trader-mysql/src/main/java/com/crypto/execution/service/ExecutionIntelligenceService.java:1171)
+
+- **PROJECT EVIDENCE:** Timing persistence is best-effort and incomplete; absence of timing evidence cannot prove no delay.
+
+## UNKNOWNS
+
+For every frozen trade: symbol; UTC/KSA entry and exit times; entry/exit signal links; quantity; stop/target; close reason; wallet BUY/SELL legs; fees; realized-P&L reconciliation; accepted price-event state; contemporaneous signal/data-quality/HTF evidence; and deployed runtime version/configuration.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-001  
+Purpose: Establish the actual schema for the authoritative positions and their entry, exit, wallet, protection, audit, and signal evidence before forming root-cause joins for frozen IDs 182, 172, 162, 158, 143, and 137.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    column_type,
+    is_nullable,
+    column_key
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'signal_processing_work',
+      'wallet_trade',
+      'wallet_managed_position',
+      'market_price_event',
+      'production_exit_audit',
+      'position_management_event',
+      'position_analysis',
+      'execution_opportunity',
+      'candle',
+      'technical_indicator',
+      'fix129_stage_timing'
+  )
+ORDER BY table_name, ordinal_position;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I6-002  
+Purpose: Retrieve the six frozen authoritative positions without assuming unverified columns, preserving their exact durable lifecycle and loss evidence for the next reconstruction step.  
+SQL:
+```sql
+SELECT p.*
+FROM crypto_ai.paper_position AS p
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY FIELD(p.id, 182, 172, 162, 158, 143, 137);
+```
+### END_DB_REQUEST

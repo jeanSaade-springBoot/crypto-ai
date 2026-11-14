@@ -1,0 +1,200 @@
+# CLAUDE — FTS WINDOW1 — Iteration 2: Database forensics (self-review only)
+
+The main result: in four of the six losses, the trade opened and closed on the same hourly SELL signal. The entry treated it as a mild conflict; the exit treated it as a fresh breakdown. The losses themselves are one or two price ticks each, before fees.
+
+This round is analysis only. I wrote no code, config, DB rows, git changes or docs; `claude-docs` updates wait until the study converges. I didn't open Codex's private/db folders, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md` or Codex memory. I read the I1-001…008 results under `db/CLAUDE/`.
+
+Frozen trades analysed, none substituted: **104, 101, 96, 91, 82, 78**. All times are DB UTC, with KSA = UTC+3 where shown.
+
+## 0. Contradiction with project docs (must be reported)
+
+**PROJECT EVIDENCE:**
+- `claude-docs/TRADING_RULES.md` ("Pending (not implemented): FIX-154") and the AGENTS.md FIX-154 section say FIX-154 is not implemented or deployed.
+- The Production DB disagrees:
+  - DBQ-CLAUDE-I1-006: V107 `fix 154 trusted higher timeframe buy` was applied 2026-10-10 00:15:21 UTC, and V109 at 01:52:45 UTC.
+  - DBQ-CLAUDE-I1-007: `buy_htf_assessment_audit` holds Production rows (`replay_mode=0`). Their `final_reason` text includes "FIX-154 soft-HTF cap=25%" (audit 1362, created 2026-10-10 22:28:03 UTC).
+- **Conclusion:** FIX-154 runtime code was active in Production for trades 82, 96, 101 and 104, and probably for all six.
+
+I'm reporting this, not silently accepting it. Shared knowledge should be corrected only through the dual-agent process.
+
+## 1. Reconstructed timelines (PROJECT EVIDENCE: I1-001/002/003/004/007/008)
+
+| id | sym | entry UTC → KSA | entry route evidence | 1h signal at entry | 5m at entry | exit UTC → KSA | exit trigger, 1h at exit | entry → exit px | ticks |
+|---|---|---|---|---|---|---|---|---|---|
+| 78 | PEPE | 10-10 17:35:06.80 → 20:35:07 | 1m 115049 = WATCH; 5m 115050 BUY generated 17:35:04.17, 36 ms after the 1m; no audit row on the 1m id | **114160 SELL c70**, gen 17:00:07 | 115050 BUY (prev 114924 WATCH) | 17:50:12.87 → 20:50:13 | HTF_SELL_CONFIRMED; 5m 115428 NEUTRAL gen 17:50:04.72 (+8.2 s); 1h still **114160** | 4.06e-6 → 4.05e-6 | −1 |
+| 82 | XLM | 18:03:06.24 → 21:03:06 | audit 1132 ACCUMULATED_EVIDENCE, NO_CONFLICT, BALANCED_STRONG 75% | 114163 WATCH, **age 3782 s** | 115556 BUY, **age 482 s** | 19:25:16.12 → 22:25:16 | SELL_CONFIRMED; 1m 117760 STRONG_SELL, 5m 117761 SELL (19:25:04.70), 1h 117124 WATCH | 0.1984 → 0.1978 | −6 |
+| 91 | SHIB | 21:40:07.27 → 10-11 00:40:07 | 1m 121198 = WATCH, `confluence_higher_decision=SELL`; 5m 121201 BUY gen 21:40:04.56; no audit row on the 1m id | **120186 SELL c70**, gen 21:00:06 | 121201 BUY (prev 121076 NEUTRAL) | 21:45:30.85 → 00:45:31 | HTF; 5m 121327 NEUTRAL 21:45:04.64 (+26.2 s); 1h still **120186** | 5.48e-6 → 5.47e-6 | −1 |
+| 96 | PEPE | 22:28:04.36 → 01:28:04 | audit 1362 DIRECT_BUY, **SOFT_CONFLICT**, 1h SELL → effective NEUTRAL, cap 25%, BALANCED_STRONG | **121720 SELL c71**, gen 22:00:06 | 122356 BUY | 22:45:09.70 → 01:45:10 | HTF; 5m 122860 NEUTRAL 22:45:04.50 (+5.2 s); 1h still **121720** | 4.06e-6 → 4.05e-6 | −1 |
+| 101 | AERO | 10-11 02:12:06.56 → 05:12:07 | audit 1523 DIRECT_BUY, NO_CONFLICT; 1h **127870 BUY with conf 49, final_entry_allowed=0** | 127870 | 128124 WATCH (original STRONG_BUY, c49, blocked) | 02:21:27.16 → 05:21:27 | PROFIT_LOCK_HARD_EXIT: price 0.9487 < floor 0.94926322 | avg 0.94878883 → 0.9487 | ≈ −1 below avg |
+| 104 | ENA | 05:35:07.08 → 08:35:07 | audit 1558 DIRECT_BUY **SOFT_CONFLICT → BALANCED_CONFIRMATION_INSUFFICIENT** (rejected); audit 1559 CONSOLIDATION → OPPORTUNITY_BUILDING (not an approval); 5m 133251 BUY gen 05:35:03.96 | **132367 SELL c70**, gen 05:00:07 | 133124 WATCH → 133251 BUY | 05:40:11.25 → 08:40:11 | HTF; 5m 133376 NEUTRAL 05:40:03.91 (+7.3 s); 1h still **132367** | 0.2248 → 0.2246 | −2 |
+
+The "1h still" claim is proven by absence. I1-003 returns every 1h signal up to `closed_at + 1 min`, and no 1h signal newer than the one listed exists for 78, 91, 96 or 104. `LivePositionProtectionService.java:97` reads the newest 1h by `generated_at`, so the 1h used at exit was the same signal ID present before entry.
+
+## 2. FINDINGS
+
+**F-08 (CONFIRMED for 96 and 104; strongly supported for 78 and 91). The same 1h signal is read one way at entry and the opposite way at exit.** (PROJECT EVIDENCE, with AGENT INFERENCE on 78/91)
+
+- **Entry side.** FIX-154 treats a quality-valid 1h SELL (confidence about 70) as `SOFT_CONFLICT` and turns the effective 1h into NEUTRAL (audits 1362 and 1558). BALANCED then admits 5m BUY plus 1h NEUTRAL.
+- **Exit side.** `PositionExitPolicy.evaluateNormalExit` (`PositionExitPolicy.java:25-32`) uses the **raw** latest 1h. It exits as soon as 5m is no longer BUY/STRONG_BUY/WATCH.
+- **No timing check.** Nothing tests whether that 1h came before the entry. The class Javadoc (line 14) says "a **fresh** 1h SELL may close a position", and the exit text says "1h **turned** SELL". In all four trades the 1h SELL existed 28–40 minutes before entry, so neither statement matches the implementation.
+- **Result.** Each position lived exactly until the first 5m close that wasn't BUY/WATCH (1, 4, 4 and 1 bars). The exits fired 5–26 seconds after that 5m signal.
+- **Classification.** This is a design inconsistency (a logic-defect candidate), not stale data. Every input was fresh (`data_quality_valid=1`, LIVE mode, ages within the limits).
+
+**F-09. Trades 78, 91 and 104 match the `SETUP_CONFIRMATION_WAKEUP` route.** (PROJECT EVIDENCE for the code; AGENT INFERENCE for the attribution)
+
+- `ExecutionIntelligenceService.java:397-457` fires when a fresh 5m BUY follows a non-bullish 5m, while an unexecuted opportunity is building (104's audit 1559 says OPPORTUNITY_BUILDING).
+- It validates with `validateBuyContext(fiveMinuteTrigger, "SETUP_WAKEUP")`. Its audit row would therefore be keyed to the **5m** signal ID, which explains why I1-007 found no rows for the 1m IDs of 78 and 91.
+- The size is `min(25, …)`.
+- In all three trades the 5m BUY landed 0.04–0.9 s after the 1m signal, and entry followed about 3 s later.
+- **Pattern:** entry authority hinges on one 5m WATCH/NEUTRAL→BUY flip and exit on the next BUY→NEUTRAL flip, while the 1h SELL stays constant. This is a whipsaw by construction.
+- **To verify:** I2-001 and I2-002.
+
+**F-10. Every loss is 1–2 price ticks; for PEPE and SHIB one tick is about one ATR or more.** (PROJECT EVIDENCE plus arithmetic)
+
+| Coin | One tick | ATR |
+|---|---|---|
+| PEPE | 1e-8 = 0.246% of 4.06e-6 | 0.22–0.29% |
+| SHIB | 0.18% of 5.48e-6 | 0.09% |
+
+- I found no tick-size handling (`tickSize|PRICE_FILTER` returns nothing in `src/main/java`).
+- 91's TP is 1.5 ticks away; 96's TP is 2.7 ticks and its SL 2.0 ticks.
+- Any exit after zero net move realises at least one tick of loss. The ATR geometry runs below the price resolution.
+
+**F-11. Entries with risk/reward below 1 are admitted.** (PROJECT EVIDENCE)
+
+- `AtrRiskService.java:34-45` sets stop = max(2·ATR, 0.50% of price). The 0.50% comes from `application.yml:143`. Target stays at 3·ATR.
+- With low ATR the stop is floored at 0.5% and RR collapses: 82 has RR 0.453 (I1-002), 91 has 0.546, 104 has 1.09.
+- RR appears only in display and inspector code (grep of `getRiskRewardRatio()`). No gate references it.
+- Trade 78 also filled one tick above the signal price (fill 4.06e-6 vs `latest_price` 4.05e-6), while SL/TP stayed anchored to the signal price. Its RR at the fill was about 0.76 instead of 1.5.
+
+**F-12. Fees are excluded from P&L.** (PROJECT EVIDENCE: `wallet_trade.fee_usdt` defaults to 0 per I1-005, plus `claude-docs` TRADING_RULES §6; AGENT INFERENCE on the rate)
+
+- Implied notional (qty × entry): 78/82/91/96 = 25.00 USDT each, 104 = 15.00, 101 = 50.00. Total 165 USDT.
+- Total gross loss is −0.2624 USDT.
+- At an assumed 0.1% per side, fees would be about 0.33 USDT, more than the gross loss. 82's TP distance (0.226%) and 91's (0.273%) are barely above a 0.2% round trip.
+- The 0.1% rate is general knowledge I did not fetch this iteration; it's marked to verify.
+
+**F-05 resolved. 96 and 78 have identical P&L because their trades are identical.** (PROJECT EVIDENCE)
+Both have qty 6157635.468 = 25 USDT / 4.06e-6, the same entry and exit price, and a one-tick loss of 0.0615764. There's no defect here.
+
+**F-13. Trade 101 is a TP extension followed by a fast reversal through the thin rebase floor.** (PROJECT EVIDENCE plus AGENT INFERENCE)
+
+- Paper TP 0.963551424473 equals the signal TP 0.958630559740 plus 50% of the TP-minus-average-entry distance, exactly. So the TP was extended once (`LivePositionProtectionService.java:107-128`), which means a price event reached at least 0.95863.
+- About a minute later price was 0.9487, below the hard floor of entry × 1.0005 = 0.94926322 (`:191-198`). The exit ran at the tick price below entry, giving −0.0047 USDT.
+- During the FIX-118 rebase the earlier lock is non-executable, so protection fell from roughly +1% open profit to the +0.05% floor. A single price-event gap then crossed it.
+- The average entry (0.94879) is below the signal price (0.9505), and notional is 50 USDT, which points to more than one fill. That needs I2-002/003.
+- 101's HTF "bullish" support was a 1h BUY with `confidence=49` and `final_entry_allowed=0`, a blocked signal (audit 1523: "1h is bullish"). Whether a blocked 1h BUY should count as authority is still open (AGENT INFERENCE).
+
+**F-14. Trade 82 looks like a valid losing trade, but its entry used one-hour-old context because both hour-boundary signals are missing.** (PROJECT EVIDENCE plus AGENT INFERENCE)
+
+- I1-003 shows no XLM 1h signal for candle 17:00 (expected about 18:00:0x) and no 5m signal for candle 17:55.
+- Audit 1132 therefore used the 1h at age 3782 s and the 5m at age 482 s. Both are inside the limits (≤3 h, ≤20 min), so this follows the rules.
+- The exit followed the rules: 1m STRONG_SELL plus 5m SELL plus 1h WATCH. Earlier 1m STRONG_SELLs (19:10, 19:16, 19:24) were correctly held because 5m was NEUTRAL.
+- Price never reached TP 0.198849 (max 1m 0.1986). RR at entry was 0.45 (F-11).
+- Whether the 18:00 gap is a data defect is unknown; I2-007 and I2-008 check it.
+
+**F-15 (sizing, open question). The FIX-154 "cap 25%" does not show up in notional.** (PROJECT EVIDENCE)
+96 (SOFT_CONFLICT, cap 25%) and 82 (BALANCED_STRONG 75%, no cap) both spent 25 USDT, while 104 (60% REDUCED_POSITION) spent 15 USDT. Either the cap is applied to a different base, or it isn't binding. I2-003 and I2-002 will tell.
+
+**F-01 (carried).** The `status='CLOSED'` selection leaves out all 40 STOPPED losses. This remains a scope note, not a defect.
+
+## 3. Self-review: what would falsify these findings
+- **F-08:** a 1h signal newer than entry with `generated_at > closed_at + 1 min` couldn't have been read at exit, so the I1-003 absence proof holds. The remaining risk is that the Production JAR's `PositionExitPolicy` differs from the working tree. The audit `final_reason` text matches the working-tree FIX-154 strings, which supports the same code.
+- **F-09:** proven only if an audit row with `evaluation_path='SETUP_WAKEUP'` exists on 5m 115050, 121201 and 133251, and `wallet_trade.execution_reason` matches.
+- **I1-007 interpretation:** `buy_htf_assessment_audit.evaluated_at` equals the signal's `generated_at`, not wall-clock time; `created_at` runs about 1.4 s later.
+
+## 4. UNKNOWNS
+- U-2: the exact entry route for 78, 91, 101 and 104 (`wallet_trade.execution_reason`, `entry_decision_path_json`).
+- U-4: the price-event path for 101, whether its lock was active before the extension, and how the multiple fills happened.
+- U-7: whether the FIX-154 cap reached the wallet spend (F-15).
+- U-8: whether the XLM hour-boundary gap at 18:00 was XLM-only or system-wide, and whether candles exist for it.
+- U-9: how many Production closes since 2026-10-10 share the F-08 pattern (prevalence).
+- Replay: `PositionExitPolicy` is documented as the shared Production/Replay exit authority, so F-08 should reproduce deterministically. I haven't run Replay; it's not permitted here.
+
+## 5. DB_REQUEST blocks
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-001
+Purpose: FIX-154 audit rows for any signal (1m or 5m) of each symbol within 10 min before entry; tests the SETUP_WAKEUP attribution (F-09)
+SQL:
+SELECT p.id AS position_id, s.interval_code, s.decision AS ref_decision, a.id, a.reference_signal_id, a.evaluation_path, a.evaluated_at, a.created_at, a.one_hour_signal_id, a.one_hour_raw_decision, a.one_hour_effective_decision, a.one_hour_age_seconds, a.five_minute_signal_id, a.five_minute_raw_decision, a.assessment_band, a.max_initial_percent, a.final_result, LEFT(a.final_reason,400) AS final_reason FROM paper_position p JOIN trade_signal s ON s.symbol = p.symbol AND s.generated_at BETWEEN p.opened_at - INTERVAL 10 MINUTE AND p.opened_at JOIN buy_htf_assessment_audit a ON a.reference_signal_id = s.id WHERE p.id IN (104,101,96,91,82,78) ORDER BY p.id, a.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-002
+Purpose: Wallet fills per position (entry route, scale-ins, decision vs fill price, fees, partial harvest)
+SQL:
+SELECT p.id AS position_id, w.id, w.signal_id, w.position_analysis_id, w.side, w.quantity, w.price_usdt, w.decision_price_usdt, w.execution_price_observed_at, w.gross_amount_usdt, w.fee_usdt, w.net_amount_usdt, w.realized_pnl_usdt, w.execution_type, w.execution_reason, w.status, w.executed_at, LEFT(w.notes,300) AS notes, LEFT(w.execution_message,600) AS execution_message FROM paper_position p JOIN wallet_trade w ON w.symbol = p.symbol AND w.executed_at BETWEEN p.opened_at - INTERVAL 30 SECOND AND p.closed_at + INTERVAL 30 SECOND WHERE p.id IN (104,101,96,91,82,78) ORDER BY p.id, w.executed_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-003
+Purpose: Managed-position lifecycle state (allocation %, stage, profit lock / rebase, near-TP, entry decision path)
+SQL:
+SELECT id, entry_signal_id, symbol, quantity, average_entry_price_usdt, total_cost_usdt, entry_decision, stop_loss_usdt, take_profit_usdt, status, opened_at, updated_at, highest_price_usdt, profit_lock_active, profit_lock_price_usdt, profit_lock_progress_percent, profit_lock_activated_at, profit_lock_state, profit_lock_rebase_started_at, entry_stage, allocated_position_percent, entry_quality_score, last_scale_in_at, near_tp_state, near_tp_harvest_used, near_tp_harvested_quantity, LEFT(CAST(entry_decision_path_json AS CHAR),2500) AS decision_path FROM wallet_managed_position WHERE id IN (107,111,120,125,130,133) ORDER BY id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-004
+Purpose: Position management events (TP extension, lock activation/rebase, scale-in) for the six wallet positions
+SQL:
+SELECT id, wallet_position_id, symbol, event_type, old_value_usdt, new_value_usdt, market_price_usdt, LEFT(reason,500) AS reason, occurred_at FROM position_management_event WHERE wallet_position_id IN (107,111,120,125,130,133) ORDER BY wallet_position_id, occurred_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-005
+Purpose: Accepted price events in the 3 minutes before each exit (exit tick, gap size through floor for 101); for 101 the window is widened to cover the TP touch
+SQL:
+SELECT p.id AS position_id, e.id, e.observed_at, e.price, e.source, e.delivery_status, e.outcome_reason, e.source_received_at, e.created_at FROM paper_position p JOIN market_price_event e ON e.symbol = p.symbol AND e.observed_at BETWEEN (CASE WHEN p.id = 101 THEN p.closed_at - INTERVAL 4 MINUTE ELSE p.closed_at - INTERVAL 90 SECOND END) AND p.closed_at + INTERVAL 5 SECOND WHERE p.id IN (104,101,96,91,82,78) ORDER BY p.id, e.observed_at LIMIT 800
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-006
+Purpose: Opportunity memory that the entries consumed (SETUP_WAKEUP precondition, execution_source, decision_code)
+SQL:
+SELECT p.id AS position_id, o.id, o.status, o.started_at, o.last_evidence_at, o.latest_signal_id, o.evidence_count, o.buy_count, o.watch_count, o.neutral_count, o.bearish_count, o.five_minute_decision, o.one_hour_decision, o.execution_source, o.recommended_position_percent, o.decision_code, LEFT(o.decision_explanation,500) AS explanation, o.executed_at FROM paper_position p JOIN execution_opportunity o ON o.symbol = p.symbol AND o.started_at <= p.opened_at AND o.last_evidence_at >= p.opened_at - INTERVAL 30 MINUTE WHERE p.id IN (104,101,96,91,82,78) ORDER BY p.id, o.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-007
+Purpose: Hour-boundary signal coverage across all symbols for 1h candle 17:00 and 5m candle 17:55 on 2026-10-10 (XLM gap, F-14) – global vs symbol-specific
+SQL:
+SELECT interval_code, candle_open_time, signal_mode, COUNT(*) AS n, COUNT(DISTINCT symbol) AS symbols, MIN(generated_at) AS first_gen, MAX(generated_at) AS last_gen, SUM(symbol='XLMUSDT') AS xlm_rows FROM trade_signal WHERE (interval_code = '1h' AND candle_open_time IN ('2026-10-10 16:00:00','2026-10-10 17:00:00','2026-10-10 18:00:00')) OR (interval_code = '5m' AND candle_open_time IN ('2026-10-10 17:50:00','2026-10-10 17:55:00','2026-10-10 18:00:00')) GROUP BY interval_code, candle_open_time, signal_mode ORDER BY interval_code, candle_open_time
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-008
+Purpose: Schema discovery for candle table before checking whether the XLM 17:55 5m / 17:00 1h candles exist and are closed
+SQL:
+DESCRIBE candle
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-009
+Purpose: Prevalence of exit reasons since FIX-154 schema install (V107 at 2026-10-10 00:15:21 UTC; app deploy time may differ)
+SQL:
+SELECT status, close_reason, COUNT(*) AS n, SUM(realized_pnl < 0) AS losses, SUM(realized_pnl) AS pnl_sum, AVG(TIMESTAMPDIFF(SECOND, opened_at, closed_at)) AS avg_hold_s FROM paper_position WHERE closed_at >= '2026-10-10 00:15:21' AND closed_at <= '2026-10-11 07:00:03' GROUP BY status, close_reason ORDER BY n DESC
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-010
+Purpose: F-08 prevalence – HTF_SELL_CONFIRMED closes since V107 where no 1h signal was generated between open and close (same 1h at entry and exit)
+SQL:
+SELECT p.id, p.symbol, p.opened_at, p.closed_at, p.realized_pnl, (SELECT COUNT(*) FROM trade_signal s WHERE s.symbol = p.symbol AND s.interval_code = '1h' AND s.generated_at > p.opened_at AND s.generated_at <= p.closed_at) AS new_1h_during_hold, (SELECT s2.decision FROM trade_signal s2 WHERE s2.symbol = p.symbol AND s2.interval_code = '1h' AND s2.generated_at <= p.opened_at ORDER BY s2.generated_at DESC LIMIT 1) AS one_hour_at_entry FROM paper_position p WHERE p.close_reason = 'HTF_SELL_CONFIRMED' AND p.closed_at BETWEEN '2026-10-10 00:15:21' AND '2026-10-11 07:00:03' ORDER BY p.closed_at LIMIT 200
+### END_DB_REQUEST
+
+## 6. Plan for iteration 3
+- Confirm or refute F-09 and F-15 with I2-001/002/003/006.
+- Settle 101's path with I2-004/005.
+- Classify the XLM gap with I2-007/008, and measure prevalence with I2-009/010.
+- Begin the per-trade verdict: valid loss vs logic defect vs data issue. Assess each entry only on what was known at that moment.
+- Check whether a blocked 1h BUY may count as bullish authority, starting from the code in `HigherTimeframeBuyAssessmentService` and `balancedBuy`.
+
+## 7. Labels
+- **PROJECT EVIDENCE:**
+  - DB results: I1-001…008 and DBQ-FTS-001/002/004/005.
+  - Exit and protection code: `PositionExitPolicy.java:14,25-43,99-111`, `LivePositionProtectionService.java:95-97,107-133,191-244`.
+  - Entry and risk code: `ExecutionIntelligenceService.java:397-457`, `TradeExecutionValidationService.java:81-163`, `AtrRiskService.java:34-45`, `application.yml:143`.
+  - Grep scope: `tickSize`/`PRICE_FILTER` and `getRiskRewardRatio()` usage, both limited to `src/main/java`.
+- **AGENT INFERENCE:** F-09 route attribution for 78/91/104, the cause behind F-13, whether F-14's gap is a data defect, the F-15 interpretation, and the fee rate.
+- **EXTERNAL RESEARCH:** none fetched this iteration. The Binance 0.1% spot fee is unverified.

@@ -1,0 +1,3 @@
+status	n	neg	newest_close
+STOPPED	3	3	2026-10-12 15:19:51.459993
+CLOSED	2	0	2026-10-12 10:15:10.630386

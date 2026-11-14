@@ -1,0 +1,61 @@
+installed_rank	version	description	installed_on	success
+1	1	initial schema	2026-10-03 16:11:01	1
+2	2	create technical indicator table	2026-10-03 16:11:01	1
+3	3	extend technical indicator	2026-10-03 16:11:01	1
+4	4	add created at to trade signal	2026-10-03 16:11:01	1
+5	5	create sentiment provider table	2026-10-03 16:11:01	1
+6	6	create whale activity	2026-10-03 16:11:01	1
+7	7	create app user table	2026-10-03 16:11:01	1
+8	8	add trade signal score breakdown	2026-10-03 16:11:01	1
+9	9	add analysis breakdown to trade signal	2026-10-03 16:11:01	1
+10	10	add latest volume to technical indicator	2026-10-03 16:11:01	1
+11	11	extend paper position lifecycle	2026-10-03 16:11:01	1
+12	12	extend market fundamental metrics	2026-10-03 16:11:01	1
+13	13	add atr risk to trade signal	2026-10-03 16:11:01	1
+14	14	add fundamental ownership allocation	2026-10-03 16:11:01	1
+15	15	add grouped trend scores	2026-10-03 16:11:02	1
+16	16	add multi timeframe confluence	2026-10-03 16:11:02	1
+17	17	add confluence snapshot timestamps	2026-10-03 16:11:02	1
+18	18	add btc relationship context	2026-10-03 16:11:02	1
+19	19	add order book liquidity context	2026-10-03 16:11:02	1
+20	20	add dynamic market strategy	2026-10-03 16:11:02	1
+21	21	add market context snapshot	2026-10-03 16:11:02	1
+22	22	add final decision audit	2026-10-03 16:11:02	1
+23	23	add timeframe aware liquidity	2026-10-03 16:11:02	1
+24	24	add derivatives positioning context	2026-10-03 16:11:02	1
+25	25	add category availability snapshot	2026-10-03 16:11:02	1
+26	26	add atr entry plan	2026-10-03 16:11:02	1
+27	27	add trade signal candle idempotency	2026-10-03 16:11:02	1
+28	28	create wallet portfolio	2026-10-03 16:11:02	1
+29	29	automatic wallet execution	2026-10-03 16:11:02	1
+30	30	add daily wallet budget	2026-10-03 16:11:02	1
+31	31	create position analysis	2026-10-03 16:11:03	1
+32	32	add position buy thesis	2026-10-03 16:11:03	1
+33	33	link wallet execution to position decision	2026-10-03 16:11:03	1
+34	34	create coin configuration	2026-10-03 16:11:03	1
+35	35	make daily position limit admin configurable	2026-10-03 16:11:03	1
+36	36	remove automatic execution toggle	2026-10-03 16:11:03	1
+37	37	add dashboard trade performance settings	2026-10-03 16:11:03	1
+38	38	add dashboard interval configuration	2026-10-03 16:11:03	1
+39	39	add execution validation settings	2026-10-03 16:11:03	1
+40	40	add dynamic profit lock	2026-10-03 16:11:03	1
+41	41	add execution profile	2026-10-03 16:11:03	1
+42	42	create execution opportunity	2026-10-03 16:11:03	1
+43	43	add opportunity health memory	2026-10-03 16:11:03	1
+44	44	add opportunity health momentum	2026-10-03 16:11:03	1
+45	45	add execution opportunity evidence momentum	2026-10-03 16:11:03	1
+46	46	add progressive position building	2026-10-03 16:11:03	1
+47	47	create debug price move monitor	2026-10-03 16:11:03	1
+48	48	upgrade debug price move monitor to tracker	2026-10-03 16:11:03	1
+49	49	filter debug tracker to medium high moves	2026-10-03 16:11:03	1
+50	50	create ai regression test framework	2026-10-03 16:11:03	1
+51	51	upgrade regression to fresh signal replay	2026-10-03 16:11:03	1
+52	52	add full shadow production replay	2026-10-03 16:11:04	1
+53	53	add regression failure diagnostics	2026-10-03 16:11:04	1
+54	54	persist debug monitor symbols	2026-10-03 16:11:04	1
+55	55	add position management replay trace	2026-10-03 16:11:04	1
+56	56	add proven analyzed trades	2026-10-03 16:11:04	1
+57	57	archive regression test runs	2026-10-03 16:11:04	1
+58	58	optimize dashboard candle reads	2026-10-03 16:11:04	1
+59	59	upgrade market catcher 8h blame	2026-10-03 16:11:04	1
+60	60	archive proven trade legs	2026-10-03 16:11:04	1

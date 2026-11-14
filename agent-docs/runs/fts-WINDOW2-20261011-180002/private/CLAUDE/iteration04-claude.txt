@@ -1,0 +1,174 @@
+# Iteration 4: code and trade route for the six frozen trades (Claude)
+
+Two causes explain five of the six losses: the exit acts on the same 1h SELL that the entry ignored (78, 91, 96, 104), and a target extension removed earned profit protection (101). Trade 82 lost money under rules that were followed. It entered just after a confirmed 2–3 minute data outage, on context up to 63 minutes old.
+
+This round also confirmed four things from the code and the iteration-3 results:
+- **Times:** the DB times in our evidence are KSA, not UTC.
+- **Risk/reward:** risk/reward below 1 comes from the stop having a minimum size while the target does not.
+- **Exit timing:** exits run only when a 1m price update arrives.
+- **Outage:** the 18:00 KSA gap on 2026-10-10 was a real feed outage, recovered without analysis by design.
+
+This was analysis only: no code, config, DB, git or deploy changes. Plan mode was active, but no file-write or ExitPlanMode tool was available, so this text is the whole deliverable. I did not read the CODEX folders, LIVE_TEAM_STATUS.md, LIVE_EVENTS.log or the other agent's memory.
+
+## FINDINGS
+
+**R0. DB times as shown are KSA, not UTC (PROJECT EVIDENCE: DBQ-CLAUDE-I3-001)**
+- The investigation session uses `SYSTEM` time, which is `Arab Standard Time`. `NOW()` minus `UTC_TIMESTAMP()` is 180 minutes.
+- Signal 150942 shows a candle open of 17:07:00. The application log has `candleOpenTime=14:07:00Z` for the same signal.
+- The values are stored in UTC and the app reads and writes in UTC. Only our query wrapper (`scripts/agent-db-query.ps1`) displays them in KSA.
+- **This contradicts DATABASE_INVESTIGATION_RULES.md:35 and this prompt's "DB timestamps are UTC" as applied to our query output.** I am reporting the contradiction, not resolving it.
+- From here on: **KSA = time as shown; UTC = shown − 3h.** Iteration 1–2 labels marked "UTC" were really KSA. For example, trade 101's buy at "02:12:04 UTC" was really 02:12:04 KSA on 10-11, which is 23:12:04 UTC on 10-10.
+
+**R1. Route map for each trade (PROJECT EVIDENCE: DB I1–I3 plus code)**
+
+| Trade | Coin | Entry path | Exit path (`LivePositionProtectionService.onPrice`) | Exit (KSA / UTC) |
+|---|---|---|---|---|
+| 78 | PEPE | 5m wake-up `ExecutionIntelligenceService.java:397-457` → `validateBuyContext(5m,"SETUP_WAKEUP")` → 1h SELL relabelled NEUTRAL, 25% cap (`HigherTimeframeBuyAssessmentService.java:33-34`) → fill check `:1150-1168` | `:235` → `PositionExitPolicy.java:25-32` `HTF_SELL_CONFIRMED` | 10-10 17:50:12 / 14:50:12 |
+| 91 | SHIB | Same wake-up path | Same | 10-10 21:45:29 / 18:45:29 |
+| 96 | PEPE | Direct BUY path (audit 1362: raw 1h SELL relabelled NEUTRAL) | Same | 10-10 22:45:08 / 19:45:08 |
+| 104 | ENA | Direct BUY rejected, then wake-up admitted it about 1 s later | Same | 10-11 05:40:09 / 02:40:09 |
+| 101 | AERO | Two buys, at 02:12:04 and 02:16:04 KSA on 10-11 | TP extension `:100-164`, then rebase floor `:191-198` `PROFIT_LOCK_HARD_EXIT` | 10-11 02:21:25.7 / 10-10 23:21:25.7 |
+| 82 | XLM | Direct BUY at about 18:03 KSA (15:03 UTC) on 10-10 | `PositionExitPolicy.java:35-44` `SELL_CONFIRMED` | 10-10 about 22:25 / 19:25 |
+
+**R2. The exit reads the newest signal with no freshness, quality or "after entry" check (PROJECT EVIDENCE: `LivePositionProtectionService.java:95-97`)**
+- `findTopBySymbolAndIntervalOrderByGeneratedAtDesc` is used for 1m, 5m and 1h. `PositionExitPolicy` then checks only the decisions.
+- There is no check of signal age, `data_quality_valid`, or whether the 1h signal came after `opened_at`. The entry's assessment band (SOFT_CONFLICT) is not stored where the exit reads it.
+- So F2/T4 is structural, not a one-off. The entry's decision to soften the 1h SELL is never handed to the exit.
+- After a recovery gap (R5), the exit can act on a 1h signal nearly 2 hours old.
+- AGENTS.md says to "enforce freshness … before analysis and again before execution". This exit path does not, although an exit is an execution.
+
+**R3. Risk/reward below 1 comes from the stop's minimum size (PROJECT EVIDENCE: `AtrRiskService.java:34-45`, `application.yml:137-144`)**
+- The stop distance is `max(2×ATR, 0.50% of price)`. The target distance is `3×ATR`, with no minimum.
+- So when ATR is below 0.25% of price, risk/reward = 6 × ATR%. This matches every stored value:
+
+| Trade | Risk/reward | Implied ATR% | Evidence |
+|---|---|---|---|
+| 91 | 0.546 | 0.091% | Iteration 2 measured ATR at about 0.09% |
+| 82 | 0.453 | 0.0755% | |
+| 104 (1m signal) | 1.09 | 0.18% | Iteration 2 measured about 0.18% |
+| 78 | 1.5 | at least 0.25% | ATR measured at 0.29% |
+
+- Production therefore seems to run the default multipliers. That is an inference from the arithmetic; I have not seen the environment overrides.
+- No general minimum risk/reward exists. The fill-time check (`:1150-1168`) and the wake-up path (`:431-451`) check neither risk/reward nor the price tick size.
+- On PEPE and SHIB, a 0.5% stop is only 2–3 ticks; one tick is 0.18–0.25%.
+- **Classification:** a confirmed design gap in entry quality, and a contributing factor in 82, 91 and 78. It is not the trigger of any exit.
+
+**R4. Exits run only on 1m price updates; trade 91's 25-second delay is explained (PROJECT EVIDENCE: `BinanceKlineService.java:95,106-108`, DBQ-CLAUDE-I3-005; EXTERNAL RESEARCH)**
+- Price events and `onPrice` come only from the `1m` kline stream (`canonical="1m"`). A new 5m signal does not trigger exit evaluation by itself.
+- SHIB price events (KSA, 2026-10-10): 21:45:00.057, then 21:45:03.461, then **21:45:29.467**, all APPLIED. The 5m NEUTRAL signal arrived at about 21:45:04, after the :03 tick. So the exit waited about 26 s for the next SHIB kline update. Nothing was rejected.
+- Binance documents a kline update speed of 2000 ms. The gaps suggest updates are sent only when the kline changes. That is an inference; the docs do not say so explicitly.
+- **Classification:** not a defect for trade 91, whose exit price equals the price at trigger time. It is a structural exit latency on quiet coins.
+
+**R5. The 18:00 KSA outage on 2026-10-10 is confirmed, and recovery behaved as designed (PROJECT EVIDENCE: DBQ-CLAUDE-I3-002/003/004)**
+
+Times are KSA; subtract 3 hours for UTC.
+- The last runtime write was 1m 17:59, created at 17:59:01. Runtime writes resumed when the 5m 18:00 candle was created at 18:02:21–18:02:26. **The feed was silent for about 2–3 minutes** across the 18:00 boundary for AERO, PEPE and XLM.
+- Recovery (`AUTHORITATIVE_RECOVERY`) closed the 1m 17:59, 5m 17:55 and 1h 17:00 candles with outcome `SKIPPED_NOT_LIVE / RECOVERED` and no signal, for every symbol listed.
+- The 1m 18:00 and 18:01 candles were inserted as `BACKFILL`, with no token and no signal.
+- This matches the AGENTS.md rule that recovery must not dispatch analysis.
+- **Consequence:** the 1h signal for the 17:00 KSA candle (14:00 UTC) is **permanently missing for every symbol**. Until the 19:00 KSA signal, both entry and exit fell back to the 16:00 KSA 1h signal, up to about 2 hours old.
+
+**R6. Trade 82 entered on the first live 1m signal after the outage (PROJECT EVIDENCE plus AGENT INFERENCE)**
+- Entry was at about 18:03 KSA (15:03 UTC). It used:
+  - the 5m signal for the 17:50 candle, 482 s old, because the 17:55 candle was recovered without analysis;
+  - 1h signal 114163, 3782 s old, because the 17:00 candle was recovered without analysis.
+- Both are within the limits at `TradeExecutionValidationService.java:42-43` (5m: 20 minutes, 1h: 3 hours). So this is not a rule breach.
+- The rules allow entering right after an outage on pre-outage higher-timeframe context. Whether the missing 5m 17:55 or 1h 17:00 signal would have blocked the entry cannot be known without Replay.
+- **Classification:** a valid loss under the rules. Contributing factors are risk/reward 0.453 (R3) and context recovered after the outage (R5).
+
+**R7. Cause of the outage: Binance's 24-hour disconnect is likely but unproven (AGENT INFERENCE; EXTERNAL RESEARCH; PROJECT EVIDENCE for the code)**
+- Binance says "a single connection to stream.binance.com is only valid for 24 hours".
+- `BinanceWebSocketManager.java:207-209` only logs `NO_MESSAGES` ("observe only, no forced reconnect"). I found no planned connection rotation before the 24-hour mark.
+- A disconnect forced by the server at a fixed time of day would repeat daily. DBQ-CLAUDE-I4-001 tests this.
+
+**R8. The host clock was about 2.7 s behind exchange time around 10-11 05:40 KSA (PROJECT EVIDENCE: I3-005)**
+- ENA price events have `created_at` about 2.6–2.8 s **before** `observed_at` (for example 05:39:57.381 against 05:40:00.114). For PEPE on 10-10, the gap was +0.05 to +0.25 s.
+- The events were still APPLIED, so the exchange-clock correction is active (`MarketPriceEventService.java:39-44`; the future-skew limit is 2 s).
+- **Effect on findings:** my iteration-3 T5 latency for trade 104 (3.96 s from candle close to decision) may be about 2.7 s too low, if the decision time uses the local clock. The ordering and the "no execution delay" conclusion still hold.
+
+**R9. The trade 101 hard floor guarantees almost no profit (PROJECT EVIDENCE plus arithmetic)**
+- The floor is entry × 1.0005 (`:210` and `DynamicProfitLockService` `:164-166`). The exit price is the price that triggered it, so a one-tick gap below the floor makes a loss certain.
+- The paper loss of −0.004681 equals (0.9487 − 0.948789) × about 52.6, so `realized_pnl` does not appear to include fees. That is an inference.
+- T2 from iteration 3 stands: a design defect in protection, and the code ran exactly as written.
+
+**Classification after iteration 4**
+
+| Trade | Classification |
+|---|---|
+| 78 | Logic defect: exit/entry 1h mismatch (R2). Contributor: fill-time risk/reward about 0.76 (R3) |
+| 91 | R2 defect. Contributor: risk/reward 0.546 (R3). Exit latency explained (R4) |
+| 96 | R2 defect |
+| 104 | R2 defect |
+| 101 | TP-extension rebase protection defect (T2/R9) |
+| 82 | Valid loss under the rules. Contributors: risk/reward 0.453 and entry on context recovered after the outage (R3, R5, R6) |
+
+## EVIDENCE
+- **DB:** DBQ-CLAUDE-I3-001 to I3-006, plus earlier I1/I2 results and DBQ-FTS-001.
+- **Code:**
+  - `LivePositionProtectionService.java:53-72,95-97,100-249`
+  - `PositionExitPolicy.java:20-50`
+  - `HigherTimeframeBuyAssessmentService.java:15-38`
+  - `AtrRiskService.java:27-45`
+  - `application.yml:137-144`
+  - `ExecutionIntelligenceService.java:397-457,1150-1183`
+  - `TradeExecutionValidationService.java:41-43`
+  - `BinanceKlineService.java:91-111`
+  - `MarketPriceEventService.java:31-46`
+  - `BinanceWebSocketManager.java:174-233`
+  - `ExchangeClockSynchronizer.java:56-59`
+- **Logs:** none used. The archives for the trade period are gzipped and I could not open them.
+- **External research:** listed under Sources at the end.
+
+## UNKNOWNS
+- **U1:** The cause of the outage (R7). DB evidence is requested below; log evidence would need `[FIX-131][WS-LIFECYCLE]`, `serverShutdown`, `CONNECTION_FAILED` and `ADMISSION_ENABLED` lines around 2026-10-10 14:58–15:04 UTC.
+- **U2:** Clock-skew history (R8). This needs the `[FIX-153][CLOCK_SKEW]` and `CLOCK_SYNC` log lines.
+- **U3:** Whether the R2 pattern loses money across all trades, not just these four (I4-003).
+- **U4:** Whether risk/reward below 1 performs worse across all trades (I4-004).
+- **U5:** Replay reproduction. Not attempted, because running Replay creates state.
+- **U6:** Whether the deployed binary matches the working tree, which has uncommitted changes. The exit messages match the code text exactly.
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-001
+Purpose: R7. Does recovery without analysis recur at the same time each day (Binance 24-hour disconnect)? Times are shown in KSA.
+SQL:
+SELECT DATE(created_at) AS d_ksa, HOUR(created_at) AS h_ksa, MINUTE(created_at) AS m_ksa, interval_code, COUNT(*) AS n FROM candle_analysis_outcome WHERE origin='AUTHORITATIVE_RECOVERY' AND created_at >= '2026-10-04 00:00:00' GROUP BY d_ksa, h_ksa, m_ksa, interval_code ORDER BY d_ksa, h_ksa, m_ksa, interval_code LIMIT 300;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-002
+Purpose: R5/R7. Reconciliation audit rows for the outage window (shown 17:58–18:06 KSA on 2026-10-10).
+SQL:
+SELECT id, subject_type, symbol, interval_code, candle_open_time, status, failure_reason, attempt_count, last_observation, late_live_close_at, resolved_at, created_at FROM local_reconciliation_audit WHERE created_at BETWEEN '2026-10-10 17:58:00' AND '2026-10-10 18:06:00' ORDER BY created_at LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-003
+Purpose: R2/U3. Population check: HTF_SELL_CONFIRMED exits where the newest 1h signal at close was created before the position opened (a stale 1h SELL acting as exit authority). Aggregate only.
+SQL:
+SELECT CASE WHEN (SELECT MAX(s.generated_at) FROM trade_signal s WHERE s.symbol=p.symbol AND s.interval_code='1h' AND s.generated_at<=p.closed_at) < p.opened_at THEN 'HOUR_SIGNAL_PRE_ENTRY' ELSE 'HOUR_SIGNAL_POST_ENTRY' END AS hour_signal_timing, COUNT(*) AS n, SUM(p.realized_pnl<0) AS losers, ROUND(SUM(p.realized_pnl),6) AS pnl_sum, ROUND(AVG(TIMESTAMPDIFF(SECOND,p.opened_at,p.closed_at)),0) AS avg_hold_s FROM paper_position p WHERE p.close_reason='HTF_SELL_CONFIRMED' AND p.closed_at >= '2026-10-03 00:00:00' GROUP BY hour_signal_timing;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-004
+Purpose: R3/U4. Population check: outcome by entry-signal risk/reward bucket (below 1, 1 to 1.49, 1.5 and above). Joined through wallet_managed_position.entry_signal_id; aggregate only.
+SQL:
+SELECT CASE WHEN s.risk_reward_ratio < 1 THEN 'RR_LT_1' WHEN s.risk_reward_ratio < 1.5 THEN 'RR_1_TO_1.49' ELSE 'RR_GE_1.5' END AS rr_bucket, COUNT(*) AS n, SUM(p.realized_pnl<0) AS losers, ROUND(SUM(p.realized_pnl),6) AS pnl_sum FROM wallet_managed_position w JOIN trade_signal s ON s.id=w.entry_signal_id JOIN paper_position p ON p.symbol=w.symbol AND ABS(TIMESTAMPDIFF(SECOND,p.opened_at,w.opened_at))<=5 WHERE w.opened_at >= '2026-10-03 00:00:00' AND p.closed_at IS NOT NULL GROUP BY rr_bucket ORDER BY rr_bucket;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I4-005
+Purpose: R5. Confirm that the 1m candles inserted as BACKFILL (shown 18:00 and 18:01 KSA) have no analysis outcome or signal.
+SQL:
+SELECT o.symbol, o.interval_code, o.candle_open_time, o.outcome, o.reason_code, o.origin, o.created_at FROM candle_analysis_outcome o WHERE o.interval_code='1m' AND o.candle_open_time IN ('2026-10-10 18:00:00','2026-10-10 18:01:00') ORDER BY o.symbol, o.candle_open_time LIMIT 100;
+### END_DB_REQUEST
+
+**Labels:**
+- **PROJECT EVIDENCE:** R0–R6, R8, and the code and arithmetic parts of R9.
+- **AGENT INFERENCE:** the cause in R7, the R8 effect on latency, fees being excluded from P&L (R9), the default multipliers being in effect (R3), and the cause of the sparse updates (R4).
+- **EXTERNAL RESEARCH:** the 24-hour connection limit (R7) and the kline update speed (R4).
+
+Sources:
+- [Binance Spot WebSocket Streams (legacy docs)](https://developers.binance.com/legacy-docs/binance-spot-api-docs/web-socket-streams)
+- [Binance Spot WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)

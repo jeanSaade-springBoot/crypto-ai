@@ -1,0 +1,1 @@
+SELECT 'fix122_replay_rows' AS k, COUNT(*) AS v FROM fix122_evaluation WHERE test_run_id IS NOT NULL UNION ALL SELECT CONCAT('col:', table_name, '.', column_name), NULL FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name IN ('wallet_position_test','execution_opportunity_test','trade_signal_test') ORDER BY 1 LIMIT 200

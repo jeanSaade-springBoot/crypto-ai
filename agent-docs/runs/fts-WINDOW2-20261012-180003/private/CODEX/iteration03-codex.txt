@@ -1,0 +1,276 @@
+## FINDINGS
+
+- **PROJECT EVIDENCE:** No executed trade-level DB results are present in the permitted CODEX evidence folder; only schema evidence exists. Therefore no timing defect, log delay, or exit-path conclusion is established for frozen IDs `182, 172, 162, 158, 143, 137`.
+
+- **PROJECT EVIDENCE:** The current application log has no explicit `paper_position`/`paperPosition` reference for any frozen ID. The database-timing log records SQL templates and transaction IDs but not bind values, so it cannot link its timings to a position without first resolving symbol, signal, and wallet-position IDs.
+
+- **PROJECT EVIDENCE:** Direct price protection is transactional. `LivePositionProtectionService.onPrice` locks the managed position, validates observation age/order, applies protection, then marks the exact price event `APPLIED` in the same transaction. The post-commit `PRICE_OUTCOME_COMMITTED` log proves committed callback completion, not necessarily a position exit.
+
+- **PROJECT EVIDENCE:** Signal timing can be reconstructed once IDs are known: `[FIX-127][ATTEMPT]` and `[FIX-127][COMPLETED]` log `signalId`, symbol, interval, and attempt. The durable `signal_processing_work` record holds claim/completion timestamps and failure state.
+
+- **AGENT INFERENCE:** The next valid forensic step is to resolve each position’s exact anchors, then search logs only by the resulting signal IDs, wallet-position IDs, symbols, and bounded UTC intervals. Searching generic position IDs or SQL timing logs now would risk false association.
+
+- **EXTERNAL RESEARCH:** None used.
+
+## EVIDENCE
+
+- `DBQ-CODEX-I1-001-CODEX-result.txt`: confirms authoritative `paper_position` lifecycle fields; `trade_signal`, `signal_processing_work`, `production_exit_audit`, `wallet_managed_position`, `position_management_event`, `wallet_trade`, and `market_price_event` timing fields.
+- `LivePositionProtectionService.java:53-71`: position lock, freshness/order validation, protection, and durable outcome occur in one transaction.
+- `MarketPriceEventService.java:82-95`: the outcome log is emitted only after committed transaction completion.
+- `SignalProcessingCoordinator.java:54-105`: durable claim precedes attempt logging; work is completed within the processing transaction; completion log does not itself prove a trade.
+- Snapshot boundary: `2026-10-12 15:00:04 UTC` / `2026-10-12 18:00:03 KSA`.
+
+## UNKNOWNS
+
+- Symbols, entry/exit signal IDs, wallet-position IDs, entry/exit timestamps, and close triggers for all six frozen positions.
+- Whether any candidate price observation met the then-active stop, target, or profit-lock threshold.
+- Candle-close → signal → processing → entry and observation → protection → exit latencies.
+- Whether any DB lock, pool wait, rollback, retry, or delayed callback affected a selected trade.
+- Whether available runtime logs cover each selected trade’s bounded UTC interval.
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-001  
+Purpose: Resolve exact per-trade timing anchors and direct durable relationships for the six frozen positions. All timestamps returned are UTC.  
+SQL:
+```sql
+SELECT
+    p.id AS paper_position_id,
+    p.symbol,
+    p.side,
+    p.status,
+    p.quantity,
+    p.entry_price,
+    p.stop_loss,
+    p.take_profit,
+    p.exit_price,
+    p.realized_pnl,
+    p.close_reason,
+    p.signal_id AS entry_signal_id,
+    p.exit_signal_id,
+    p.opened_at,
+    p.closed_at,
+
+    es.interval_code AS entry_interval,
+    es.candle_open_time AS entry_candle_open_time,
+    es.generated_at AS entry_signal_generated_at,
+    es.latest_price AS entry_signal_price,
+    es.decision AS entry_signal_decision,
+    es.final_entry_allowed,
+    es.data_quality_valid,
+
+    xs.interval_code AS exit_interval,
+    xs.candle_open_time AS exit_candle_open_time,
+    xs.generated_at AS exit_signal_generated_at,
+    xs.decision AS exit_signal_decision,
+
+    spw.origin AS processing_origin,
+    spw.status AS processing_status,
+    spw.attempts AS processing_attempts,
+    spw.next_attempt_at AS processing_next_attempt_at,
+    spw.updated_at AS processing_updated_at,
+    spw.completed_at AS processing_completed_at,
+    spw.failure_stage,
+    spw.error_message,
+
+    pea.id AS production_exit_audit_id,
+    pea.wallet_position_id,
+    pea.close_trigger,
+    pea.source_signal_id AS exit_audit_source_signal_id,
+    pea.position_analysis_id,
+    pea.audited_at,
+
+    wmp.opened_at AS wallet_position_opened_at,
+    wmp.updated_at AS wallet_position_updated_at,
+    wmp.status AS wallet_position_status,
+    wmp.highest_price_usdt,
+    wmp.profit_lock_active,
+    wmp.profit_lock_price_usdt,
+    wmp.profit_lock_activated_at
+FROM crypto_ai.paper_position p
+LEFT JOIN crypto_ai.trade_signal es
+    ON es.id = p.signal_id
+LEFT JOIN crypto_ai.trade_signal xs
+    ON xs.id = p.exit_signal_id
+LEFT JOIN crypto_ai.signal_processing_work spw
+    ON spw.signal_id = p.signal_id
+LEFT JOIN crypto_ai.production_exit_audit pea
+    ON pea.paper_position_id = p.id
+LEFT JOIN crypto_ai.wallet_managed_position wmp
+    ON wmp.id = pea.wallet_position_id
+WHERE p.id IN (182, 172, 162, 158, 143, 137)
+ORDER BY p.closed_at DESC, p.id DESC;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-002  
+Purpose: Produce a non-cartesian durable timeline of entry, processing, wallet execution, management, audit, and close events. Wallet trades are included only when their `signal_id` equals the position’s entry or exit signal. All timestamps returned are UTC.  
+SQL:
+```sql
+WITH frozen AS (
+    SELECT id, symbol, signal_id, exit_signal_id, opened_at, closed_at
+    FROM crypto_ai.paper_position
+    WHERE id IN (182, 172, 162, 158, 143, 137)
+)
+SELECT
+    f.id AS paper_position_id,
+    'PAPER_POSITION_OPENED' AS event_type,
+    f.opened_at AS event_at,
+    NULL AS source_record_id,
+    f.signal_id AS related_signal_id,
+    f.symbol
+FROM frozen f
+
+UNION ALL
+
+SELECT
+    f.id,
+    'ENTRY_SIGNAL_GENERATED',
+    ts.generated_at,
+    ts.id,
+    ts.id,
+    f.symbol
+FROM frozen f
+JOIN crypto_ai.trade_signal ts ON ts.id = f.signal_id
+
+UNION ALL
+
+SELECT
+    f.id,
+    CONCAT('PROCESSING_', spw.status),
+    COALESCE(spw.completed_at, spw.updated_at),
+    spw.signal_id,
+    spw.signal_id,
+    f.symbol
+FROM frozen f
+JOIN crypto_ai.signal_processing_work spw ON spw.signal_id = f.signal_id
+
+UNION ALL
+
+SELECT
+    f.id,
+    'EXIT_SIGNAL_GENERATED',
+    ts.generated_at,
+    ts.id,
+    ts.id,
+    f.symbol
+FROM frozen f
+JOIN crypto_ai.trade_signal ts ON ts.id = f.exit_signal_id
+
+UNION ALL
+
+SELECT
+    f.id,
+    CONCAT('WALLET_TRADE_', wt.side, '_', COALESCE(wt.execution_reason, 'NONE')),
+    wt.executed_at,
+    wt.id,
+    wt.signal_id,
+    f.symbol
+FROM frozen f
+JOIN crypto_ai.wallet_trade wt
+    ON wt.signal_id IN (f.signal_id, f.exit_signal_id)
+
+UNION ALL
+
+SELECT
+    f.id,
+    CONCAT('MANAGEMENT_', pme.event_type),
+    pme.occurred_at,
+    pme.id,
+    NULL,
+    f.symbol
+FROM frozen f
+JOIN crypto_ai.production_exit_audit pea
+    ON pea.paper_position_id = f.id
+JOIN crypto_ai.position_management_event pme
+    ON pme.wallet_position_id = pea.wallet_position_id
+
+UNION ALL
+
+SELECT
+    f.id,
+    CONCAT('EXIT_AUDIT_', pea.close_trigger),
+    pea.audited_at,
+    pea.id,
+    pea.source_signal_id,
+    f.symbol
+FROM frozen f
+JOIN crypto_ai.production_exit_audit pea
+    ON pea.paper_position_id = f.id
+
+UNION ALL
+
+SELECT
+    f.id,
+    'PAPER_POSITION_CLOSED',
+    f.closed_at,
+    NULL,
+    f.exit_signal_id,
+    f.symbol
+FROM frozen f
+ORDER BY paper_position_id, event_at, source_record_id;
+```
+### END_DB_REQUEST
+
+### DB_REQUEST
+
+QueryId: DBQ-CODEX-I3-003  
+Purpose: Retrieve bounded symbol-level protection evidence for the final three UTC minutes before each selected close. These records are not position-linked; they must be reconciled with the durable audit and management evidence before attribution.  
+SQL:
+```sql
+WITH frozen AS (
+    SELECT id AS paper_position_id, symbol, entry_price, stop_loss,
+           take_profit, exit_price, opened_at, closed_at
+    FROM crypto_ai.paper_position
+    WHERE id IN (182, 172, 162, 158, 143, 137)
+),
+ranked_events AS (
+    SELECT
+        f.paper_position_id,
+        f.symbol,
+        f.entry_price,
+        f.stop_loss,
+        f.take_profit,
+        f.exit_price,
+        f.closed_at,
+        mpe.id AS market_price_event_id,
+        mpe.observed_at,
+        mpe.price,
+        mpe.source,
+        mpe.source_received_at,
+        mpe.delivery_status,
+        mpe.ordering_slot,
+        mpe.outcome_reason,
+        ROW_NUMBER() OVER (
+            PARTITION BY f.paper_position_id
+            ORDER BY mpe.observed_at DESC, mpe.id DESC
+        ) AS recency_rank
+    FROM frozen f
+    JOIN crypto_ai.market_price_event mpe
+      ON mpe.symbol = f.symbol
+     AND mpe.observed_at >= f.closed_at - INTERVAL 180 SECOND
+     AND mpe.observed_at <= f.closed_at
+)
+SELECT
+    paper_position_id,
+    symbol,
+    entry_price,
+    stop_loss,
+    take_profit,
+    exit_price,
+    closed_at,
+    market_price_event_id,
+    observed_at,
+    price,
+    source,
+    source_received_at,
+    delivery_status,
+    ordering_slot,
+    outcome_reason
+FROM ranked_events
+WHERE recency_rank <= 500
+ORDER BY paper_position_id, observed_at, market_price_event_id;
+```
+### END_DB_REQUEST

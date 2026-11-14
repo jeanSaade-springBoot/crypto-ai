@@ -1,0 +1,1 @@
+SELECT p.id AS position_id, e.* FROM paper_position p JOIN position_management_event e ON e.symbol = p.symbol AND e.occurred_at BETWEEN p.opened_at AND p.closed_at + INTERVAL 5 SECOND WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, e.occurred_at LIMIT 200;

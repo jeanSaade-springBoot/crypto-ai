@@ -1,0 +1,40 @@
+## FINDINGS — Iteration 1: trade reconstruction start
+
+- **[PROJECT EVIDENCE]** Scope is fixed to `crypto_ai.paper_position` IDs **182, 172, 162, 158, 143, 137**. No substitution is permitted.
+- **[PROJECT EVIDENCE]** The assigned CODEX database-evidence directory is empty. No position, signal, candle, execution, or price-event records were available locally to reconstruct any of the six timelines.
+- **[PROJECT EVIDENCE]** The documented flow requires durable evidence across: position → signal/work → candle/indicators → accepted protection price events → exit execution. Candle OHLC cannot substitute for missing intra-candle protection evidence.
+- **[PROJECT EVIDENCE]** There is a timestamp inconsistency in the supplied study metadata: `2026-10-20 11:54:53 UTC` converts to **2026-10-20 14:54:53 KSA**, not the stated snapshot KSA `12:31:38`. The frozen IDs remain authoritative, but the snapshot-clock provenance is not currently reliable for time-bound interpretation.
+- **[AGENT INFERENCE]** No conclusion is currently justified about entry quality, exit reason, stop/profit-lock correctness, fees, or whether any loss was a valid strategy outcome versus an execution/data defect.
+
+## EVIDENCE
+
+- `agent-docs/runs/fts-WINDOW1-20261020-123138/CHARTER.md`
+- `agent-docs/DATABASE_INVESTIGATION_RULES.md`
+- `codex-docs/ARCHITECTURE.md`
+- `codex-docs/TRADE_INVESTIGATION_AGENT.md`
+- `codex-docs/INVESTIGATION_LOG.md`
+
+## UNKNOWNS
+
+For each frozen trade, still required:
+
+- Symbol, side, quantities, entry/exit prices, stop/target, realized P&L, and exact UTC timestamps.
+- Linked entry/exit signals and signal-processing work.
+- Contemporaneous candle, indicator, freshness, data-quality, BTC/HTF, and strategy evidence.
+- Accepted `market_price_event` evidence and the first protection-triggering observation.
+- Exit reason and linked execution/wallet record.
+- Fee and P&L reconciliation.
+- Runtime/version/configuration history active at entry.
+- Relevant application logs and Replay comparability.
+
+## DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Schema-first discovery for the authoritative `paper_position` entity and the exact related trader tables. This is required before selecting columns or reconstructing the six frozen trades.  
+SQL:
+```sql
+SHOW TABLES FROM crypto_ai;
+SHOW CREATE TABLE crypto_ai.paper_position;
+```
+### END_DB_REQUEST

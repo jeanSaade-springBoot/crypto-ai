@@ -1,0 +1,155 @@
+# Claude: Iteration 1, trade reconstruction (self-review only)
+
+**Run:** fts-WINDOW2-20261019-180001 · **DB:** `crypto_ai` (Production paper trading) · **Frozen trades:** 182, 172, 162, 158, 143, 137. None were substituted.
+
+**Context loaded:** AGENTS.md, AGREED_KNOWLEDGE.md (it has no entries), DECISIONS.md (no entries), DATABASE_INVESTIGATION_RULES.md, DATABASE_ENTITY_REGISTRY.md (no dual-agreed entries), claude-docs (TRADE_INVESTIGATION_AGENT, TRADING_RULES, INVESTIGATION_LOG), CHARTER.md, FROZEN_TRADE_SELECTION.md, and the coordinator proof queries DBQ-FTS-001..005. My `db/CLAUDE/` folder is empty. I did not open `private/CODEX/`, `LIVE_EVENTS.log` or `LIVE_TEAM_STATUS.md`.
+
+**Limitation:** this session has no file-write tool apart from the plan file, so the output is below and not saved to `private/CLAUDE/`. The coordinator needs to capture it.
+
+---
+
+## FINDINGS
+
+### F-1: Frozen trade identity and timeline [PROJECT EVIDENCE: DBQ-FTS-005]
+
+| ID | Symbol | Opened UTC → KSA | Closed UTC → KSA | Hold | close_reason | realized_pnl | entry signal |
+|---|---|---|---|---|---|---|---|
+| 182 | ACEUSDT | 2026-10-12 09:57:06.476 → 12:57:06.476 | 10:05:20.486 → 13:05:20.486 | 8m14s | SELL_CONFIRMED | −0.031847 | 176710 |
+| 172 | SHIBUSDT | 2026-10-12 06:36:05.087 → 09:36:05.087 | 07:15:45.484 → 10:15:45.484 | 39m40s | HTF_SELL_CONFIRMED | −0.045537 | 171589 |
+| 162 | DOGEUSDT | 2026-10-12 04:02:06.415 → 07:02:06.415 | 04:26:04.116 → 07:26:04.116 | 23m58s | STRONG_SELL | −0.051694 | 167668 |
+| 158 | XRPUSDT | 2026-10-12 02:35:04.811 → 05:35:04.811 | 03:30:06.638 → 06:30:06.638 | 55m02s | SELL_CONFIRMED | −0.031897 | 165412 |
+| 143 | EGLDUSDT | 2026-10-11 22:40:04.858 → 2026-10-12 01:40:04.858 | 22:43:36.229 → 2026-10-12 01:43:36.229 | 3m31s | PROFIT_LOCK_HARD_EXIT | −0.037193 | 159408 |
+| 137 | EGLDUSDT | 2026-10-11 20:55:04.510 → 23:55:04.510 | 21:00:12.122 → 2026-10-12 00:00:12.122 | 5m08s | SELL_CONFIRMED | −0.075019 | 156723 |
+
+- The total loss across the six trades is about −0.273 USDT. That is gross: automatic trades record `fee_usdt = 0` (claude-docs/INVESTIGATION_LOG.md #2), so the real loss after fees is larger and still has to be computed.
+- All six entries happened 4–7 s after a minute boundary. That fits a 1m close followed by analysis latency, but it is not proven until the candle and work records are queried.
+
+### F-2: Selection scope [PROJECT EVIDENCE: DBQ-FTS-002]
+The rule `status=CLOSED` leaves out all 75 `STOPPED` rows, and every one of them has negative P&L. Stop-loss closes are written as `PositionStatus.STOPPED` (`LivePositionProtectionService.java:178`, `PaperTradingService.java:183`). So this study only covers losses that happened above the stop: signal-driven or profit-lock exits. That matches the charter and does not affect the frozen set, but the final report needs to say it.
+
+### F-3: Two exit paths, identified by close_reason [PROJECT EVIDENCE: code] [AGENT INFERENCE until audit rows are queried]
+- **`SELL_CONFIRMED` / `HTF_SELL_CONFIRMED` (182, 172, 158, 137):** these codes come only from `PositionExitPolicy.evaluateNormalExit` (`PositionExitPolicy.java:29,42`). It runs from the live price path at `LivePositionProtectionService.java:235-238`. The signal path in `PaperTradingService.java:207-208` writes `signal.getDecision().name()` instead, meaning SELL or STRONG_SELL. So these four were most likely closed by the live price-event path.
+- **`STRONG_SELL` (162):** matches the signal path (`PaperTradingService.java:197-208`), which passed `validateSell` and found no active profit lock. The exit price would then be `signal.latestPrice`, not a tick.
+- **`PROFIT_LOCK_HARD_EXIT` (143):** two code paths can produce it:
+  1. `TP_EXTENSION_REBASE` with price below entry×1.0005 (`DynamicProfitLockService.java:164-166`).
+  2. Lock triggered with price below the hard floor (`LivePositionProtectionService.java:210-214`).
+
+  Either way, within 3.5 minutes the position must have reached either the take-profit (TP extended) or about 70% progress, and then printed below entry without first touching the stop. A negative P&L on a "profit-lock" exit is possible because the floor check only looks at `price < floor` and does not require `price ≥ entry`. Which path fired is UNKNOWN until `position_management_event` is queried.
+
+### F-4: Code observation to test, not a confirmed defect [PROJECT EVIDENCE: code]
+`LivePositionProtectionService.java:95-97` takes the most recent 1m/5m/1h `trade_signal` by `generated_at`. It applies no freshness limit and does not filter by `signal_mode`, so `HISTORICAL_ONLY` signals are not excluded. `PositionExitPolicy` then acts on those decisions with no check on whether the trade is in profit or loss. Two consequences:
+- Normal exits are allowed to close below entry by design.
+- A stale or historical 1h/5m SELL could in principle drive `HTF_SELL_CONFIRMED` or `SELL_CONFIRMED`.
+
+Whether that happened in any of the four live-path exits is what DBQ-CLAUDE-I1-004/005 should establish.
+
+### F-5: Gap in recent activity [PROJECT EVIDENCE: DBQ-FTS-005] [UNKNOWN cause]
+The newest negative CLOSED trade closed on 2026-10-12 10:05:20 UTC, which is 7 days before the snapshot (2026-10-19 15:00:03 UTC). This could mean no losing non-stop trades, no trading at all, or an outage. DBQ-CLAUDE-I1-009 checks this.
+
+### Entry-quality assessment
+Not possible yet. The entry signal fields (strategy, scores, MTF/BTC context, data quality, signal mode, R:R) have not been retrieved.
+
+## EVIDENCE
+- DBQ-FTS-001: `paper_position` schema.
+- DBQ-FTS-002: CLOSED 118 rows / 26 negative; STOPPED 75 rows / 75 negative.
+- DBQ-FTS-003: `wallet_trade` EXECUTED 445 rows / 101 negative.
+- DBQ-FTS-004: `wallet_position_test` exists (Replay) and is excluded.
+- DBQ-FTS-005: the frozen rows.
+- Code: `LivePositionProtectionService.java:95-97,174-244`; `PositionExitPolicy.java:20-50`; `PaperTradingService.java:176-213`; `DynamicProfitLockService.java:164-186`.
+
+## UNKNOWNS
+- U1: Entry signal content for all six; whether `signal_mode` is LIVE; data quality and freshness.
+- U2: Wallet fills, execution prices and timestamps, fill vs. `latest_price`; the decision-to-fill lag.
+- U3: Which 1m/5m/1h signals the exit policy saw at close, and how old they were.
+- U4: Which branch closed trade 143 (rebase or triggered lock), and whether a TP extension occurred.
+- U5: The accepted price-event path before each exit (APPLIED/NON_CANONICAL), and the max favourable / max adverse excursion during each hold.
+- U6: Actual fees, which are not recorded.
+- U7: Why there are no qualifying closes after 2026-10-12.
+- U8: Schemas of `wallet_managed_position`, `market_price_event` (added columns), `candle`, `signal_processing_work` and `execution_opportunity` have not been read yet.
+- U9: Replay reproducibility is not assessed yet.
+
+---
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-001
+Purpose: Full paper_position rows for the frozen trades (entry/exit reasons, SL/TP, quantity, exit signal).
+SQL:
+SELECT id, symbol, side, status, quantity, entry_price, stop_loss, take_profit, exit_price, realized_pnl, close_reason, signal_id, exit_signal_id, opened_at, closed_at, LEFT(entry_reason, 1500) AS entry_reason, LEFT(exit_reason, 1500) AS exit_reason FROM paper_position WHERE id IN (182,172,162,158,143,137) ORDER BY id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-002
+Purpose: Entry and exit signal evidence (decision chain, mode, quality, freshness, MTF/BTC context, R:R).
+SQL:
+SELECT p.id AS position_id, 'ENTRY' AS role, s.id, s.symbol, s.interval_code, s.candle_open_time, s.generated_at, s.created_at, s.signal_mode, s.decision, s.original_decision, s.selected_strategy, s.market_regime, s.market_regime_confidence, s.total_score, s.confidence_score, s.raw_confidence_score, s.final_entry_allowed, s.primary_blocking_stage, s.confluence_status, s.confluence_higher_interval, s.confluence_higher_decision, s.btc_context_status, s.btc_context_entry_allowed, s.btc_context_age_seconds, s.data_quality_valid, s.latest_price, s.stop_loss, s.take_profit, s.atr_percent, s.risk_reward_ratio, s.atr_entry_type, s.entry_authority, s.volatility_level, LEFT(s.final_decision_explanation, 800) AS final_explanation FROM paper_position p JOIN trade_signal s ON s.id = p.signal_id WHERE p.id IN (182,172,162,158,143,137)
+UNION ALL
+SELECT p.id, 'EXIT', s.id, s.symbol, s.interval_code, s.candle_open_time, s.generated_at, s.created_at, s.signal_mode, s.decision, s.original_decision, s.selected_strategy, s.market_regime, s.market_regime_confidence, s.total_score, s.confidence_score, s.raw_confidence_score, s.final_entry_allowed, s.primary_blocking_stage, s.confluence_status, s.confluence_higher_interval, s.confluence_higher_decision, s.btc_context_status, s.btc_context_entry_allowed, s.btc_context_age_seconds, s.data_quality_valid, s.latest_price, s.stop_loss, s.take_profit, s.atr_percent, s.risk_reward_ratio, s.atr_entry_type, s.entry_authority, s.volatility_level, LEFT(s.final_decision_explanation, 800) FROM paper_position p JOIN trade_signal s ON s.id = p.exit_signal_id WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY position_id, role;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-003
+Purpose: Wallet executions (fills, fill authority time, decision price, P&L, reason) for each trade lifecycle.
+SQL:
+SELECT p.id AS position_id, w.id, w.signal_id, w.side, w.quantity, w.price_usdt, w.decision_price_usdt, w.execution_price_observed_at, w.gross_amount_usdt, w.fee_usdt, w.cost_basis_usdt, w.realized_pnl_usdt, w.realized_pnl_percent, w.execution_type, w.execution_reason, w.status, w.executed_at, w.execution_key, LEFT(w.execution_message, 600) AS execution_message FROM paper_position p JOIN wallet_trade w ON w.symbol = p.symbol AND w.executed_at BETWEEN p.opened_at - INTERVAL 2 MINUTE AND p.closed_at + INTERVAL 2 MINUTE WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, w.executed_at LIMIT 100;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-004
+Purpose: 5m/1h signals visible to PositionExitPolicy around each hold (age, mode, decision) — tests F-4.
+SQL:
+SELECT p.id AS position_id, s.id, s.interval_code, s.candle_open_time, s.generated_at, s.signal_mode, s.decision, s.original_decision, s.total_score, s.confidence_score, s.final_entry_allowed, s.primary_blocking_stage, s.data_quality_valid, s.latest_price FROM paper_position p JOIN trade_signal s ON s.symbol = p.symbol AND s.interval_code IN ('5m','1h') AND s.generated_at BETWEEN p.opened_at - INTERVAL 2 HOUR AND p.closed_at + INTERVAL 1 MINUTE WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, s.interval_code, s.generated_at LIMIT 400;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-005
+Purpose: 1m signal sequence from 10 min before entry to close (entry consolidation and exit 1m decision).
+SQL:
+SELECT p.id AS position_id, s.id, s.candle_open_time, s.generated_at, s.signal_mode, s.decision, s.original_decision, s.total_score, s.confidence_score, s.final_entry_allowed, s.primary_blocking_stage, s.latest_price FROM paper_position p JOIN trade_signal s ON s.symbol = p.symbol AND s.interval_code = '1m' AND s.generated_at BETWEEN p.opened_at - INTERVAL 10 MINUTE AND p.closed_at + INTERVAL 1 MINUTE WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, s.generated_at LIMIT 500;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-006
+Purpose: Actual close trigger audit for each position.
+SQL:
+SELECT id, paper_position_id, wallet_position_id, symbol, close_trigger, source_signal_id, source_signal_decision, source_signal_original_decision, position_analysis_id, position_recommendation, entry_price_usdt, exit_price_usdt, stop_loss_usdt, take_profit_usdt, LEFT(close_explanation, 1000) AS close_explanation, audited_at FROM production_exit_audit WHERE paper_position_id IN (182,172,162,158,143,137) ORDER BY paper_position_id;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-007
+Purpose: Schemas needed before managed-position / price-event / candle / work queries (U8).
+SQL:
+DESCRIBE wallet_managed_position;
+DESCRIBE market_price_event;
+DESCRIBE position_management_event;
+DESCRIBE candle;
+DESCRIBE signal_processing_work;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-008
+Purpose: Management events (TP extension, profit lock, near-TP) during each hold — resolves U4 for trade 143.
+SQL:
+SELECT p.id AS position_id, e.* FROM paper_position p JOIN position_management_event e ON e.symbol = p.symbol AND e.occurred_at BETWEEN p.opened_at AND p.closed_at + INTERVAL 5 SECOND WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, e.occurred_at LIMIT 200;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-009
+Purpose: Price-path summary per hold (MFE/MAE inputs, event count) and price events in the 90 s before each close.
+SQL:
+SELECT p.id AS position_id, COUNT(*) AS events, MIN(e.price) AS min_price, MAX(e.price) AS max_price, MIN(e.observed_at) AS first_obs, MAX(e.observed_at) AS last_obs FROM paper_position p JOIN market_price_event e ON e.symbol = p.symbol AND e.observed_at BETWEEN p.opened_at AND p.closed_at WHERE p.id IN (182,172,162,158,143,137) GROUP BY p.id ORDER BY p.id;
+SELECT p.id AS position_id, e.* FROM paper_position p JOIN market_price_event e ON e.symbol = p.symbol AND e.observed_at BETWEEN p.closed_at - INTERVAL 90 SECOND AND p.closed_at + INTERVAL 5 SECOND WHERE p.id IN (182,172,162,158,143,137) ORDER BY p.id, e.observed_at LIMIT 600;
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I1-010
+Purpose: Explain the 7-day gap before the snapshot (F-5 / U7).
+SQL:
+SELECT status, COUNT(*) AS n, MIN(opened_at) AS first_open, MAX(opened_at) AS last_open, MAX(closed_at) AS last_close, SUM(realized_pnl < 0) AS neg FROM paper_position WHERE opened_at >= '2026-10-12 10:05:20' GROUP BY status;
+### END_DB_REQUEST
+
+---
+
+**Plan for Iteration 2 (self-review):** use the results to finish each trade's chain: candle → signal → work → entry → protection → exit. That includes checking entry fill vs. `latest_price` (fill price event ≤ 15 s old), whether exit signals were fresh, and which branch closed trade 143. Then classify each trade as a valid loss, a logic defect, stale data, an execution delay or missing evidence.
+
+No code, config, DB writes, git or deploy actions were taken.

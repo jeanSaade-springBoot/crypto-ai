@@ -1,0 +1,306 @@
+# Daily failed-trade study, WINDOW1: Claude track, Iteration 2 (database forensics, self-review)
+
+**Bottom line:** none of the six losses hit its stop-loss. All six were closed by a signal, a higher-timeframe exit or the profit-lock floor, with losses of -0.13% to -0.34%. The pattern behind them is in the entry plans:
+
+- **Five of six entries had planned reward/risk well below 1** (0.33 to 0.74).
+- **Trade 143 is the clearest case of a likely defect.** Its entry used a 5-minute signal that had just been replaced. It also gave up a take-profit hit and then fell straight through its profit floor between two price updates.
+
+I made no changes to code, configuration, the database, git or deployments. Plan mode was active, but there was no Write or ExitPlanMode tool, so there is no plan file and this message is the whole Iteration 2 output.
+
+**Inputs:**
+- My Iteration 1 database results DBQ-CLAUDE-I1-001…008 and 010…012. I1-009 failed: `market_price_event` has no `status` column; the actual columns are `delivery_status` and `outcome_reason`. It is reissued below as I2-005.
+- The code read in this iteration: `AtrRiskService.java`, the relevant parts of `ExecutionIntelligenceService.java`, and `application.yml`.
+- As required, I did not read `private/CODEX/`, `LIVE_EVENTS.log`, `LIVE_TEAM_STATUS.md`, or the other agent's memory files.
+
+All timestamps are stored as UTC; KSA = UTC+3. All dates are 2026.
+
+---
+
+## FINDINGS
+
+**F-11: Five of six entries had planned reward/risk below 1, because of a 0.50% minimum stop with a 3×ATR target.** [PROJECT EVIDENCE + arithmetic] Severity: high, systemic.
+- `AtrRiskService.java:35-45` sets the stop distance to the larger of 2×ATR and the minimum stop (`ATR_MINIMUM_STOP_PERCENT:0.50`, `application.yml:143`). The target stays at 3×ATR.
+- When ATR is below 0.25% of price, reward/risk is therefore below 1.5, and it shrinks as ATR falls.
+- Stored `trade_signal.risk_reward_ratio` (DBQ-CLAUDE-I1-007):
+
+| Trade | ATR % | Reward/risk | Target distance | Stop distance |
+|---|---|---|---|---|
+| 182 | 0.080 | 0.48 | 0.24% | 0.50% |
+| 172 | 0.124 | 0.74 | 0.37% | 0.50% |
+| 162 | 0.073 | 0.44 | 0.22% | 0.50% |
+| 158 | 0.055 | 0.33 | 0.16% | 0.50% |
+| 143 | 0.270 | 1.50 | 0.81% | 0.54% |
+| 137 | 0.107 | 0.64 | 0.32% | 0.50% |
+
+- The paper rows' stop-loss and take-profit values reproduce these distances exactly (DBQ-CLAUDE-I1-002).
+- Every one of these entries still passed: `final_entry_allowed=1` and `primary_blocking_stage=NULL`.
+- Some entry routes in `ExecutionIntelligenceService` require an Entry Quality reward/risk of 1.15–1.25 (lines 1055, 1098, 1128). That is a different calculation from the stored signal value. Which reward/risk each entry was actually checked against is still unknown (U-10).
+- [AGENT INFERENCE] With these plans, the trades needed win rates of about 57–75% just to break even before fees. This is entry-plan design and is the main driver of the losses. It is not one bad trade.
+
+**F-12: Fees are not modelled, and several targets are smaller than realistic round-trip fees.** [PROJECT EVIDENCE + EXTERNAL RESEARCH]
+- `wallet_trade.fee_usdt = 0` on all 12 fills in DBQ-CLAUDE-I1-005, and `application.yml` contains no fee key.
+- [EXTERNAL RESEARCH: Binance standard spot fee is about 0.1% per side, so about 0.2% per round trip. I did not verify this in this iteration.] On that basis, a take-profit win on 158 (0.16%) would have been net negative, and on 162 (0.22%) or 182 (0.24%) about break-even.
+- Net losses are understated by roughly 0.03–0.05 USDT per trade.
+
+**F-13: Trade 143's entry used a 5m signal that had already been replaced.** [PROJECT EVIDENCE for the code path and timestamps; AGENT INFERENCE for the selection] Severity: highest. Likely defect, to be confirmed with I2-001 and I2-002.
+- The entry 1m signal was 159408: WATCH, `atr_entry_type=WAIT_FOR_RETRACEMENT`, recommended position 0%, `atr_immediate_entry_allowed=0`. It also said to wait for a pullback to about 4.0118. RSI was 84.3, and price was 4.35 ATR above SMA20 and above the upper Bollinger band.
+- Even so, the position opened at 4.033 with 25% allocation and `entry_stage=SETUP_TIMEFRAME_ATR`.
+- That route (`ExecutionIntelligenceService.java:1472-1514`) lets a fresh, bullish, entry-allowed 5m signal stand in when the 1m is ATR-extended. It finds that 5m signal with `latestAtOrBefore`, which compares `generated_at` (wall-clock time), not candle time (lines 2455-2462 and 2606-2608).
+- The two signals for the same 22:40:00 UTC candle close:
+  - 1m signal 159408: generated 22:40:01.633945 UTC (01:40:01 KSA).
+  - 5m signal 159407 (WATCH 76): generated 22:40:01.635944 UTC, **2 ms later**.
+- So the query would have skipped 159407 and picked 5m signal 159285 (BUY 83). That signal was generated at 22:35:01.55 UTC (01:35:01 KSA) and is within the 20-minute limit (`FIVE_MINUTE_MAX_AGE`, line 66).
+- [AGENT INFERENCE] The entry's authority came from a 5m BUY that the newly closed 5m candle had already downgraded to WATCH. Which signal wins depends on a millisecond race between threads.
+- Replay picks signals through `replayScope.latestAtOrBefore`, which may order ties differently, so this may not reproduce in Replay (U-14).
+
+**F-14: Trade 143 gave up a take-profit hit and then fell through its profit floor between two price updates.** [PROJECT EVIDENCE] This was a valid rule at the time, but the outcome was bad.
+
+| UTC | KSA | Event |
+|---|---|---|
+| 22:40:04.858 | 01:40:04 | Entry at 4.033. Take-profit 4.0647, stop 4.0102. |
+| 22:40:23.057 | 01:40:23 | Profit lock turns on: price 4.056 is about 72.6% of the way to the original take-profit. |
+| 22:40:41.050 | 01:40:41 | Price 4.067 passes the original take-profit. The system extends the target to 4.0805 instead of closing (`position_management_event` 51: "Continuation PASS"). |
+| 22:41:13.036 | 01:41:13 | Target extended again, to 4.1043 (event 52). |
+| 22:41:55 | 01:41:55 | High of 4.101. |
+| 22:43:27.038 | 01:43:27 | Last price at or above the lock level: 4.100. |
+| 22:43:35.021 | 01:43:35 | **Next stored price: 4.027.** That is below the lock (4.0758), below the hard floor (4.0350 = 4.033 × 1.0005), and below entry. The system sold at 22:43:35.046 UTC, 25 ms later. |
+| 22:43:37–39 | 01:43:37–39 | Price keeps falling: 4.018, then 4.016. The drop was real. |
+
+- Paper protection sells at the tick price; it has no resting stop order. So a drop between two price updates (8 seconds, from 4.100 to 4.027, about -1.8%) turns a protected profit into a loss.
+- Outcome only: the original take-profit would have earned about +0.196 USDT. The actual result was -0.037 USDT.
+- Root cause for trade 143: the late entry (F-13), plus the target extension, plus a price gap. Hold the defect classification until I2-001, I2-002 and I2-005 come back.
+
+**F-15: Trade 182 never moved above its entry price.** [PROJECT EVIDENCE]
+- `highest_price_usdt = 0.1884`, which equals the entry price.
+- The entry was a 1m BUY at 75 after seven straight 1m STRONG_SELLs (09:48–09:54 UTC = 12:48–12:54 KSA).
+- The regime was WEAK_DOWNTREND, yet the strategy was TREND_FOLLOWING:
+  - EMA20 was below EMA50, so the direction and EMA alignment scores were both 0.
+  - `confluence_status=CONFLICT`.
+  - All 5m signals in the prior 30 minutes were NEUTRAL, with scores falling 31→22.
+  - Price was 2.15 ATR from SMA20, with `atr_overextended=1`.
+- The multi-timeframe check lowered confidence but did not block.
+- [AGENT INFERENCE] This was a poor-quality entry with a 0.48 reward/risk. The exit (1m SELL plus 5m STRONG_SELL, 1h NEUTRAL) followed the rules.
+
+**F-16: Trade 172 lost because SHIBUSDT's price step is larger than its ATR.** [PROJECT EVIDENCE]
+- Every stored SHIB price is a multiple of 1e-8, which is about 0.18% of price. ATR14 was 6.8e-9, about 0.68 of one price step.
+- The take-profit needed +2 steps and the stop -3 steps. The exit came at -1 step.
+- The exit followed the rules:
+  - 1h turned SELL at 07:00:06 UTC (10:00:06 KSA). The 1h at entry was NEUTRAL 46, so the bearish-at-entry version of F-05 is **rejected**.
+  - 5m dropped to NEUTRAL at 07:15:04 UTC.
+  - The exit then fired on the next price update, 07:15:43 UTC (10:15:43 KSA). Price updates for SHIB were sparse.
+- [AGENT INFERENCE] ATR-based risk planning isn't meaningful when ATR is less than one price step. I found no guard for this.
+
+**F-17: Three entries came from a 1m signal whose decision was WATCH, not BUY.** [PROJECT EVIDENCE]
+- They went through other routes:
+  - 162: ACCUMULATED_EVIDENCE.
+  - 158: SETUP_CONFIRMATION_WAKEUP. Its 1m work row has `paper_position_id=NULL`; the 5m work row 165415 (5m BUY 76 at 02:35:01 UTC) has `paper_position_id=158`.
+  - 143: SETUP_TIMEFRAME_ATR.
+- 162 was a BREAKOUT entry with RSI 68, price above the upper Bollinger band, 2.82 ATR from SMA20 and `atr_overextended=1`.
+- 158 had "volume expanded without bullish price confirmation" (volume-vs-SMA20 score 0) and the lowest reward/risk of the six (0.33).
+- For 158, `evaluateSetupTimeframeWakeupInternal` returns nothing when the 1m signal allows immediate entry (`ExecutionIntelligenceService.java:325`), and 165412 had `atr_immediate_entry_allowed=1`. So 158 must have entered through the other wake-up route at line 443. That still needs the execution message (I2-002).
+
+**F-18: Trade 137 was a STRONG_BUY right after eight straight 1m STRONG_SELLs.** [PROJECT EVIDENCE]
+- The 1m STRONG_SELLs ran 20:46–20:53 UTC (23:46–23:53 KSA). Then came a 1m STRONG_BUY 91 under RANGE_MEAN_REVERSION.
+- The range entry-location guard passed only through its "expansion-transition exception" (RVOL 8.26).
+- The 5m was NEUTRAL 48, and the latest 1h was WATCH (the 18:00 UTC 1h was STRONG_SELL).
+- The high was 4.005, 46.6% of the way to the take-profit. The exit was SELL_CONFIRMED: 1m STRONG_SELL plus 5m SELL at 21:00 UTC, with 1h NEUTRAL. It followed the rules.
+
+**F-19: FIX-154 migrations were applied to the production database before these trades, but AGENTS.md and claude-docs say FIX-154 is "pending, not implemented".** [PROJECT EVIDENCE: contradiction to report]
+- From DBQ-CLAUDE-I1-012:
+  - V107 `fix 154 trusted higher timeframe buy` was installed 2026-10-10 00:15:21 UTC.
+  - V109 `fix 154 forward replay and audit columns` was installed 2026-10-10 01:52:45 UTC.
+- `trade_signal.data_quality_valid` is populated (=1) on all seven entry and exit signals.
+- Under the "Do not start from zero" rule, this has to be reported and investigated, not silently accepted. Whether the FIX-154 runtime gate was active for these entries is unknown (I2-007).
+
+**F-20: F-02 and F-03 are now confirmed.** [PROJECT EVIDENCE, DBQ-CLAUDE-I1-003]
+- Within the selection window (closed_at from 2026-10-11 20:55 UTC onward), **22 STOPPED losses totalling about -4.83 USDT** were excluded. The six frozen trades total -0.273 USDT.
+- The six newest losses overall are 193, 191, 186, 185, 181 and 180, all STOPPED.
+- No position opened after 2026-10-15 03:08:06 UTC (06:08 KSA), and the last close was 03:15:19 UTC. So there was no trading for about 7 days before the snapshot. V110 (10-15 01:58 UTC) and V111 (10-17 03:11 UTC) suggest redeployments, but why trading stopped is unknown.
+
+**F-21: Paper position rows are written 1.2–3.2 seconds after the matching wallet fill.** [PROJECT EVIDENCE] Low severity.
+- Entries, wallet fill → paper `opened_at`:
+  - 143: 22:40:03.115 → 22:40:04.858 UTC.
+  - The others show the same gap of about 1.8–2.2 s.
+- Exits through the live price path:
+  - 137: 21:00:08.935 → 21:00:12.122 UTC (3.19 s).
+  - 182: 10:05:18.50 → 10:05:20.49 UTC (1.98 s).
+- The signal-path exit on 162 is the reverse: paper closed at 04:26:04.116 UTC, before the wallet fill at 04:26:04.134.
+- For 158, 162 and 137, some price updates have `created_at` 120–170 ms **earlier** than `observed_at`: the local clock was behind Binance's event time. That matters for any price-age check inside protection (AGENTS.md).
+
+**F-22: None of the six trades used data that was out of date.** [PROJECT EVIDENCE]
+- 1m signals were generated 1.5–3.4 s after candle close, and every signal processing work row is COMPLETED on its first attempt.
+- Entries were 4.5–6.5 s after candle close.
+- Every price update in the windows is `APPLIED` / `PROTECTION_CALLBACK_COMPLETED`, from `BINANCE_KLINE_DIRECT_FIX153`.
+- All entry signals have `signal_mode=LIVE` and `data_quality_valid=1`.
+- Fill prices equal the signal price, or are one tick away (143: 4.033 vs 4.032; 158: 1.4108 vs 1.4109).
+
+## EVIDENCE: Trade classification so far
+
+| ID | Symbol | Entry KSA | Route | Reward/risk | High (% of way to take-profit) | Exit KSA | Exit trigger | Classification so far |
+|---|---|---|---|---|---|---|---|---|
+| 182 | ACEUSDT | 10-12 12:57:06 | Immediate 1m BUY | 0.48 | 0% | 13:05:18 | SELL_CONFIRMED (176927 + 176934) | Poor entry quality and low-reward/risk plan. Exit followed the rules. |
+| 172 | SHIBUSDT | 10-12 09:36:05 | Immediate 1m BUY | 0.74 | 49% | 10:15:43 | HTF_SELL_CONFIRMED (172201 1h SELL + 5m NEUTRAL 172588) | Price step larger than ATR. Exit followed the rules. |
+| 162 | DOGEUSDT | 10-12 07:02:06 | ACCUMULATED_EVIDENCE (1m WATCH) | 0.44 | 31% | 07:26:04 | STRONG_SELL signal (168277) | Overextended breakout entry, low-reward/risk plan. Exit followed the rules. |
+| 158 | XRPUSDT | 10-12 05:35:04 | SETUP_CONFIRMATION_WAKEUP (5m 165415) | 0.33 | 33% | 06:30:04 | SELL_CONFIRMED (166819 + 166821) | Target below fees. Route still to be confirmed. |
+| 143 | EGLDUSDT | 10-12 01:40:04 | SETUP_TIMEFRAME_ATR (1m WAIT_FOR_RETRACEMENT) | 1.50 (5m-based) | 95% of extended target (the original was passed) | 01:43:35 | PROFIT_LOCK_HARD_EXIT, fell through the floor between price updates | **Possible logic defect (F-13)** plus target extension plus a price gap. |
+| 137 | EGLDUSDT | 10-11 23:55:04 | Immediate 1m STRONG_BUY | 0.64 | 47% | 10-12 00:00:08 | SELL_CONFIRMED (156850 + 156852) | Mean-reversion entry against a bearish 1m streak, low-reward/risk plan. Exit followed the rules. |
+
+Sources: DBQ-CLAUDE-I1-002, 004, 005, 006, 007, 008, 010 and 011. Exit-audit IDs are 181, 172, 163, 159, 141 and 137.
+
+## UNKNOWNS
+
+- **U-10:** The Entry Quality reward/risk, score and execution message behind each entry, and which route-level threshold applied.
+- **U-11:** Whether 5m signal 159285 was really the authority for trade 143 (confirms or refutes F-13).
+- **U-12:** Why the price updates stop between 22:43:27 and 22:43:35 UTC. Did Binance not send them, or were they dropped? Is there candle high/low evidence of prices in between?
+- **U-13:** Whether FIX-154 runtime code was active on 10-11 and 10-12 (F-19).
+- **U-14:** Whether Replay's `replayScope.latestAtOrBefore` resolves same-boundary 1m/5m ties the same way as production.
+- **U-15:** Price movement after each exit: would holding have reached the take-profit or the stop? This is an outcome-only question.
+- **U-16:** Why trading stopped after 2026-10-15 03:15 UTC.
+- No application logs are available to me, so all log evidence is still missing.
+
+## DB_REQUESTS
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-001
+Purpose: Confirm which 5m/1h signals gave entry authority. F-13 (143 used 159285 instead of the newer 159407?) and the routes for 158 and 162.
+SQL:
+SELECT id, symbol, interval_code, candle_open_time, decision, original_decision, total_score, confidence_score, final_entry_allowed, atr_immediate_entry_allowed, atr_entry_type, atr_recommended_position_percent, atr_overextended, risk_reward_ratio, strategy_entry_allowed, btc_context_entry_allowed, derivatives_entry_allowed, liquidity_entry_allowed, selected_strategy, data_quality_valid, generated_at, created_at
+FROM trade_signal
+WHERE id IN (159285,159407,159408,165289,165412,165415,167616,167646,167668,171433,171559,171589,176655,176692,176710,156594,156721,156723)
+ORDER BY symbol, generated_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-002
+Purpose: Execution route, decision price, price-observation time and Entry Quality text for every entry and exit fill (U-10, F-17, F-21)
+SQL:
+SELECT id, signal_id, execution_key, symbol, side, price_usdt, decision_price_usdt, execution_price_observed_at, execution_type, execution_reason, executed_at, created_at, LEFT(execution_message, 4000) AS execution_message
+FROM wallet_trade
+WHERE id IN (451,454,426,429,403,407,392,401,358,359,344,346)
+ORDER BY id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-003
+Purpose: Execution-opportunity state (route, decision code, 5m/1h decision, health) at each entry
+SQL:
+SELECT o.id, o.symbol, o.status, o.started_at, o.last_evidence_at, o.latest_signal_id, o.evidence_score, o.opportunity_health, o.five_minute_decision, o.one_hour_decision, o.execution_source, o.recommended_position_percent, o.decision_code, LEFT(o.decision_explanation, 2000) AS decision_explanation, o.executed_at, o.updated_at
+FROM execution_opportunity o
+JOIN paper_position p
+  ON p.symbol = o.symbol
+ AND o.executed_at BETWEEN p.opened_at - INTERVAL 10 SECOND AND p.opened_at + INTERVAL 10 SECOND
+WHERE p.id IN (182,172,162,158,143,137)
+ORDER BY o.executed_at
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-004
+Purpose: Read the candle table schema before requesting candle high/low for the gap through trade 143's floor (U-12) (AGENTS.md: read the schema first)
+SQL:
+SELECT table_name, ordinal_position, column_name, column_type
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN ('candle')
+ORDER BY ordinal_position
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-005
+Purpose: Reissue of failed I1-009 with the correct columns: price-update coverage per hold, the largest gap between updates, and any non-APPLIED outcomes
+SQL:
+SELECT p.id AS paper_id, e.source, e.delivery_status, e.outcome_reason, COUNT(*) AS n, MIN(e.observed_at) AS first_obs, MAX(e.observed_at) AS last_obs, MIN(e.price) AS min_price, MAX(e.price) AS max_price, MIN(TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at)) AS min_ingest_lag_us, MAX(TIMESTAMPDIFF(MICROSECOND, e.observed_at, e.created_at)) AS max_ingest_lag_us
+FROM paper_position p
+JOIN market_price_event e
+  ON e.symbol = p.symbol
+ AND e.observed_at BETWEEN p.opened_at - INTERVAL 30 SECOND AND p.closed_at + INTERVAL 5 SECOND
+WHERE p.id IN (182,172,162,158,143,137)
+GROUP BY p.id, e.source, e.delivery_status, e.outcome_reason
+ORDER BY p.id DESC;
+SELECT x.paper_id, MAX(x.gap_ms) AS max_gap_ms
+FROM (
+  SELECT p.id AS paper_id,
+         TIMESTAMPDIFF(MICROSECOND, LAG(e.observed_at) OVER (PARTITION BY p.id ORDER BY e.observed_at), e.observed_at) / 1000 AS gap_ms
+  FROM paper_position p
+  JOIN market_price_event e
+    ON e.symbol = p.symbol
+   AND e.observed_at BETWEEN p.opened_at AND p.closed_at
+  WHERE p.id IN (182,172,162,158,143,137)
+) x
+GROUP BY x.paper_id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-006
+Purpose: Is the low-reward/risk plan systemic (F-11)? Planned target/stop percentages and reward/risk against outcome for every position closed since 2026-10-11
+SQL:
+SELECT p.id, p.symbol, p.status, p.close_reason, p.realized_pnl, s.selected_strategy, s.atr_percent, s.risk_reward_ratio,
+       ROUND((s.take_profit - s.latest_price) / s.latest_price * 100, 4) AS planned_tp_pct,
+       ROUND((s.latest_price - s.stop_loss) / s.latest_price * 100, 4) AS planned_sl_pct,
+       p.opened_at, p.closed_at
+FROM paper_position p
+JOIN trade_signal s ON s.id = p.signal_id
+WHERE p.opened_at >= '2026-10-11 00:00:00'
+ORDER BY p.id
+LIMIT 200
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-007
+Purpose: Resolve the FIX-154 contradiction (F-19): migration scripts, any FIX-154 tables, and when data_quality_valid started being populated
+SQL:
+SELECT installed_rank, version, description, script, checksum, installed_on, success
+FROM flyway_schema_history
+WHERE version IN ('106','107','108','109');
+SELECT table_name, create_time
+FROM information_schema.tables
+WHERE table_schema = 'crypto_ai'
+  AND (table_name LIKE '%buy%eval%' OR table_name LIKE '%higher%' OR table_name LIKE '%htf%' OR table_name LIKE '%fix154%' OR table_name LIKE '%fix_154%');
+SELECT DATE(generated_at) AS d, COUNT(*) AS n, SUM(data_quality_valid IS NULL) AS dq_null, SUM(data_quality_valid = 1) AS dq_true, SUM(data_quality_valid = 0) AS dq_false
+FROM trade_signal
+WHERE generated_at BETWEEN '2026-10-08 00:00:00' AND '2026-10-16 00:00:00'
+GROUP BY DATE(generated_at)
+ORDER BY d
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-008
+Purpose: How often 1m and 5m signals for the same candle close race each other at entry (F-13 generalisation), for all positions opened since 2026-10-11
+SQL:
+SELECT p.id AS paper_id, p.symbol, s1.id AS one_m_id, s1.decision AS one_m_decision, s1.atr_immediate_entry_allowed AS one_m_atr_immediate, s1.generated_at AS one_m_generated,
+       s5.id AS five_m_same_boundary_id, s5.decision AS five_m_decision, s5.generated_at AS five_m_generated,
+       TIMESTAMPDIFF(MICROSECOND, s1.generated_at, s5.generated_at) AS five_minus_one_us
+FROM paper_position p
+JOIN trade_signal s1 ON s1.id = p.signal_id
+JOIN trade_signal s5
+  ON s5.symbol = s1.symbol
+ AND s5.interval_code = '5m'
+ AND s5.candle_open_time + INTERVAL 5 MINUTE = s1.candle_open_time + INTERVAL 1 MINUTE
+WHERE p.opened_at >= '2026-10-11 00:00:00'
+ORDER BY p.id
+### END_DB_REQUEST
+
+### DB_REQUEST
+QueryId: DBQ-CLAUDE-I2-009
+Purpose: Outcome only (U-15): price range in the 60 minutes after each exit, against the trade's take-profit and stop
+SQL:
+SELECT p.id AS paper_id, p.symbol, p.exit_price, p.stop_loss, p.take_profit,
+       MIN(e.price) AS min_60m, MAX(e.price) AS max_60m,
+       MIN(CASE WHEN e.price >= p.take_profit THEN e.observed_at END) AS first_tp_touch,
+       MIN(CASE WHEN e.price <= p.stop_loss THEN e.observed_at END) AS first_sl_touch
+FROM paper_position p
+JOIN market_price_event e
+  ON e.symbol = p.symbol
+ AND e.observed_at BETWEEN p.closed_at AND p.closed_at + INTERVAL 60 MINUTE
+WHERE p.id IN (182,172,162,158,143,137)
+GROUP BY p.id, p.symbol, p.exit_price, p.stop_loss, p.take_profit
+ORDER BY p.id DESC
+### END_DB_REQUEST
+
+---
+
+**Self-review of Iteration 2:**
+- **Confirmed from data:** the low-reward/risk mechanism (F-11), the gap through trade 143's floor (F-14), the excluded STOPPED losses (F-20), and the FIX-154 migration contradiction (F-19).
+- **Code-backed inference still needing DB confirmation:** F-13, the 5m-signal race on trade 143 (I2-001, I2-002, I2-008).
+- **Rejected:** the version of F-05 where trade 172 was admitted against a bearish 1h.
+- **Not yet assessed:** Replay reproduction (U-14). No trade is labelled a confirmed defect yet.
+- **Planned for Iteration 3:** candle high/low for trade 143 (after I2-004), the Entry Quality and route evidence, and whether F-11 holds across all trades.

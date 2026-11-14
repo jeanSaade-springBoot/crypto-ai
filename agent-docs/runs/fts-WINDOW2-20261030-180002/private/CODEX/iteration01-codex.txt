@@ -1,0 +1,70 @@
+## FINDINGS
+
+- Frozen scope confirmed: `paper_position` IDs **182, 172, 162, 158, 143, 137** in WINDOW2. No substitute trades considered.
+- No CODEX-scoped database evidence files are present yet, so no trade-specific facts, timestamps, symbols, entry/exit reasons, or P&L calculations can be established.
+- **PROJECT EVIDENCE:** `PaperPosition` links entry and optional exit signals and records entry/exit price, stop, target, realized P&L, reason, and UTC lifecycle timestamps.
+- **PROJECT EVIDENCE:** live protection can close positions via stop loss, take profit, profit-lock variants, or signal-driven exits. `production_exit_audit` is the intended immutable record of the terminal trigger, distinct from the context signal.
+
+## EVIDENCE
+
+- Charter: fixed selection and snapshot supplied in `CHARTER.md`.
+- Source:
+  - `PaperPosition.java`
+  - `TradeSignal.java`
+  - `WalletTrade.java`
+  - `LivePositionProtectionService.java`
+  - `PaperTradingService.java`
+  - `ProductionExitAudit.java`
+- **EXTERNAL RESEARCH:** none.
+- **AGENT INFERENCE:** none asserted as trade fact.
+
+## UNKNOWNS
+
+- Actual schema and available evidence tables/columns.
+- Each trade’s symbol, entry signal, exit signal, entry/exit UTC timestamps, KSA conversions, close trigger, protection observations, wallet executions, fees, and P&L reconciliation.
+- Whether each entry passed contemporaneous freshness/data-quality/risk gates.
+- Whether Replay evidence exists or can reproduce the behavior.
+
+### DB_REQUEST
+QueryId: DBQ-CODEX-I1-001  
+Purpose: Read the actual `crypto_ai` schema before selecting trade-specific columns for the six frozen `paper_position` records and their bounded lifecycle evidence.  
+SQL:
+```sql
+SELECT
+    table_name,
+    ordinal_position,
+    column_name,
+    data_type,
+    column_type,
+    is_nullable,
+    column_key,
+    extra
+FROM information_schema.columns
+WHERE table_schema = 'crypto_ai'
+  AND table_name IN (
+      'paper_position',
+      'trade_signal',
+      'wallet_trade',
+      'wallet_managed_position',
+      'production_exit_audit',
+      'position_management_event',
+      'market_price_event',
+      'signal_processing_work',
+      'candle'
+  )
+ORDER BY
+    FIELD(
+        table_name,
+        'paper_position',
+        'trade_signal',
+        'wallet_trade',
+        'wallet_managed_position',
+        'production_exit_audit',
+        'position_management_event',
+        'market_price_event',
+        'signal_processing_work',
+        'candle'
+    ),
+    ordinal_position;
+```
+### END_DB_REQUEST

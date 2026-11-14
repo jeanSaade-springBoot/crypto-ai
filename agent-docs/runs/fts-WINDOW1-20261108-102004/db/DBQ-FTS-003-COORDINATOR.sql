@@ -1,0 +1,1 @@
+SELECT status, COUNT(*) n, SUM(realized_pnl_usdt < 0) neg_pnl FROM wallet_trade GROUP BY status

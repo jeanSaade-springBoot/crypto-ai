@@ -1,0 +1,31 @@
+FIX-149 CORRECTED TWO-SCHEMA CANDIDATE
+Original real MySQL startup: crypto_ai V103 failed before DDL, missing local source table. User confirms collector event table is crypto_ai_v2 and local rank103 success=0.
+Actual corrected migration compiled on Java 17 against minimal Flyway API doubles and exercised with JDBC dynamic proxies. Every metadata query asserts crypto_ai_v2/table binding. DDL assertion requires the qualified collector table. No real database was altered here.
+Java syntax parse and registry node --check passed. Six JUnit tests authored, not executed here; no Maven. Full Java21/Maven/MySQL/EXPLAIN/load gates remain. Recovery SQL reviewed statically only, not executed.
+
+Oct 05, 2026 12:33:16 AM db.migration.V103__fix_149_fresh_admission_indexes migrate
+INFO: [FIX-149][INDEX_BUILD_START] schema=crypto_ai_v2 historySchema=crypto_ai table=market_data_stream_event startUtc=2026-10-04T22:33:16.890701069Z
+Oct 05, 2026 12:33:16 AM db.migration.V103__fix_149_fresh_admission_indexes migrate
+INFO: [FIX-149][INDEX_BUILD_END] startUtc=2026-10-04T22:33:16.890701069Z endUtc=2026-10-04T22:33:16.953262654Z durationMs=62 outcome=SUCCESS
+PASS two missing indexes built ONLY in collector schema and timeout restored
+Oct 05, 2026 12:33:16 AM db.migration.V103__fix_149_fresh_admission_indexes migrate
+INFO: [FIX-149][INDEXES_ALREADY_PRESENT] schema=crypto_ai_v2 historySchema=crypto_ai utc=2026-10-04T22:33:16.962682834Z
+PASS existing manual indexes produce no ALTER
+Oct 05, 2026 12:33:16 AM db.migration.V103__fix_149_fresh_admission_indexes migrate
+INFO: [FIX-149][INDEX_BUILD_START] schema=crypto_ai_v2 historySchema=crypto_ai table=market_data_stream_event startUtc=2026-10-04T22:33:16.963701787Z
+Oct 05, 2026 12:33:16 AM db.migration.V103__fix_149_fresh_admission_indexes migrate
+INFO: [FIX-149][INDEX_BUILD_END] startUtc=2026-10-04T22:33:16.963701787Z endUtc=2026-10-04T22:33:16.964613558Z durationMs=0 outcome=SUCCESS
+PASS only missing index added
+PASS incompatible existing index fails closed
+PASS mismatch makes no mutation
+PASS wrong schema rejected before mutation
+PASS wrong schema makes no mutation
+PASS missing table rejected without creating replacement
+PASS missing table makes no mutation
+Oct 05, 2026 12:33:16 AM db.migration.V103__fix_149_fresh_admission_indexes migrate
+INFO: [FIX-149][INDEX_BUILD_START] schema=crypto_ai_v2 historySchema=crypto_ai table=market_data_stream_event startUtc=2026-10-04T22:33:16.990024084Z
+Oct 05, 2026 12:33:16 AM db.migration.V103__fix_149_fresh_admission_indexes migrate
+SEVERE: [FIX-149][INDEX_BUILD_END] startUtc=2026-10-04T22:33:16.990024084Z endUtc=2026-10-04T22:33:16.991118380Z durationMs=1 outcome=FAILED sqlState=HY000
+PASS DDL error propagated
+PASS DDL failure restores original metadata lock timeout
+PASS DDL declared nontransactional

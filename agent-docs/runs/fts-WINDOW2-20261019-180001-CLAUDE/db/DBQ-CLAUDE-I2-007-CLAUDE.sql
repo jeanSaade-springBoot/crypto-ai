@@ -1,0 +1,2 @@
+SELECT id, symbol, status, entry_price, exit_price, realized_pnl, close_reason, signal_id, opened_at, closed_at FROM crypto_ai.paper_position WHERE symbol = 'EGLDUSDT' AND closed_at BETWEEN '2026-10-11 22:20:00' AND '2026-10-11 22:40:05' LIMIT 5;
+SELECT * FROM crypto_ai.position_management_event WHERE wallet_position_id IN (171, 172) ORDER BY occurred_at LIMIT 50;
