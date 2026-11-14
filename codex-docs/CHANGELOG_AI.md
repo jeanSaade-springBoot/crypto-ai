@@ -1,5 +1,23 @@
 # 2026-10-08 — FIX-153 local-candle hardening status
 
+# 2026-11-15 — Jenkins Mockito-stub repair (IMPLEMENTED UNDER JEAN OVERRIDE)
+
+- **Problem:** Jenkins rejected the build before deployment because
+  `ExecutionIntelligenceServiceTest.freshFiveMinuteBuyCanWakeSupportiveOneMinuteAfterLiquidityConfirmationClears`
+  used an obsolete one-argument Mockito stub.
+- **Root cause:** the production setup-wakeup path calls
+  `validateBuyContext(signal, "SETUP_WAKEUP")`; the targeted test still stubbed
+  `validateBuyContext(signal)`.
+- **Solution:** aligned the targeted test stub with the existing two-argument
+  production contract.
+- **Files/classes changed:** `ExecutionIntelligenceServiceTest`.
+- **Database impact:** NONE.
+- **Production impact:** NONE; this is a test-only correction and does not
+  deploy or change runtime behavior.
+- **Replay impact:** NONE.
+- **Validation:** Java 21 targeted `ExecutionIntelligenceServiceTest` passed:
+  59 tests, 0 failures, 0 errors.
+
 # 2026-10-16 — FIX-156 Replay boundary foundation correction (in progress)
 
 - **Problem:** the active baseline Replay run still consulted the shared

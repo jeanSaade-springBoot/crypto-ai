@@ -1530,7 +1530,7 @@ class ExecutionIntelligenceServiceTest {
 
                 any(), any(), any())).thenReturn(Optional.of(opportunity));
 
-        when(validationService.validateBuyContext(triggerFive)).thenReturn(
+        when(validationService.validateBuyContext(triggerFive, "SETUP_WAKEUP")).thenReturn(
 
                 TradeExecutionValidationService.ValidationResult.allow(75, "BALANCED_STRONG",
 
