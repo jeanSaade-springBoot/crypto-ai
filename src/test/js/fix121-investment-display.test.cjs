@@ -53,3 +53,9 @@ test('Investigation summary uses KSA timestamps and contains all requested trade
  const summary=ctx.investigationSummary(trade);
  assert.equal(summary,'Investigate trade #15 | Symbol: ETHUSDT | Open KSA: 2026-11-15 17:53:05 | Close KSA: 2026-11-15 18:00:08 | Status: CLOSED | P&L USDT: -0.4371 | P&L percent: -0.291%');
 });
+test('Blocked BUY evidence text keeps its persisted blocker and KSA timestamp',()=>{
+ const text=ctx.blockedBuyEvidenceText({signalId:34090,symbol:'ENAUSDT',generatedAt:'2026-11-15T21:21:04Z',price:'0.1202',score:93,confidence:49,blocker:'RANGE_ENTRY_LOCATION',blockerExplanation:'Entry blocked by range location.'});
+ assert.ok(text.includes('Blocked BUY #34090 | ENAUSDT | KSA: 2026-11-16 00:21:04'));
+ assert.ok(text.includes('Blocker: RANGE_ENTRY_LOCATION'));
+ assert.ok(text.includes('Entry blocked by range location.'));
+});

@@ -52,6 +52,28 @@ live Binance account or order actions, or deletion.
 
 ---
 
+### JEAN-OVERRIDE-20261116-002 â€” Trade Inspector blocked-BUY chart evidence
+
+Date/time KSA: 2026-11-16 01:26:44 +03:00
+
+Scope: Add Trade Inspector blocked-BUY chart markers with a right-click View
+Info panel showing the persisted blocker reason and evidence.
+
+Waived: ALL pending items for this scope.
+
+Jean's exact words:
+
+> proceed direct from jean\
+> scope: Add Trade Inspector blocked-BUY chart markers with a right-click View Info panel showing the persisted blocker reason and evidence\
+> waive: ALL pending
+
+Status: IMPLEMENTATION AUTHORIZED UNDER JEAN OVERRIDE. This override does not
+authorize Git push, remote merge, deployment, Production server configuration
+or live-service changes, Production database writes or migration application,
+live Binance account or order actions, or deletion.
+
+---
+
 ### JEAN-OVERRIDE-20261115-001 — Jenkins Mockito-stub repair
 
 Date/time KSA: 2026-11-15 00:32:34 +03:00

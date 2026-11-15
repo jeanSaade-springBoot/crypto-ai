@@ -92,6 +92,7 @@
                 <div class="inspector-chart-legend">
                     <span><i class="legend-dot buy-dot"></i>BUY</span>
                     <span><i class="legend-dot sell-dot"></i>SELL</span>
+                    <span><i class="legend-dot blocked-buy-dot"></i>Blocked BUY · right-click for reason</span>
                     <span><i class="legend-line"></i>BUY → SELL lifecycle</span>
                     <span>Hover: OHLC · volume · taker buy % · trades · X date/time · Y price</span>
                 </div>
@@ -99,6 +100,10 @@
                     <div id="inspected-trade-chart" class="inspected-trade-chart" tabindex="0" aria-label="Interactive candlestick chart"></div>
                     <div id="inspected-trade-chart-empty" class="empty hidden">Historical candles are not available for this trade and interval.</div>
                 </div>
+                <div id="inspected-blocked-buy-context-menu" class="inspector-chart-context-menu hidden" role="menu" aria-label="Blocked BUY actions">
+                    <button type="button" data-blocked-buy-view-info="1" role="menuitem">View blocked BUY reason</button>
+                </div>
+                <section id="inspected-blocked-buy-info" class="inspector-blocked-buy-info hidden" aria-live="polite"></section>
             </section>
         </div>
 
@@ -141,7 +146,7 @@
 </div>
 <script src="/js/time-utils.js"></script>
 <script src="/js/chart-crosshair.js"></script>
-<script src="/js/trade-inspector.js?v=11j"></script>
+<script src="/js/trade-inspector.js?v=11k"></script>
 <script src="/js/catching-market-badge.js"></script><script src="/js/global-system-health.js"></script>
 </body>
 </html>

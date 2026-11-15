@@ -35,6 +35,13 @@ async function copyInvestigationSummary(text){
  try{if(!document.execCommand('copy'))throw new Error('Clipboard permission was denied.');}finally{area.remove();}
 }
 
+function blockedBuyEvidenceText(signal){
+ return `Blocked BUY #${signal.signalId??'—'} | ${String(signal.symbol||'').toUpperCase()} | KSA: ${investigationKsaDate(signal.generatedAt)} | Price: ${investigationAmount(signal.price)} | Score: ${signal.score??'—'} | Confidence: ${signal.confidence??'—'} | Blocker: ${signal.blocker||'FINAL DECISION'} | Reason: ${signal.blockerExplanation||signal.finalExplanation||'No persisted explanation is available.'}`;
+}
+function blockedBuyDetailsHtml(signal){
+ return `<div class="inspector-blocked-buy-info-head"><div><h3>Blocked BUY #${esc(signal.signalId??'—')} · ${esc(signal.blocker||'FINAL DECISION')}</h3><p>Persisted evidence only · ${esc(investigationKsaDate(signal.generatedAt))} KSA</p></div><button type="button" class="inspector-blocked-buy-close" data-blocked-buy-close="1">Close</button></div><div class="inspector-blocked-buy-info-grid"><div><span>Price</span><strong>${esc(chartPriceLabel(signal.price))}</strong></div><div><span>Signal</span><strong>${esc(signal.decision||'BUY')} · ${esc(signal.interval||'—')}</strong></div><div><span>Score / confidence</span><strong>${esc(signal.score??'—')} / ${esc(signal.confidence??'—')}</strong></div><div><span>Strategy</span><strong>${esc(signal.strategy||'—')}</strong></div></div><p>${esc(signal.blockerExplanation||signal.finalExplanation||'No persisted explanation is available.')}</p>`;
+}
+
 
 // FIX-121: values arrive as backend decimal strings; do not multiply floats in the browser.
 function investmentQuantity(v){
@@ -381,6 +388,60 @@ const INSPECTOR_WINDOW_POINTS=1600;
 const INSPECTOR_EDGE_POINTS=260;
 let inspectedWindowTimer=null;
 let inspectedWindowRequest=0;
+let blockedBuyMarkerTimer=null;
+let blockedBuyMarkerRequest=0;
+
+async function fetchBlockedBuyMarkers(t,fromMs,toMs){
+ const params=new URLSearchParams({symbol:String(t.symbol||'').toUpperCase(),from:new Date(fromMs).toISOString(),to:new Date(toMs).toISOString(),limit:'80'});
+ const response=await fetch(`/api/trade-inspector/blocked-buys?${params.toString()}`,{cache:'no-store'});
+ if(!response.ok)throw new Error(`Blocked BUY markers HTTP ${response.status}`);
+ return response.json();
+}
+function hideBlockedBuyContextMenu(){
+ const menu=$('inspected-blocked-buy-context-menu');menu?.classList.add('hidden');
+}
+function showBlockedBuyInfo(signal){
+ const panel=$('inspected-blocked-buy-info');if(!panel)return;
+ panel.innerHTML=blockedBuyDetailsHtml(signal);panel.classList.remove('hidden');hideBlockedBuyContextMenu();
+}
+function showBlockedBuyContextMenu(signal,x,y){
+ window.__inspectedBlockedBuyContext=signal;
+ const menu=$('inspected-blocked-buy-context-menu');if(!menu)return;
+ menu.style.left=`${Math.min(x,window.innerWidth-210)}px`;menu.style.top=`${Math.min(y,window.innerHeight-52)}px`;menu.classList.remove('hidden');
+}
+function renderBlockedBuyMarkers(){
+ const state=window.__inspectedChartState,host=$('inspected-trade-chart'),chart=inspectedTradeChart;
+ if(!state||!host||!chart)return;
+ host.querySelector('.inspector-blocked-buy-overlay')?.remove();
+ const globals=chart.w?.globals,gridWidth=Number(globals?.gridWidth),gridHeight=Number(globals?.gridHeight),translateX=Number(globals?.translateX??0),translateY=Number(globals?.translateY??0);
+ const minX=Number(globals?.minX??state.visibleMin),maxX=Number(globals?.maxX??state.visibleMax),range=inspectorVisibleYRange(chart);
+ if(!Number.isFinite(gridWidth)||!Number.isFinite(gridHeight)||!Number.isFinite(minX)||!Number.isFinite(maxX)||maxX<=minX||!range)return;
+ const overlay=document.createElement('div');overlay.className='inspector-blocked-buy-overlay';
+ (state.blockedBuys||[]).forEach(signal=>{
+   const time=window.CryptoTime.parseUtc(signal.generatedAt)?.getTime(),priceValue=Number(signal.price);
+   if(!Number.isFinite(time)||!Number.isFinite(priceValue)||time<minX||time>maxX||priceValue<range.min||priceValue>range.max)return;
+   const marker=document.createElement('button');marker.type='button';marker.className='inspector-blocked-buy-marker';marker.title=`Blocked BUY · ${signal.blocker||'reason available on right-click'}`;
+   marker.setAttribute('aria-label',blockedBuyEvidenceText(signal));
+   marker.style.left=`${translateX+((time-minX)/(maxX-minX))*gridWidth}px`;marker.style.top=`${translateY+gridHeight-((priceValue-range.min)/(range.max-range.min))*gridHeight}px`;
+   marker.addEventListener('contextmenu',event=>{event.preventDefault();showBlockedBuyContextMenu(signal,event.clientX,event.clientY);});
+   marker.addEventListener('click',()=>showBlockedBuyInfo(signal));overlay.appendChild(marker);
+ });
+ host.appendChild(overlay);
+}
+async function loadVisibleBlockedBuyMarkers(min,max){
+ const state=window.__inspectedChartState;if(!state)return;
+ const request=++blockedBuyMarkerRequest;
+ try{
+   const rows=await fetchBlockedBuyMarkers(state.trade,min,max);if(request!==blockedBuyMarkerRequest||window.__inspectedChartState!==state)return;
+   state.blockedBuys=rows||[];renderBlockedBuyMarkers();
+ }catch(error){
+   // Marker evidence is optional chart decoration; a failure must not hide the trade chart.
+   state.blockedBuys=[];renderBlockedBuyMarkers();
+ }
+}
+function scheduleVisibleBlockedBuyMarkers(min,max){
+ clearTimeout(blockedBuyMarkerTimer);blockedBuyMarkerTimer=setTimeout(()=>loadVisibleBlockedBuyMarkers(min,max),180);
+}
 
 function inspectedWindowBounds(min,max,step,fullStart=null,fullEnd=null){
   const visibleSpan=Math.max(step*40,Number(max)-Number(min));
@@ -439,6 +500,7 @@ async function replaceInspectedWindow(min,max){
       {name:state.pathName,type:'line',data:state.path}
     ],false);
     inspectedTradeChart.zoomX(min,max);
+    scheduleVisibleBlockedBuyMarkers(min,max);
     requestAnimationFrame(()=>{if(window.__inspectedChartState)window.__inspectedChartState.suppressWindowCheck=false;});
   }finally{
     if(window.__inspectedChartState)window.__inspectedChartState.loading=false;
@@ -491,7 +553,7 @@ async function loadInspectedTradeChart(){
   const pathName=isOpen?'Open position entry':`Trade Path · ${pnl>=0?'+':''}${pnl.toFixed(3)}%`; 
 
   window.__inspectedChartState={
-    fullStart,fullEnd,interval,step,candleMeta,candles,trade:t,path,pathName,
+    fullStart,fullEnd,interval,step,candleMeta,candles,trade:t,path,pathName,blockedBuys:[],
     loadedStart:candles[0].x,loadedEnd:candles[candles.length-1].x,
     totalPointCount:Number(data.totalPointCount||candles.length),
     visibleMin:initialMin,visibleMax:initialMax,loading:false,suppressWindowCheck:false
@@ -531,10 +593,10 @@ async function loadInspectedTradeChart(){
         // FIX-015: toolbar/interval actions can recreate or mutate Apex internals.
         // Rebind the display-only Y-axis hover badge after every chart interaction
         // without changing candle, zoom, pan or trading behavior.
-        updated:()=>scheduleInspectorYAxisHoverRefresh(),
-        selection:(_ctx,{xaxis})=>{if(xaxis)scheduleInspectedWindow(xaxis.min,xaxis.max);scheduleInspectorYAxisHoverRefresh();},
-        zoomed:(_ctx,{xaxis})=>{if(xaxis)scheduleInspectedWindow(xaxis.min,xaxis.max);scheduleInspectorYAxisHoverRefresh();},
-        scrolled:(_ctx,{xaxis})=>{if(xaxis)scheduleInspectedWindow(xaxis.min,xaxis.max);scheduleInspectorYAxisHoverRefresh();},
+        updated:()=>{scheduleInspectorYAxisHoverRefresh();renderBlockedBuyMarkers();},
+        selection:(_ctx,{xaxis})=>{if(xaxis){scheduleInspectedWindow(xaxis.min,xaxis.max);scheduleVisibleBlockedBuyMarkers(xaxis.min,xaxis.max);}scheduleInspectorYAxisHoverRefresh();},
+        zoomed:(_ctx,{xaxis})=>{if(xaxis){scheduleInspectedWindow(xaxis.min,xaxis.max);scheduleVisibleBlockedBuyMarkers(xaxis.min,xaxis.max);}scheduleInspectorYAxisHoverRefresh();},
+        scrolled:(_ctx,{xaxis})=>{if(xaxis){scheduleInspectedWindow(xaxis.min,xaxis.max);scheduleVisibleBlockedBuyMarkers(xaxis.min,xaxis.max);}scheduleInspectorYAxisHoverRefresh();},
         beforeResetZoom:()=>{scheduleInspectorYAxisHoverRefresh();}
       }
     },
@@ -580,6 +642,7 @@ async function loadInspectedTradeChart(){
     host.onwheel=null;
     installInspectorYAxisHoverPrice(host, inspectedTradeChart);
   }
+  await loadVisibleBlockedBuyMarkers(initialMin,initialMax);
 }
 
 function scheduleInspectorYAxisHoverRefresh(){
@@ -640,6 +703,8 @@ async function showInspectedTradeChart(t){
 }
 
 function closeInspectedTradeChart(){
+  clearTimeout(blockedBuyMarkerTimer);hideBlockedBuyContextMenu();
+  const blockedInfo=$('inspected-blocked-buy-info');if(blockedInfo){blockedInfo.classList.add('hidden');blockedInfo.innerHTML='';}
   const modal=$('inspected-trade-chart-panel');
   modal?.classList.add('hidden');
   modal?.setAttribute('aria-hidden','true');
@@ -676,6 +741,12 @@ document.addEventListener('click',event=>{
   const button=event.target.closest('button[data-inspect-chart]');if(!button)return;
   const trade=findTradeByKey(button.dataset.tradeId);if(!trade)return;
   showInspectedTradeChart(trade).catch(e=>{ $('inspector-error').textContent=`Trade chart could not load: ${e.message}`;$('inspector-error').classList.remove('hidden'); });
+});
+document.addEventListener('click',event=>{
+  const view=event.target.closest('button[data-blocked-buy-view-info]');
+  if(view&&window.__inspectedBlockedBuyContext){showBlockedBuyInfo(window.__inspectedBlockedBuyContext);return;}
+  if(event.target.closest('button[data-blocked-buy-close]')){$('inspected-blocked-buy-info')?.classList.add('hidden');return;}
+  if(!event.target.closest('#inspected-blocked-buy-context-menu')&&!event.target.closest('.inspector-blocked-buy-marker'))hideBlockedBuyContextMenu();
 });
 $('inspected-trade-interval')?.addEventListener('change',()=>loadInspectedTradeChart().catch(e=>{ $('inspector-error').textContent=`Trade chart could not load: ${e.message}`;$('inspector-error').classList.remove('hidden'); }));
 $('inspected-trade-close')?.addEventListener('click',closeInspectedTradeChart);

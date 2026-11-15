@@ -215,3 +215,158 @@ not a Production behavior change.
   to Production in all phases. A future parity program must add deterministic
   scenario tests and a run-level eligibility contract before using Replay as a
   release-equivalence certificate.
+
+# Production paper trade #16 (XLMUSDT) â€” 2026-11-16 KSA
+
+- Scope: read-only investigation of closed `paper_position.id=16`, XLMUSDT.
+  No application, configuration, Production database, or wallet data was
+  changed.
+- Entry: wallet trade #34 bought 1,785.714285714285 XLM at 0.14000000 for
+  250 USDT. The authoritative observed-price evidence was 21:09:02.377 UTC
+  (00:09:02.377 KSA); the wallet execution committed at 00:09:05.589 KSA.
+  It used accumulated fresh evidence (3 BUY, 10 WATCH, evidence score 19),
+  with fresh 5m BUY and 1h NEUTRAL context. The entry-quality guard marked it
+  `LATE_ENTRY` (50/100) because of a nearby 0.1402 rejection zone, so it
+  limited initial allocation to 25% rather than blocking it.
+- Exit: wallet trade #35 sold at 0.13940000 at 00:20:12.575 KSA, producing
+  -1.071428571429 USDT (-0.428571%). It was not stop-loss or take-profit:
+  the execution reason was `SELL_CONFIRMED`. Signal #35591 was 1m
+  `STRONG_SELL` (80 confidence), and signal #35590 was 5m `SELL`; the exit
+  message records a non-bullish 1h context. This is the normal-confirmed exit
+  path in `PositionExitPolicy`.
+- Outcome: immediately after the exit, XLM reached 0.1392 before recovering;
+  it remained under entry at +15 minutes (0.1396), recovered to 0.1404 at
+  +30 minutes, and later reached 0.1406 within the next hour. The exit avoided
+  a deeper initial decline, but later forewent a recovery. Available evidence
+  supports a valid losing trade rather than a confirmed logic or execution
+  defect.
+- Timestamp caveat: the MySQL session uses `W. Europe Standard Time` (UTC+01),
+  so direct SQL renders TIMESTAMP values one hour later than UTC. The UTC
+  observed-price evidence and the supplied UI time reconcile to the KSA
+  timeline above; do not treat raw session-rendered SQL values as KSA.
+- Replay: not run. A parity conclusion cannot be made without a bounded
+  Replay window and its evidence-qualification results.
+
+## Follow-up: why XLMUSDT did not enter around 22:00 KSA
+
+- Scope: read-only production query around 15 November 2026, 22:00 KSA. No
+  XLM wallet execution exists in the reviewed 21:45–22:16 KSA window.
+- At 22:00 KSA, the 1m signal was `NEUTRAL` and the contemporaneous 1h signal
+  was `SELL` (score 40, weak downtrend). There was therefore no eligible BUY
+  authority at that exact time.
+- A 1m BUY around 22:05 KSA was blocked by `RANGE_ENTRY_LOCATION`: raw score
+  87 was reduced to effective confidence 49. Around 22:08 KSA, a further 1m
+  BUY was blocked by `ATR_RISK`; the strategy requested a retracement and
+  recommended 0% size. A later 5m BUY at about 22:15 KSA was blocked by
+  `MULTI_TIMEFRAME`, consistent with the bearish 1h context.
+- Conclusion: the lack of entry near 22:00 KSA was intentional gating, not a
+  missed wallet execution or a technical failure.
+
+## Production paper trade #15 (ETHUSDT) â€” 2026-11-15 KSA
+
+- Scope: read-only investigation of closed `paper_position.id=15`, ETHUSDT.
+  No application, configuration, Production database, or wallet data changed.
+- Entry: wallet trade #32 bought 0.081703796503 ETH at 1,835.90 for 150 USDT.
+  Its authoritative observed price was 13:53:00.045 UTC (16:53:00.045 KSA),
+  and it committed at 16:53:02.961 KSA. Signal #24140 was 1m `STRONG_BUY`
+  (85 score, 73 confidence), but context was cautious: 5m NEUTRAL, 1h WATCH
+  in a strong downtrend, an ask wall near the target, and entry quality 50/100.
+  `IMMEDIATE_VALIDATION` therefore approved only a 25% exploratory allocation,
+  producing the 15%-of-budget buy.
+- Exit: wallet trade #33 sold at 1,830.55 at 17:00:08.020 KSA for
+  -0.437115311433 USDT (-0.291410%). The exit reason was `SELL_CONFIRMED`.
+  At the decision point, the 1m signal was SELL (score 33, confidence 80),
+  the 5m signal was SELL (score 41), and 1h was WATCH/non-bullish. This is the
+  normal lower-timeframe-confirmed exit path in `PositionExitPolicy`, not a
+  stop-loss or take-profit exit.
+- Outcome: ETH continued down immediately after the exit: 1m closed 1,827.12
+  in the next minute and 1,821.69 within five minutes, then reached 1,807.06
+  within roughly 31 minutes. The exit avoided a materially larger loss.
+- Confirmed concern for follow-up, not a concluded defect: the persisted plan
+  reports stop 1,826.7205, target 1,841.0553 and risk/reward 0.561605, while
+  the attached ATR explanation says “Stop uses 2.0 ATR and target uses 3.0
+  ATR.” At ATR 1.7184, the stored stop is materially farther than 2 ATR and
+  the reward/risk is below 1. This needs a separate code/config trace before
+  calling it a bug.
+- Timestamp caveat: direct MySQL queries render TIMESTAMP in the server’s
+  UTC+01 session. KSA values above are reconciled from UTC evidence and are
+  not raw SQL display values. Replay was not run.
+
+## Production paper trade #14 (SUIUSDT) â€” 2026-11-15 KSA
+
+- Scope: read-only investigation of closed `paper_position.id=14`, SUIUSDT.
+  No application, configuration, Production database, or wallet data changed.
+- Entry: wallet trade #30 bought 340.506673930809 SUI at 0.7342 for 250 USDT
+  at 16:00:12.172 KSA. It was a `SETUP_CONFIRMATION_WAKEUP`: a fresh 5m
+  `STRONG_BUY` (#22801) reactivated an earlier unexecuted opportunity, while
+  the latest 1m signal (#22800) was WATCH at 0.7347. The entry was a 25%
+  confirmation allocation under the balanced-strong higher-timeframe profile.
+- Assessment at entry: this is not the XLM-style late-entry pattern. The 1m
+  assessment said `STANDARD_ENTRY`, price was only 1.05 ATR from SMA20, and
+  there was no `LATE_ENTRY`, rejection-zone, ATR-risk, or other entry block.
+  The cautious 25% allocation reflected mixed higher timeframes (5m bullish,
+  1h neutral/strong-downtrend), not a late-price chase.
+- Exit: wallet trade #31 sold at 0.7358 at 16:22:02.547 KSA for
+  +0.544810678289 USDT (+0.217924%). It was `PROFIT_LOCK_EXIT`: the position
+  had achieved 82.24% of target distance, then price breached the protected
+  lock while 1m/5m/1h were all neutral. The configured profile had 70%
+  activation, 40% initial lock, and 10% trail.
+- Outcome: after exit, the next minute traded as high as 0.7371 but did not
+  reach the 0.737482887855 target; shortly afterward SUI reversed to 0.7335.
+  Available evidence supports the profit-lock exit as a valid protection of a
+  small gain, not a confirmed early-exit defect. Replay was not run.
+
+## Production paper trade #12 (ENAUSDT) — 2026-11-15 KSA
+
+- Scope: read-only investigation of closed `paper_position.id=12`, ENAUSDT.
+  No application, configuration, Production database, or wallet data changed.
+- Entry: wallet trade #25 bought 3,311.258278145695 ENA at 0.1208 for 400 USDT
+  at 13:45:12.144 KSA. Signal #19367 was 1m BUY (score 80, confidence 76)
+  with 5m WATCH and 1h WATCH. `IMMEDIATE_VALIDATION` treated this as an early,
+  balanced-profile reduced entry.
+- Late-entry assessment: not late. Entry Quality was 73/100, explicitly
+  `GOOD_ENTRY`, and price was 0.50 ATR from SMA20. A nearby 0.1209 rejection
+  zone capped the initial allocation at 40%, but was not a hard veto and did
+  not change the entry classification to `LATE_ENTRY`.
+- Exit: wallet trade #29 sold at 0.1204 at 14:05:11.627 KSA for
+  -1.324503311258 USDT (-0.331126%). It followed signal #19893, a 1m
+  `STRONG_SELL` (score 16, confidence 80), via the `SIGNAL_SELL` execution
+  path. Immediately after exit ENA reached 0.1201 before a later recovery to
+  0.1215 within the following hour; this supports a valid protective exit at
+  the decision point but does not prove the later recovery was knowable.
+- Conclusion: no late-entry or missed-blocker defect is confirmed for this
+  trade. Replay was not run.
+
+## ENAUSDT move review — 2026-11-15 23:20 to 2026-11-16 00:05 KSA
+
+- Scope: read-only production review of ENA candles, signals, and wallet
+  executions. No wallet execution occurred in the reviewed interval.
+- Market path: ENA rose from approximately 0.1202 at 23:20 KSA to 0.1213 by
+  23:34 KSA (about +0.9%), then retraced toward 0.1204 before a later move
+  resumed near midnight.
+- Admission behavior: the apparent breakout was not silently missed. At about
+  23:21 KSA, a 1m STRONG_BUY (score 93) was blocked by
+  `RANGE_ENTRY_LOCATION`. At about 23:24 and 23:26 KSA, BUY/STRONG_BUY signals
+  were blocked by `ATR_RISK`, with a retracement requested near 0.12037–0.12040
+  and zero recommended initial size. At about 23:35 KSA, another BUY was also
+  blocked by `ATR_RISK` after price had extended more than four ATR from SMA20.
+- Interpretation: the system intentionally refused to chase the first sharp
+  rise. Near 00:04–00:05 KSA, fresh 1m/5m BUY signals became allowed as price
+  structure reset; no wallet execution is present in this bounded window, and
+  the available records do not establish why no later execution occurred.
+
+## Supplied Trade Inspector #13 (PEPEUSDT) identity mismatch - 2026-11-16 KSA
+
+- Scope: read-only attempt to investigate the supplied completed PEPEUSDT
+  trade with open/close times 2026-11-15 13:46:05/13:50:46 KSA and P&L
+  -1.85185185 USDT (-0.741%). No application, configuration, Production
+  database, or wallet data was changed.
+- Evidence mismatch: the current configured `crypto_ai` server reports
+  `paper_position.id=13` as EDUUSDT on 2026-10-09, not the supplied PEPEUSDT
+  trade. It has no PEPEUSDT wallet execution, paper position, or signal in
+  the supplied 15 November window, and no wallet/position row matching the
+  supplied P&L. Its newest PEPEUSDT persisted signal is 2026-11-14.
+- Conclusion: a late-entry diagnosis would be invented from the currently
+  available evidence. Resolve the application database/connection identity or
+  provide the Trade Inspector record's entry and exit wallet-trade IDs before
+  retrying this investigation.

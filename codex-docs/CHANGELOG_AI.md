@@ -486,6 +486,17 @@ and the remaining external MySQL/release proof.
 - Database impact: no migration was applied. The test cannot run until a dedicated loopback `FIX153_TEST_MYSQL_URL`, disposable marker, and verified server UUID are provided.
 - Production impact: none; the harness rejects non-disposable targets.
 
+## 2026-11-16 â€” Trade Inspector blocked-BUY chart evidence
+
+- Problem: users could see a completed trade on the focused chart but could not place persisted blocked BUY decisions in that market context.
+- Solution: the focused Trade Inspector chart now fetches its existing read-only blocked-BUY evidence for the visible window and renders each as a small, quiet amber point. Right-clicking a point opens an extensible action menu; **View blocked BUY reason** displays its KSA timestamp, price, signal, score/confidence, strategy, persisted blocker, and full persisted explanation. A normal click provides the same read-only detail for keyboard/touch accessibility.
+- Files: `src/main/resources/static/trade-inspector.html`, `src/main/resources/static/css/trade-inspector.css`, `src/main/resources/static/js/trade-inspector.js`, `src/test/js/fix121-investment-display.test.cjs`.
+- Database impact: none. The chart only calls the existing read-only `/api/trade-inspector/blocked-buys` endpoint.
+- Production impact: no trading logic, trade state, execution, or configuration changed.
+- Replay impact: none.
+- Validation: targeted Node display test updated; execution is pending because Node.js is unavailable on this workstation.
+- Status: IMPLEMENTED UNDER JEAN OVERRIDE (`JEAN-OVERRIDE-20261116-002`); no Git push, deployment, or Production change was performed.
+
 ## 2026-11-16 â€” Trade Inspector copy-investigation summary
 
 - Problem: copying the facts needed for a focused trade investigation required manual transcription from a Trade Inspector card.
@@ -501,6 +512,12 @@ and the remaining external MySQL/release proof.
 ## 2026-11-16 â€” Ignore local investigation artifacts
 
 - Solution: `.gitignore` now excludes local `logs/`, disposable FTS coordinator-run directories, and failed-trade study artifacts so they are not accidentally added to a deployment commit.
+- Files: `.gitignore`.
+- Database/Production/Replay impact: none.
+
+## 2026-11-16 â€” Ignore manual database-query artifacts
+
+- Solution: `.gitignore` now excludes `agent-docs/runs/manual/db/`, including local read-only SQL/query-result evidence generated during ad hoc investigations.
 - Files: `.gitignore`.
 - Database/Production/Replay impact: none.
 
