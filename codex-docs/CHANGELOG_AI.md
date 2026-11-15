@@ -486,6 +486,24 @@ and the remaining external MySQL/release proof.
 - Database impact: no migration was applied. The test cannot run until a dedicated loopback `FIX153_TEST_MYSQL_URL`, disposable marker, and verified server UUID are provided.
 - Production impact: none; the harness rejects non-disposable targets.
 
+## 2026-11-16 â€” Trade Inspector copy-investigation summary
+
+- Problem: copying the facts needed for a focused trade investigation required manual transcription from a Trade Inspector card.
+- Root cause: the card exposed its values individually but had no clipboard action or stable investigation format.
+- Solution: each open and closed Trade Inspector card now has **Copy investigation**. It copies the trade ID, symbol, KSA open/close time, status, P&L USDT, and P&L percent in one paste-ready line. It reports clipboard failures visibly and has a legacy browser copy fallback.
+- Files: `src/main/resources/static/trade-inspector.html`, `src/main/resources/static/js/trade-inspector.js`, `src/test/js/fix121-investment-display.test.cjs`.
+- Database impact: none; the feature uses the existing read-only Trade Inspector response.
+- Production impact: none; no server, configuration, database, or trading behavior changed.
+- Replay impact: none.
+- Validation: static diff/whitespace validation passed. The targeted Node Trade Inspector display test was prepared but could not run because Node.js is not installed or on this machine's `PATH`.
+- Status: IMPLEMENTED UNDER JEAN OVERRIDE (`JEAN-OVERRIDE-20261116-001`); no Git push, deployment, or Production change was performed.
+
+## 2026-11-16 â€” Ignore local investigation artifacts
+
+- Solution: `.gitignore` now excludes local `logs/`, disposable FTS coordinator-run directories, and failed-trade study artifacts so they are not accidentally added to a deployment commit.
+- Files: `.gitignore`.
+- Database/Production/Replay impact: none.
+
 ## 2026-11-14 â€” Consolidate application logs under `logs/`
 
 - Problem: JDBC/application logs used a configurable directory and the deployment launcher placed JVM stdout/stderr in a release directory.

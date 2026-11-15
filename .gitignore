@@ -5,3 +5,9 @@ target/
 .idea/
 *.iml
 .metadata/
+
+# Local operational logs and disposable AI investigation output.
+# Keep source, tests, permanent decisions, and changelog entries under version control.
+logs/
+agent-docs/runs/fts-*/
+agent-docs/failed-trade-studies/

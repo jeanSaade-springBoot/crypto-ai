@@ -15,6 +15,26 @@ function qualityClass(q){return q==='GOOD_EXIT'?'good':q==='EARLY_EXIT'?'early':
 function qualityLabel(q){return (q||'NEUTRAL_EXIT').replaceAll('_',' ')}
 function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 
+// This is presentation-only text built from the read-only inspector payload.
+function investigationKsaDate(value){
+ const valueDate=window.CryptoTime.parseUtc(value);if(!valueDate||Number.isNaN(valueDate.getTime()))return 'Unavailable';
+ const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).formatToParts(valueDate);
+ const part=type=>parts.find(x=>x.type===type)?.value||'';
+ return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}:${part('second')}`;
+}
+function investigationAmount(value){const number=Number(value);return Number.isFinite(number)?number.toFixed(8).replace(/\.?0+$/,''):'Unavailable'}
+function investigationPercent(value){const number=Number(value);return Number.isFinite(number)?`${number>=0?'+':''}${number.toFixed(3)}%`:'Unavailable'}
+function investigationSummary(t){
+ const tradeId=t.tradeHistoryId??t.walletSellTradeId??t.walletBuyTradeId??'Unavailable';
+ const state=String(t.tradeState||t.status||'CLOSED').toUpperCase();
+ return `Investigate trade #${tradeId} | Symbol: ${String(t.symbol||'Unavailable').toUpperCase()} | Open KSA: ${investigationKsaDate(t.openedAt)} | Close KSA: ${t.closedAt?investigationKsaDate(t.closedAt):'OPEN'} | Status: ${state} | P&L USDT: ${investigationAmount(t.realizedPnl)} | P&L percent: ${investigationPercent(t.realizedPnlPercent)}`;
+}
+async function copyInvestigationSummary(text){
+ if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);return;}
+ const area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();
+ try{if(!document.execCommand('copy'))throw new Error('Clipboard permission was denied.');}finally{area.remove();}
+}
+
 
 // FIX-121: values arrive as backend decimal strings; do not multiply floats in the browser.
 function investmentQuantity(v){
@@ -86,6 +106,7 @@ function openTradeCard(t){
    <div class="inspector-symbol"><strong>${esc(t.symbol)}</strong><span class="venue-badge ${String(t.executionVenue||'WALLET').toLowerCase()}">${esc(t.executionVenue||'WALLET')}</span><span class="badge open">OPEN</span><span class="badge buy">BUY ↑</span></div>
    <div class="inspector-head-actions">
     <label class="trade-review-check"><input type="checkbox" data-review-trade="1" data-sell-trade-id="${esc(t.walletSellTradeId??'')}" ${t.markedForReview?'checked':''}> Marked for Review</label>
+    <button type="button" class="trade-chart-link" data-copy-investigation="1" data-trade-id="${esc(inspectorTradeKey(t))}" title="Copy a paste-ready investigation summary"><span>⧉</span> Copy investigation</button>
     <button type="button" class="trade-chart-link" data-copy-proven="1" data-sell-trade-id="${esc(t.walletSellTradeId??'')}"><span>✓</span> ${t.copiedToProven?'Open Proven Analysis':'Copy to Proven Analysis'}</button>
     <button type="button" class="trade-chart-link" data-inspect-chart="1" data-trade-id="${esc(inspectorTradeKey(t))}" title="Inspect this open BUY on the dedicated chart"><span>↗</span> View chart</button>
     <div class="inspector-result"><strong class="positive">OPEN POSITION</strong><small>${duration(t.holdingMinutes)} holding time</small></div>
@@ -122,6 +143,7 @@ function tradeCard(t){
    <div class="inspector-symbol"><strong>${esc(t.symbol)}</strong>${t.tradeHistoryId==null?'':`<span class="trade-reference">Trade #${esc(t.tradeHistoryId)}</span>`}<span class="venue-badge ${String(t.executionVenue||'WALLET').toLowerCase()}">${esc(t.executionVenue||'WALLET')}</span><span class="badge buy">BUY ↑</span><span class="trade-action-arrow">→</span><span class="badge sell">SELL ↓</span><span class="quality ${qualityClass(t.exitQuality)}">${qualityLabel(t.exitQuality)}</span></div>
    <div class="inspector-head-actions">
     <label class="trade-review-check"><input type="checkbox" data-review-trade="1" data-sell-trade-id="${esc(t.walletSellTradeId??'')}" ${t.markedForReview?'checked':''}> Marked for Review</label>
+    <button type="button" class="trade-chart-link" data-copy-investigation="1" data-trade-id="${esc(t.tradeHistoryId??t.walletSellTradeId??t.walletBuyTradeId??'')}" title="Copy a paste-ready investigation summary"><span>⧉</span> Copy investigation</button>
     <button type="button" class="trade-chart-link" data-copy-proven="1" data-sell-trade-id="${esc(t.walletSellTradeId??'')}"><span>✓</span> ${t.copiedToProven?'Open Proven Analysis':'Copy to Proven Analysis'}</button>
     <button type="button" class="trade-chart-link" data-inspect-chart="1" data-trade-id="${esc(t.tradeHistoryId??t.walletSellTradeId??'')}" title="Inspect only this BUY/SELL on the dedicated chart"><span>↗</span> View chart</button>
     <button type="button" class="trade-chart-link trade-path-link" data-inspect-path="1" data-trade-id="${esc(t.tradeHistoryId??t.walletSellTradeId??'')}" title="View the persisted decision and state path for this trade"><span>⌁</span> View path</button>
@@ -987,5 +1009,12 @@ document.addEventListener('click',event=>{if(event.target.closest('[data-inspect
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!$('inspected-trade-path-panel')?.classList.contains('hidden'))closeInspectedTradePath();});
 
 // FIX-11R operator review/copy actions only.
+document.addEventListener('click',async event=>{
+  const button=event.target.closest('button[data-copy-investigation]');if(!button)return;
+  const trade=findTradeByKey(button.dataset.tradeId);if(!trade)return;
+  const original=button.innerHTML;button.disabled=true;
+  try{await copyInvestigationSummary(investigationSummary(trade));button.innerHTML='<span>✓</span> Copied';window.setTimeout(()=>{button.innerHTML=original;button.disabled=false;},1400);}
+  catch(error){button.disabled=false;$('inspector-error').textContent=`Could not copy investigation summary: ${error.message||'clipboard access was denied.'}`;$('inspector-error').classList.remove('hidden');}
+});
 document.addEventListener('change',async e=>{const b=e.target.closest('input[data-review-trade]');if(!b)return;const id=b.dataset.sellTradeId;b.disabled=true;try{const r=await fetch(`/api/trade-inspector/${id}/review`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({markedForReview:b.checked})});if(!r.ok)throw new Error(`HTTP ${r.status}`);if(String($('review-filter')?.value)==='MARKED'&&!b.checked)await load();}catch(x){b.checked=!b.checked;$('inspector-error').textContent=x.message;$('inspector-error').classList.remove('hidden')}finally{b.disabled=false}});
 document.addEventListener('click',async e=>{const b=e.target.closest('button[data-copy-proven]');if(!b)return;b.disabled=true;try{const r=await fetch(`/api/trade-inspector/${b.dataset.sellTradeId}/copy-to-proven`,{method:'POST'});if(!r.ok)throw new Error(`HTTP ${r.status}`);const d=await r.json();const q=new URLSearchParams({provenTradeId:d.provenTradeId,symbol:d.symbol,start:d.analysisStart,end:d.analysisEnd});location.href=`/proven-analyzed-trades?${q}`;}catch(x){b.disabled=false;$('inspector-error').textContent=x.message;$('inspector-error').classList.remove('hidden')}});

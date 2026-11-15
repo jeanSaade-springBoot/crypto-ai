@@ -8,7 +8,7 @@ const {test} = require('node:test');
 const root = path.resolve(__dirname, '../../main/resources/static/js');
 const inspectorSource = fs.readFileSync(path.join(root, 'trade-inspector.js'), 'utf8');
 const replaySource = fs.readFileSync(path.join(root, 'proven-analyzed-trades.js'), 'utf8');
-const ctx = vm.createContext({window:{CryptoTime:{formatLocal:x=>String(x)}},document:{},URLSearchParams});
+const ctx = vm.createContext({window:{CryptoTime:{formatLocal:x=>String(x),parseUtc:x=>new Date(x)}},document:{},URLSearchParams});
 // Execute real pure render functions, excluding page boot/event handlers.
 vm.runInContext(inspectorSource.slice(0, inspectorSource.indexOf('function shortText(')), ctx);
 vm.runInContext('function inspectorTradeKey(t){return t.walletBuyTradeId;}', ctx);
@@ -47,4 +47,9 @@ test('Closed and open cards retain separate sold/remaining quantity labels',()=>
  assert.ok(ctx.openTradeCard(trade).includes('Remaining quantity'));
  assert.ok(ctx.tradeCard(trade).includes('Quantity acquired'));
  assert.ok(ctx.openTradeCard(trade).includes('Quantity acquired'));
+});
+test('Investigation summary uses KSA timestamps and contains all requested trade facts',()=>{
+ const trade={tradeHistoryId:15,symbol:'ETHUSDT',openedAt:'2026-11-15T14:53:05Z',closedAt:'2026-11-15T15:00:08Z',tradeState:'CLOSED',realizedPnl:'-0.43710000',realizedPnlPercent:'-0.2914'};
+ const summary=ctx.investigationSummary(trade);
+ assert.equal(summary,'Investigate trade #15 | Symbol: ETHUSDT | Open KSA: 2026-11-15 17:53:05 | Close KSA: 2026-11-15 18:00:08 | Status: CLOSED | P&L USDT: -0.4371 | P&L percent: -0.291%');
 });
