@@ -306,3 +306,91 @@
 - approximate output lines: 0
 - password: never logged
 
+
+## DBQ-PEPE-006
+- timestamp: 2026-11-16T01:41:33.0215419+03:00
+- agent: CODEX
+- purpose: Investigate supplied PEPEUSDT Trade Inspector wallet trades 27 and 28 and entry signal 19380
+- SQL file: DBQ-PEPE-006-CODEX.sql
+- exit code: 0
+- duration_ms: 55
+- approximate output lines: 1
+- password: never logged
+
+
+## DBQ-PEPE-PROD-001
+- timestamp: 2026-11-16T01:42:15.3400253+03:00
+- agent: CODEX
+- purpose: Verify Contabo production identity and exact PEPEUSDT Trade Inspector wallet IDs 27 and 28
+- SQL file: DBQ-PEPE-PROD-001-CODEX.sql
+- exit code: 0
+- duration_ms: 897
+- approximate output lines: 6
+- password: never logged
+
+
+## DBQ-PEPE-PROD-003
+- timestamp: 2026-11-16T01:42:55.1522483+03:00
+- agent: CODEX
+- purpose: Prove Contabo production candle schema before PEPEUSDT market-path query
+- SQL file: DBQ-PEPE-PROD-003-CODEX.sql
+- exit code: 0
+- duration_ms: 695
+- approximate output lines: 19
+- password: never logged
+
+
+## DBQ-PEPE-PROD-004
+- timestamp: 2026-11-16T01:43:15.6391705+03:00
+- agent: CODEX
+- purpose: Reconstruct Contabo production PEPEUSDT entry decision and preceding signal/candle evidence
+- SQL file: DBQ-PEPE-PROD-004-CODEX.sql
+- exit code: 0
+- duration_ms: 2005
+- approximate output lines: 186
+- password: never logged
+
+
+## DBQ-PEPE-PROD-005
+- timestamp: 2026-11-16T01:43:46.8710502+03:00
+- agent: CODEX
+- purpose: Determine whether earlier Contabo production PEPEUSDT BUY signals were available, blocked, or unexecuted before trade 13 entry
+- SQL file: DBQ-PEPE-PROD-005-CODEX.sql
+- exit code: 0
+- duration_ms: 1239
+- approximate output lines: 22
+- password: never logged
+
+
+## DBQ-PEPE-PROD-007
+- timestamp: 2026-11-16T01:44:17.4534217+03:00
+- agent: CODEX
+- purpose: Explain why earlier allowed Contabo production PEPEUSDT BUY signals did not create a wallet entry before trade 13
+- SQL file: DBQ-PEPE-PROD-007-CODEX.sql
+- exit code: 0
+- duration_ms: 804
+- approximate output lines: 17
+- password: never logged
+
+
+## DBQ-PEPE-PROD-008
+- timestamp: 2026-11-16T01:47:01.0028323+03:00
+- agent: CODEX
+- purpose: Assess Contabo production PEPEUSDT movement and BUY decisions from 11:18 to 12:16 KSA
+- SQL file: DBQ-PEPE-PROD-008-CODEX.sql
+- exit code: 0
+- duration_ms: 1751
+- approximate output lines: 53
+- password: never logged
+
+
+## DBQ-PEPE-PROD-009
+- timestamp: 2026-11-16T01:50:43.0789271+03:00
+- agent: CODEX
+- purpose: Quantify production PEPEUSDT confidence cap behavior during reviewed breakout window
+- SQL file: DBQ-PEPE-PROD-009-CODEX.sql
+- exit code: 0
+- duration_ms: 1143
+- approximate output lines: 15
+- password: never logged
+

@@ -109,6 +109,7 @@ run on the Binance ingestion thread.
 | `trade_signal` | Persisted analysis decisions and their context. |
 | `signal_processing_work` | Durable processing registration/status for a persisted signal. |
 | `market_price_event` | Canonical 1m price evidence used by protection and Replay. |
+| `blocked_buy_review` | Inspector-owned user research metadata keyed by immutable blocked-BUY signal ID; it is read/written only by Trade Inspector review endpoints and is excluded from analysis, execution, wallet, and Replay flows. |
 | Paper wallet / position tables | Paper executions, open-position state, TP/SL/profit protection. |
 
 ## Legacy/shared-market path

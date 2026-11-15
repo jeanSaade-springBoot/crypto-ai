@@ -3,12 +3,14 @@ package com.crypto.inspector.service;
 import com.crypto.audit.domain.ProductionExitAudit;
 import com.crypto.audit.repository.ProductionExitAuditRepository;
 import com.crypto.domain.Candle;
+import com.crypto.domain.BlockedBuyReview;
 import com.crypto.domain.PaperPosition;
 import com.crypto.domain.TradeSignal;
 import com.crypto.dto.TradeInspectorResponse;
 import com.crypto.dto.TradeInspectorSummary;
 import com.crypto.dto.TradeInspectorTradeView;
 import com.crypto.repository.CandleRepository;
+import com.crypto.repository.BlockedBuyReviewRepository;
 import com.crypto.repository.PaperPositionRepository;
 import com.crypto.repository.TradeSignalRepository;
 import com.crypto.execution.domain.ExecutionOpportunity;
@@ -50,8 +52,10 @@ public class TradeInspectorService {
     private final ProductionExitAuditRepository productionExitAuditRepository;
     private final PositionAnalysisRepository positionAnalysisRepository;
     private final PositionManagementEventRepository positionManagementEventRepository;
+    private final BlockedBuyReviewRepository blockedBuyReviewRepository;
     private final JdbcTemplate jdbcTemplate;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public TradeInspectorService(WalletTradeRepository walletTradeRepository,
                                  CandleRepository candleRepository,
                                  PaperPositionRepository paperPositionRepository,
@@ -60,7 +64,8 @@ public class TradeInspectorService {
                                  ExecutionOpportunityRepository executionOpportunityRepository,
                                  ProductionExitAuditRepository productionExitAuditRepository,
                                  PositionAnalysisRepository positionAnalysisRepository,
-                                 PositionManagementEventRepository positionManagementEventRepository, JdbcTemplate jdbcTemplate) {
+                                 PositionManagementEventRepository positionManagementEventRepository,
+                                 BlockedBuyReviewRepository blockedBuyReviewRepository, JdbcTemplate jdbcTemplate) {
         this.walletTradeRepository = walletTradeRepository;
         this.candleRepository = candleRepository;
         this.paperPositionRepository = paperPositionRepository;
@@ -70,7 +75,24 @@ public class TradeInspectorService {
         this.productionExitAuditRepository = productionExitAuditRepository;
         this.positionAnalysisRepository = positionAnalysisRepository;
         this.positionManagementEventRepository = positionManagementEventRepository;
+        this.blockedBuyReviewRepository = blockedBuyReviewRepository;
         this.jdbcTemplate = jdbcTemplate;
+    }
+
+    /** Compatibility constructor for existing focused Inspector tests. */
+    public TradeInspectorService(WalletTradeRepository walletTradeRepository,
+                                 CandleRepository candleRepository,
+                                 PaperPositionRepository paperPositionRepository,
+                                 WalletManagedPositionRepository walletManagedPositionRepository,
+                                 TradeSignalRepository tradeSignalRepository,
+                                 ExecutionOpportunityRepository executionOpportunityRepository,
+                                 ProductionExitAuditRepository productionExitAuditRepository,
+                                 PositionAnalysisRepository positionAnalysisRepository,
+                                 PositionManagementEventRepository positionManagementEventRepository,
+                                 JdbcTemplate jdbcTemplate) {
+        this(walletTradeRepository, candleRepository, paperPositionRepository, walletManagedPositionRepository,
+                tradeSignalRepository, executionOpportunityRepository, productionExitAuditRepository,
+                positionAnalysisRepository, positionManagementEventRepository, null, jdbcTemplate);
     }
 
     @Transactional(readOnly = true)
@@ -151,11 +173,44 @@ public class TradeInspectorService {
         TimeWindow window = blockedSignalWindow(requestedFrom, requestedTo);
         int limit = Math.max(1, Math.min(requestedLimit, 250));
         String symbol = normalizeSymbol(requestedSymbol);
-        return tradeSignalRepository.findBlockedBuys(
+        List<TradeSignal> signals = tradeSignalRepository.findBlockedBuys(
                         com.crypto.domain.SignalDecision.BUY,
                         com.crypto.domain.SignalDecision.STRONG_BUY,
-                        symbol, window.from(), window.to(), PageRequest.of(0, limit))
-                .stream().map(this::blockedBuyView).toList();
+                        symbol, window.from(), window.to(), PageRequest.of(0, limit));
+        return blockedBuyViews(signals);
+    }
+
+    /** Persistent research queue; returns only operator-marked blocked BUY evidence. */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> suspiciousBlockedBuys(String requestedSymbol, Instant requestedFrom, Instant requestedTo, int requestedLimit) {
+        TimeWindow window = blockedSignalWindow(requestedFrom, requestedTo);
+        String symbol = normalizeSymbol(requestedSymbol);
+        int limit = Math.max(1, Math.min(requestedLimit, 250));
+        List<TradeSignal> signals = blockedBuyReviewRepository.findBySuspiciousTrueOrderByMarkedAtDesc().stream()
+                .map(review -> tradeSignalRepository.findById(review.getSignalId()).orElse(null))
+                .filter(Objects::nonNull)
+                .filter(signal -> signal.isFinalEntryAllowed() == false)
+                .filter(signal -> signal.getGeneratedAt() != null && !signal.getGeneratedAt().isBefore(window.from()) && !signal.getGeneratedAt().isAfter(window.to()))
+                .filter(signal -> symbol == null || symbol.equalsIgnoreCase(signal.getSymbol()))
+                .limit(limit).toList();
+        return blockedBuyViews(signals);
+    }
+
+    @Transactional
+    public Map<String, Object> setBlockedBuySuspicious(long signalId, boolean suspicious) {
+        TradeSignal signal = tradeSignalRepository.findById(signalId)
+                .orElseThrow(() -> new IllegalArgumentException("Blocked BUY signal was not found."));
+        boolean buyCandidate = signal.getOriginalDecision() == com.crypto.domain.SignalDecision.BUY
+                || signal.getOriginalDecision() == com.crypto.domain.SignalDecision.STRONG_BUY
+                || signal.getDecision() == com.crypto.domain.SignalDecision.BUY
+                || signal.getDecision() == com.crypto.domain.SignalDecision.STRONG_BUY;
+        if (!buyCandidate || signal.isFinalEntryAllowed()) throw new IllegalArgumentException("Only persisted blocked BUY signals can be reviewed.");
+        BlockedBuyReview review = blockedBuyReviewRepository.findById(signalId).orElseGet(() -> {
+            BlockedBuyReview created = new BlockedBuyReview(); created.setSignalId(signalId); return created;
+        });
+        Instant now = Instant.now(); review.setSuspicious(suspicious); review.setMarkedAt(now); review.setUpdatedAt(now);
+        blockedBuyReviewRepository.save(review);
+        return blockedBuyView(signal, review);
     }
 
     /**
@@ -414,7 +469,16 @@ public class TradeInspectorService {
         return rows.stream().limit(limit).map(this::productionExitTableView).toList();
     }
 
-    private Map<String, Object> blockedBuyView(TradeSignal signal) {
+    private List<Map<String, Object>> blockedBuyViews(List<TradeSignal> signals) {
+        if (signals.isEmpty()) return List.of();
+        if (blockedBuyReviewRepository == null) return signals.stream().map(signal -> blockedBuyView(signal, null)).toList();
+        Map<Long, BlockedBuyReview> reviews = blockedBuyReviewRepository.findBySignalIdIn(
+                        signals.stream().map(TradeSignal::getId).filter(Objects::nonNull).toList())
+                .stream().collect(java.util.stream.Collectors.toMap(BlockedBuyReview::getSignalId, review -> review));
+        return signals.stream().map(signal -> blockedBuyView(signal, reviews.get(signal.getId()))).toList();
+    }
+
+    private Map<String, Object> blockedBuyView(TradeSignal signal, BlockedBuyReview review) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("signalId", signal.getId());
         m.put("symbol", signal.getSymbol());
@@ -423,13 +487,23 @@ public class TradeInspectorService {
         m.put("price", signal.getLatestPrice());
         m.put("decision", signal.getDecision() == null ? null : signal.getDecision().name());
         m.put("score", signal.getTotalScore());
-        m.put("confidence", signal.getConfidenceScore());
+        m.put("confidence", signal.getConfidenceScore()); // legacy effective confidence field
+        m.put("rawConfidence", signal.getRawConfidenceScore());
+        m.put("effectiveConfidence", signal.getEffectiveConfidenceScore());
+        m.put("finalEntryAllowed", signal.isFinalEntryAllowed());
+        m.put("trendScore", signal.getTrendScore());
+        m.put("volumeScore", signal.getVolumeScore());
+        m.put("momentumScore", signal.getMomentumScore());
+        m.put("sentimentScore", signal.getSentimentScore());
+        m.put("fundamentalScore", signal.getFundamentalScore());
         m.put("strategy", signal.getSelectedStrategy() == null ? null : signal.getSelectedStrategy().name());
         m.put("regime", signal.getMarketRegime() == null ? null : signal.getMarketRegime().name());
         m.put("blocker", primaryBlocker(signal));
         m.put("blockerExplanation", primaryBlockerExplanation(signal));
         m.put("finalExplanation", signal.getFinalDecisionExplanation());
         m.put("decisionPath", signal.getDecisionPath());
+        m.put("suspicious", review != null && review.isSuspicious());
+        m.put("suspiciousMarkedAt", review == null || !review.isSuspicious() ? null : review.getMarkedAt());
         return m;
     }
 

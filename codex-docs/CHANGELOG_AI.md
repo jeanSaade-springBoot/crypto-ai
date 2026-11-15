@@ -528,3 +528,13 @@ and the remaining external MySQL/release proof.
 - Files: `src/main/resources/logback-spring.xml`, `scripts/deploy/Deploy-Trader.ps1`.
 - Database/Replay impact: none.
 - Verification: Logback XML and PowerShell syntax parsing passed. No deployment was run.
+
+## 2026-11-16 - Suspicious blocked-BUY review evidence
+
+- Problem: a user could see a blocked BUY's reason but could not retain a research decision that the block appears suspicious, nor distinguish technical setup score from raw and authority-adjusted confidence.
+- Solution: added immutable-signal-linked review metadata with mark/unmark endpoints and a future-analysis list endpoint. The focused chart context menu can mark a blocked BUY suspicious; the information panel separates total technical score, component scores, raw confidence, effective confidence, and blocker evidence.
+- Files: V113 migration, `BlockedBuyReview`, `BlockedBuyReviewRepository`, Trade Inspector controller/service, and Trade Inspector HTML/CSS/JS.
+- Database impact: additive `blocked_buy_review` table only. It is not applied by this change.
+- Production impact: review metadata is structurally outside all decision/execution/wallet services; it cannot affect trading.
+- Replay impact: none.
+- Status: IMPLEMENTED UNDER JEAN OVERRIDE (`JEAN-OVERRIDE-20261116-003`); no Git push, deployment, Production database change, or migration application was performed.

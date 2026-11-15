@@ -56,6 +56,19 @@ public class TradeInspectorController {
         return service.blockedBuys(symbol, from, to, limit);
     }
 
+    @GetMapping("/api/trade-inspector/suspicious-blocked-buys") @ResponseBody
+    public java.util.List<Map<String, Object>> suspiciousBlockedBuys(
+            @RequestParam(required = false, defaultValue = "ALL") String symbol,
+            @RequestParam(required = false) Instant from, @RequestParam(required = false) Instant to,
+            @RequestParam(required = false, defaultValue = "100") int limit) {
+        return service.suspiciousBlockedBuys(symbol, from, to, limit);
+    }
+
+    @PostMapping("/api/trade-inspector/blocked-buys/{signalId}/suspicious") @ResponseBody
+    public Map<String, Object> blockedBuySuspicious(@PathVariable long signalId, @RequestBody Map<String, Object> body) {
+        return service.setBlockedBuySuspicious(signalId, Boolean.TRUE.equals(body.get("suspicious")));
+    }
+
     @GetMapping("/api/trade-inspector/blocked-sells")
     @ResponseBody
     public java.util.List<Map<String, Object>> blockedSells(

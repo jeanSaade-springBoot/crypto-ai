@@ -6,6 +6,28 @@ for traceability; do not silently rewrite history.
 
 No approved decisions recorded yet.
 
+### JEAN-OVERRIDE-20261116-003 - Suspicious blocked-BUY review evidence
+
+Date/time KSA: 2026-11-16 01:58:00 +03:00
+
+Scope: Add persistent suspicious-review marking for blocked BUY signals from
+Trade Inspector, including mark/unmark actions, future-analysis query support,
+and separate technical score, raw confidence, effective confidence, and blocker
+display.
+
+Waived: ALL pending items for this scope.
+
+Jean's exact words:
+
+> proceed direct from jean\
+> scope: Add persistent suspicious-review marking for blocked BUY signals from Trade Inspector, including mark/unmark actions, future-analysis query support, and separate technical score, raw confidence, effective confidence, and blocker display\
+> waive: ALL pending
+
+Status: IMPLEMENTED UNDER JEAN OVERRIDE. This override does not
+authorize Git push, remote merge, deployment, Production server configuration
+or live-service changes, Production database writes or migration application,
+live Binance account or order actions, or deletion.
+
 ---
 
 ### JEAN-OVERRIDE-20261108-001 — FIX-156 Replay-only parity work

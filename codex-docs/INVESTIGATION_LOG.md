@@ -370,3 +370,76 @@ not a Production behavior change.
   available evidence. Resolve the application database/connection identity or
   provide the Trade Inspector record's entry and exit wallet-trade IDs before
   retrying this investigation.
+
+## Production paper trade #13 (PEPEUSDT) - corrected Contabo investigation - 2026-11-15 KSA
+
+- Scope: read-only investigation against Contabo production `vmi3479567:3307`,
+  schema `crypto_ai`, using the Trade Inspector identifiers: paper position
+  #13, wallet BUY #27, wallet SELL #28, and entry signal #19380. The earlier
+  local JohnnyM result above is superseded for this trade; that connection was
+  not the deployed application's database. No application, configuration,
+  Production database, or wallet data was changed.
+- Entry and timing: signal #19380 was generated at 13:46:03.693 KSA for the
+  13:45 one-minute candle, and its work completed with paper position #13 at
+  13:46:05.999 KSA. Wallet BUY #27 used the observed price at 13:46:02.265
+  KSA and committed at 13:46:05.731 KSA: there is no execution backlog or
+  delayed-processing evidence.
+- Earlier attempts: this was not the first PEPE opportunity. Position #8
+  bought at 13:01 KSA near 0.00000401 and took profit at 13:11 near
+  0.00000408. Position #11 bought at 13:16 near 0.00000406 and stopped at
+  13:28 near 0.00000402. Between that stop and #13's entry, persisted 1m
+  signals were NEUTRAL/WATCH and 5m signals were NEUTRAL; no earlier eligible
+  BUY is present in that post-stop interval.
+- Entry quality: #19380 was a fresh BUY (score 77, confidence 64),
+  `STANDARD_ENTRY`, entry quality 80/100, 0.84 ATR from SMA20, with no blocker.
+  It was deliberately only a 25% exploratory allocation because 5m was
+  NEUTRAL and 1h WATCH/strong-downtrend. The entry price 0.00000405 was below
+  the prior 13:11 peak (0.00000408), but it was the high of the immediately
+  preceding 16-minute 0.00000402--0.00000405 range. The current entry-quality
+  logic did not classify that local-range location as `LATE_ENTRY`.
+- Exit: wallet SELL #28 stopped at 13:50:46 KSA at 0.00000402, crossing the
+  persisted 0.000004023744 stop. Realized P&L was -1.851851851852 USDT
+  (-0.740741%).
+- Conclusion: no late execution or blocked earlier post-stop BUY is confirmed.
+  The valid concern is strategy quality: the system re-entered on a local-range
+  high despite mixed higher timeframes; its current rules allowed the reduced
+  25% trial rather than vetoing it. This is a candidate future entry-quality
+  policy review, not a confirmed execution defect.
+
+## PEPEUSDT move review - 2026-11-15 11:20 to 12:16 KSA
+
+- Scope: read-only Contabo production review of PEPEUSDT one-minute candles,
+  persisted BUY decisions, blockers, and wallet executions. No application,
+  configuration, Production database, or wallet data was changed.
+- Market path: PEPE was approximately 0.00000388 at 11:20 KSA, rose to a high
+  of 0.00000405 at 12:11 KSA (about +4.4%), then traded near 0.00000403 at
+  12:16 KSA.
+- Admission behavior: the system did not execute a PEPE wallet BUY in this
+  interval. At 12:05 KSA, 5m signal #16814 was an original BUY (score 79) but
+  was blocked by `MULTI_TIMEFRAME`, reducing confidence to 49. At 12:09 KSA,
+  1m signal #16903 was an original STRONG_BUY (score 85) but was blocked by
+  `ATR_RISK`, reducing confidence to 49 and requesting a pullback near
+  0.000003987754. The reviewed market low after that request was about
+  0.00000402, so that retracement condition was not reached.
+- Interpretation: this is a genuine blocked-opportunity candidate, not an
+  execution-delay finding. It supports a future review of how the
+  multi-timeframe and ATR-risk gates interact during a sustained breakout;
+  subsequent price appreciation alone does not prove that the contemporaneous
+  vetoes were invalid.
+
+### Score and confidence interpretation
+
+- `total_score` measures the technical setup; confidence is a separate
+  context/trust measure. The Trade Inspector's existing `confidence` field is
+  the effective confidence used by the entry authority, not necessarily the
+  raw confidence.
+- In the reviewed PEPE move, blocked 5m BUY #16814 had technical score 79 and
+  raw confidence 66; blocked 1m STRONG_BUY #16903 had technical score 85 and
+  raw confidence 64. Both show effective/displayed confidence 49 because the
+  final entry was blocked (`MULTI_TIMEFRAME` and `ATR_RISK`, respectively).
+- Code evidence: `FinalDecisionService` calculates
+  `effectiveConfidence = entryAllowed ? rawConfidence : min(rawConfidence,49)`.
+  An allowed example, #19380, retained raw/effective/displayed confidence 64.
+- UI learning recommendation: show technical score, raw confidence, effective
+  confidence labelled as capped when blocked, and the primary blocker as four
+  separate facts. Do not treat 49 as a measured market-confidence value.

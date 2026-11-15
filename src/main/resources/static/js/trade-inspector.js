@@ -39,7 +39,9 @@ function blockedBuyEvidenceText(signal){
  return `Blocked BUY #${signal.signalId??'—'} | ${String(signal.symbol||'').toUpperCase()} | KSA: ${investigationKsaDate(signal.generatedAt)} | Price: ${investigationAmount(signal.price)} | Score: ${signal.score??'—'} | Confidence: ${signal.confidence??'—'} | Blocker: ${signal.blocker||'FINAL DECISION'} | Reason: ${signal.blockerExplanation||signal.finalExplanation||'No persisted explanation is available.'}`;
 }
 function blockedBuyDetailsHtml(signal){
- return `<div class="inspector-blocked-buy-info-head"><div><h3>Blocked BUY #${esc(signal.signalId??'—')} · ${esc(signal.blocker||'FINAL DECISION')}</h3><p>Persisted evidence only · ${esc(investigationKsaDate(signal.generatedAt))} KSA</p></div><button type="button" class="inspector-blocked-buy-close" data-blocked-buy-close="1">Close</button></div><div class="inspector-blocked-buy-info-grid"><div><span>Price</span><strong>${esc(chartPriceLabel(signal.price))}</strong></div><div><span>Signal</span><strong>${esc(signal.decision||'BUY')} · ${esc(signal.interval||'—')}</strong></div><div><span>Score / confidence</span><strong>${esc(signal.score??'—')} / ${esc(signal.confidence??'—')}</strong></div><div><span>Strategy</span><strong>${esc(signal.strategy||'—')}</strong></div></div><p>${esc(signal.blockerExplanation||signal.finalExplanation||'No persisted explanation is available.')}</p>`;
+ const raw=signal.rawConfidence??signal.confidence??'—',effective=signal.effectiveConfidence??signal.confidence??'—';
+ const state=signal.suspicious?`Suspicious since ${investigationKsaDate(signal.suspiciousMarkedAt)} KSA`:'Not marked suspicious';
+ return `<div class="inspector-blocked-buy-info-head"><div><h3>Blocked BUY #${esc(signal.signalId??'—')} · ${esc(signal.blocker||'FINAL DECISION')}</h3><p>Persisted evidence only · ${esc(investigationKsaDate(signal.generatedAt))} KSA · ${esc(state)}</p></div><button type="button" class="inspector-blocked-buy-close" data-blocked-buy-close="1">Close</button></div><div class="inspector-blocked-buy-info-grid"><div><span>Price</span><strong>${esc(chartPriceLabel(signal.price))}</strong></div><div><span>Signal</span><strong>${esc(signal.decision||'BUY')} · ${esc(signal.interval||'—')}</strong></div><div><span>Technical score</span><strong>${esc(signal.score??'—')}</strong></div><div><span>Raw confidence</span><strong>${esc(raw)}</strong></div><div><span>Effective confidence</span><strong>${esc(effective)}${signal.finalEntryAllowed===false&&Number(effective)===49?' (blocked cap)':''}</strong></div><div><span>Trend / volume</span><strong>${esc(signal.trendScore??'—')} / ${esc(signal.volumeScore??'—')}</strong></div><div><span>Momentum / sentiment</span><strong>${esc(signal.momentumScore??'—')} / ${esc(signal.sentimentScore??'—')}</strong></div><div><span>Fundamental</span><strong>${esc(signal.fundamentalScore??'—')}</strong></div><div><span>Strategy</span><strong>${esc(signal.strategy??'—')}</strong></div></div><p>${esc(signal.blockerExplanation||signal.finalExplanation||'No persisted explanation is available.')}</p>`;
 }
 
 
@@ -407,6 +409,7 @@ function showBlockedBuyInfo(signal){
 function showBlockedBuyContextMenu(signal,x,y){
  window.__inspectedBlockedBuyContext=signal;
  const menu=$('inspected-blocked-buy-context-menu');if(!menu)return;
+ const review=menu.querySelector('button[data-blocked-buy-suspicious]');if(review)review.textContent=signal.suspicious?'Unmark suspicious':'Mark suspicious';
  menu.style.left=`${Math.min(x,window.innerWidth-210)}px`;menu.style.top=`${Math.min(y,window.innerHeight-52)}px`;menu.classList.remove('hidden');
 }
 function renderBlockedBuyMarkers(){
@@ -420,13 +423,20 @@ function renderBlockedBuyMarkers(){
  (state.blockedBuys||[]).forEach(signal=>{
    const time=window.CryptoTime.parseUtc(signal.generatedAt)?.getTime(),priceValue=Number(signal.price);
    if(!Number.isFinite(time)||!Number.isFinite(priceValue)||time<minX||time>maxX||priceValue<range.min||priceValue>range.max)return;
-   const marker=document.createElement('button');marker.type='button';marker.className='inspector-blocked-buy-marker';marker.title=`Blocked BUY · ${signal.blocker||'reason available on right-click'}`;
+   const marker=document.createElement('button');marker.type='button';marker.className=`inspector-blocked-buy-marker${signal.suspicious?' suspicious':''}`;marker.title=`Blocked BUY · ${signal.blocker||'reason available on right-click'}`;
    marker.setAttribute('aria-label',blockedBuyEvidenceText(signal));
    marker.style.left=`${translateX+((time-minX)/(maxX-minX))*gridWidth}px`;marker.style.top=`${translateY+gridHeight-((priceValue-range.min)/(range.max-range.min))*gridHeight}px`;
    marker.addEventListener('contextmenu',event=>{event.preventDefault();showBlockedBuyContextMenu(signal,event.clientX,event.clientY);});
    marker.addEventListener('click',()=>showBlockedBuyInfo(signal));overlay.appendChild(marker);
  });
  host.appendChild(overlay);
+}
+async function setBlockedBuySuspicious(signal){
+ const response=await fetch(`/api/trade-inspector/blocked-buys/${encodeURIComponent(signal.signalId)}/suspicious`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({suspicious:!signal.suspicious})});
+ if(!response.ok)throw new Error(`Suspicious review HTTP ${response.status}`);
+ const updated=await response.json();Object.assign(signal,updated);
+ const state=window.__inspectedChartState;if(state?.blockedBuys){const item=state.blockedBuys.find(row=>String(row.signalId)===String(signal.signalId));if(item)Object.assign(item,updated);}
+ renderBlockedBuyMarkers();showBlockedBuyInfo(signal);
 }
 async function loadVisibleBlockedBuyMarkers(min,max){
  const state=window.__inspectedChartState;if(!state)return;
@@ -745,6 +755,8 @@ document.addEventListener('click',event=>{
 document.addEventListener('click',event=>{
   const view=event.target.closest('button[data-blocked-buy-view-info]');
   if(view&&window.__inspectedBlockedBuyContext){showBlockedBuyInfo(window.__inspectedBlockedBuyContext);return;}
+  const suspicious=event.target.closest('button[data-blocked-buy-suspicious]');
+  if(suspicious&&window.__inspectedBlockedBuyContext){setBlockedBuySuspicious(window.__inspectedBlockedBuyContext).catch(error=>{ $('inspector-error').textContent=`Could not update suspicious review: ${error.message}`;$('inspector-error').classList.remove('hidden'); });return;}
   if(event.target.closest('button[data-blocked-buy-close]')){$('inspected-blocked-buy-info')?.classList.add('hidden');return;}
   if(!event.target.closest('#inspected-blocked-buy-context-menu')&&!event.target.closest('.inspector-blocked-buy-marker'))hideBlockedBuyContextMenu();
 });
