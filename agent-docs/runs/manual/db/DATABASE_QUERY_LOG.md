@@ -394,3 +394,80 @@
 - approximate output lines: 15
 - password: never logged
 
+
+## DBQ-SUSPICIOUS-001
+- timestamp: 2026-11-16T02:12:43.5960632+03:00
+- agent: CODEX
+- purpose: Check Contabo production for persisted suspicious blocked-BUY review evidence before pattern analysis
+- SQL file: DBQ-SUSPICIOUS-001-CODEX.sql
+- exit code: 0
+- duration_ms: 807
+- approximate output lines: 3
+- password: never logged
+
+
+## DBQ-SUSPICIOUS-002
+- timestamp: 2026-11-16T02:12:55.4252369+03:00
+- agent: CODEX
+- purpose: Read Contabo production suspicious blocked-BUY review schema and marked-signal evidence
+- SQL file: DBQ-SUSPICIOUS-002-CODEX.sql
+- exit code: 0
+- duration_ms: 873
+- approximate output lines: 12
+- password: never logged
+
+
+## DBQ-SUSPICIOUS-003
+- timestamp: 2026-11-16T02:13:23.1140596+03:00
+- agent: CODEX
+- purpose: Measure post-signal Contabo production price outcomes and later executions for suspicious blocked BUY pattern analysis
+- SQL file: DBQ-SUSPICIOUS-003-CODEX.sql
+- exit code: 0
+- duration_ms: 990
+- approximate output lines: 28
+- password: never logged
+
+
+## DBQ-SUSPICIOUS-005-CODEX
+- timestamp: 2026-11-16T02:15:20.0380585+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-SUSPICIOUS-005-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 705
+- approximate output lines: 135
+- password: never logged
+
+
+## DBQ-SUSPICIOUS-006-CODEX
+- timestamp: 2026-11-16T02:15:31.3470451+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-SUSPICIOUS-006-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 869
+- approximate output lines: 7
+- password: never logged
+
+
+## DBQ-SUSPICIOUS-007-CODEX
+- timestamp: 2026-11-16T02:15:47.4230284+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-SUSPICIOUS-007-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 848
+- approximate output lines: 7
+- password: never logged
+
+
+## DBQ-SUSPICIOUS-008-CODEX
+- timestamp: 2026-11-16T02:16:04.9135703+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-SUSPICIOUS-008-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 1615
+- approximate output lines: 7
+- password: never logged
+

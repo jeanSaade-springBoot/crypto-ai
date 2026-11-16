@@ -52,6 +52,29 @@ live Binance account or order actions, or deletion.
 
 ---
 
+### JEAN-OVERRIDE-20261116-004 — Trade Inspector indicator evidence breakdown
+
+Date/time KSA: 2026-11-16 02:10:00 +03:00
+
+Scope: Add an expandable Trade Inspector technical-indicator breakdown showing
+trend, volume, momentum, component indicators, risk context,
+higher-timeframe context, liquidity, and strategy explanation.
+
+Waived: ALL pending items for this scope.
+
+Jean's exact words:
+
+> proceed direct from jean\
+> scope: Add an expandable Trade Inspector technical-indicator breakdown showing trend, volume, momentum, component indicators, risk context, higher-timeframe context, liquidity, and strategy explanation\
+> waive: ALL pending
+
+Status: IMPLEMENTATION AUTHORIZED UNDER JEAN OVERRIDE. This override does not
+authorize Git push, remote merge, deployment, Production server configuration
+or live-service changes, Production database writes or migration application,
+live Binance account or order actions, or deletion.
+
+---
+
 ### JEAN-OVERRIDE-20261116-001 â€” Trade Inspector copy-investigation summary
 
 Date/time KSA: 2026-11-16 00:38:35 +03:00

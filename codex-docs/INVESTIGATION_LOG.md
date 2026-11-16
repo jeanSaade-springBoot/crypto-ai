@@ -443,3 +443,40 @@ not a Production behavior change.
 - UI learning recommendation: show technical score, raw confidence, effective
   confidence labelled as capped when blocked, and the primary blocker as four
   separate facts. Do not treat 49 as a measured market-confidence value.
+
+## Production suspicious blocked-BUY pattern review - 2026-11-16 KSA
+
+- Scope: read-only Contabo production review of all seven signals currently
+  marked suspicious in `blocked_buy_review`. Evidence queries
+  `DBQ-SUSPICIOUS-002-CODEX`, `DBQ-SUSPICIOUS-006-CODEX`,
+  `DBQ-SUSPICIOUS-007-CODEX`, and `DBQ-SUSPICIOUS-008-CODEX` joined the
+  review metadata to `trade_signal` and the later one-minute candles. No
+  application, configuration, Production database, or wallet data was changed.
+- Shared admission pattern: every marked signal had a high technical score
+  (78--91) and raw confidence (62--74), but was finally vetoed and therefore
+  displayed effective confidence 49. The 49 values are the known blocked cap,
+  not evidence of weak confidence.
+- Blocker mix: `RANGE_ENTRY_LOCATION` blocked 3/7; `MULTI_TIMEFRAME` 2/7;
+  `ATR_RISK` 1/7; and `BTC_CONTEXT` 1/7. Four were range/mean-reversion
+  candidates, two breakout candidates, and one weak-uptrend trend-following
+  candidate. The sample is too small to identify a production rule defect,
+  but the repeated range-location and higher-timeframe vetoes are the first
+  focused cohorts for later analysis.
+- Outcome screen: six of seven recorded a 1-minute-candle high above its
+  persisted take-profit before any later candle low reached its persisted stop
+  during the first hour. PEPE #16814 did not touch either threshold in its
+  first hour; at 17:41 KSA (about 5h36m later), one 1-minute candle spans both
+  its target and stop. Candle OHLC cannot establish which threshold came
+  first. The other first target-candle times in KSA were: XLM #16417
+  13:01, ENA #16619 13:00, SUI #21504 16:18, ETH #21518 16:25, XLM #32144
+  23:08, and XLM #32446 23:31. (The stored query session timestamps are
+  UTC+1, so KSA display adds two hours.)
+- Limitation: OHLC candles establish that a price threshold was printed, not
+  the order of target/stop touches inside any single one-minute candle, the
+  achievable fill, fees/slippage, or position-size/risk constraints. These are
+  high-priority missed-opportunity candidates, not proven profitable executions.
+- Recommended next comparison: collect a materially larger marked and
+  unmarked blocked-BUY sample, then compare target-before-stop rate, maximum
+  favourable/adverse excursion, and blocker cohort against the same setup at
+  the same horizon. Keep suspicious marking as human research metadata only;
+  it must not bypass the live risk gates.

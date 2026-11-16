@@ -538,3 +538,17 @@ and the remaining external MySQL/release proof.
 - Production impact: review metadata is structurally outside all decision/execution/wallet services; it cannot affect trading.
 - Replay impact: none.
 - Status: IMPLEMENTED UNDER JEAN OVERRIDE (`JEAN-OVERRIDE-20261116-003`); no Git push, deployment, Production database change, or migration application was performed.
+
+## 2026-11-16 - Trade Inspector blocked-BUY indicator evidence breakdown
+
+- Problem: the blocked-BUY panel showed only aggregate category scores, so an operator could not see the persisted indicator contributions and contextual evidence behind a veto.
+- Solution: added an expandable **Technical indicators & context** panel to a blocked BUY's right-click information view. It exposes the persisted trend, volume, momentum and diagnostic components, ATR/protection data, higher-timeframe and BTC evidence, order-book/liquidity values, derivatives state, regime, and selected strategy. It never recalculates any score or changes the signal's decision.
+- Files: `TradeInspectorService`, `trade-inspector.js`, `trade-inspector.css`, and `trade-inspector.html`.
+- Database impact: none; the existing Trade Inspector response now exposes additional persisted `trade_signal` fields.
+- Production impact: display-only; no admission, execution, wallet, configuration, or service behavior changed.
+- Replay impact: none; no persisted decision is recomputed.
+- Validation: Java 21 compilation and focused `TradeInspectorOpenFilterTest`,
+  `TradeInspectorInvestmentViewTest`, and `TradeInspectorAllowedBuyFilterTest`
+  passed (4 tests). JavaScript runtime validation is unavailable because Node.js
+  is not installed/on `PATH` on this workstation.
+- Status: IMPLEMENTED UNDER JEAN OVERRIDE (`JEAN-OVERRIDE-20261116-004`); no Git push, deployment, or Production change was performed.

@@ -11,3 +11,4 @@ target/
 logs/
 agent-docs/runs/fts-*/
 agent-docs/failed-trade-studies/
+agent-docs/runs/manual/db/
