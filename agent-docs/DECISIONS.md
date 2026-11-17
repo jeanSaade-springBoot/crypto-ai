@@ -6,6 +6,21 @@ for traceability; do not silently rewrite history.
 
 No approved decisions recorded yet.
 
+### JEAN-OVERRIDE-20261118-002 — FIX-157 Production Replay deployment
+
+Date/time KSA: 2026-11-18
+
+Scope: Commit/push the corrected Replay-only ledger, build and deploy it,
+apply additive V114, restart the Production service, and run Replay-only
+evaluation against Production historical data. No trading, wallet, position,
+or signal mutation is authorized.
+
+Waived: ALL pending items for this scope.
+
+Status: IMPLEMENTATION/DEPLOYMENT AUTHORIZED UNDER JEAN OVERRIDE.
+
+---
+
 ### JEAN-OVERRIDE-20261118-001 — FIX-157 corrected Replay-only ledger
 
 Date/time KSA: 2026-11-18

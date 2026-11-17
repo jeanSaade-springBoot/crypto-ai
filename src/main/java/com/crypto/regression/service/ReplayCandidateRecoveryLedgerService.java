@@ -2,9 +2,9 @@ package com.crypto.regression.service;
 
 import com.crypto.regression.replay.ReplayAccessPolicy;
 import com.crypto.regression.replay.ReplayCandidateRecoveryPolicy;
+import com.crypto.regression.replay.ReplayEnforcedJdbc;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -24,7 +24,7 @@ import java.util.Map;
 @Service
 @RequiredArgsConstructor
 public class ReplayCandidateRecoveryLedgerService {
-    private final JdbcTemplate jdbcTemplate;
+    private final ReplayEnforcedJdbc replayJdbc;
 
     @Transactional
     public Map<String, Object> rebuild(long runId) {
@@ -32,7 +32,7 @@ public class ReplayCandidateRecoveryLedgerService {
         ReplayAccessPolicy.require("trade_signal_test", ReplayAccessPolicy.Operation.REPLAY_READ);
         ReplayAccessPolicy.require("replay_candidate_recovery_ledger", ReplayAccessPolicy.Operation.REPLAY_DELETE);
         ReplayAccessPolicy.require("replay_candidate_recovery_ledger", ReplayAccessPolicy.Operation.REPLAY_INSERT);
-        List<Map<String, Object>> runRows = jdbcTemplate.queryForList("SELECT id,symbol,start_time,end_time,status FROM analysis_test_run WHERE id=?", runId);
+        List<Map<String, Object>> runRows = replayJdbc.rows("analysis_test_run", ReplayAccessPolicy.Operation.REPLAY_READ, "SELECT id,symbol,start_time,end_time,status FROM analysis_test_run WHERE id=?", runId);
         if (runRows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Replay run not found.");
         Map<String, Object> run = runRows.get(0);
         String status = String.valueOf(run.get("status"));
@@ -40,8 +40,8 @@ public class ReplayCandidateRecoveryLedgerService {
                 "Candidate recovery requires a PASSED Replay run; current status=" + status + ".");
         if (run.get("start_time") == null || run.get("end_time") == null) throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Candidate recovery requires a Replay run with start and end timestamps.");
-        jdbcTemplate.update("DELETE FROM replay_candidate_recovery_ledger WHERE test_run_id=?", runId);
-        List<Map<String, Object>> signals = jdbcTemplate.queryForList("""
+        replayJdbc.update("replay_candidate_recovery_ledger", ReplayAccessPolicy.Operation.REPLAY_DELETE, "DELETE FROM replay_candidate_recovery_ledger WHERE test_run_id=?", runId);
+        List<Map<String, Object>> signals = replayJdbc.rows("trade_signal_test", ReplayAccessPolicy.Operation.REPLAY_READ, """
                 SELECT id, generated_at, latest_price, original_decision, decision, total_score,
                        raw_confidence_score, final_entry_allowed, primary_blocking_stage,
                        stop_loss, take_profit, atr_retracement_entry_price
@@ -85,7 +85,7 @@ public class ReplayCandidateRecoveryLedgerService {
             if (c != null) {
                 BigDecimal ceiling = ReplayCandidateRecoveryPolicy.releaseCeiling(c.price, c.retracementPrice, c.blocker);
                 BigDecimal entry = ReplayCandidateRecoveryPolicy.adverseBuyFill(price);
-                if (c.stop == null || c.target == null || c.stop.compareTo(entry) >= 0 || entry.compareTo(c.target) >= 0) {
+                if (!ReplayCandidateRecoveryPolicy.validLevels(c.stop, entry, c.target)) {
                     sequence = insert(runId, sequence, at, "BUY_REJECTED_LEVELS", c, number(signal.get("id")), price, null, null, null, null, null, cumulative,
                             "Rejected because required levels do not satisfy stop < adverse entry fill < target.");
                     c.terminal = true;
@@ -141,8 +141,8 @@ public class ReplayCandidateRecoveryLedgerService {
     public Map<String, Object> ledger(long runId) {
         ReplayAccessPolicy.require("replay_candidate_recovery_ledger", ReplayAccessPolicy.Operation.REPLAY_READ);
         ReplayAccessPolicy.require("replay_position", ReplayAccessPolicy.Operation.REPLAY_READ);
-        List<Map<String, Object>> events = jdbcTemplate.queryForList("SELECT * FROM replay_candidate_recovery_ledger WHERE test_run_id=? ORDER BY sequence_no", runId);
-        Map<String, Object> summary = jdbcTemplate.queryForMap("""
+        List<Map<String, Object>> events = replayJdbc.rows("replay_candidate_recovery_ledger", ReplayAccessPolicy.Operation.REPLAY_READ, "SELECT * FROM replay_candidate_recovery_ledger WHERE test_run_id=? ORDER BY sequence_no", runId);
+        Map<String, Object> summary = replayJdbc.row("replay_candidate_recovery_ledger", ReplayAccessPolicy.Operation.REPLAY_READ, """
                 SELECT COUNT(*) AS event_count,
                        SUM(event_type='BUY_ALLOWED') AS buys_allowed,
                        SUM(event_type='SELL_ALLOWED') AS sells_allowed,
@@ -152,7 +152,7 @@ public class ReplayCandidateRecoveryLedgerService {
                        COALESCE(SUM(unrealized_pnl_usdt),0) AS unrealized_pnl_usdt
                 FROM replay_candidate_recovery_ledger WHERE test_run_id=?
                 """, runId);
-        Map<String, Object> baseline = jdbcTemplate.queryForMap("""
+        Map<String, Object> baseline = replayJdbc.row("replay_position", ReplayAccessPolicy.Operation.REPLAY_READ, """
                 SELECT COUNT(*) AS positions, SUM(exit_time IS NOT NULL) AS closed_positions,
                        COALESCE(SUM(realized_pnl_usdt),0) AS realized_pnl_usdt
                 FROM replay_position WHERE test_run_id=?
@@ -164,7 +164,7 @@ public class ReplayCandidateRecoveryLedgerService {
     private Exit findExit(long runId, Candidate c, Instant after, Instant end, BigDecimal entry) {
         ReplayAccessPolicy.require("candle", ReplayAccessPolicy.Operation.MARKET_EVIDENCE_READ);
         if (c.stop == null || c.target == null || c.stop.signum() <= 0 || c.target.signum() <= 0) return null;
-        List<Map<String, Object>> candles = jdbcTemplate.queryForList("""
+        List<Map<String, Object>> candles = replayJdbc.rows("candle", ReplayAccessPolicy.Operation.MARKET_EVIDENCE_READ, """
                 SELECT open_time, open_price, high_price, low_price FROM candle
                 WHERE symbol=(SELECT symbol FROM analysis_test_run WHERE id=?) AND interval_code='1m' AND closed=1
                   AND open_time >= ? AND open_time <= ? ORDER BY open_time ASC
@@ -175,7 +175,7 @@ public class ReplayCandidateRecoveryLedgerService {
             boolean hitTarget = high != null && high.compareTo(c.target) >= 0;
             if (!hitStop && !hitTarget) continue;
             boolean useStop = hitStop; // same-candle dual hit is intentionally conservative.
-            BigDecimal decision = useStop ? (open != null && open.compareTo(c.stop) < 0 ? open : c.stop) : c.target;
+            BigDecimal decision = useStop ? ReplayCandidateRecoveryPolicy.stopFill(open, c.stop) : c.target;
             String reason = hitStop && hitTarget ? "AMBIGUOUS_SAME_CANDLE_CONSERVATIVE_STOP" : (useStop ? "VIRTUAL_STOP_LOSS" : "VIRTUAL_TAKE_PROFIT");
             return new Exit(((Timestamp) candle.get("open_time")).toInstant(), decision,
                     ReplayCandidateRecoveryPolicy.adverseSellFill(decision), reason);
@@ -185,7 +185,7 @@ public class ReplayCandidateRecoveryLedgerService {
 
     private BigDecimal lastClosedPrice(long runId, Instant end) {
         ReplayAccessPolicy.require("candle", ReplayAccessPolicy.Operation.MARKET_EVIDENCE_READ);
-        List<BigDecimal> closes = jdbcTemplate.query("""
+        List<BigDecimal> closes = replayJdbc.query("candle", ReplayAccessPolicy.Operation.MARKET_EVIDENCE_READ, """
                 SELECT close_price FROM candle WHERE symbol=(SELECT symbol FROM analysis_test_run WHERE id=?)
                   AND interval_code='1m' AND closed=1 AND open_time <= ? ORDER BY open_time DESC LIMIT 1
                 """, (rs, row) -> rs.getBigDecimal(1), runId, Timestamp.from(end));
@@ -203,7 +203,7 @@ public class ReplayCandidateRecoveryLedgerService {
                        BigDecimal decision, BigDecimal entry, BigDecimal exit, BigDecimal notional, BigDecimal fees,
                        ReplayCandidateRecoveryPolicy.Settlement settlement, BigDecimal cumulative, String reason,
                        BigDecimal unrealized, BigDecimal unrealizedPct) {
-        jdbcTemplate.update("""
+        replayJdbc.update("replay_candidate_recovery_ledger", ReplayAccessPolicy.Operation.REPLAY_INSERT, """
                 INSERT INTO replay_candidate_recovery_ledger
                 (test_run_id,sequence_no,symbol,event_time,event_type,candidate_signal_id,release_signal_id,blocker,candidate_price,decision_price,virtual_entry_price,virtual_exit_price,virtual_notional_usdt,fees_usdt,slippage_percent,realized_pnl_usdt,realized_pnl_percent,unrealized_pnl_usdt,unrealized_pnl_percent,cumulative_pnl_usdt,reason)
                 SELECT ?,?,symbol,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? FROM analysis_test_run WHERE id=?

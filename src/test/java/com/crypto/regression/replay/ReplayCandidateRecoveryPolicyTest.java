@@ -25,4 +25,24 @@ class ReplayCandidateRecoveryPolicyTest {
         assertTrue(result.feesUsdt().compareTo(new BigDecimal("0.20")) > 0);
         assertTrue(result.realizedPnlUsdt().compareTo(BigDecimal.ZERO) > 0);
     }
+
+    @Test
+    void rejectsInvalidLevelsAndUsesConservativeStopGap() {
+        assertTrue(ReplayCandidateRecoveryPolicy.validLevels(new BigDecimal("90"), new BigDecimal("100"), new BigDecimal("110")));
+        assertFalse(ReplayCandidateRecoveryPolicy.validLevels(new BigDecimal("101"), new BigDecimal("100"), new BigDecimal("110")));
+        assertFalse(ReplayCandidateRecoveryPolicy.validLevels(new BigDecimal("90"), new BigDecimal("100"), new BigDecimal("99")));
+        assertEquals(new BigDecimal("88"), ReplayCandidateRecoveryPolicy.stopFill(new BigDecimal("88"), new BigDecimal("90")));
+        assertEquals(new BigDecimal("90"), ReplayCandidateRecoveryPolicy.stopFill(new BigDecimal("92"), new BigDecimal("90")));
+    }
+
+    @Test
+    void keepsTheFirstCandidateWindowAndUsesAnExclusiveAntiChaseBoundary() {
+        BigDecimal candidate = new BigDecimal("100");
+        assertEquals(new BigDecimal("100.750000000000"),
+                ReplayCandidateRecoveryPolicy.releaseCeiling(candidate, null, "RANGE_ENTRY_LOCATION"));
+        assertTrue(ReplayCandidateRecoveryPolicy.releaseCeiling(candidate, null, "RANGE_ENTRY_LOCATION")
+                .compareTo(new BigDecimal("100.75")) == 0);
+        assertEquals(new BigDecimal("99.5"), ReplayCandidateRecoveryPolicy.releaseCeiling(candidate,
+                new BigDecimal("99.5"), "ATR_RISK"));
+    }
 }

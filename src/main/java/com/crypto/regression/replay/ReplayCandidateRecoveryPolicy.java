@@ -44,6 +44,16 @@ public final class ReplayCandidateRecoveryPolicy {
         return decisionPrice.multiply(BigDecimal.ONE.subtract(SLIPPAGE_RATE)).setScale(12, RoundingMode.HALF_UP);
     }
 
+    public static boolean validLevels(BigDecimal stop, BigDecimal entryFill, BigDecimal target) {
+        return stop != null && target != null && entryFill != null
+                && stop.compareTo(entryFill) < 0 && entryFill.compareTo(target) < 0;
+    }
+
+    /** A downward stop gap fills at the available candle open; target gaps retain target price. */
+    public static BigDecimal stopFill(BigDecimal candleOpen, BigDecimal stop) {
+        return candleOpen != null && candleOpen.compareTo(stop) < 0 ? candleOpen : stop;
+    }
+
     public static Settlement settle(BigDecimal entryFill, BigDecimal exitFill) {
         BigDecimal quantity = VIRTUAL_NOTIONAL_USDT.divide(entryFill, 18, RoundingMode.HALF_UP);
         BigDecimal proceeds = quantity.multiply(exitFill);

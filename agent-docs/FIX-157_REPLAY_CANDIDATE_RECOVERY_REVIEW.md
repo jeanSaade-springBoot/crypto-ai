@@ -212,6 +212,16 @@ scenario does not replace or modify it.
 This is intentionally an initial research instrument, not a finished recovery
 strategy. Current limitations include:
 
+### Current validation gate
+
+- Java 21 focused Replay boundary/policy tests: passed locally.
+- Disposable-MySQL V110–V114 Flyway validation: pending. The test harness
+  refuses to run without a dedicated loopback disposable URL, explicit
+  disposable acknowledgement, and verified server UUID. No trader database is
+  an allowed substitute.
+- Replay remains **not measured** until the complete scenario and disposable
+  database validation gates pass.
+
 1. It uses candle OHLC for virtual stop/target detection and therefore cannot
    prove intrabar order; the conservative dual-hit rule reduces, but cannot
    remove, this uncertainty.
