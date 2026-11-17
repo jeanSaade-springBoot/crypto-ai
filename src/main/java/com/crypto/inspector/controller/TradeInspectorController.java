@@ -60,8 +60,9 @@ public class TradeInspectorController {
     public java.util.List<Map<String, Object>> suspiciousBlockedBuys(
             @RequestParam(required = false, defaultValue = "ALL") String symbol,
             @RequestParam(required = false) Instant from, @RequestParam(required = false) Instant to,
+            @RequestParam(required = false, defaultValue = "false") boolean allHistory,
             @RequestParam(required = false, defaultValue = "100") int limit) {
-        return service.suspiciousBlockedBuys(symbol, from, to, limit);
+        return service.suspiciousBlockedBuys(symbol, from, to, allHistory, limit);
     }
 
     @PostMapping("/api/trade-inspector/blocked-buys/{signalId}/suspicious") @ResponseBody

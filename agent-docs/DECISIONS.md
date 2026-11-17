@@ -6,6 +6,22 @@ for traceability; do not silently rewrite history.
 
 No approved decisions recorded yet.
 
+### JEAN-OVERRIDE-20261118-003 — Suspicious blocked-BUY Replay handoff
+
+Date/time KSA: 2026-11-18
+
+Scope: Add a Trade Inspector Review dropdown option for all operator-marked
+suspicious blocked BUY signals, and make its Copy to Proven Analysis action
+prefill a read-only Replay window from one hour before through one hour after
+the blocked signal time.
+
+Waived: ALL pending items for this scope.
+
+Status: IMPLEMENTED UNDER JEAN OVERRIDE. The handoff creates no wallet trade,
+paper position, signal, or Production trading effect.
+
+---
+
 ### JEAN-OVERRIDE-20261118-002 — FIX-157 Production Replay deployment
 
 Date/time KSA: 2026-11-18

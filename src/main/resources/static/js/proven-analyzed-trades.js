@@ -1630,7 +1630,7 @@ document.getElementById('proven-chart-symbol')?.addEventListener('change',()=>{
 document.getElementById('proven-chart-interval')?.addEventListener('change',()=>loadProvenTradesGraph().catch(e=>showAdminMessage(e.message,true)));
 
 (async function initializeRegressionUi() {
-    await loadRegressionSymbols(); const q=new URLSearchParams(location.search); if(q.get('symbol'))document.getElementById('regression-symbol').value=q.get('symbol'); if(q.get('start'))document.getElementById('regression-start').value=regressionUtcLocalValue(q.get('start')); if(q.get('end'))document.getElementById('regression-end').value=regressionUtcLocalValue(q.get('end')); if(q.get('provenTradeId'))showAdminMessage('Copied trade is READY. Proven Analysis input is prefilled.');
+    await loadRegressionSymbols(); const q=new URLSearchParams(location.search); if(q.get('symbol'))document.getElementById('regression-symbol').value=q.get('symbol'); if(q.get('start'))document.getElementById('regression-start').value=regressionUtcLocalValue(q.get('start')); if(q.get('end'))document.getElementById('regression-end').value=regressionUtcLocalValue(q.get('end')); if(q.get('provenTradeId'))showAdminMessage('Copied trade is READY. Proven Analysis input is prefilled.'); if(q.get('blockedSignalId'))showAdminMessage(`Suspicious blocked BUY #${q.get('blockedSignalId')} is ready for Replay. The window is one hour before and one hour after its signal time.`);
     await loadProvenTradesGraph();
     await loadInvestigationCases();
     const runs = await loadRegressionRuns();

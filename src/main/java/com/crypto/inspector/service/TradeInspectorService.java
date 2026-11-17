@@ -182,8 +182,13 @@ public class TradeInspectorService {
 
     /** Persistent research queue; returns only operator-marked blocked BUY evidence. */
     @Transactional(readOnly = true)
-    public List<Map<String, Object>> suspiciousBlockedBuys(String requestedSymbol, Instant requestedFrom, Instant requestedTo, int requestedLimit) {
-        TimeWindow window = blockedSignalWindow(requestedFrom, requestedTo);
+    public List<Map<String, Object>> suspiciousBlockedBuys(String requestedSymbol, Instant requestedFrom, Instant requestedTo,
+                                                            boolean allHistory, int requestedLimit) {
+        // The Review dropdown is an operator-curated queue. Unlike chart markers,
+        // it intentionally spans all persisted suspicious reviews unless a window is requested.
+        TimeWindow window = allHistory && requestedFrom == null && requestedTo == null
+                ? new TimeWindow(Instant.EPOCH, Instant.now())
+                : blockedSignalWindow(requestedFrom, requestedTo);
         String symbol = normalizeSymbol(requestedSymbol);
         int limit = Math.max(1, Math.min(requestedLimit, 250));
         List<TradeSignal> signals = blockedBuyReviewRepository.findBySuspiciousTrueOrderByMarkedAtDesc().stream()

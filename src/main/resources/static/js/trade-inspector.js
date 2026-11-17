@@ -126,6 +126,21 @@ function renderSymbols(symbols){
   symbolsLoaded=true;
 }
 
+function suspiciousBlockedBuyCard(signal){
+ const signalId=esc(signal.signalId??'—');
+ return `<article class="inspector-card suspicious-blocked-buy-card">
+  <div class="inspector-card-head">
+   <div class="inspector-symbol"><strong>${esc(signal.symbol||'—')}</strong><span class="badge buy">BLOCKED BUY</span><span class="quality early">SUSPICIOUS</span></div>
+   <div class="inspector-head-actions"><button type="button" class="trade-chart-link" data-copy-suspicious-to-proven="1" data-signal-id="${signalId}"><span>✓</span> Copy to Proven Analysis</button></div>
+  </div>
+  <div class="inspector-card-body"><section class="inspector-block"><h3>Suspicious blocked BUY #${signalId}</h3><div class="inspector-kv">
+   <div><span>Signal time</span><strong>${esc(investigationKsaDate(signal.generatedAt))} KSA</strong></div><div><span>Price</span><strong>${esc(chartPriceLabel(signal.price))}</strong></div>
+   <div><span>Technical score</span><strong>${esc(signal.score??'—')}</strong></div><div><span>Effective confidence</span><strong>${esc(signal.effectiveConfidence??signal.confidence??'—')}</strong></div>
+   <div><span>Blocker</span><strong>${esc(signal.blocker||'FINAL DECISION')}</strong></div><div><span>Strategy</span><strong>${esc(signal.strategy||'—')}</strong></div>
+  </div><p class="quality-explanation">${esc(signal.blockerExplanation||signal.finalExplanation||'No persisted explanation is available.')}</p></section></div>
+ </article>`;
+}
+
 function openTradeCard(t){
  const mfeClass=cls(t.maximumFavorablePercent);
  return `<article class="inspector-card open-trade-card">
@@ -306,6 +321,21 @@ async function load(){
  const state=String($('trade-state-filter')?.value||'CLOSED').toUpperCase();
  const symbol=String($('symbol-filter')?.value||'ALL').toUpperCase();
  try{
+  const review=String($('review-filter')?.value||'ALL');
+  if(review==='SUSPICIOUS_BLOCKED_BUYS'){
+   const params=new URLSearchParams({symbol,allHistory:'true',limit:'250'});
+   const r=await fetch(`/api/trade-inspector/suspicious-blocked-buys?${params.toString()}`,{cache:'no-store'});
+   if(!r.ok)throw new Error(`HTTP ${r.status}`);
+   const signals=await r.json();window.__suspiciousBlockedBuys=signals;
+   $('summary-net').textContent='—';$('summary-net').className='';$('summary-count').textContent=`${signals.length} suspicious blocked BUY signal${signals.length===1?'':'s'}`;
+   $('summary-win-rate').textContent='—';$('summary-record').textContent='Operator-marked research evidence';
+   $('summary-average').textContent='—';$('summary-average').className='';$('summary-averages').textContent='No trade or P&L was created';$('summary-profit-factor').textContent='—';
+   $('inspector-list-eyebrow').textContent='OPERATOR-MARKED RESEARCH EVIDENCE';$('inspector-list-title').textContent='Suspicious blocked BUYs';
+   $('trade-cards').innerHTML=signals.length?signals.map(suspiciousBlockedBuyCard).join(''):'<div class="empty">No suspicious blocked BUY signals match this symbol.</div>';
+   $('inspector-page-info').textContent=`All marked signals · ${signals.length} result${signals.length===1?'':'s'}`;
+   $('inspector-prev').disabled=true;$('inspector-next').disabled=true;$('inspector-updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
+   return;
+  }
   const markedForReviewOnly=String($('review-filter')?.value||'ALL')==='MARKED'; const params=new URLSearchParams({symbol,venue:'ALL',state,page:String(inspectorPage),pageSize:'10',markedForReviewOnly:String(markedForReviewOnly)});
   const r=await fetch(`/api/trade-inspector?${params.toString()}`,{cache:'no-store'});
   if(!r.ok)throw new Error(`HTTP ${r.status}`);
@@ -1119,3 +1149,10 @@ document.addEventListener('click',async event=>{
 });
 document.addEventListener('change',async e=>{const b=e.target.closest('input[data-review-trade]');if(!b)return;const id=b.dataset.sellTradeId;b.disabled=true;try{const r=await fetch(`/api/trade-inspector/${id}/review`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({markedForReview:b.checked})});if(!r.ok)throw new Error(`HTTP ${r.status}`);if(String($('review-filter')?.value)==='MARKED'&&!b.checked)await load();}catch(x){b.checked=!b.checked;$('inspector-error').textContent=x.message;$('inspector-error').classList.remove('hidden')}finally{b.disabled=false}});
 document.addEventListener('click',async e=>{const b=e.target.closest('button[data-copy-proven]');if(!b)return;b.disabled=true;try{const r=await fetch(`/api/trade-inspector/${b.dataset.sellTradeId}/copy-to-proven`,{method:'POST'});if(!r.ok)throw new Error(`HTTP ${r.status}`);const d=await r.json();const q=new URLSearchParams({provenTradeId:d.provenTradeId,symbol:d.symbol,start:d.analysisStart,end:d.analysisEnd});location.href=`/proven-analyzed-trades?${q}`;}catch(x){b.disabled=false;$('inspector-error').textContent=x.message;$('inspector-error').classList.remove('hidden')}});
+document.addEventListener('click',event=>{
+ const button=event.target.closest('button[data-copy-suspicious-to-proven]');if(!button)return;
+ const signal=(window.__suspiciousBlockedBuys||[]).find(row=>String(row.signalId)===String(button.dataset.signalId));
+ const at=window.CryptoTime.parseUtc(signal?.generatedAt);if(!signal||!at||Number.isNaN(at.getTime()))return;
+ const q=new URLSearchParams({symbol:String(signal.symbol||'').toUpperCase(),start:new Date(at.getTime()-60*60*1000).toISOString(),end:new Date(at.getTime()+60*60*1000).toISOString(),blockedSignalId:String(signal.signalId)});
+ location.href=`/proven-analyzed-trades?${q}`;
+});

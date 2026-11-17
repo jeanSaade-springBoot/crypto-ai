@@ -1,3 +1,18 @@
+# 2026-11-18 — Suspicious blocked-BUY Replay handoff (IMPLEMENTED UNDER JEAN OVERRIDE)
+
+- **Problem:** operator-marked suspicious blocked BUY evidence could be viewed only
+  as chart markers and did not provide a direct, consistent Replay investigation window.
+- **Solution:** added **Suspicious blocked BUYs** to Trade Inspector's Review filter.
+  It reads all persisted suspicious reviews and offers a direct Proven Analysis handoff
+  with the symbol and `[signal time - 1h, signal time + 1h]` prefilled.
+- **Files/classes:** `TradeInspectorController`, `TradeInspectorService`, Trade Inspector
+  HTML/JavaScript, Proven Analysis JavaScript.
+- **Database impact:** NONE. Existing `blocked_buy_review` rows are read only.
+- **Production impact:** read-only UI/API behaviour only; no trade, wallet, position,
+  signal, configuration, or execution change.
+- **Replay impact:** the operator may start a Replay from the prefilled window; the
+  handoff itself does not create a Replay run.
+
 # 2026-10-08 — FIX-153 local-candle hardening status
 
 # 2026-11-15 — Jenkins Mockito-stub repair (IMPLEMENTED UNDER JEAN OVERRIDE)
