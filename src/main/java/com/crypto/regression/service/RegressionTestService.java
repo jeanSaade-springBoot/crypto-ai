@@ -4,6 +4,10 @@ import com.crypto.regression.dto.RegressionTestRunRequest;
 import com.crypto.inspector.service.TradeInvestmentHistory;
 import com.crypto.regression.replay.ReplayFix122EvaluationStore;
 import com.crypto.regression.replay.ReplayAccessPolicy;
+import com.crypto.regression.replay.ReplayPolicyProfile;
+import com.crypto.regression.replay.ReplayPolicyProfileStore;
+import com.crypto.wallet.domain.WalletSettings;
+import com.crypto.wallet.repository.WalletSettingsRepository;
 import com.crypto.regression.dto.RegressionInvestigationCaseRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -16,11 +20,16 @@ import java.sql.PreparedStatement;
 import java.sql.Statement;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.context.event.EventListener;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -40,6 +49,12 @@ public class RegressionTestService {
     private final RegressionTestWorker worker;
     private final ReplayFix122EvaluationStore replayFix122EvaluationStore;
     private final ReplayCandidateRecoveryLedgerService candidateRecoveryLedgerService;
+    private final ReplayPolicyProfileStore replayPolicyProfileStore;
+    private final WalletSettingsRepository walletSettingsRepository;
+
+    private static final BigDecimal REPLAY_MINIMUM_EXECUTABLE_NOTIONAL_USDT = BigDecimal.TEN;
+    private static final String REPLAY_POLICY_FINGERPRINT = "FIX-156-REPLAY-POLICY-V1";
+    private static final String EXCHANGE_CONSTRAINT_FIXTURE_HASH = "FIX-156-MIN-NOTIONAL-10-USDT";
 
     private static void requireReplayRead(String table) {
         ReplayAccessPolicy.require(table, ReplayAccessPolicy.Operation.REPLAY_READ);
@@ -234,11 +249,58 @@ public class RegressionTestService {
             throw new IllegalStateException("Could not create regression test run.");
         }
         long id = key.longValue();
-        // FIX-156 / RET-01: do not persist a legacy shared experiment revision
-        // for baseline Replay. Its fixed parity policy is recorded by the
-        // immutable Replay profile/certificate work, not by FIX-122 state.
-        worker.runAsync(id, effectiveSource);
+        freezeReplayPolicyProfile(id);
+        // The worker must never race the profile INSERT. It is scheduled only after the
+        // run row and immutable Replay-owned profile have committed successfully.
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void afterCommit() { worker.runAsync(id, effectiveSource); }
+            });
+        } else {
+            // Saved investigation cases call this method internally, bypassing the Spring proxy.
+            // Their JDBC writes are already committed one statement at a time.
+            worker.runAsync(id, effectiveSource);
+        }
         return id;
+    }
+
+    /**
+     * Snapshot the configured policy once, before asynchronous Replay begins. The worker can
+     * subsequently read only the immutable Replay-owned profile and never wallet_settings.
+     */
+    private void freezeReplayPolicyProfile(long runId) {
+        WalletSettings settings = walletSettingsRepository.findById(1L)
+                .orElseThrow(() -> new IllegalStateException("Replay requires configured wallet settings before it can freeze a policy profile."));
+        Instant effectiveAt = Instant.now();
+        String canonical = String.join("|", REPLAY_POLICY_FINGERPRINT, settings.getExecutionProfile(),
+                Boolean.toString(settings.isRequireNewBuyTransition()), decimal(settings.getMinimumUsdtReserve()),
+                decimal(settings.getBaseTradeAmountUsdt()), Integer.toString(settings.getMaximumDailyNewPositions()),
+                Boolean.toString(settings.isDynamicProfitLockEnabled()), decimal(settings.getProfitLockActivationPercent()),
+                decimal(settings.getProfitLockInitialPercent()), decimal(settings.getProfitLockTrailStepPercent()),
+                EXCHANGE_CONSTRAINT_FIXTURE_HASH, decimal(REPLAY_MINIMUM_EXECUTABLE_NOTIONAL_USDT));
+        ReplayPolicyProfile profile = new ReplayPolicyProfile(runId, sha256(canonical), effectiveAt,
+                REPLAY_POLICY_FINGERPRINT, settings.getExecutionProfile(), settings.isRequireNewBuyTransition(),
+                settings.getMinimumUsdtReserve(), settings.getBaseTradeAmountUsdt(), settings.getMaximumDailyNewPositions(),
+                EXCHANGE_CONSTRAINT_FIXTURE_HASH, REPLAY_MINIMUM_EXECUTABLE_NOTIONAL_USDT,
+                settings.isDynamicProfitLockEnabled(), settings.getProfitLockActivationPercent(),
+                settings.getProfitLockInitialPercent(), settings.getProfitLockTrailStepPercent(), settings.getBaseTradeAmountUsdt());
+        replayPolicyProfileStore.insert(profile);
+    }
+
+    private static String decimal(BigDecimal value) {
+        if (value == null) throw new IllegalStateException("Replay policy profile cannot freeze a null numeric setting.");
+        return value.stripTrailingZeros().toPlainString();
+    }
+
+    private static String sha256(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte part : digest) hex.append(String.format("%02x", part));
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable for Replay profile evidence.", impossible);
+        }
     }
 
 

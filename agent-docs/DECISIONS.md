@@ -6,6 +6,21 @@ for traceability; do not silently rewrite history.
 
 No approved decisions recorded yet.
 
+### JEAN-OVERRIDE-20261118-004 — Replay policy-profile creation repair
+
+Date/time KSA: 2026-11-18
+
+Scope: Persist the immutable Replay policy profile before a Replay worker starts;
+validate locally, deploy, and rerun the failed PEPEUSDT Replay window. Only
+Replay-owned tables may be written.
+
+Waived: ALL pending items for this scope.
+
+Status: IMPLEMENTED UNDER JEAN OVERRIDE. No Production trading, wallet,
+signal, position, or configuration mutation is authorized.
+
+---
+
 ### JEAN-OVERRIDE-20261118-003 — Suspicious blocked-BUY Replay handoff
 
 Date/time KSA: 2026-11-18

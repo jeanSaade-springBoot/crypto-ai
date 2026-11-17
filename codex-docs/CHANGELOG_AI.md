@@ -13,6 +13,21 @@
 - **Replay impact:** the operator may start a Replay from the prefilled window; the
   handoff itself does not create a Replay run.
 
+# 2026-11-18 — Replay policy-profile creation repair (IMPLEMENTED UNDER JEAN OVERRIDE)
+
+- **Problem:** a new Replay run could begin its asynchronous execution before an
+  immutable `replay_policy_profile` existed, failing closed with a FIX-156 error.
+- **Root cause:** the new-run path launched the worker without creating a profile;
+  it also did not establish an after-commit boundary for that launch.
+- **Solution:** snapshot configured policy values once into Replay-owned profile tables,
+  then launch the worker only after the creation transaction commits.
+- **Files/classes:** `RegressionTestService`.
+- **Database impact:** inserts only into `replay_policy_profile` and
+  `replay_policy_profile_detail`, both Replay-owned tables.
+- **Production impact:** no trading, wallet, signal, position, or configuration write.
+- **Replay impact:** new runs can execute with immutable policy evidence; parity remains
+  explicitly not measured.
+
 # 2026-10-08 — FIX-153 local-candle hardening status
 
 # 2026-11-15 — Jenkins Mockito-stub repair (IMPLEMENTED UNDER JEAN OVERRIDE)
