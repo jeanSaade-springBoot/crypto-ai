@@ -144,6 +144,17 @@
 <tbody id="regression-trades-body"><tr><td colspan="11">Run a full replay to see simulated trades.</td></tr></tbody>
 </table></div>
 </div>
+<div class="regression-detail hidden" id="candidate-recovery-ledger">
+<div class="regression-trades-head">
+<div><h3>Late-entry recovery ledger</h3><p class="form-note">Replay-only research for blocked BUY candidates. It records virtual outcomes only: it never creates paper positions, wallet trades, or Production trades.</p></div>
+<button class="secondary-button" disabled id="candidate-recovery-run" type="button">Build recovery ledger</button>
+</div>
+<p id="candidate-recovery-summary" class="form-note">Select a completed Replay run to inspect its ledger.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Time</th><th>Decision</th><th>Candidate / fill</th><th>Virtual P&amp;L</th><th>Cumulative</th><th>Reason</th></tr></thead>
+<tbody id="candidate-recovery-body"><tr><td colspan="7">No recovery ledger has been built for this Replay run.</td></tr></tbody>
+</table></div>
+</div>
 <div class="section-heading regression-current-runs-heading">
 <div>
 <p class="eyebrow">CURRENT TEST DATA</p>

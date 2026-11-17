@@ -552,3 +552,15 @@ and the remaining external MySQL/release proof.
   passed (4 tests). JavaScript runtime validation is unavailable because Node.js
   is not installed/on `PATH` on this workstation.
 - Status: IMPLEMENTED UNDER JEAN OVERRIDE (`JEAN-OVERRIDE-20261116-004`); no Git push, deployment, or Production change was performed.
+
+## 2026-11-17 - Replay-only late-entry candidate recovery ledger
+
+- Problem: the late-entry hypothesis could not be measured chronologically within a selected Replay window without risking confusion with normal Replay or paper-trading outcomes.
+- Root cause: Replay retained generated signals and baseline executions but had no isolated, durable candidate-recovery decision stream.
+- Solution: added additive V114 `replay_candidate_recovery_ledger`; a deterministic Replay-only policy and service record supported blocked BUY candidates, fresh-release BUY_ALLOWED/BUT_REJECTED outcomes, virtual exits/expiry, adverse fill costs, realized/unrealized P&L, cumulative results, and a baseline Replay comparison. The existing full Replay chart overlays the resulting points and the Proven Analysis page exposes a per-run ledger action/table.
+- Files/classes: `V114__replay_candidate_recovery_ledger.sql`, `ReplayCandidateRecoveryPolicy`, `ReplayCandidateRecoveryLedgerService`, `ReplayAccessPolicy`, `RegressionTestService`, `RegressionTestController`, `proven-analyzed-trades.html`, `proven-analyzed-trades.js`, and `ReplayCandidateRecoveryPolicyTest`.
+- Database impact: additive Replay-owned table only; it was not applied by this change.
+- Production impact: none. There is no Production database write, trading rule alteration, wallet/paper position creation, order interaction, or service configuration change.
+- Replay impact: an operator can build a timestamp-bounded, costed research ledger for an already completed Replay run. It is experimental evidence and does not claim Production parity or authorize a trading rule change.
+- Validation: Java 21 compile and focused policy test passed.
+- Status: IMPLEMENTED UNDER JEAN OVERRIDE (`JEAN-OVERRIDE-20261117-001`); no Git push, deployment, Production change, or migration application was performed.

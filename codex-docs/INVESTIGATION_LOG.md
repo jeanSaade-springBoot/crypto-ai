@@ -480,3 +480,188 @@ not a Production behavior change.
   favourable/adverse excursion, and blocker cohort against the same setup at
   the same horizon. Keep suspicious marking as human research metadata only;
   it must not bypass the live risk gates.
+
+## Production paper trade #31 (ICPUSDT) and its suspicious blocked BUY - 2026-11-16 KSA
+
+- Scope: read-only Contabo production review of paper position #31, wallet BUY
+  #69 / SELL #70, entry signal #70747, and suspicious blocked BUY #69658.
+  Evidence queries `DBQ-ICP31-003-CODEX` through `DBQ-ICP31-006-CODEX` read
+  `paper_position`, `wallet_trade`, `trade_signal`, `blocked_buy_review`, and
+  one-minute candles. No application, configuration, Production database, or
+  wallet data was changed.
+- Identity and exit: position #31 entered ICP at 2.559 at 23:46:06 KSA and
+  stopped at 2.541 at 23:47:37 KSA for -1.05509965 USDT (-0.703%). The stored
+  position stop was 2.541611701416. This was a real stop-loss, not an
+  execution-delay finding.
+- Suspicious point: signal #69658 occurred at 23:03:04 KSA, 43 minutes before
+  that entry. It was an original/final BUY with score 84 and raw confidence 77,
+  but effective confidence 49 because `RANGE_ENTRY_LOCATION` vetoed entry.
+  It was later marked suspicious in `blocked_buy_review`.
+- Exact veto evidence: the active `RANGE_MEAN_REVERSION` strategy classified
+  price 2.524 as 80.80% through the Bollinger range, above its normal 55.00%
+  entry limit. The persisted decision path says that it blocked a new range
+  entry until price location improved or a strict expansion transition was
+  confirmed. ATR, higher-timeframe, BTC, derivatives, and order-book stages
+  did not impose the veto. The order book did record a persistent ask wall at
+  2.533 before the target, but the system recorded it as insufficient for a
+  hard veto.
+- Subsequent outcome: its planned stop/target were 2.509840089712 / 2.545239865432.
+  One-minute candles printed the target at 23:40 KSA; the low through the next
+  hour was 2.512, so its stored stop was not printed. Its 15-minute high was
+  2.538 and low 2.516: it first endured a material but sub-stop pullback before
+  recovering. Candle evidence cannot prove exact fill or slippage, but it is a
+  strong missed-opportunity candidate.
+- Relation to the later loss: at 23:45 KSA a 5m BUY #70723 was allowed. The
+  actual execution used 1m signal #70747 at 23:46 KSA, which was NEUTRAL and
+  explicitly labelled `PULLBACK_ENTRY` at 2.559 versus a recommended retrace
+  near 2.551688. Execution Intelligence permitted a conservative 15% setup
+  entry because the fresh 5m BUY was its authority. Price then reached the
+  configured stop within roughly 91 seconds. This is a timing/entry-quality
+  concern distinct from the earlier blocked range signal.
+
+## Production wallet trade #68 / paper position #30 (PEPEUSDT) - 2026-11-16 KSA
+
+- Scope: read-only Contabo production review of wallet SELL #68, paper position
+  #30, entry wallet BUY #67 / signal #69577, contemporaneous blocked 5m BUY
+  #69578, and same-day marked PEPE signal #66678. Evidence queries
+  `DBQ-PEPE68-001-CODEX` through `DBQ-PEPE68-004-CODEX` read production
+  trade, signal, review, and candle data only. No application, configuration,
+  Production database, or wallet data was changed.
+- Identity and loss: the position opened at 23:00:14 KSA at 0.000003930 and
+  stopped at 23:32:54 KSA at 0.000003900, realizing -3.81679389 USDT
+  (-0.763%). It re-entered about one minute after the preceding PEPE position
+  profit-locked.
+- Entry cause: signal #69577 was only a 1m `WATCH` (score 69, confidence 72),
+  yet Final Decision allowed it. Execution Intelligence then created the 50%
+  entry from accumulated fresh evidence (3 BUY / 12 WATCH) while 5m and 1h
+  were both `WATCH`. Its own stop 0.000003905284 was reached. This is an
+  execution-authority/entry-quality candidate, not a delayed execution.
+- Contemporaneous blocked point: two seconds before the wallet BUY, 5m signal
+  #69578 was an original BUY (score 83, raw confidence 75) but was downgraded
+  to WATCH and blocked by `MULTI_TIMEFRAME`: the BREAKOUT strategy required
+  bullish higher-timeframe confirmation, while its 1h was WATCH with trend
+  11/25 in a strong-downtrend regime. This point is **not** marked suspicious.
+  Its 0.000003994779 target did not print in the following hour; its own wider
+  0.000003886814 stop did print at 23:37 KSA. That outcome supports the veto,
+  although candle evidence cannot prove executable fills.
+- Marked suspicious PEPE point: the same-day red-marker point is #66678 at
+  21:06 KSA, almost two hours before this trade, not at the re-entry. It was a
+  score-87/raw-confidence-67 RANGE mean-reversion BUY blocked because price was
+  94.55% through its Bollinger range against the normal 55% limit. Its target
+  printed at 21:40 KSA and its stop did not print in the first hour. It is a
+  separate strong missed-opportunity candidate; it did not cause trade #68.
+
+## PEPE and ICP execution-area comparison - 2026-11-16 KSA
+
+- Scope: read-only Contabo production comparison of all PEPEUSDT and ICPUSDT
+  paper positions/wallet executions opened during 16 November KSA. Query
+  `DBQ-PEPE-ICP-DAY-001-CODEX` reconstructed the execution sequence; query
+  `DBQ-PEPE-ICP-DAY-002-CODEX` measured the one-minute daily price envelope.
+  No application, configuration, Production database, or wallet data changed.
+- ICP: six positions entered progressively higher at 2.388, 2.450, 2.468,
+  2.471, 2.511--2.514, and 2.559. Its entry span was 7.161%, within a daily
+  2.198--2.560 range (16.470%). These are not all the same price area: they
+  form a sequence of early range/transition entries, then breakout continuation
+  entries, followed by the late 2.559 entry that stopped. Positions #23/#24
+  are the closest same-swing re-entry pair; #31 is the outlying late entry.
+- PEPE: four positions entered at 0.000003880, 0.000003890, 0.000003914994,
+  and 0.000003930: only a 1.289% entry span, inside the daily
+  0.000003710--0.000003950 range (6.469%). These are repeated attempts in the
+  same narrow 0.00000388--0.00000393 area rather than clearly separate market
+  areas. Position #29 profit-locked at 22:59 KSA and position #30 re-entered
+  at 23:00 KSA at the same 0.000003930 area; that is the clearest immediate
+  same-area re-entry.
+- Interpretation: the repeated PEPE activity is a churn/re-entry pattern in a
+  narrow range; the ICP activity is broadly a trend-following stair-step, with
+  the final trade materially later/higher than the earlier profitable entries.
+
+### Deferred follow-up — investigate after late-entry analysis is finalized
+
+- Topic: PEPE same-area repeat-entry behavior, especially the immediate
+  re-entry after a profit-lock exit.
+- Evidence to start from: position #29 profit-locked at 22:59 KSA and position
+  #30 re-entered at 23:00 KSA at the same 0.000003930 area before stopping.
+- Scope for the later investigation: determine whether the re-entry was
+  justified by new independent evidence, a deliberate continuation/add policy,
+  or repeated accumulated-evidence reuse. Compare the applicable cooldown,
+  duplicate-area, position-close, and execution-intelligence paths without
+  changing production behavior or treating the finding as a confirmed defect
+  beforehand.
+
+## Production wallet trade #58 / PEPE position #26 - 2026-11-16 KSA
+
+- Scope: read-only Contabo production review of wallet SELL #58, its owning
+  paper position #26, wallet BUYs #54--#56, associated signals, and marked
+  blocked BUYs in the relevant window. Query `DBQ-PEPE58-001-CODEX` read
+  production position, wallet-trade, signal, and review evidence only. No
+  application, configuration, Production database, or wallet data changed.
+- Identity: Inspector trade #58 is the final `POSITION_STOP_LOSS` SELL, not a
+  separately opened trade. Position #26 first opened at 20:18:08 KSA at
+  0.000003880; it added 25% at 20:22:09 and another 50% at 20:23:11, both at
+  0.000003880. The displayed 20:23:11 time corresponds to the final
+  `TREND_ADD`, while the cumulative position stopped at 20:30:44 at
+  0.000003860 for -5.15463918 USDT (-0.515%).
+- Admission and add behavior: the original position used accumulated evidence
+  (1 BUY / 13 WATCH) despite 5m and 1h both being WATCH. The final add used
+  signal #65561 (BUY, score 80, raw/effective confidence 69), but its context
+  remained mixed with a 5m WATCH. The position expanded from 25% to 50% and
+  then 100% while price stayed at the same entry area, before the stop.
+- Suspicious evidence: no `blocked_buy_review.suspicious=1` row exists in the
+  19:45--20:45 KSA investigation window. Thus there is no marked suspicious
+  blocked BUY that explains or precedes this loss. The nearest reviewed issue
+  is instead the execution/add policy: repeated accumulated-evidence and
+  progressive additions in a weak-uptrend setup with 5m/1h WATCH context.
+
+## Cohort analysis — all marked suspicious blocked BUYs - 2026-11-17 KSA
+
+- Scope: read-only Contabo production analysis of all currently marked
+  `blocked_buy_review.suspicious=1` signals (11 records). Queries
+  `DBQ-SUSPICIOUS-COHORT-001-CODEX` through
+  `DBQ-SUSPICIOUS-COHORT-003-CODEX` measured their persisted evidence,
+  subsequent one-minute candle threshold touches, and first same-symbol wallet
+  BUY in the following six hours. No application, configuration, Production
+  database, or wallet data was changed.
+- Cohort facts: every marked signal was technically strong (score 77--91) with
+  raw confidence 62--77. Every effective confidence is 49 because the final
+  blocker cap applied, not because the underlying confidence was 49.
+- Blocker concentration: `RANGE_ENTRY_LOCATION` is 5/11 (average score 86.6,
+  average raw confidence 71.2); `MULTI_TIMEFRAME` 3/11; `ATR_RISK` 2/11; and
+  `BTC_CONTEXT` 1/11. Thus the dominant issue is protective context/entry
+  location, not weak trend, volume, or momentum scoring.
+- Retrospective threshold screen: 10/11 printed their persisted target before
+  a later one-minute candle printed their persisted stop. The exception is
+  PEPE #16814, which printed its stop but not its target in the six-hour
+  window. This is not a win-rate result: the cohort was manually selected after
+  chart review, and OHLC candles cannot prove fill ordering, fees, or slippage.
+- Late-entry evidence: all 11 later received a same-symbol wallet BUY within
+  six hours at a higher price than the marked blocked candidate (+0.501% to
+  +2.931%; median +1.229%). The later routes were 5 immediate validations, 3
+  accumulated-evidence entries, 2 setup-confirmation wakeups, and 1
+  setup-timeframe-ATR entry. This demonstrates repeated later/higher admission,
+  but not that every later trade was caused solely by the earlier block.
+- Evidence-backed missing capability: the current final-decision pipeline
+  persists a one-way hard veto, while the later execution paths evaluate fresh
+  signals/opportunity evidence. The observed gap is a safe, durable
+  **high-quality blocked-candidate recovery lifecycle**: retain the original
+  candidate's entry area, stop/target/risk budget and blocker; permit only an
+  explicitly validated release (for example confirmed expansion or a genuine
+  retrace); and prohibit a later accumulated/setup route from entering above a
+  defined candidate-chase limit without fresh independent authority. This is a
+  proposed design hypothesis, not a confirmed code defect and not authorization
+  to weaken current risk gates.
+
+### External research cross-check
+
+- Research reviewed on 2026-11-17: a 2026 peer-reviewed cryptocurrency
+  momentum study reports stronger evidence for time-series than cross-sectional
+  momentum after realistic liquidation/friction treatment; it cautions that
+  statistically significant mean returns can still yield negative profits in
+  fat-tailed crypto portfolios. A 2023 study of nearly 3,000 assets reports
+  that price signals are more useful at shorter horizons and volume signals at
+  longer horizons. Recent walk-forward/overfitting research emphasizes that
+  the conversion from forecast/signal into trades and realistic costs can
+  dominate apparent gross performance.
+- Applicability: these studies do not prove an individual production blocker is
+  wrong and do not validate adding any specific indicator. They support
+  prioritizing a timestamp-safe recovery/entry-quality policy and held-out,
+  costed Replay evaluation over adding more correlated oscillators.

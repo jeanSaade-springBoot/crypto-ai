@@ -45,7 +45,34 @@ Jean's exact words:
 > scope: FIX-156 Replay-only parity work
 > waive: ALL pending
 
-Status: IMPLEMENTATION AUTHORIZED UNDER JEAN OVERRIDE. This override does not
+Status: IMPLEMENTED UNDER JEAN OVERRIDE. This override does not
+authorize Git push, remote merge, deployment, Production server configuration
+or live-service changes, Production database writes or migration application,
+live Binance account or order actions, or deletion.
+
+---
+
+### JEAN-OVERRIDE-20261117-001 — Replay-only candidate-recovery decision ledger
+
+Date/time KSA: 2026-11-17 00:00:00 +03:00
+
+Scope: Add a Replay-only candidate-recovery decision ledger for a selected
+`[t1,t2]` period. It records chronological `BUY_ALLOWED`, `SELL_ALLOWED`,
+`BUY_REJECTED`, and `EXPIRED` decisions, virtual prices, realized/unrealized
+P&L, fees/slippage, cumulative scenario results, and baseline Replay comparison.
+It must not create paper positions, wallet trades, production trades, or alter
+production behavior. Ledger events must render on the existing Replay graph as
+distinct scenario BUY/SELL markers.
+
+Waived: ALL pending items for this scope.
+
+Jean's exact words:
+
+> proceed direct from jean\
+> scope: Add a Replay-only candidate-recovery decision ledger for a selected [t1,t2] period. It must record chronological BUY_ALLOWED, SELL_ALLOWED, BUY_REJECTED, and EXPIRED decisions; virtual entry/exit prices; realized and unrealized P&L; fees/slippage; cumulative scenario results; and comparison with baseline Replay. It must not create paper positions, wallet trades, production trades, or alter production behavior.\
+> waive: ALL pending
+
+Status: IMPLEMENTED UNDER JEAN OVERRIDE. This override does not
 authorize Git push, remote merge, deployment, Production server configuration
 or live-service changes, Production database writes or migration application,
 live Binance account or order actions, or deletion.

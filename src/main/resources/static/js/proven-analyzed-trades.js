@@ -627,6 +627,7 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
             api(`${base}/signals`),
             api(`${base}/opportunities`),
             api(`${base}/trades`),
+            api(`${base}/candidate-recovery-ledger`),
             api(`${base}/position-management`),
             api(`${base}/fix122`),
             api(`${base}/fix124`),
@@ -638,13 +639,14 @@ async function loadRegressionDetail(runId, includeTables = true, archived = fals
         const signals = detailResults[0].status === 'fulfilled' ? detailResults[0].value : [];
         const opportunities = detailResults[1].status === 'fulfilled' ? detailResults[1].value : [];
         const trades = detailResults[2].status === 'fulfilled' ? detailResults[2].value : [];
+        renderCandidateRecoveryLedger(detailResults[3], run);
         // FIX-122: failure is visible; it must never render as a successful rule check.
-        renderFix122(detailResults[4]);
-        renderFix124(detailResults[5]);
-        renderFix127(detailResults[6]);
-        renderFix129(detailResults[7]);
-        renderFix130(detailResults[8]);
-        const management = detailResults[3].status === 'fulfilled' ? detailResults[3].value : [];
+        renderFix122(detailResults[5]);
+        renderFix124(detailResults[6]);
+        renderFix127(detailResults[7]);
+        renderFix129(detailResults[8]);
+        renderFix130(detailResults[9]);
+        const management = detailResults[4].status === 'fulfilled' ? detailResults[4].value : [];
 
         // FIX-11O: always expose fresh directional Replay signals independently of the BUY-centric
         // execution pipeline. This makes generated BUY/STRONG_BUY and SELL/STRONG_SELL rows visible
@@ -1298,6 +1300,44 @@ function buildRunExecutionPath(executions) {
     return data;
 }
 
+function renderCandidateRecoveryLedger(result, run) {
+    const panel = document.getElementById('candidate-recovery-ledger');
+    const button = document.getElementById('candidate-recovery-run');
+    const summary = document.getElementById('candidate-recovery-summary');
+    const body = document.getElementById('candidate-recovery-body');
+    if (!panel || !button || !summary || !body) return;
+    panel.classList.remove('hidden');
+    button.disabled = false;
+    button.dataset.runId = String(run.id);
+    const data = result?.status === 'fulfilled' ? result.value : null;
+    if (!data) {
+        summary.textContent = 'The recovery-ledger migration is not available for this environment yet.';
+        body.innerHTML = '<tr><td colspan="7">No recovery ledger has been built for this Replay run.</td></tr>';
+        return;
+    }
+    const s = data.summary || {};
+    const b = data.baseline || {};
+    summary.textContent = `Recovery scenario: ${s.buys_allowed || 0} BUY_ALLOWED, ${s.sells_allowed || 0} SELL_ALLOWED, ${s.buys_rejected || 0} BUY_REJECTED, ${s.expired || 0} EXPIRED · realized ${Number(s.realized_pnl_usdt || 0).toFixed(4)} USDT · unrealized ${Number(s.unrealized_pnl_usdt || 0).toFixed(4)} USDT · baseline Replay: ${b.closed_positions || 0} closed positions / ${Number(b.realized_pnl_usdt || 0).toFixed(4)} USDT.`;
+    const events = data.events || [];
+    body.innerHTML = events.map(event => {
+        const pnl = event.realized_pnl_usdt ?? event.unrealized_pnl_usdt;
+        const entry = event.virtual_entry_price ? formatMovePrice(event.virtual_entry_price) : '—';
+        const exit = event.virtual_exit_price ? ` → ${formatMovePrice(event.virtual_exit_price)}` : '';
+        return `<tr><td>${escapeHtml(event.sequence_no)}</td><td>${formatMoveTime(event.event_time)}</td><td><strong>${escapeHtml(event.event_type)}</strong></td><td>#${escapeHtml(event.candidate_signal_id)} · ${entry}${exit}</td><td>${pnl == null ? '—' : Number(pnl).toFixed(4)}</td><td>${Number(event.cumulative_pnl_usdt || 0).toFixed(4)}</td><td>${escapeHtml(event.reason)}</td></tr>`;
+    }).join('') || '<tr><td colspan="7">No recovery ledger has been built for this Replay run.</td></tr>';
+}
+
+function recoveryChartSeries(events) {
+    const groups = {BUY_ALLOWED: [], SELL_ALLOWED: [], BUY_REJECTED: [], EXPIRED: [], OPEN_AT_T2: []};
+    (events || []).forEach(event => {
+        const time = window.CryptoTime.parseUtc(event.event_time);
+        const price = Number(event.decision_price ?? event.virtual_exit_price ?? event.virtual_entry_price);
+        if (!time || !Number.isFinite(price) || !groups[event.event_type]) return;
+        groups[event.event_type].push({x: time.getTime(), y: price, meta: event});
+    });
+    return Object.entries(groups).filter(([, data]) => data.length).map(([name, data]) => ({name: `Recovery ${name}`, type: 'scatter', data}));
+}
+
 async function renderReplayRunTradesPopup() {
     if (!provenPopupRun) return;
     const interval = document.getElementById('proven-popup-interval')?.value || '5m';
@@ -1327,6 +1367,7 @@ async function renderReplayRunTradesPopup() {
     empty?.classList.toggle('hidden', candles.length > 0);
     if (empty && !candles.length) empty.textContent = 'No candles are available for this Replay window.';
 
+    const recoverySeries = recoveryChartSeries(data.candidateRecoveryEvents);
     const series = [
         {name:'Price', type:'candlestick', data:candles},
         {name:'Replay trade path', type:'line', data:replayPath}
@@ -1334,6 +1375,7 @@ async function renderReplayRunTradesPopup() {
     if (showProduction) {
         series.push({name:'Production trade path', type:'line', data:productionPath});
     }
+    series.push(...recoverySeries);
 
     const options={
         chart:{type:'line',height:520,background:'transparent',foreColor:'#8da2b1',toolbar:{show:true},animations:{enabled:false},zoom:{enabled:true,autoScaleYaxis:true}},
@@ -1341,9 +1383,9 @@ async function renderReplayRunTradesPopup() {
         series,
         // FIX-11S: no R_BUY/R_SELL/P_BUY/P_SELL annotation labels. Replay and
         // Production are distinguished by their trade-path line colors instead.
-        colors: showProduction ? ['#8da2b1','#2da8ff','#ff9f43'] : ['#8da2b1','#2da8ff'],
-        stroke:{width:showProduction?[1,3,3]:[1,3],curve:'straight',connectNulls:false},
-        markers:{size:showProduction?[0,3,3]:[0,3],strokeWidth:0},
+        colors: (showProduction ? ['#8da2b1','#2da8ff','#ff9f43'] : ['#8da2b1','#2da8ff']).concat(['#39d98a','#ff6b72','#ffbf3f','#8899a6','#aa7dff']),
+        stroke:{width:Array(series.length).fill(0).map((_,i)=>i===0?1:(i<=(showProduction?2:1)?3:0)),curve:'straight',connectNulls:false},
+        markers:{size:Array(series.length).fill(0).map((_,i)=>i<=(showProduction?2:1)?(i===0?0:3):5),strokeWidth:0},
         dataLabels:{enabled:false},
         legend:{show:true},
         xaxis:{type:'datetime',crosshairs:{show:true,stroke:{width:1,dashArray:0}},labels:{datetimeUTC:false},tooltip:{enabled:false}},
@@ -1380,6 +1422,19 @@ document.getElementById('proven-popup-interval')?.addEventListener('change', () 
 document.getElementById('regression-view-all-trades')?.addEventListener('click', event => {
     const button = event.currentTarget;
     openReplayRunTradesPopup(button.dataset.runId, button.dataset.symbol).catch(error => showAdminMessage(error.message,true));
+});
+
+document.getElementById('candidate-recovery-run')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const runId = button.dataset.runId;
+    if (!runId) return;
+    button.disabled = true;
+    try {
+        const ledger = await api(`/api/administration/regression-tests/runs/${encodeURIComponent(runId)}/candidate-recovery-ledger`, {method:'POST'});
+        renderCandidateRecoveryLedger({status:'fulfilled', value:ledger}, {id:runId});
+        showAdminMessage('Replay-only late-entry recovery ledger built. Open View All Trades on Chart to see the candidate markers.');
+    } catch (error) { showAdminMessage(error.message, true); }
+    finally { button.disabled = false; }
 });
 
 document.getElementById('proven-popup-show-production')?.addEventListener('change', event => {

@@ -103,6 +103,16 @@ public class RegressionTestController {
         return service.trades(id);
     }
 
+    @GetMapping("/runs/{id}/candidate-recovery-ledger")
+    public Map<String, Object> candidateRecoveryLedger(@PathVariable long id) {
+        return service.candidateRecoveryLedger(id);
+    }
+
+    @PostMapping("/runs/{id}/candidate-recovery-ledger")
+    public Map<String, Object> rebuildCandidateRecoveryLedger(@PathVariable long id) {
+        return service.rebuildCandidateRecoveryLedger(id);
+    }
+
     // FIX-11S: read-only run-level chart payload. It overlays isolated Replay executions
     // with real Production wallet executions for the same symbol/window without changing
     // either execution path. Missing Production trades are returned as an empty list.

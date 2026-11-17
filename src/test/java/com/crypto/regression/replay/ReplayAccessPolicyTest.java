@@ -20,6 +20,7 @@ class ReplayAccessPolicyTest {
         assertDoesNotThrow(() -> ReplayAccessPolicy.require("replay_position", ReplayAccessPolicy.Operation.REPLAY_UPDATE));
         assertDoesNotThrow(() -> ReplayAccessPolicy.require("replay_execution", ReplayAccessPolicy.Operation.REPLAY_INSERT));
         assertDoesNotThrow(() -> ReplayAccessPolicy.require("replay_position_management", ReplayAccessPolicy.Operation.REPLAY_INSERT));
+        assertDoesNotThrow(() -> ReplayAccessPolicy.require("replay_candidate_recovery_ledger", ReplayAccessPolicy.Operation.REPLAY_INSERT));
         assertDoesNotThrow(() -> ReplayAccessPolicy.require("analysis_test_run", ReplayAccessPolicy.Operation.REPLAY_READ));
         assertDoesNotThrow(() -> ReplayAccessPolicy.require("trade_signal_test", ReplayAccessPolicy.Operation.REPLAY_READ));
         assertDoesNotThrow(() -> ReplayAccessPolicy.require("candle", ReplayAccessPolicy.Operation.MARKET_EVIDENCE_READ));

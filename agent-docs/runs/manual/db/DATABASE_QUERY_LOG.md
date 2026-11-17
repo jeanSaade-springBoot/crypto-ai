@@ -471,3 +471,168 @@
 - approximate output lines: 7
 - password: never logged
 
+
+## DBQ-ICP31-002-CODEX
+- timestamp: 2026-11-17T00:35:55.0873069+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-ICP31-002-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 699
+- approximate output lines: 17
+- password: never logged
+
+
+## DBQ-ICP31-003-CODEX
+- timestamp: 2026-11-17T00:36:06.0373555+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-ICP31-003-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 906
+- approximate output lines: 1
+- password: never logged
+
+
+## DBQ-ICP31-004-CODEX
+- timestamp: 2026-11-17T00:36:30.4629351+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-ICP31-004-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 2446
+- approximate output lines: 11
+- password: never logged
+
+
+## DBQ-ICP31-005-CODEX
+- timestamp: 2026-11-17T00:37:03.8162772+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-ICP31-005-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 971
+- approximate output lines: 53
+- password: never logged
+
+
+## DBQ-ICP31-006-CODEX
+- timestamp: 2026-11-17T00:37:26.9971431+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-ICP31-006-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 1433
+- approximate output lines: 341
+- password: never logged
+
+
+## DBQ-PEPE68-001-CODEX
+- timestamp: 2026-11-17T00:39:20.8912998+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-PEPE68-001-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 5088
+- approximate output lines: 8
+- password: never logged
+
+
+## DBQ-PEPE68-002-CODEX
+- timestamp: 2026-11-17T00:39:41.4054041+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-PEPE68-002-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 1449
+- approximate output lines: 8
+- password: never logged
+
+
+## DBQ-PEPE68-003-CODEX
+- timestamp: 2026-11-17T00:40:10.2102028+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-PEPE68-003-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 1167
+- approximate output lines: 323
+- password: never logged
+
+
+## DBQ-PEPE68-004-CODEX
+- timestamp: 2026-11-17T00:40:38.4138580+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-PEPE68-004-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 839
+- approximate output lines: 84
+- password: never logged
+
+
+## DBQ-PEPE-ICP-DAY-001-CODEX
+- timestamp: 2026-11-17T00:56:30.1833794+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-PEPE-ICP-DAY-001-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 864
+- approximate output lines: 35
+- password: never logged
+
+
+## DBQ-PEPE-ICP-DAY-002-CODEX
+- timestamp: 2026-11-17T00:56:54.1040029+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-PEPE-ICP-DAY-002-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 1840
+- approximate output lines: 5
+- password: never logged
+
+
+## DBQ-PEPE58-001-CODEX
+- timestamp: 2026-11-17T01:03:59.2864804+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-PEPE58-001-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 1222
+- approximate output lines: 12
+- password: never logged
+
+
+## DBQ-SUSPICIOUS-COHORT-001-CODEX
+- timestamp: 2026-11-17T01:46:09.6870265+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-SUSPICIOUS-COHORT-001-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 2322
+- approximate output lines: 16
+- password: never logged
+
+
+## DBQ-SUSPICIOUS-COHORT-002-CODEX
+- timestamp: 2026-11-17T01:46:38.2115263+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-SUSPICIOUS-COHORT-002-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 4725
+- approximate output lines: 16
+- password: never logged
+
+
+## DBQ-SUSPICIOUS-COHORT-003-CODEX
+- timestamp: 2026-11-17T01:47:10.4735370+03:00
+- agent: COORDINATOR
+- purpose: read-only investigation
+- SQL file: DBQ-SUSPICIOUS-COHORT-003-CODEX-COORDINATOR.sql
+- exit code: 0
+- duration_ms: 690
+- approximate output lines: 11
+- password: never logged
+

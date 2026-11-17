@@ -33,6 +33,7 @@ public final class ReplayAccessPolicy {
             "replay_position",
             "replay_execution",
             "replay_position_management",
+            "replay_candidate_recovery_ledger",
             "analysis_test_run",
             "trade_signal_test");
 

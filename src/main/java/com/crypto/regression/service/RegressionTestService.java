@@ -39,6 +39,7 @@ public class RegressionTestService {
     private final JdbcTemplate jdbcTemplate;
     private final RegressionTestWorker worker;
     private final ReplayFix122EvaluationStore replayFix122EvaluationStore;
+    private final ReplayCandidateRecoveryLedgerService candidateRecoveryLedgerService;
 
     private static void requireReplayRead(String table) {
         ReplayAccessPolicy.require(table, ReplayAccessPolicy.Operation.REPLAY_READ);
@@ -360,6 +361,7 @@ public class RegressionTestService {
         deleted.put("wallet_execution_test", jdbcTemplate.update("DELETE FROM wallet_execution_test"));
         deleted.put("wallet_position_test", jdbcTemplate.update("DELETE FROM wallet_position_test"));
         deleted.put("execution_opportunity_test", jdbcTemplate.update("DELETE FROM execution_opportunity_test"));
+        deleted.put("replay_candidate_recovery_ledger", jdbcTemplate.update("DELETE FROM replay_candidate_recovery_ledger"));
         deleted.put("trade_signal_test", jdbcTemplate.update("DELETE FROM trade_signal_test"));
         deleted.put("analysis_test_signal", jdbcTemplate.update("DELETE FROM analysis_test_signal"));
         deleted.put("analysis_test_result", jdbcTemplate.update("DELETE FROM analysis_test_result"));
@@ -384,7 +386,7 @@ public class RegressionTestService {
         // contains rows, throw and rollback instead of reporting a false successful purge.
         java.util.List<String> replayTables = java.util.List.of(
                 "one_candle_continuation_grace_test", "defensive_risk_reduction_observation_test", "position_management_test", "wallet_execution_test", "wallet_position_test",
-                "execution_opportunity_test", "trade_signal_test", "analysis_test_signal",
+                "execution_opportunity_test", "replay_candidate_recovery_ledger", "trade_signal_test", "analysis_test_signal",
                 "analysis_test_result", "analysis_test_run",
                 "one_candle_continuation_grace_test_archive", "defensive_risk_reduction_observation_test_archive", "position_management_test_archive", "wallet_execution_test_archive",
                 "wallet_position_test_archive", "execution_opportunity_test_archive",
@@ -524,6 +526,7 @@ public class RegressionTestService {
         requireReplayRead("analysis_test_run");
         ReplayAccessPolicy.require("candle", ReplayAccessPolicy.Operation.MARKET_EVIDENCE_READ);
         requireReplayRead("replay_execution");
+        requireReplayRead("replay_candidate_recovery_ledger");
         List<Map<String, Object>> runs = jdbcTemplate.queryForList("""
                 SELECT id, symbol, start_time, end_time
                 FROM analysis_test_run
@@ -559,6 +562,13 @@ public class RegressionTestService {
                   AND UPPER(side) IN ('BUY','SELL')
                 ORDER BY execution_time ASC, id ASC
                 """, runId, symbol, start, end);
+        List<Map<String, Object>> candidateRecoveryEvents = jdbcTemplate.queryForList("""
+                SELECT event_time,event_type,decision_price,virtual_entry_price,virtual_exit_price,
+                       realized_pnl_usdt,realized_pnl_percent,unrealized_pnl_usdt,unrealized_pnl_percent,reason
+                FROM replay_candidate_recovery_ledger
+                WHERE test_run_id=? AND symbol=? AND event_time BETWEEN ? AND ?
+                ORDER BY sequence_no ASC
+                """, runId, symbol, start, end);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("runId", runId);
@@ -568,11 +578,20 @@ public class RegressionTestService {
         result.put("to", end);
         result.put("candles", candles);
         result.put("replayExecutions", replayExecutions);
+        result.put("candidateRecoveryEvents", candidateRecoveryEvents);
         // FIX-156 / D47: the baseline Replay chart is deliberately
         // Replay-owned. It never reads wallet_trade as a convenient overlay;
         // any Production comparison belongs in an immutable, pre-extracted
         // fixture and in the parity report, not in the execution UI query.
         return result;
+    }
+
+    public Map<String, Object> rebuildCandidateRecoveryLedger(long runId) {
+        return candidateRecoveryLedgerService.rebuild(runId);
+    }
+
+    public Map<String, Object> candidateRecoveryLedger(long runId) {
+        return candidateRecoveryLedgerService.ledger(runId);
     }
 
     /** FIX-11K Phase A: read-only replay observations; never Production execution. */

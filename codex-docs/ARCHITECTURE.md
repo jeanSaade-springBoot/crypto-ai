@@ -296,6 +296,16 @@ though local-candle reconciliation remains disabled. `CandleAnalysisOutcomeSchem
 runs after Flyway and fails application startup with a clear message if the
 table is absent; this prevents later processing transactions from failing only
 when they attempt their first outcome write.
+
+### Replay-only candidate-recovery ledger
+
+`ReplayCandidateRecoveryLedgerService` is a separate post-Replay research path.
+For one completed `analysis_test_run`, it reads the run-scoped `trade_signal_test`
+records and immutable candle evidence, then stores a chronological what-if ledger
+in `replay_candidate_recovery_ledger`. It is not a position manager and has no
+dependency on wallet, paper-position, order, or Production execution services.
+The existing Replay chart reads its event points only as an overlay; baseline
+Replay execution remains separately represented by `replay_execution`.
 # FIX-154 implementation update — 2026-10-10
 
 `HigherTimeframeBuyAssessmentService` is the single pure assessment boundary for
