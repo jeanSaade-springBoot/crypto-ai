@@ -36,9 +36,10 @@ public class ReplayCandidateRecoveryLedgerService {
         if (runRows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Replay run not found.");
         Map<String, Object> run = runRows.get(0);
         String status = String.valueOf(run.get("status"));
-        if ("PENDING".equals(status) || "RUNNING".equals(status)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Wait for the Replay run to finish before building the recovery ledger.");
-        }
+        if (!"PASSED".equals(status)) throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Candidate recovery requires a PASSED Replay run; current status=" + status + ".");
+        if (run.get("start_time") == null || run.get("end_time") == null) throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Candidate recovery requires a Replay run with start and end timestamps.");
         jdbcTemplate.update("DELETE FROM replay_candidate_recovery_ledger WHERE test_run_id=?", runId);
         List<Map<String, Object>> signals = jdbcTemplate.queryForList("""
                 SELECT id, generated_at, latest_price, original_decision, decision, total_score,
@@ -51,6 +52,7 @@ public class ReplayCandidateRecoveryLedgerService {
         int sequence = 1;
         BigDecimal cumulative = BigDecimal.ZERO;
         Instant end = ((Timestamp) run.get("end_time")).toInstant();
+        Instant virtualPositionUntil = null;
         for (Map<String, Object> signal : signals) {
             Instant at = ((Timestamp) signal.get("generated_at")).toInstant();
             BigDecimal price = decimal(signal.get("latest_price"));
@@ -68,30 +70,33 @@ public class ReplayCandidateRecoveryLedgerService {
             int score = integer(signal.get("total_score")) == null ? 0 : integer(signal.get("total_score"));
             if (isBuy(original) && !truthy(signal.get("final_entry_allowed"))
                     && ReplayCandidateRecoveryPolicy.qualifies(score, raw, blocker)) {
-                candidates.add(new Candidate(number(signal.get("id")), at, price, blocker,
+                // A setup is one symbol/blocker consecutive-minute sequence. Retain its first
+                // blocked minute and start its 60-minute lifetime there, never at a later repeat.
+                boolean sameOpenSetup = candidates.stream().anyMatch(c -> !c.terminal && c.blocker.equals(blocker));
+                if (virtualPositionUntil == null || !at.isBefore(virtualPositionUntil)) if (!sameOpenSetup) candidates.add(new Candidate(number(signal.get("id")), at, price, blocker,
                         decimal(signal.get("stop_loss")), decimal(signal.get("take_profit")),
                         decimal(signal.get("atr_retracement_entry_price"))));
                 continue;
             }
             if (!isBuy(text(signal.get("decision"))) || !truthy(signal.get("final_entry_allowed"))) continue;
-            for (Candidate c : candidates) {
-                if (c.terminal) continue;
+            Candidate c = candidates.stream().filter(candidate -> !candidate.terminal)
+                    .filter(candidate -> price.compareTo(ReplayCandidateRecoveryPolicy.releaseCeiling(candidate.price, candidate.retracementPrice, candidate.blocker)) <= 0)
+                    .findFirst().orElse(null); // oldest candidate wins deterministically.
+            if (c != null) {
                 BigDecimal ceiling = ReplayCandidateRecoveryPolicy.releaseCeiling(c.price, c.retracementPrice, c.blocker);
-                if (price.compareTo(ceiling) > 0) {
-                    if (!c.rejected) {
-                        sequence = insert(runId, sequence, at, "BUY_REJECTED", c, number(signal.get("id")), price, null, null, null, null, null, cumulative,
-                                "Fresh BUY was rejected by the anti-chase ceiling " + ceiling.toPlainString() + ".");
-                        c.rejected = true;
-                    }
+                BigDecimal entry = ReplayCandidateRecoveryPolicy.adverseBuyFill(price);
+                if (c.stop == null || c.target == null || c.stop.compareTo(entry) >= 0 || entry.compareTo(c.target) >= 0) {
+                    sequence = insert(runId, sequence, at, "BUY_REJECTED_LEVELS", c, number(signal.get("id")), price, null, null, null, null, null, cumulative,
+                            "Rejected because required levels do not satisfy stop < adverse entry fill < target.");
+                    c.terminal = true;
                     continue;
                 }
-                BigDecimal entry = ReplayCandidateRecoveryPolicy.adverseBuyFill(price);
                 sequence = insert(runId, sequence, at, "BUY_ALLOWED", c, number(signal.get("id")), price, entry, null,
                         ReplayCandidateRecoveryPolicy.VIRTUAL_NOTIONAL_USDT, null, null, cumulative,
                         "Replay-only candidate recovery: fresh 1m BUY arrived inside the anti-chase ceiling.");
                 Exit exit = findExit(runId, c, at, end, entry);
                 if (exit == null) {
-                    BigDecimal mark = price;
+                    BigDecimal mark = lastClosedPrice(runId, end);
                     ReplayCandidateRecoveryPolicy.Settlement markSettlement = ReplayCandidateRecoveryPolicy.settle(entry,
                             ReplayCandidateRecoveryPolicy.adverseSellFill(mark));
                     sequence = insert(runId, sequence, end, "OPEN_AT_T2", c, number(signal.get("id")), mark, entry,
@@ -106,6 +111,23 @@ public class ReplayCandidateRecoveryLedgerService {
                             ReplayCandidateRecoveryPolicy.VIRTUAL_NOTIONAL_USDT, settlement.feesUsdt(), settlement, cumulative, exit.reason);
                 }
                 c.terminal = true;
+                virtualPositionUntil = exit == null ? end : exit.time;
+                for (Candidate other : candidates) if (!other.terminal) {
+                    sequence = insert(runId, sequence, at, "SUPERSEDED", other, number(signal.get("id")), price, null, null, null, null, null, cumulative,
+                            "Superseded by the oldest valid candidate released at this fresh BUY.");
+                    other.terminal = true;
+                }
+            } else {
+                // Preserve one anti-chase evidence row per candidate, rather than repeating it
+                // on every later fresh BUY.
+                for (Candidate rejected : candidates) if (!rejected.terminal && !rejected.rejected) {
+                    BigDecimal ceiling = ReplayCandidateRecoveryPolicy.releaseCeiling(rejected.price, rejected.retracementPrice, rejected.blocker);
+                    if (price.compareTo(ceiling) > 0) {
+                        sequence = insert(runId, sequence, at, "BUY_REJECTED", rejected, number(signal.get("id")), price, null, null, null, null, null, cumulative,
+                                "Fresh BUY was rejected by the anti-chase ceiling " + ceiling.toPlainString() + ".");
+                        rejected.rejected = true;
+                    }
+                }
             }
         }
         for (Candidate c : candidates) if (!c.terminal) {
@@ -143,22 +165,33 @@ public class ReplayCandidateRecoveryLedgerService {
         ReplayAccessPolicy.require("candle", ReplayAccessPolicy.Operation.MARKET_EVIDENCE_READ);
         if (c.stop == null || c.target == null || c.stop.signum() <= 0 || c.target.signum() <= 0) return null;
         List<Map<String, Object>> candles = jdbcTemplate.queryForList("""
-                SELECT open_time, high_price, low_price FROM candle
+                SELECT open_time, open_price, high_price, low_price FROM candle
                 WHERE symbol=(SELECT symbol FROM analysis_test_run WHERE id=?) AND interval_code='1m' AND closed=1
                   AND open_time >= ? AND open_time <= ? ORDER BY open_time ASC
                 """, runId, Timestamp.from(after), Timestamp.from(end));
         for (Map<String, Object> candle : candles) {
-            BigDecimal high = decimal(candle.get("high_price")); BigDecimal low = decimal(candle.get("low_price"));
+            BigDecimal open = decimal(candle.get("open_price")); BigDecimal high = decimal(candle.get("high_price")); BigDecimal low = decimal(candle.get("low_price"));
             boolean hitStop = low != null && low.compareTo(c.stop) <= 0;
             boolean hitTarget = high != null && high.compareTo(c.target) >= 0;
             if (!hitStop && !hitTarget) continue;
             boolean useStop = hitStop; // same-candle dual hit is intentionally conservative.
-            BigDecimal decision = useStop ? c.stop : c.target;
+            BigDecimal decision = useStop ? (open != null && open.compareTo(c.stop) < 0 ? open : c.stop) : c.target;
             String reason = hitStop && hitTarget ? "AMBIGUOUS_SAME_CANDLE_CONSERVATIVE_STOP" : (useStop ? "VIRTUAL_STOP_LOSS" : "VIRTUAL_TAKE_PROFIT");
             return new Exit(((Timestamp) candle.get("open_time")).toInstant(), decision,
                     ReplayCandidateRecoveryPolicy.adverseSellFill(decision), reason);
         }
         return null;
+    }
+
+    private BigDecimal lastClosedPrice(long runId, Instant end) {
+        ReplayAccessPolicy.require("candle", ReplayAccessPolicy.Operation.MARKET_EVIDENCE_READ);
+        List<BigDecimal> closes = jdbcTemplate.query("""
+                SELECT close_price FROM candle WHERE symbol=(SELECT symbol FROM analysis_test_run WHERE id=?)
+                  AND interval_code='1m' AND closed=1 AND open_time <= ? ORDER BY open_time DESC LIMIT 1
+                """, (rs, row) -> rs.getBigDecimal(1), runId, Timestamp.from(end));
+        if (closes.isEmpty() || closes.get(0) == null) throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "No closed 1m candle is available at or before the Replay end time for mark-to-market.");
+        return closes.get(0);
     }
 
     private int insert(long runId, int sequence, Instant time, String type, Candidate c, Long releaseSignal,

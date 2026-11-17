@@ -5,9 +5,8 @@
          events to JdbcTimingDataSource's bounded queue; this appender runs on its writer. -->
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
     <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
-    <!-- All application-managed logs are project-relative under logs/.  Do not
-         override this with an environment-specific path. -->
-    <property name="LOG_DIR" value="logs"/>
+    <!-- Keep the deployment's existing per-environment log-directory contract. -->
+    <springProperty scope="context" name="LOG_DIR" source="diagnostics.jdbc.log-directory" defaultValue="logs"/>
     <appender name="DATABASE_TIMING" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${LOG_DIR}/database-timing.log</file>
         <immediateFlush>true</immediateFlush>

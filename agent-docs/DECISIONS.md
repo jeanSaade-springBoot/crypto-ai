@@ -6,6 +6,30 @@ for traceability; do not silently rewrite history.
 
 No approved decisions recorded yet.
 
+### JEAN-OVERRIDE-20261118-001 — FIX-157 corrected Replay-only ledger
+
+Date/time KSA: 2026-11-18
+
+Scope: Implement the corrected Replay-only candidate-recovery ledger rules,
+tests, enforcing Replay data access boundary, V110–V114 disposable-MySQL
+coverage, scoped documentation corrections, and only the configurable JDBC log
+directory restoration in `logback-spring.xml`.
+
+Waived: ALL pending items for this scope.
+
+Jean's exact words:
+
+> proceed direct from jean\
+> scope: Implement the approved FIX-157 corrected Replay-only scope: A1–A6, one-candidate rule, SUPERSEDED, BUY_REJECTED_LEVELS, correct t2 mark, PASSED-only runs, enforced Replay SQL boundary, required Java 21/disposable-MySQL tests; restore only logback-spring.xml to configurable diagnostics.jdbc.log-directory behavior; update FIX-156/FIX-157 documents with scoped Production-change exceptions.\
+> waive: ALL pending
+
+Status: IMPLEMENTATION AUTHORIZED UNDER JEAN OVERRIDE. This override does not
+authorize Git push, remote merge, deployment, Production database writes or
+migration application, live service configuration changes, live orders, or
+deletion.
+
+---
+
 ### JEAN-OVERRIDE-20261116-003 - Suspicious blocked-BUY review evidence
 
 Date/time KSA: 2026-11-16 01:58:00 +03:00
